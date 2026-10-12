@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
 
 import { MapPanel } from '../components/MapPanel'
+import { AppointmentPlanner } from '../components/AppointmentPlanner'
 import { VehicleOperationsPanel } from '../components/VehicleOperationsPanel'
 import { RouteEditor } from '../components/RouteEditor'
 import { ErrorState, LoadingState } from '../components/States'
@@ -99,6 +100,7 @@ export function VehicleDetailPage() {
         </div>
         <div className="space-y-4">
           <TourSummary tour={activeTour} />
+          {activeTour && ['ACTIVE', 'QUEUED'].includes(activeTour.status) ? <AppointmentPlanner key={`appointment-${activeTour.id}`} tour={activeTour} onChange={refreshOperations} /> : null}
           <VehicleOperationsPanel key={id} vehicleId={id} onChange={refreshOperations} />
           {activeTour && ['ACTIVE', 'QUEUED'].includes(activeTour.status) && <RouteEditor key={activeTour.id} tour={activeTour} onChange={refreshOperations} />}
           {actionError ? <ErrorState error={actionError} /> : null}
