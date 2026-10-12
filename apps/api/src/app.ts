@@ -5,9 +5,16 @@ import { z } from "zod";
 import { CALCULATED_POSITION_DISCLAIMER } from "./domain.js";
 import { prisma } from "./lib/prisma.js";
 import { AlertService } from "./services/alerts.js";
+import { AppointmentService } from "./services/appointments.js";
 import { EtaService } from "./services/eta.js";
 import { importExcelPreview } from "./services/excel-order-import.js";
-import { importPdfPreview, type PdfImportPreview } from "./services/pdf-order-import.js";
+import {
+  importImagePreview,
+  importPdfPreview,
+  isSupportedImageMimeType,
+  type ImageImportPreview,
+  type PdfImportPreview
+} from "./services/pdf-order-import.js";
 import { OsrmRoutingProvider, RoutingError, RoutingService } from "./services/routing.js";
 import { validateXlsxArchive } from "./services/xlsx-validation.js";
 import { enrichTour, type TourAggregate, toIsoObject, tourInclude, TourService } from "./services/tours.js";
@@ -27,6 +34,7 @@ const alertService = new AlertService(prisma);
 const vehicleService = new VehicleService(prisma);
 const notificationService = new NotificationService(prisma, tourService);
 const operationsService = new OperationsService(prisma, tourService);
+const appointmentService = new AppointmentService(prisma, etaService, (id, now) => tourService.getCurrentPosition(id, now));
 const replanningService = new ReplanningService(prisma, routingService, (id, now) => tourService.getCurrentPosition(id, now));
 const trafficService = new TrafficOperationsService(prisma, tourService, notificationService, new TrafficRoutingService(trafficProvider, trafficQuota));
 
@@ -64,6 +72,7 @@ const patchTourSchema = z.union([
 
 export interface BuildAppOptions {
   pdfImport?: (buffer: Buffer, filename: string) => Promise<PdfImportPreview>;
+  imageImport?: (buffer: Buffer, filename: string, mimeType: "image/png" | "image/jpeg" | "image/webp") => Promise<ImageImportPreview>;
 }
 
 export async function buildApp(options: BuildAppOptions = {}) {
@@ -81,6 +90,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
 
   let activeOrderImports = 0;
   const pdfImport = options.pdfImport ?? importPdfPreview;
+  const imageImport = options.imageImport ?? importImagePreview;
   const subscribers = new Set<import('node:http').ServerResponse>();
   let notificationTimer: ReturnType<typeof setInterval> | undefined;
   let refreshingNotifications = false;
@@ -206,6 +216,18 @@ export async function buildApp(options: BuildAppOptions = {}) {
     await prisma.notification.updateMany({ where: { stopId: stop.id, type: 'PREDICTED_ARRIVAL', acknowledgedAt: null }, data: { acknowledgedAt: new Date() } });
     return { ok: true };
   });
+  app.post('/stops/:id/appointment/preview', async request => {
+    const stopId = idParams.parse(request.params).id;
+    const input = z.object({ appointmentAt: z.string().datetime() }).parse(request.body);
+    return appointmentService.preview(stopId, input);
+  });
+  app.put('/stops/:id/appointment', async request => {
+    const stopId = idParams.parse(request.params).id;
+    const input = versionInput.extend({ appointmentAt: z.string().datetime() }).parse(request.body);
+    const analysis = await appointmentService.apply(stopId, input);
+    await refreshAlertsForVehicle(analysis.vehicleId);
+    return analysis;
+  });
   app.post('/tours/:id/replan/preview', async request => {
     const input = versionInput.extend({
       futureStops: z.array(z.object({
@@ -255,11 +277,17 @@ export async function buildApp(options: BuildAppOptions = {}) {
         return reply.status(415).send({ error: "Файл не является корректной книгой .xlsx." });
       }
 
-      let result;
       try {
         validateXlsxArchive(buffer);
+      } catch (error) {
+        request.log.warn({ err: error, filename }, "Отклонена небезопасная или повреждённая книга Excel");
+        return reply.status(422).send({ error: "Не удалось безопасно прочитать книгу Excel." });
+      }
+      let result;
+      try {
         result = await importExcelPreview(buffer, filename);
-      } catch {
+      } catch (error) {
+        request.log.error({ err: error, filename }, "Не удалось разобрать книгу Excel");
         return reply.status(422).send({ error: "Не удалось безопасно прочитать книгу Excel." });
       }
       return {
@@ -323,6 +351,50 @@ export async function buildApp(options: BuildAppOptions = {}) {
         }
         request.log.error({ err: error }, "Не удалось распознать PDF-заказ");
         return reply.status(502).send({ error: "Не удалось прочитать PDF-заказ. Проверьте файл и повторите попытку." });
+      }
+    } finally {
+      activeOrderImports -= 1;
+    }
+  });
+
+  app.post("/imports/image/preview", async (request, reply) => {
+    if (!request.isMultipart()) {
+      return reply.status(400).send({ error: "Скриншот необходимо отправить как multipart/form-data в поле 'file'." });
+    }
+    if (activeOrderImports >= 2) {
+      return reply.status(429).send({ error: "Слишком много одновременных импортов заказов. Повторите попытку позже." });
+    }
+
+    activeOrderImports += 1;
+    try {
+      const file = await request.file();
+      if (!file) return reply.status(400).send({ error: "Скриншот не приложен." });
+
+      const filename = file.filename.trim();
+      const lowerFilename = filename.toLocaleLowerCase();
+      const extensionAllowed = [".png", ".jpg", ".jpeg", ".webp"].some((extension) => lowerFilename.endsWith(extension));
+      if (file.fieldname !== "file" || !extensionAllowed || !isSupportedImageMimeType(file.mimetype)
+        || !imageExtensionMatchesMimeType(lowerFilename, file.mimetype)) {
+        file.file.resume();
+        return reply.status(415).send({ error: "В поле 'file' поддерживаются только скриншоты PNG, JPG/JPEG или WebP." });
+      }
+
+      const buffer = await file.toBuffer();
+      if (buffer.length > 10 * 1024 * 1024) {
+        return reply.status(413).send({ error: "Размер скриншота не должен превышать 10 МБ." });
+      }
+      if (!hasImageHeader(buffer, file.mimetype)) {
+        return reply.status(415).send({ error: "Файл не является корректным изображением PNG, JPG/JPEG или WebP." });
+      }
+
+      try {
+        return await imageImport(buffer, filename, file.mimetype);
+      } catch (error) {
+        if (error instanceof Error && error.message.includes("OPENAI_API_KEY")) {
+          return reply.status(503).send({ error: "OpenAI ещё не настроен для импорта скриншотов." });
+        }
+        request.log.error({ err: error }, "Не удалось распознать скриншот заказа");
+        return reply.status(502).send({ error: "Не удалось прочитать скриншот. Проверьте файл и повторите попытку." });
       }
     } finally {
       activeOrderImports -= 1;
@@ -622,6 +694,36 @@ function hasStatusCode(error: unknown): error is { statusCode: number } {
 function hasPdfHeader(buffer: Buffer): boolean {
   const headerWindow = buffer.subarray(0, Math.min(buffer.length, 1024)).toString("latin1");
   return headerWindow.includes("%PDF-");
+}
+
+function hasImageHeader(buffer: Buffer, mimeType: string): boolean {
+  if (mimeType === "image/png") {
+    return buffer.length >= 8
+      && buffer[0] === 0x89
+      && buffer[1] === 0x50
+      && buffer[2] === 0x4e
+      && buffer[3] === 0x47
+      && buffer[4] === 0x0d
+      && buffer[5] === 0x0a
+      && buffer[6] === 0x1a
+      && buffer[7] === 0x0a;
+  }
+  if (mimeType === "image/jpeg") {
+    return buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+  }
+  if (mimeType === "image/webp") {
+    return buffer.length >= 12
+      && buffer.subarray(0, 4).toString("ascii") === "RIFF"
+      && buffer.subarray(8, 12).toString("ascii") === "WEBP";
+  }
+  return false;
+}
+
+function imageExtensionMatchesMimeType(filename: string, mimeType: string): boolean {
+  if (mimeType === "image/png") return filename.endsWith(".png");
+  if (mimeType === "image/jpeg") return filename.endsWith(".jpg") || filename.endsWith(".jpeg");
+  if (mimeType === "image/webp") return filename.endsWith(".webp");
+  return false;
 }
 
 function mapTimelineLegStatus(legStatus: string, tourStatus: string): "DONE" | "CURRENT" | "NEXT" | "QUEUED" {
