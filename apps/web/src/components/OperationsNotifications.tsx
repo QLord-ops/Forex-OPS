@@ -31,7 +31,7 @@ export function OperationsNotifications() {
   }
   if (!current) return null
   const isArrival = current.type.includes('ARRIVAL') || current.type === 'ARRIVED'
-  return <aside role="dialog" aria-labelledby="operations-notification-heading" className="fixed bottom-4 right-4 z-50 max-h-[80vh] w-[calc(100%-2rem)] max-w-lg overflow-auto rounded-xl border border-sky-300 bg-white p-5 shadow-xl">
+  return <aside role="dialog" aria-labelledby="operations-notification-heading" className="fixed bottom-4 right-4 z-50 max-h-[80vh] w-[calc(100%-2rem)] max-w-lg overflow-auto rounded-xl border border-sky-300 bg-white p-5 shadow-xl text-balance-safe">
     <h2 id="operations-notification-heading" className="font-semibold">{current.message}</h2>
     {isArrival && <><p className="my-2 text-sm text-slate-600">Это прогноз, а не подтверждённое прибытие. Укажите фактическое время.</p><label className="block text-sm">Время прибытия<input className="input" type="datetime-local" value={arrival} onChange={e => setArrival(e.target.value)} /></label></>}
     {error && <p role="alert" className="my-2 text-red-700">{error}</p>}

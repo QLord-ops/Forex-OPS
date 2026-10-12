@@ -14,7 +14,7 @@ const itemIcon = {
 export function TourTimeline({ tours, items }: { tours?: Tour[]; items?: TimelineItem[] }) {
   if (items?.length) {
     return (
-      <div className="rounded-lg border border-slate-200 bg-white p-4">
+      <div className="work-surface p-4">
         <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-500">Цепочка маршрутов</h2>
         <div className="space-y-3">
           {items.map((item) => (
@@ -26,7 +26,7 @@ export function TourTimeline({ tours, items }: { tours?: Tour[]; items?: Timelin
   }
 
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-4">
+    <div className="work-surface min-w-0 p-4">
       <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-500">Цепочка маршрутов</h2>
       <div className="space-y-5">
         {tours?.map((tour) => (

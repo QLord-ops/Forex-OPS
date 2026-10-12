@@ -66,15 +66,15 @@ export function VehicleDetailPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
+      <div className="page-header items-start">
+        <div className="min-w-0">
           <p className="text-sm font-semibold uppercase tracking-wide text-slate-500">Грузовик</p>
-          <h2 className="text-2xl font-bold tabular-nums">Грузовик {vehicle.data?.vehicleNumber}</h2>
-          <p className="text-sm text-slate-500">
+          <h2 className="page-title tabular-nums">Грузовик {vehicle.data?.vehicleNumber}</h2>
+          <p className="page-subtitle">
             {vehicle.data?.licensePlate || 'Госномер не указан'} · макс. {vehicle.data?.maxSpeedKmh ?? 85} км/ч
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button className="secondary-button" onClick={() => void Promise.all([vehicle.refetch(), tours.refetch(), timeline.refetch(), position.refetch()])}>
             <RefreshCw className="h-4 w-4" aria-hidden="true" />
             Обновить
@@ -93,12 +93,12 @@ export function VehicleDetailPage() {
         </div>
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_440px]">
-        <div className="space-y-4">
+      <div className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,440px)]">
+        <div className="min-w-0 space-y-4">
           <MapPanel tour={activeTour} position={position.data} />
           <MetricsPanel tour={activeTour} position={position.data} />
         </div>
-        <div className="space-y-4">
+        <div className="min-w-0 space-y-4">
           <TourSummary tour={activeTour} />
           {activeTour && ['ACTIVE', 'QUEUED'].includes(activeTour.status) ? <AppointmentPlanner key={`appointment-${activeTour.id}`} tour={activeTour} onChange={refreshOperations} /> : null}
           <VehicleOperationsPanel key={id} vehicleId={id} onChange={refreshOperations} />
@@ -116,7 +116,7 @@ function MetricsPanel({ tour, position }: { tour?: Tour | null; position?: Curre
   const progress = Math.round(((position?.progress ?? 0) * 100 + Number.EPSILON) * 10) / 10
 
   return (
-    <section className="grid gap-3 rounded-lg border border-slate-200 bg-white p-4 md:grid-cols-4">
+    <section className="work-surface grid min-w-0 gap-3 p-4 md:grid-cols-4">
       <Metric label="Статус" value={statusLabel(position?.status)} />
       <Metric label="Начало" value={formatDateTime(position?.startedAt)} />
       <Metric label="ETA" value={formatDateTime(position?.eta ?? tour?.predictedEta)} />
@@ -141,7 +141,7 @@ function Metric({ label, value, accent = false }: { label: string; value: string
 function TourSummary({ tour }: { tour?: Tour | null }) {
   if (!tour) {
     return (
-      <section className="rounded-lg border border-slate-200 bg-white p-4">
+      <section className="work-surface p-4">
         <h3 className="font-semibold">Нет активного маршрута</h3>
         <p className="mt-1 text-sm text-slate-500">У этого грузовика сейчас нет активного или ожидающего маршрута.</p>
       </section>
@@ -151,7 +151,7 @@ function TourSummary({ tour }: { tour?: Tour | null }) {
   const stops = tour.stops?.slice().sort((a, b) => a.sequence - b.sequence) ?? []
 
   return (
-    <section className="rounded-lg border border-slate-200 bg-white p-4">
+    <section className="work-surface min-w-0 p-4">
       <div className="flex items-start justify-between gap-3">
         <div>
           <h3 className="font-semibold">Текущий маршрут</h3>

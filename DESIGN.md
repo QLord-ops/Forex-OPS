@@ -2,7 +2,7 @@
 
 ## Source of truth
 - Status: Active
-- Last refreshed: 2026-10-01
+- Last refreshed: 2026-10-12
 - Primary product surfaces: Dispatcher dashboard, vehicle detail/map, tours, new order form, alerts, vehicle history.
 - Evidence reviewed: User-provided product specification in the Codex attachment; repository contained no prior UI or brand assets.
 
@@ -24,7 +24,7 @@
 ## Information architecture
 - Primary navigation: Dashboard, Fahrzeuge, Touren, Neuer Auftrag, Warnungen, Historie.
 - Core routes/screens: `/`, `/vehicles`, `/vehicles/:id`, `/tours`, `/tours/:id/edit`, `/orders/new`, `/alerts`, `/history`.
-- Content hierarchy: Critical appointments first; fleet table second; selected vehicle route and timeline; editing/creation flows after operational monitoring.
+- Content hierarchy: Urgency-sorted vehicle rail first; selected vehicle map and current-tour controls second; route timeline third; editing/creation flows after operational monitoring.
 
 ## Design principles
 - Principle 1: Dense but legible — tables and timelines carry the information, with minimal chrome.
@@ -33,16 +33,16 @@
 - Tradeoffs: Desktop-first density over small-screen optimization; operational clarity over visual novelty.
 
 ## Visual language
-- Color: Cool graphite/navy shell, white work surfaces, blue selection/accent, semantic green/yellow/orange/red/grey states.
+- Color: Light control-center workspace with compact navy navigation, white work surfaces, blue selection/accent, and semantic red/orange/yellow/blue/green/grey attention states. Color always has a text label and icon/context.
 - Typography: System sans-serif with tabular numerals for times, distances, and vehicle numbers.
-- Spacing/layout rhythm: Compact 4/8 px rhythm; 56 px application rail/header; 44–52 px table rows.
+- Spacing/layout rhythm: Compact 4/8 px rhythm; 64 px header; 80 px desktop navigation rail below 1536 px; 340–380 px vehicle rail; 44–52 px table rows.
 - Shape/radius/elevation: 6–10 px radii, restrained borders, almost no shadows.
 - Motion: Short state transitions only; truck marker may move smoothly between calculated positions.
 - Imagery/iconography: Functional line icons; MapLibre/OpenStreetMap map is the primary visual surface.
 
 ## Components
-- Existing components to reuse: None; the repository was empty.
-- New/changed components: App shell, status badge, risk band, data table, map panel, vehicle marker, timeline, stop editor, event action button, alert list, empty/error/loading states.
+- Existing components to reuse: App shell, status badges, data table, map panel, timeline, order import preview, appointment planner and operational states.
+- New/changed components: Urgency-sorted vehicle rail, map workspace toolbar, route stop cards, filter chips, shared page headers, work surfaces, icon buttons and overflow-safe text treatments.
 - Variants and states: GREEN/YELLOW/ORANGE/RED/GREY; DONE/CURRENT/NEXT/QUEUED; loading/arrived/waiting/cancelled.
 - Token/component ownership: CSS custom properties and Tailwind theme in the web app; shared primitives under `apps/web/src/components`.
 
@@ -55,7 +55,7 @@
 
 ## Responsive behavior
 - Supported breakpoints/devices: Primary 1280–1728 px MacBook desktop; usable down to 1024 px; narrow screens scroll dense tables horizontally.
-- Layout adaptations: Side navigation becomes a compact top strip; map stacks above details below desktop width.
+- Layout adaptations: From 1100 px the dashboard uses vehicle rail + map; below it the vehicle cards become a horizontal rail above the map. Side navigation becomes a compact top strip below 1024 px.
 - Touch/hover differences: No hover-only actions; primary buttons maintain at least 40 px height.
 
 ## Interaction states
@@ -73,7 +73,7 @@
 
 ## Implementation constraints
 - Framework/styling system: React, TypeScript, Vite, Tailwind CSS, MapLibre GL JS.
-- Design-token constraints: Small semantic token set; no second component framework.
+- Design-token constraints: CSS custom properties plus existing Tailwind utilities; no second component framework. Shared controls must use the common button/input/surface/status classes.
 - Performance constraints: Backend state refresh every 30 seconds; marker interpolation every 5 seconds without database writes.
 - Compatibility constraints: Local macOS launch via `npm install` and `npm run dev`; desktop Safari/Chrome current versions.
 - Test/screenshot expectations: Business calculations have unit tests; core pages receive build/type checks and manual smoke verification.

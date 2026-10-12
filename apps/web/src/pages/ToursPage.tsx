@@ -35,10 +35,10 @@ export function ToursPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h2 className="text-xl font-semibold">Маршруты</h2>
-          <p className="text-sm text-slate-500">Активные, ожидающие и завершённые заказы</p>
+      <div className="page-header">
+        <div className="min-w-0">
+          <h2 className="page-title">Маршруты</h2>
+          <p className="page-subtitle">Активные, ожидающие и завершённые заказы</p>
         </div>
         <button className="secondary-button" onClick={refetch}>
           <RefreshCw className="h-4 w-4" aria-hidden="true" />

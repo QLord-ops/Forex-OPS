@@ -113,11 +113,11 @@ export function MapPanel({
   }, [position?.coordinate])
 
   return (
-    <section className="rounded-lg border border-slate-200 bg-white">
+    <section className="work-surface min-w-0 overflow-hidden">
       <div ref={containerRef} style={{ height }} className="rounded-t-lg" />
       <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 px-4 py-3 text-sm">
         <span className="font-semibold text-amber-900">{calculatedPositionLabel}</span>
-        <span className="text-slate-500">OpenStreetMap · дороги, трафик и актуальность данных показаны в разделе «Время грузовика»</span>
+        <span className="min-w-0 text-balance-safe text-slate-500">OpenStreetMap · дороги, трафик и актуальность данных показаны в разделе «Время грузовика»</span>
       </div>
     </section>
   )

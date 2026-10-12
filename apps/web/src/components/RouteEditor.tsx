@@ -36,7 +36,7 @@ export function RouteEditor({ tour, onChange }: { tour: Tour; onChange: () => Pr
     try { await operationsRequest(`/tours/${tour.id}/replan/apply`, 'POST', { previewId: preview.id, version }); setOpen(false); await onChange() }
     catch (e) { setError((e as Error).message); setPreview(null) } finally { setBusy(false) }
   }
-  return <section className="rounded-lg border border-slate-200 bg-white p-4">
+  return <section id="route-editor" className="work-surface min-w-0 p-4">
     <button className="secondary-button" disabled={busy} onClick={() => open ? setOpen(false) : void start()}>{open ? 'Закрыть редактирование' : 'Изменить маршрут'}</button>
     {error && <p role="alert" className="mt-2 text-sm text-red-700">{error}</p>}
     {open && <form className="mt-3 space-y-3" onSubmit={event => { event.preventDefault(); void calculate() }}>

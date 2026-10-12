@@ -76,7 +76,7 @@ export function AppointmentPlanner({ tour, onChange }: { tour: Tour; onChange: (
   }
 
   return (
-    <section className="rounded-lg border border-slate-200 bg-white p-4">
+    <section className="work-surface min-w-0 p-4">
       <button
         type="button"
         className="secondary-button"

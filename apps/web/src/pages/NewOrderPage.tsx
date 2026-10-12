@@ -413,9 +413,9 @@ export function NewOrderPage() {
 
   return (
     <form className="space-y-5" onSubmit={handleSubmit}>
-      <div>
-        <h2 className="text-xl font-semibold">Новый заказ</h2>
-        <p className="text-sm text-slate-500">Перетащите Auftrag, Excel или скриншот таблицы для распознавания либо введите данные вручную. Сохранение выполняется только после вашего подтверждения.</p>
+      <div className="min-w-0">
+        <h2 className="page-title">Новый заказ</h2>
+        <p className="page-subtitle">Перетащите Auftrag, Excel или скриншот таблицы для распознавания либо введите данные вручную. Сохранение выполняется только после вашего подтверждения.</p>
       </div>
 
       <section className="rounded-lg border border-sky-200 bg-sky-50 p-4">
@@ -573,7 +573,7 @@ export function NewOrderPage() {
       </section>
 
       {vehicles.data?.length ? (
-        <section className="rounded-lg border border-slate-200 bg-white p-4">
+        <section className="work-surface p-4">
           <div className="grid gap-4 md:grid-cols-[220px_1fr]">
             <label>
               <span className="field-label">Грузовик</span>
@@ -597,7 +597,7 @@ export function NewOrderPage() {
         <EmptyState label="Нет доступных грузовиков. Сначала добавьте грузовик на странице «Грузовики»." />
       )}
 
-      <section className="rounded-lg border border-slate-200 bg-white">
+      <section className="work-surface overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
           <div>
             <h3 className="font-semibold">Точки маршрута</h3>

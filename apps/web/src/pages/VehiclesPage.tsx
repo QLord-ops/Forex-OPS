@@ -44,10 +44,10 @@ export function VehiclesPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h2 className="text-xl font-semibold">Грузовики</h2>
-          <p className="text-sm text-slate-500">Основные данные и текущее состояние каждого грузовика</p>
+      <div className="page-header">
+        <div className="min-w-0">
+          <h2 className="page-title">Грузовики</h2>
+          <p className="page-subtitle">Основные данные и текущее состояние каждого грузовика</p>
         </div>
         <button className="secondary-button" onClick={refetch}>
           <RefreshCw className="h-4 w-4" aria-hidden="true" />
@@ -55,7 +55,7 @@ export function VehiclesPage() {
         </button>
       </div>
 
-      <form className="rounded-lg border border-slate-200 bg-white p-4" onSubmit={handleCreateVehicle}>
+      <form className="work-surface p-4" onSubmit={handleCreateVehicle}>
         <div className="grid items-end gap-3 md:grid-cols-[180px_220px_160px_auto]">
           <label>
             <span className="field-label">Номер грузовика</span>

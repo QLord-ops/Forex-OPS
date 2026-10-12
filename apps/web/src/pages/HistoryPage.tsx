@@ -33,10 +33,10 @@ export function HistoryPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-xl font-semibold">История грузовиков</h2>
-          <p className="text-sm text-slate-500">
+      <div className="page-header">
+        <div className="min-w-0">
+          <h2 className="page-title">История грузовиков</h2>
+          <p className="page-subtitle">
             Маршруты и неизменяемые события загрузки/выгрузки из базы данных · данные на {formatDateTime(history.data?.generatedAt)}
           </p>
         </div>
@@ -46,7 +46,7 @@ export function HistoryPage() {
         </button>
       </div>
 
-      <section className="rounded-lg border border-slate-200 bg-white p-4">
+      <section className="work-surface sticky top-[4.5rem] z-10 p-4">
         <label className="block max-w-sm">
           <span className="field-label">Фильтр по грузовику</span>
           <select className="field-input" value={vehicleId} onChange={(event) => setVehicleId(event.target.value)}>

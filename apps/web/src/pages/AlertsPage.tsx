@@ -16,10 +16,10 @@ export function AlertsPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h2 className="text-xl font-semibold">Предупреждения</h2>
-          <p className="text-sm text-slate-500">Одно уведомление на точку для каждого уровня: за два часа и за один час</p>
+      <div className="page-header">
+        <div className="min-w-0">
+          <h2 className="page-title">Предупреждения</h2>
+          <p className="page-subtitle">Одно уведомление на точку для каждого уровня: за два часа и за один час</p>
         </div>
         <button className="secondary-button" onClick={refetch}>
           <RefreshCw className="h-4 w-4" aria-hidden="true" />

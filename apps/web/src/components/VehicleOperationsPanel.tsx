@@ -56,7 +56,7 @@ export function VehicleOperationsPanel({ vehicleId, onChange }: { vehicleId: str
     catch (e) { setError((e as Error).message) } finally { setBusy(false) }
   }
   const cycle = data?.clock?.currentCycle
-  return <section className="space-y-3 rounded-lg border border-slate-200 bg-white p-4">
+  return <section className="work-surface min-w-0 space-y-3 p-4">
     <h3 className="font-semibold">Время грузовика и стоянка</h3>
     <p className="text-xs text-slate-500">Расчётная модель для грузовика, а не подтверждение фактического времени вождения или отдыха.</p>
     {(error || state.error) && <p role="alert" className="text-sm text-red-700">{error || state.error?.message}</p>}
