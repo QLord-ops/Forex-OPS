@@ -107,6 +107,7 @@ describe("POST /imports/pdf/preview", () => {
               type: "LOAD" as const,
               company: null,
               address: "Alexanderplatz 1, 10178 Berlin",
+              city: "Berlin",
               appointmentLocal: null,
               sourcePage: 1,
               confidence: 0.9
@@ -116,6 +117,7 @@ describe("POST /imports/pdf/preview", () => {
               type: "UNLOAD" as const,
               company: null,
               address: "Am Sandtorkai 1, 20457 Hamburg",
+              city: "Hamburg",
               appointmentLocal: null,
               sourcePage: 1,
               confidence: 0.9
@@ -172,6 +174,150 @@ describe("POST /imports/pdf/preview", () => {
     expect(wrongExtensionResponse.statusCode).toBe(415);
     expect(fakePdfResponse.statusCode).toBe(415);
     expect(pdfImport).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /imports/image/preview", () => {
+  it("returns an AI preview for a screenshot without creating an Auftrag", async () => {
+    const imageImport = vi.fn(async () => ({
+      source: "OPENAI" as const,
+      detectedLayout: "IMAGE" as const,
+      drafts: [
+        {
+          orderNumber: "IMG-1",
+          vehicleNumber: null,
+          stops: [
+            {
+              sequence: 1,
+              type: "LOAD" as const,
+              company: null,
+              address: "Alexanderplatz 1, 10178 Berlin",
+              city: "Berlin",
+              appointmentLocal: null,
+              sourcePage: null,
+              confidence: 0.9
+            },
+            {
+              sequence: 2,
+              type: "UNLOAD" as const,
+              company: null,
+              address: "Am Sandtorkai 1, 20457 Hamburg",
+              city: "Hamburg",
+              appointmentLocal: null,
+              sourcePage: null,
+              confidence: 0.9
+            }
+          ],
+          warnings: []
+        }
+      ],
+      warnings: [],
+      aiAvailable: true as const,
+      usedAi: true as const
+    }));
+    const app = await buildApp({ imageImport });
+    apps.push(app);
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
+    const multipart = buildMultipart("auftrag.png", png, "image/png");
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/imports/image/preview",
+      headers: { "content-type": `multipart/form-data; boundary=${multipart.boundary}` },
+      payload: multipart.body
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      source: "OPENAI",
+      detectedLayout: "IMAGE",
+      drafts: [{ orderNumber: "IMG-1", stops: [{ city: "Berlin" }, { city: "Hamburg" }] }]
+    });
+    expect(imageImport).toHaveBeenCalledWith(png, "auftrag.png", "image/png");
+  });
+
+  it("accepts valid JPEG and WebP screenshot signatures", async () => {
+    const imageImport = vi.fn(async () => ({
+      source: "OPENAI" as const,
+      detectedLayout: "IMAGE" as const,
+      drafts: [],
+      warnings: [],
+      aiAvailable: true as const,
+      usedAi: true as const
+    }));
+    const app = await buildApp({ imageImport });
+    apps.push(app);
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00]);
+    const webp = Buffer.from("RIFF\u0004\u0000\u0000\u0000WEBPVP8 ", "binary");
+
+    for (const [filename, file, mimeType] of [
+      ["auftrag.jpg", jpeg, "image/jpeg"],
+      ["auftrag.webp", webp, "image/webp"]
+    ] as const) {
+      const multipart = buildMultipart(filename, file, mimeType);
+      const response = await app.inject({
+        method: "POST",
+        url: "/imports/image/preview",
+        headers: { "content-type": `multipart/form-data; boundary=${multipart.boundary}` },
+        payload: multipart.body
+      });
+      expect(response.statusCode).toBe(200);
+    }
+
+    expect(imageImport).toHaveBeenNthCalledWith(1, jpeg, "auftrag.jpg", "image/jpeg");
+    expect(imageImport).toHaveBeenNthCalledWith(2, webp, "auftrag.webp", "image/webp");
+  });
+
+  it("rejects disguised screenshot uploads before calling OpenAI", async () => {
+    const imageImport = vi.fn();
+    const app = await buildApp({ imageImport });
+    apps.push(app);
+    const wrongExtension = buildMultipart("auftrag.gif", Buffer.from("GIF89a"), "image/gif");
+    const fakePng = buildMultipart("auftrag.png", Buffer.from("not a png"), "image/png");
+    const mismatchedPng = buildMultipart("auftrag.png", Buffer.from([0xff, 0xd8, 0xff, 0x00]), "image/jpeg");
+
+    const wrongExtensionResponse = await app.inject({
+      method: "POST",
+      url: "/imports/image/preview",
+      headers: { "content-type": `multipart/form-data; boundary=${wrongExtension.boundary}` },
+      payload: wrongExtension.body
+    });
+    const fakePngResponse = await app.inject({
+      method: "POST",
+      url: "/imports/image/preview",
+      headers: { "content-type": `multipart/form-data; boundary=${fakePng.boundary}` },
+      payload: fakePng.body
+    });
+    const mismatchedPngResponse = await app.inject({
+      method: "POST",
+      url: "/imports/image/preview",
+      headers: { "content-type": `multipart/form-data; boundary=${mismatchedPng.boundary}` },
+      payload: mismatchedPng.body
+    });
+
+    expect(wrongExtensionResponse.statusCode).toBe(415);
+    expect(fakePngResponse.statusCode).toBe(415);
+    expect(mismatchedPngResponse.statusCode).toBe(415);
+    expect(imageImport).not.toHaveBeenCalled();
+  });
+
+  it("enforces the ten megabyte screenshot limit before calling OpenAI", async () => {
+    const imageImport = vi.fn();
+    const app = await buildApp({ imageImport });
+    apps.push(app);
+    const oversized = Buffer.alloc(10 * 1024 * 1024 + 1, 0x00);
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(oversized);
+    const multipart = buildMultipart("zu-gross.png", oversized, "image/png");
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/imports/image/preview",
+      headers: { "content-type": `multipart/form-data; boundary=${multipart.boundary}` },
+      payload: multipart.body
+    });
+
+    expect(response.statusCode).toBe(413);
+    expect(imageImport).not.toHaveBeenCalled();
   });
 });
 
