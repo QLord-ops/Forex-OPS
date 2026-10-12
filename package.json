@@ -1,0 +1,24 @@
+{
+  "name": "ops-disponent",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "postinstall": "npm run prisma:generate -w @ops/api",
+    "dev": "concurrently -n API,WEB -c blue,green \"npm run dev -w @ops/api\" \"npm run dev -w @ops/web\"",
+    "db:setup": "npm --workspace @ops/api run prisma:generate && npm --workspace @ops/api run db:deploy && npm --workspace @ops/api run db:seed",
+    "db:reset": "npm --workspace @ops/api run db:reset",
+    "lint": "npm run lint --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}
