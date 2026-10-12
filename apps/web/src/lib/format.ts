@@ -93,6 +93,7 @@ export function operationEventLabel(type?: string | null): string {
     MANUAL_STOP: 'Движение остановлено',
     MOVEMENT_RESUMED: 'Движение продолжено',
     ROUTE_REPLANNED: 'Маршрут изменён',
+    APPOINTMENT_ATTACHED: 'Термин прикреплён',
     REROUTE_ACCEPTED: 'Объезд принят',
     TRAFFIC_REFRESH: 'Данные о трафике обновлены',
     TRUCK_PROFILE_UPDATED: 'Параметры грузовика обновлены'

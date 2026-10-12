@@ -54,6 +54,7 @@ export interface Tour {
   id: string
   vehicleId: string
   orderNumber: string
+  planVersion?: number
   status: TourStatus
   previousTourId?: string | null
   plannedStartAt?: string | null
@@ -206,7 +207,26 @@ export interface GeocodeResult {
   address: string
   latitude: number
   longitude: number
+  city?: string | null
   provider?: string
+}
+
+export interface AppointmentAnalysis {
+  stopId: string
+  tourId: string
+  vehicleId: string
+  version: number
+  generatedAt: string
+  appointmentAt: string
+  previousAppointmentAt?: string | null
+  earliestArrival: string
+  latestArrival: string
+  recommendedStartAt?: string | null
+  bufferMinutes: number
+  risk: 'ON_TIME' | 'RISK' | 'LATE' | 'UNKNOWN'
+  action: 'LEAVE_BY' | 'LEAVE_NOW' | 'IN_TRANSIT' | 'ARRIVED' | 'UNKNOWN_POSITION'
+  message: string
+  preliminary: boolean
 }
 
 export type RouteGeometry =
@@ -237,7 +257,7 @@ export interface CreateTourInput {
 }
 
 export type OrderImportSource = 'RULES' | 'OPENAI'
-export type OrderImportLayout = 'ROW_PER_STOP' | 'LOAD_UNLOAD_COLUMNS' | 'PDF' | 'UNKNOWN'
+export type OrderImportLayout = 'ROW_PER_STOP' | 'LOAD_UNLOAD_COLUMNS' | 'PDF' | 'IMAGE' | 'UNKNOWN'
 
 export interface ImportWarning {
   code: string
@@ -252,6 +272,7 @@ export interface ImportedStopDraft {
   type: StopType
   company: string | null
   address: string | null
+  city?: string | null
   appointmentLocal: string | null
   sourceRow?: number
   sourcePage?: number | null

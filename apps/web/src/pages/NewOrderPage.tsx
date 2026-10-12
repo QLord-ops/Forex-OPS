@@ -1,5 +1,5 @@
 import { AlertTriangle, CheckCircle2, FileText, MapPin, Plus, Save, Sparkles, Trash2, Upload } from 'lucide-react'
-import type { ChangeEvent, FormEvent } from 'react'
+import type { ChangeEvent, DragEvent, FormEvent } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
@@ -22,21 +22,88 @@ interface StopDraft {
   geocodeError?: string
 }
 
-const initialStops: StopDraft[] = [
-  { id: crypto.randomUUID(), type: 'LOAD', company: '', address: '', city: '', appointmentAt: '', serviceMinMinutes: 60, serviceMaxMinutes: 120 },
-  { id: crypto.randomUUID(), type: 'UNLOAD', company: '', address: '', city: '', appointmentAt: '', serviceMinMinutes: 60, serviceMaxMinutes: 120 }
-]
+function createInitialStops(): StopDraft[] {
+  return [
+    { id: crypto.randomUUID(), type: 'LOAD', company: '', address: '', city: '', appointmentAt: '', serviceMinMinutes: 60, serviceMaxMinutes: 120 },
+    { id: crypto.randomUUID(), type: 'UNLOAD', company: '', address: '', city: '', appointmentAt: '', serviceMinMinutes: 60, serviceMaxMinutes: 120 }
+  ]
+}
+
+type ImportFileKind = 'PDF' | 'EXCEL' | 'IMAGE' | 'UNSUPPORTED'
+type ImportFileStatus = 'queued' | 'processing' | 'ready' | 'error'
+
+interface ImportQueueItem {
+  id: string
+  key: string
+  fileName: string
+  fileType: ImportFileKind
+  status: ImportFileStatus
+  preview?: OrderImportPreview
+  error?: string
+  completedDraftIndexes: number[]
+}
+
+interface ImportSelection {
+  itemId: string
+  draftIndex: number
+}
+
+function classifyImportFile(file: File): ImportFileKind {
+  const filename = file.name.toLocaleLowerCase()
+  if (filename.endsWith('.pdf') || file.type === 'application/pdf') return 'PDF'
+  if (filename.endsWith('.xlsx') || file.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') return 'EXCEL'
+  if (
+    filename.endsWith('.png')
+    || filename.endsWith('.jpg')
+    || filename.endsWith('.jpeg')
+    || filename.endsWith('.webp')
+    || ['image/png', 'image/jpeg', 'image/webp'].includes(file.type)
+  ) return 'IMAGE'
+  return 'UNSUPPORTED'
+}
+
+function validateImportFile(file: File) {
+  const kind = classifyImportFile(file)
+  if (kind === 'PDF' && file.size > 20 * 1024 * 1024) throw new Error(`PDF «${file.name}» больше 20 МБ.`)
+  if (kind === 'EXCEL' && file.size > 5 * 1024 * 1024) throw new Error(`Excel «${file.name}» больше 5 МБ.`)
+  if (kind === 'IMAGE' && file.size > 10 * 1024 * 1024) throw new Error(`Скриншот «${file.name}» больше 10 МБ.`)
+  if (kind === 'UNSUPPORTED') throw new Error(`Файл «${file.name}» не поддерживается.`)
+}
+
+function importKindLabel(kind: ImportFileKind) {
+  if (kind === 'PDF') return 'PDF Auftrag'
+  if (kind === 'EXCEL') return 'Excel'
+  if (kind === 'IMAGE') return 'Скриншот'
+  return 'Не поддерживается'
+}
+
+function isDraftCompleted(item: ImportQueueItem, draftIndex: number) {
+  return item.completedDraftIndexes.includes(draftIndex)
+}
+
+function findNextImportSelection(items: ImportQueueItem[], current?: ImportSelection | null): ImportSelection | null {
+  for (const item of items) {
+    if (item.status !== 'ready' || !item.preview) continue
+    for (let index = 0; index < item.preview.drafts.length; index += 1) {
+      if (current && current.itemId === item.id && current.draftIndex === index) continue
+      if (!isDraftCompleted(item, index)) return { itemId: item.id, draftIndex: index }
+    }
+  }
+  return null
+}
 
 export function NewOrderPage() {
   const navigate = useNavigate()
   const vehicles = usePolling(api.vehicles, 30_000)
   const [vehicleId, setVehicleId] = useState('')
   const [orderNumber, setOrderNumber] = useState('')
-  const [stops, setStops] = useState<StopDraft[]>(initialStops)
+  const [stops, setStops] = useState<StopDraft[]>(() => createInitialStops())
   const [submitting, setSubmitting] = useState(false)
   const [importing, setImporting] = useState(false)
-  const [importPreview, setImportPreview] = useState<OrderImportPreview | null>(null)
-  const [selectedDraftIndex, setSelectedDraftIndex] = useState(0)
+  const [isImportDragging, setIsImportDragging] = useState(false)
+  const [importItems, setImportItems] = useState<ImportQueueItem[]>([])
+  const [importSelection, setImportSelection] = useState<ImportSelection | null>(null)
+  const [appliedImportSelection, setAppliedImportSelection] = useState<ImportSelection | null>(null)
   const [previewVehicleId, setPreviewVehicleId] = useState('')
   const importGeneration = useRef(0)
   const geocodeGeneration = useRef(new Map<string, number>())
@@ -52,10 +119,13 @@ export function NewOrderPage() {
     && stop.serviceMaxMinutes >= stop.serviceMinMinutes
   )
   const canSubmit = Boolean(vehicleId && orderNumber.trim() && allStopsConfirmed && stops.length >= 2 && !importing)
-  const importWarnings = importPreview
-    ? [...importPreview.warnings, ...(importPreview.drafts[selectedDraftIndex]?.warnings ?? [])]
+  const selectedImportItem = importItems.find((item) => item.id === importSelection?.itemId)
+  const selectedDraftIndex = importSelection?.draftIndex ?? 0
+  const importWarnings = selectedImportItem?.preview
+    ? [...selectedImportItem.preview.warnings, ...(selectedImportItem.preview.drafts[selectedDraftIndex]?.warnings ?? [])]
     : []
-  const selectedImportDraft = importPreview?.drafts[selectedDraftIndex]
+  const selectedImportDraft = selectedImportItem?.preview?.drafts[selectedDraftIndex]
+  const remainingImportDrafts = importItems.reduce((total, item) => total + (item.preview?.drafts.filter((_, index) => !isDraftCompleted(item, index)).length ?? 0), 0)
 
   useEffect(() => () => { importGeneration.current += 1 }, [])
 
@@ -80,8 +150,10 @@ export function NewOrderPage() {
     setGeocodingStopId(stopId)
     setStops((current) => current.map((item) => (item.id === stopId ? { ...item, geocodeError: undefined, geocode: undefined } : item)))
     try {
-      const result = await api.geocode(stop.address.trim())
-      if (isCurrent()) setStops((current) => current.map((item) => (item.id === stopId && item.address === stop.address ? { ...item, geocode: result } : item)))
+      const result = await api.geocode(buildGeocodeQuery(stop.address, stop.city))
+      if (isCurrent()) setStops((current) => current.map((item) => (item.id === stopId && item.address === stop.address
+        ? { ...item, geocode: result, city: item.city.trim() || result.city || '' }
+        : item)))
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Адрес не найден.'
       if (isCurrent()) setStops((current) => current.map((item) => (item.id === stopId && item.address === stop.address ? { ...item, geocodeError: message } : item)))
@@ -107,17 +179,19 @@ export function NewOrderPage() {
     )?.id ?? ''
   }
 
-  function selectImportedDraft(index: number) {
-    const draft = importPreview?.drafts[index]
+  function selectImportedDraft(selection: ImportSelection) {
+    const item = importItems.find((candidate) => candidate.id === selection.itemId)
+    const draft = item?.preview?.drafts[selection.draftIndex]
     if (!draft) return
-    setSelectedDraftIndex(index)
+    setImportSelection(selection)
     setPreviewVehicleId(findVehicleId(draft))
     setError(null)
     setSuccessMessage(null)
   }
 
   function applyImportedDraft() {
-    const draft = importPreview?.drafts[selectedDraftIndex]
+    const draft = selectedImportDraft
+    const currentSelection = importSelection
     if (!draft) return
     if (!previewVehicleId) {
       setError(new Error('Сначала выберите грузовик, для которого создаётся этот заказ.'))
@@ -131,7 +205,7 @@ export function NewOrderPage() {
       type: stop.type,
       company: stop.company ?? '',
       address: stop.address ?? '',
-      city: '',
+      city: stop.city ?? '',
       appointmentAt: stop.appointmentLocal ?? '',
       serviceMinMinutes: 60,
       serviceMaxMinutes: 120
@@ -139,45 +213,101 @@ export function NewOrderPage() {
 
     setOrderNumber(draft.orderNumber ?? '')
     setVehicleId(previewVehicleId)
+    setAppliedImportSelection(currentSelection)
     const missingStop: StopDraft = {
       id: crypto.randomUUID(), type: importedStops[0]?.type === 'LOAD' ? 'UNLOAD' : 'LOAD',
       company: '', address: '', city: '', appointmentAt: '', serviceMinMinutes: 60, serviceMaxMinutes: 120
     }
     setStops(importedStops.length >= 2 ? importedStops : importedStops[0]?.type === 'UNLOAD'
       ? [missingStop, ...importedStops] : [...importedStops, missingStop])
-    setSuccessMessage(`Предпросмотр PDF перенесён: ${draft.stops.length} точек. Проверьте распознанные данные и адреса перед сохранением заказа.`)
+    setSuccessMessage(`Предпросмотр перенесён: ${draft.stops.length} точек. Проверьте распознанные данные и адреса перед сохранением заказа.`)
     void geocodeImportedStops(importedStops, generation)
   }
 
-  async function handlePdfImport(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0]
+  async function handleOrderImport(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? [])
     event.target.value = ''
-    if (!file) return
+    await importOrderFiles(files)
+  }
+
+  async function handleImportDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault()
+    event.stopPropagation()
+    setIsImportDragging(false)
+    if (importing) return
+    await importOrderFiles(Array.from(event.dataTransfer.files))
+  }
+
+  function handleImportDrag(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault()
+    event.stopPropagation()
+    if (!importing) setIsImportDragging(true)
+  }
+
+  function handleImportDragLeave(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault()
+    event.stopPropagation()
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+      setIsImportDragging(false)
+    }
+  }
+
+  async function importOrderFiles(files: File[]) {
+    if (!files.length) return
 
     setError(null)
     setSuccessMessage(null)
-    setImportPreview(null)
-    setPreviewVehicleId('')
-    if (!file.name.toLocaleLowerCase().endsWith('.pdf')) {
-      setError(new Error('Выберите заказ только в формате PDF.'))
-      return
-    }
-    if (file.size > 20 * 1024 * 1024) {
-      setError(new Error('Размер PDF-заказа не должен превышать 20 МБ.'))
+    const existingKeys = new Set(importItems.map((item) => item.key))
+    const newFiles = files
+      .map((file) => ({ file, key: `${file.name}:${file.size}:${file.lastModified}` }))
+      .filter(({ key }) => !existingKeys.has(key))
+      .slice(0, Math.max(0, 10 - importItems.length))
+
+    if (!newFiles.length) {
+      setError(new Error('Перетащите PDF Auftrag, книгу Excel .xlsx или скриншот PNG/JPG/WebP с адресами загрузки и выгрузки.'))
       return
     }
 
+    if (files.length !== newFiles.length) {
+      setSuccessMessage('Часть файлов уже была добавлена или превышает лимит 10 файлов за один импорт.')
+    }
+
+    const queuedItems: ImportQueueItem[] = newFiles.map(({ file, key }) => ({
+      id: crypto.randomUUID(),
+      key,
+      fileName: file.name,
+      fileType: classifyImportFile(file),
+      status: 'queued',
+      completedDraftIndexes: []
+    }))
+    setImportItems((current) => [...current, ...queuedItems])
     setImporting(true)
     try {
-      const preview = await api.importPdf(file)
-      setImportPreview(preview)
-      setSelectedDraftIndex(0)
-      if (!preview.drafts.length) {
-        setError(new Error('В PDF не найдены адреса загрузки или выгрузки. Проверьте заказ или введите данные вручную.'))
-        return
+      for (const [index, { file }] of newFiles.entries()) {
+        const item = queuedItems[index]
+        setImportItems((current) => current.map((candidate) => candidate.id === item.id ? { ...candidate, status: 'processing', error: undefined } : candidate))
+        try {
+          validateImportFile(file)
+          const fileKind = classifyImportFile(file)
+          let preview: OrderImportPreview
+          if (fileKind === 'PDF') preview = await api.importPdf(file)
+          else if (fileKind === 'EXCEL') preview = await api.importExcel(file)
+          else if (fileKind === 'IMAGE') preview = await api.importImage(file)
+          else throw new Error(`Файл «${file.name}» не поддерживается.`)
+
+          if (!preview.drafts.length) {
+            throw new Error('В файле не найдены адреса загрузки или выгрузки.')
+          }
+
+          setImportItems((current) => current.map((candidate) => candidate.id === item.id ? { ...candidate, status: 'ready', preview } : candidate))
+          setImportSelection((currentSelection) => currentSelection ?? { itemId: item.id, draftIndex: 0 })
+          setPreviewVehicleId((currentVehicleId) => currentVehicleId || findVehicleId(preview.drafts[0]))
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Не удалось распознать файл.'
+          setImportItems((current) => current.map((candidate) => candidate.id === item.id ? { ...candidate, status: 'error', error: message } : candidate))
+        }
       }
-      setPreviewVehicleId(findVehicleId(preview.drafts[0]))
-      setSuccessMessage('PDF-заказ прочитан. Подтвердите данные и грузовик; пока ничего не сохранено.')
+      setSuccessMessage(`Файлы добавлены: ${newFiles.length}. Выберите распознанную запись, назначьте грузовик и подтвердите данные.`)
     } catch (err) {
       setError(err as Error)
     } finally {
@@ -215,6 +345,28 @@ export function NewOrderPage() {
     setSubmitting(true)
     try {
       const tour = await api.createTour(payload)
+      if (appliedImportSelection) {
+        const nextItems = importItems.map((item) => item.id === appliedImportSelection.itemId
+          ? { ...item, completedDraftIndexes: Array.from(new Set([...item.completedDraftIndexes, appliedImportSelection.draftIndex])) }
+          : item
+        )
+        const nextSelection = findNextImportSelection(nextItems, appliedImportSelection)
+        setImportItems(nextItems)
+        setAppliedImportSelection(null)
+
+        if (nextSelection) {
+          const nextItem = nextItems.find((item) => item.id === nextSelection.itemId)
+          const nextDraft = nextItem?.preview?.drafts[nextSelection.draftIndex]
+          setImportSelection(nextSelection)
+          setPreviewVehicleId(nextDraft ? findVehicleId(nextDraft) : '')
+          setVehicleId('')
+          setOrderNumber('')
+          setStops(createInitialStops())
+          setSuccessMessage(`Заказ ${tour.orderNumber} сохранён. Осталось подтвердить распознанных записей: ${Math.max(0, remainingImportDrafts - 1)}.`)
+          return
+        }
+      }
+
       setSuccessMessage(`Заказ ${tour.orderNumber} сохранён. Статус: ${statusLabel(tour.status)}`)
       navigate(`/vehicles/${tour.vehicleId}`)
     } catch (err) {
@@ -225,7 +377,7 @@ export function NewOrderPage() {
   }
 
   function updateStop(stopId: string, patch: Partial<StopDraft>) {
-    if (patch.address !== undefined) {
+    if (patch.address !== undefined || patch.city !== undefined) {
       geocodeGeneration.current.set(stopId, (geocodeGeneration.current.get(stopId) ?? 0) + 1)
     }
     setStops((current) =>
@@ -234,7 +386,10 @@ export function NewOrderPage() {
           ? {
               ...stop,
               ...patch,
-              geocode: patch.address !== undefined && patch.address !== stop.address ? undefined : stop.geocode,
+              geocode: (patch.address !== undefined && patch.address !== stop.address)
+                || (patch.city !== undefined && patch.city !== stop.city)
+                ? undefined
+                : stop.geocode,
               geocodeError: undefined
             }
           : stop
@@ -260,54 +415,98 @@ export function NewOrderPage() {
     <form className="space-y-5" onSubmit={handleSubmit}>
       <div>
         <h2 className="text-xl font-semibold">Новый заказ</h2>
-        <p className="text-sm text-slate-500">Загрузите PDF-заказ для распознавания ИИ или введите данные вручную. Сохранение выполняется только после вашего подтверждения.</p>
+        <p className="text-sm text-slate-500">Перетащите Auftrag, Excel или скриншот таблицы для распознавания либо введите данные вручную. Сохранение выполняется только после вашего подтверждения.</p>
       </div>
 
       <section className="rounded-lg border border-sky-200 bg-sky-50 p-4">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-start gap-3">
+        <div
+          className={`rounded-lg border-2 border-dashed p-4 transition ${isImportDragging ? 'border-sky-500 bg-white' : 'border-sky-200 bg-sky-50'}`}
+          onDragEnter={handleImportDrag}
+          onDragOver={handleImportDrag}
+          onDragLeave={handleImportDragLeave}
+          onDrop={(event) => void handleImportDrop(event)}
+        >
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="flex items-start gap-3">
             <FileText className="mt-0.5 h-5 w-5 text-sky-700" aria-hidden="true" />
             <div>
-              <h3 className="font-semibold text-sky-950">Распознать PDF-заказ с помощью ИИ</h3>
+              <h3 className="font-semibold text-sky-950">Перетащите Auftrag, Excel или скриншот</h3>
               <p className="text-sm text-sky-800">
-                Только PDF до 20 МБ. Содержимое отправляется в OpenAI для распознавания; исходный файл не сохраняется. ИИ определяет номер заказа, грузовик, точки загрузки и выгрузки, а также указанные сроки.
+                PDF до 20 МБ, Excel .xlsx до 5 МБ, скриншоты PNG/JPG/WebP до 10 МБ. PDF и изображения распознаются через OpenAI; Excel сначала читается локально. Исходные файлы не сохраняются.
               </p>
-              <p className="mt-1 text-xs text-sky-800">Результат является предварительным. Вы выбираете грузовик и подтверждаете данные перед переносом в форму заказа.</p>
+              <p className="mt-1 text-xs text-sky-800">Можно бросить несколько файлов: найденные записи появятся ниже, а вы выберете нужную машину и подтвердите данные.</p>
             </div>
           </div>
           <label className={`primary-button cursor-pointer focus-within:ring-2 focus-within:ring-sky-400 focus-within:ring-offset-2 ${importing ? 'pointer-events-none opacity-60' : ''}`}>
             <Upload className="h-4 w-4" aria-hidden="true" />
-            {importing ? 'PDF распознаётся…' : 'Выбрать PDF'}
+            {importing ? 'Файл распознаётся…' : 'Выбрать файл'}
             <input
               className="sr-only"
               type="file"
-              accept=".pdf,application/pdf"
-              onChange={(event) => void handlePdfImport(event)}
+              multiple
+              accept=".pdf,.xlsx,.png,.jpg,.jpeg,.webp,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,image/png,image/jpeg,image/webp"
+              onChange={(event) => void handleOrderImport(event)}
               disabled={importing}
             />
           </label>
+          </div>
         </div>
 
-        {importPreview ? (
+        {importItems.length ? (
           <div className="mt-4 space-y-3 border-t border-sky-200 pt-3">
             <div className="flex flex-wrap items-center gap-2 text-sm text-sky-900">
               <Sparkles className="h-4 w-4" aria-hidden="true" />
               <span>
-                Распознано ИИ · заказов/записей: {importPreview.drafts.length} · ещё не сохранено
+                Очередь импорта · файлов: {importItems.length} · распознанных записей к подтверждению: {remainingImportDrafts} · ещё не сохранено
               </span>
             </div>
-            {importPreview.drafts.length > 1 ? (
-              <div className="flex flex-wrap gap-2" aria-label="Распознанные заказы">
-                {importPreview.drafts.map((draft, index) => (
-                  <button key={`${draft.orderNumber ?? 'auftrag'}-${index}`} type="button" className="secondary-button" aria-pressed={selectedDraftIndex === index} onClick={() => selectImportedDraft(index)}>
-                    {draft.orderNumber || `Заказ ${index + 1}`} · точек: {draft.stops.length}
-                  </button>
-                ))}
-              </div>
-            ) : null}
+            <div className="grid gap-2">
+              {importItems.map((item) => (
+                <div key={item.id} className="rounded-md border border-sky-200 bg-white p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                    <div>
+                      <div className="font-semibold text-slate-900">{item.fileName}</div>
+                      <div className="text-slate-500">
+                        {importKindLabel(item.fileType)} · {
+                          item.status === 'queued' ? 'ожидает'
+                            : item.status === 'processing' ? 'распознаётся'
+                              : item.status === 'ready' ? `найдено записей: ${item.preview?.drafts.length ?? 0}`
+                                : 'ошибка'
+                        }
+                      </div>
+                    </div>
+                    {item.status === 'ready' && item.preview?.drafts.length ? (
+                      <div className="flex flex-wrap gap-2" aria-label={`Распознанные заказы из ${item.fileName}`}>
+                        {item.preview.drafts.map((draft, index) => {
+                          const selected = importSelection?.itemId === item.id && importSelection.draftIndex === index
+                          const completed = isDraftCompleted(item, index)
+                          return (
+                            <button
+                              key={`${draft.orderNumber ?? item.id}-${index}`}
+                              type="button"
+                              className={selected ? 'primary-button' : 'secondary-button'}
+                              aria-pressed={selected}
+                              disabled={completed}
+                              onClick={() => selectImportedDraft({ itemId: item.id, draftIndex: index })}
+                            >
+                              {completed ? 'Сохранён' : (draft.orderNumber || `Запись ${index + 1}`)} · точек: {draft.stops.length}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    ) : null}
+                  </div>
+                  {item.error ? <div className="mt-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{item.error}</div> : null}
+                </div>
+              ))}
+            </div>
             {selectedImportDraft ? (
               <div className="rounded-lg border border-sky-200 bg-white p-4">
                 <div className="grid gap-3 md:grid-cols-3">
+                  <div>
+                    <span className="field-label">Источник</span>
+                    <div className="font-semibold text-slate-900">{selectedImportItem?.fileName ?? 'Файл'}</div>
+                  </div>
                   <div>
                     <span className="field-label">Распознанный заказ</span>
                     <div className="font-semibold text-slate-900">{selectedImportDraft.orderNumber || 'Не распознан'}</div>
@@ -340,6 +539,7 @@ export function NewOrderPage() {
                       <div>
                         <div className="font-medium text-slate-900">{stop.address || 'Адрес не распознан'}</div>
                         {stop.company ? <div className="text-slate-500">{stop.company}</div> : null}
+                        {stop.city ? <div className="text-slate-500">Город: {stop.city}</div> : null}
                       </div>
                       <div>{stop.appointmentLocal ? stop.appointmentLocal.replace('T', ' ') : 'Без срока'}</div>
                       <div className="text-slate-500">
@@ -494,4 +694,13 @@ export function NewOrderPage() {
       </div>
     </form>
   )
+}
+
+function buildGeocodeQuery(address: string, city: string): string {
+  const normalizedAddress = address.trim()
+  const normalizedCity = city.trim()
+  if (!normalizedCity || normalizedAddress.toLocaleLowerCase().includes(normalizedCity.toLocaleLowerCase())) {
+    return normalizedAddress
+  }
+  return `${normalizedAddress}, ${normalizedCity}`
 }

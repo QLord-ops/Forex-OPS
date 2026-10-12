@@ -1,5 +1,6 @@
 import type {
   Alert,
+  AppointmentAnalysis,
   CreateTourInput,
   CurrentPosition,
   DashboardResponse,
@@ -77,6 +78,16 @@ export const api = {
     }),
   markLoaded: (stopId: string) => request<Tour>(`/stops/${stopId}/loaded`, { method: 'POST' }),
   markUnloaded: (stopId: string) => request<Tour>(`/stops/${stopId}/unloaded`, { method: 'POST' }),
+  previewAppointment: (stopId: string, appointmentAt: string) =>
+    request<AppointmentAnalysis>(`/stops/${stopId}/appointment/preview`, {
+      method: 'POST',
+      body: JSON.stringify({ appointmentAt })
+    }),
+  applyAppointment: (stopId: string, payload: { appointmentAt: string; version: number }) =>
+    request<AppointmentAnalysis>(`/stops/${stopId}/appointment`, {
+      method: 'PUT',
+      body: JSON.stringify(payload)
+    }),
   alerts: () => request<Alert[]>('/alerts'),
   history: (vehicleId?: string) =>
     request<HistoryResponse>(vehicleId ? `/history?vehicleId=${encodeURIComponent(vehicleId)}` : '/history'),
@@ -89,6 +100,11 @@ export const api = {
     const body = new FormData()
     body.append('file', file)
     return request<OrderImportPreview>('/imports/pdf/preview', { method: 'POST', body })
+  },
+  importImage: (file: File) => {
+    const body = new FormData()
+    body.append('file', file)
+    return request<OrderImportPreview>('/imports/image/preview', { method: 'POST', body })
   },
   geocode: (address: string) => request<GeocodeResult>(`/geocode?address=${encodeURIComponent(address)}`)
 }
