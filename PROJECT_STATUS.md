@@ -1,4 +1,4 @@
-# Project Status — 11. Oktober 2026
+# Project Status — 12. Oktober 2026
 
 ## DONE
 
@@ -15,13 +15,15 @@
 - Versionierter Editor der aktiven Route mit Vorschau; erledigte/bestätigte Stopps, Historie, Uhrzustand und gefahrene Geometrie bleiben erhalten.
 - Dashboard zeigt strukturierte Orte statt Firmen; unbekannte Alt-Orte bleiben explizit manuell korrigierbar.
 - Sofortiger, race-sicherer Fahrzeugfilter der Historie; Zeitberichte und Änderungsprotokoll.
-- Excel-only-Vorschauimport mit lokalem Parser und optionalem OpenAI-Fallback; Originaldateien werden nicht gespeichert.
-- Validierung: 100/100 API-Tests, Typecheck, Lint und Produktions-Build erfolgreich; Browser-Smoke ohne Console-Fehler.
+- Drag-and-drop-Vorschauimport für PDF-Aufträge, Excel `.xlsx` und Screenshots von Aufträgen/Excel-Tabellen; Originaldateien werden nicht gespeichert.
+- Excel-Import mit lokalem Parser und optionalem OpenAI-Fallback; PDF- und Screenshot-Import über OpenAI Structured Output. Screenshot-Orte werden separat extrahiert und bei Bedarf durch strukturiertes Nominatim-Geocoding ergänzt.
+- Später eingegangene Termine lassen sich an eine offene Lade-/Entladestelle einer aktiven oder wartenden Tour anhängen. Vor dem Speichern zeigt die Vorschau ETA-Fenster, Risiko, Puffer und empfohlene späteste Abfahrt; Änderungen sind versioniert und historisiert.
+- Validierung: 115/115 API-Tests, Typecheck, Lint und Produktions-Build erfolgreich; Browser-Smoke ohne Console-Fehler.
 
 ## CONFIGURATION PENDING
 
 - Für Live-Traffic fehlt noch der Benutzer-Key `TOMTOM_API_KEY` plus `TOMTOM_FREE_TIER_CONFIRMED=true`. Ohne diese Werte ist der sichtbare OSRM-Fallback aktiv.
-- Für ungewöhnliche Excel-Layouts fehlt optional `OPENAI_API_KEY`. Standardtabellen funktionieren ohne KI.
+- `OPENAI_API_KEY` ist lokal konfiguriert und der Screenshot-Import wurde mit einem synthetischen Auftrag gegen die echte API geprüft; für jede weitere Umgebung muss der Schlüssel separat als nicht versioniertes Server-Secret gesetzt werden. Standardtabellen funktionieren weiterhin ohne KI.
 - Bestehende Alt-Stopps haben teilweise noch keinen strukturierten Ort; dieser wird bewusst nicht aus Firmen- oder Kommatext geraten.
 
 ## KNOWN LIMITATIONS
