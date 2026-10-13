@@ -7,7 +7,7 @@ import {
   PlusCircle,
   Truck
 } from 'lucide-react'
-import { NavLink, Outlet } from 'react-router-dom'
+import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { OperationsNotifications } from './OperationsNotifications'
 
 const navItems = [
@@ -20,8 +20,11 @@ const navItems = [
 ]
 
 export function AppShell() {
+  const location = useLocation()
+  const isDashboard = location.pathname === '/'
+
   return (
-    <div className="min-h-screen text-slate-950">
+    <div className={isDashboard ? 'h-dvh overflow-hidden text-slate-950' : 'min-h-screen text-slate-950'}>
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-20 border-r border-slate-800 bg-slate-950 text-white transition-[width] 2xl:w-64 lg:block">
         <div className="flex h-16 items-center justify-center gap-3 border-b border-slate-800 px-3 2xl:justify-start 2xl:px-5">
           <MapPinned className="h-6 w-6 text-sky-300" aria-hidden="true" />
@@ -53,20 +56,9 @@ export function AppShell() {
         </nav>
       </aside>
 
-      <div className="lg:pl-20 2xl:pl-64">
-        <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 backdrop-blur">
-          <div className="flex min-h-16 items-center justify-between gap-4 px-4 lg:px-6">
-            <div className="min-w-0">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Расчётная диспетчеризация
-              </p>
-              <h1 className="text-lg font-semibold text-slate-950 text-balance-safe">Грузовики, маршруты и сроки</h1>
-            </div>
-            <div className="hidden max-w-sm rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900 md:block">
-              Расчётная позиция — без данных GPS
-            </div>
-          </div>
-          <nav className="flex gap-1 overflow-x-auto border-t border-slate-200 px-3 py-2 lg:hidden">
+      <div className={isDashboard ? 'h-dvh lg:pl-20 2xl:pl-64' : 'lg:pl-20 2xl:pl-64'}>
+        <header className="border-b border-slate-200 bg-white lg:hidden">
+          <nav className="flex gap-1 overflow-x-auto px-3 py-2" aria-label="Мобильная навигация">
             {navItems.map((item) => (
               <NavLink
                 key={item.to}
@@ -85,7 +77,7 @@ export function AppShell() {
             ))}
           </nav>
         </header>
-        <main className="px-4 py-5 lg:px-6">
+        <main className={isDashboard ? 'dashboard-main' : 'px-4 py-5 lg:px-6'}>
           <Outlet />
           <OperationsNotifications />
         </main>

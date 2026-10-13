@@ -86,6 +86,9 @@ export interface DashboardVehicle {
   delayMinutes?: number | null
   risk: RiskColor
   warning?: string | null
+  currentStop?: Stop | null
+  dwellMinutes?: number | null
+  dwellSeverity?: 'NONE' | 'WARNING' | 'CRITICAL'
 }
 
 export interface RiskAppointment {

@@ -24,11 +24,13 @@ const osmStyle: StyleSpecification = {
 export function MapPanel({
   tour,
   position,
-  height = 520
+  height = 520,
+  fill = false
 }: {
   tour?: Tour | null
   position?: CurrentPosition | null
-  height?: number
+  height?: number | string
+  fill?: boolean
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<Map | null>(null)
@@ -62,6 +64,15 @@ export function MapPanel({
       markerRef.current = null
       stopMarkersRef.current = []
     }
+  }, [])
+
+  useEffect(() => {
+    const container = containerRef.current
+    const map = mapRef.current
+    if (!container || !map || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => map.resize())
+    observer.observe(container)
+    return () => observer.disconnect()
   }, [])
 
   useEffect(() => {
@@ -113,12 +124,8 @@ export function MapPanel({
   }, [position?.coordinate])
 
   return (
-    <section className="work-surface min-w-0 overflow-hidden">
-      <div ref={containerRef} style={{ height }} className="rounded-t-lg" />
-      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 px-4 py-3 text-sm">
-        <span className="font-semibold text-amber-900">{calculatedPositionLabel}</span>
-        <span className="min-w-0 text-balance-safe text-slate-500">OpenStreetMap · дороги, трафик и актуальность данных показаны в разделе «Время грузовика»</span>
-      </div>
+    <section className={fill ? 'map-panel-fill' : 'work-surface min-w-0 overflow-hidden'}>
+      <div ref={containerRef} style={{ height }} className={fill ? 'h-full w-full' : 'rounded-lg'} />
     </section>
   )
 }

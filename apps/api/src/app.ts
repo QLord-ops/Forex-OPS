@@ -19,7 +19,7 @@ import { OsrmRoutingProvider, RoutingError, RoutingService } from "./services/ro
 import { validateXlsxArchive } from "./services/xlsx-validation.js";
 import { enrichTour, type TourAggregate, toIsoObject, tourInclude, TourService } from "./services/tours.js";
 import { VehicleService } from "./services/vehicles.js";
-import { NotificationService } from "./services/notifications.js";
+import { calculateDwellState, NotificationService } from "./services/notifications.js";
 import { OperationsService } from "./services/operations.js";
 import { ReplanningService } from "./services/replanning.js";
 import { PrismaTrafficQuotaStore, TomTomRoutingProvider, TrafficRoutingService } from './services/traffic-routing.js';
@@ -567,6 +567,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
 
   app.get("/dashboard", async () => {
     await refreshAllAlerts();
+    const generatedAt = new Date();
     const vehicles = await prisma.vehicle.findMany({
       include: {
         tours: {
@@ -587,6 +588,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
       const toStop = currentLeg ? activeTour?.stops.find((stop) => stop.id === currentLeg.toStopId) : undefined;
       const position = await tourService.getCurrentPosition(vehicle.id);
       const enriched = activeTour ? enrichTour(activeTour) : null;
+      const currentStop = activeTour?.stops.find((stop) => !stop.completedAt) ?? null;
+      const dwell = calculateDwellState(currentStop, generatedAt);
 
       rows.push({
         vehicleId: vehicle.id,
@@ -621,7 +624,10 @@ export async function buildApp(options: BuildAppOptions = {}) {
         remainingKm: Math.round((position.remainingDistanceMeters / 1000) * 10) / 10,
         delayMinutes: enriched?.currentDelayMinutes ?? position.delayMinutes,
         risk: enriched?.riskColor ?? "GREY",
-        warning: enriched?.riskColor && enriched.riskColor !== "GREEN" && enriched.riskColor !== "GREY" ? enriched.riskColor : null
+        warning: enriched?.riskColor && enriched.riskColor !== "GREEN" && enriched.riskColor !== "GREY" ? enriched.riskColor : null,
+        currentStop: currentStop ? toIsoObject(currentStop) : null,
+        dwellMinutes: dwell.dwellMinutes,
+        dwellSeverity: dwell.dwellSeverity
       });
     }
 
@@ -644,7 +650,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     }));
 
     return {
-      generatedAt: new Date().toISOString(),
+      generatedAt: generatedAt.toISOString(),
       vehicles: frontendVehicles,
       riskyAppointments,
       rows,

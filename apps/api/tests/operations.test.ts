@@ -7,7 +7,7 @@ import { migrateTestDatabase } from './test-database.js';
 import { TourService, makePersistedDrivePlan } from '../src/services/tours.js';
 import { MockRoutingProvider } from '../src/services/routing.js';
 import { OperationsService } from '../src/services/operations.js';
-import { NotificationService } from '../src/services/notifications.js';
+import { calculateDwellState, NotificationService } from '../src/services/notifications.js';
 import { createInitialClockState, type ClockState } from '../src/services/vehicle-clock.js';
 
 let db: PrismaClient;
@@ -72,6 +72,45 @@ it('persists and deduplicates predicted arrival without recording an actual arri
   await f.tours.recordUnloaded(f.stop.id, at(270));
   const completed = await db.stop.findUniqueOrThrow({ where: { id: f.stop.id } });
   expect((completed.completedAt!.getTime() - completed.arrivedAt!.getTime()) / 60000).toBe(148);
+});
+
+it('classifies confirmed dwell at the exact 60/61/120/121 minute boundaries', () => {
+  const stop = {
+    arrivedAt: start,
+    completedAt: null,
+    serviceMinMinutes: 60,
+    serviceMaxMinutes: 120
+  };
+  expect(calculateDwellState(stop, at(60))).toEqual({ dwellMinutes: 60, dwellSeverity: 'NONE' });
+  expect(calculateDwellState(stop, at(61))).toEqual({ dwellMinutes: 61, dwellSeverity: 'WARNING' });
+  expect(calculateDwellState(stop, at(120))).toEqual({ dwellMinutes: 120, dwellSeverity: 'WARNING' });
+  expect(calculateDwellState(stop, at(121))).toEqual({ dwellMinutes: 121, dwellSeverity: 'CRITICAL' });
+  expect(calculateDwellState({ ...stop, completedAt: at(59) }, at(121))).toEqual({ dwellMinutes: null, dwellSeverity: 'NONE' });
+});
+
+it('creates one long-dwell notification after 60 minutes and upgrades it after 120 minutes', async () => {
+  const f = await fixture('DWELL-LEVELS');
+  await f.service.confirmArrival(f.stop.id, start, start);
+
+  await f.notices.refresh(at(60));
+  expect(await db.notification.count({ where: { stopId: f.stop.id, type: 'LONG_DWELL' } })).toBe(0);
+
+  await f.notices.refresh(at(61));
+  const warning = await db.notification.findUniqueOrThrow({ where: { dedupKey: `dwell:${f.stop.id}` } });
+  expect(JSON.parse(warning.payloadJson)).toMatchObject({ dwellMinutes: 61, severity: 'WARNING' });
+  await f.notices.acknowledge(warning.id, at(62));
+  await f.notices.refresh(at(120));
+  expect(await db.notification.count({ where: { stopId: f.stop.id, type: 'LONG_DWELL' } })).toBe(1);
+  expect((await db.notification.findUniqueOrThrow({ where: { id: warning.id } })).acknowledgedAt).not.toBeNull();
+
+  await f.notices.refresh(at(121));
+  const critical = await db.notification.findUniqueOrThrow({ where: { id: warning.id } });
+  expect(JSON.parse(critical.payloadJson)).toMatchObject({ dwellMinutes: 121, severity: 'CRITICAL' });
+  expect(critical.acknowledgedAt).toBeNull();
+  expect(await db.notification.count({ where: { stopId: f.stop.id, type: 'LONG_DWELL' } })).toBe(1);
+
+  await f.notices.refresh(at(130));
+  expect(await db.notification.count({ where: { stopId: f.stop.id, type: 'LONG_DWELL' } })).toBe(1);
 });
 
 it('freezes movement but consumes duty during manual stop, and resumes without losing progress', async () => {
