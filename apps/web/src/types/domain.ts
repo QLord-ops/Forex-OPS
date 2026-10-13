@@ -77,6 +77,7 @@ export interface DashboardVehicle {
   vehicle: Vehicle
   tour?: Tour | null
   statusText: string
+  operationVersion?: number
   from?: Stop | null
   to?: Stop | null
   appointmentAt?: string | null
@@ -89,6 +90,32 @@ export interface DashboardVehicle {
   currentStop?: Stop | null
   dwellMinutes?: number | null
   dwellSeverity?: 'NONE' | 'WARNING' | 'CRITICAL'
+  currentAction?: {
+    type: 'CONFIRM_ARRIVAL' | 'MARK_LOADED' | 'MARK_UNLOADED' | 'MANUAL_STOP' | 'RESUME'
+    label: string
+    stopId?: string | null
+  } | null
+  statusStartedAt?: string | null
+  statusDurationSeconds?: number | null
+  lastOperation?: {
+    type: string
+    createdAt: string
+    stopId?: string | null
+    reason?: string | null
+  } | null
+  clockSummary?: {
+    preliminary: boolean
+    remainingDrivingMinutes?: number | null
+    breakInMinutes?: number | null
+    remainingDutyMinutes?: number | null
+    nextRestHours?: number | null
+  } | null
+  telemetry?: {
+    source: 'WEBFLEET' | 'CALCULATED'
+    checkedAt?: string | null
+    stale: boolean
+    ageSeconds?: number | null
+  } | null
 }
 
 export interface RiskAppointment {
@@ -201,6 +228,10 @@ export interface CurrentPosition {
   delayMinutes?: number | null
   startedAt?: string | null
   disclaimer?: string
+  positionSource?: 'WEBFLEET' | 'CALCULATED'
+  telemetryRecordedAt?: string | null
+  telemetryAgeSeconds?: number | null
+  telemetryStale?: boolean
   routeGeometry?: RouteGeometry | null
   travelledGeometry?: RouteGeometry | null
   remainingGeometry?: RouteGeometry | null

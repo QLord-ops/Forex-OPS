@@ -76,8 +76,31 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify(payload)
     }),
-  markLoaded: (stopId: string) => request<Tour>(`/stops/${stopId}/loaded`, { method: 'POST' }),
-  markUnloaded: (stopId: string) => request<Tour>(`/stops/${stopId}/unloaded`, { method: 'POST' }),
+  confirmArrival: (stopId: string, arrivedAt: string) =>
+    request(`/stops/${stopId}/arrival`, {
+      method: 'POST',
+      body: JSON.stringify({ arrivedAt })
+    }),
+  markLoaded: (stopId: string, timestamp?: string) =>
+    request<Tour>(`/stops/${stopId}/loaded`, {
+      method: 'POST',
+      body: JSON.stringify(timestamp ? { timestamp } : {})
+    }),
+  markUnloaded: (stopId: string, timestamp?: string) =>
+    request<Tour>(`/stops/${stopId}/unloaded`, {
+      method: 'POST',
+      body: JSON.stringify(timestamp ? { timestamp } : {})
+    }),
+  manualStop: (vehicleId: string, version: number) =>
+    request(`/vehicles/${vehicleId}/manual-stop`, {
+      method: 'POST',
+      body: JSON.stringify({ version })
+    }),
+  resumeVehicle: (vehicleId: string, version: number) =>
+    request(`/vehicles/${vehicleId}/resume`, {
+      method: 'POST',
+      body: JSON.stringify({ version })
+    }),
   previewAppointment: (stopId: string, appointmentAt: string) =>
     request<AppointmentAnalysis>(`/stops/${stopId}/appointment/preview`, {
       method: 'POST',

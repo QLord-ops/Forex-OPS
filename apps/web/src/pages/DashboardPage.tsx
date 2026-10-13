@@ -1,4 +1,4 @@
-import { ArrowUpRight, ChevronDown, CircleDot, Clock3, MapPin, Pin, PinOff, Search } from 'lucide-react'
+import { ArrowUpRight, CheckCircle2, ChevronDown, CircleDot, Clock3, Loader2, MapPin, PackageCheck, PauseCircle, Pin, PinOff, PlayCircle, Search, X } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 
@@ -26,6 +26,10 @@ export function DashboardPage() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [hudOpen, setHudOpen] = useState(false)
   const [pinned, setPinned] = useState<string[]>(readPinnedVehicles)
+  const [actingId, setActingId] = useState<string | null>(null)
+  const [actionVehicleId, setActionVehicleId] = useState<string | null>(null)
+  const [actionTime, setActionTime] = useState(localDateTime())
+  const [actionError, setActionError] = useState('')
   const vehicles = useMemo(() => data?.vehicles ?? [], [data?.vehicles])
   const orderedVehicles = useMemo(() => vehicles.slice().sort((a, b) => compareVehicles(a, b, pinned)), [pinned, vehicles])
   const selectedId = searchParams.get('vehicleId') ?? ''
@@ -46,6 +50,32 @@ export function DashboardPage() {
   })
 
   function selectVehicle(vehicleId: string) { setSearchParams({ vehicleId }, { replace: true }) }
+  function openAction(vehicleId: string) {
+    setActionVehicleId((current) => current === vehicleId ? null : vehicleId)
+    setActionTime(localDateTime())
+    setActionError('')
+  }
+  async function handleVehicleAction(row: DashboardVehicle) {
+    if (!row.currentAction || actingId) return
+    setActingId(row.vehicle.id)
+    setActionError('')
+    try {
+      const action = row.currentAction
+      const timestamp = new Date(actionTime).toISOString()
+      if (action.type === 'CONFIRM_ARRIVAL' && action.stopId) await api.confirmArrival(action.stopId, timestamp)
+      if (action.type === 'MARK_LOADED' && action.stopId) await api.markLoaded(action.stopId, timestamp)
+      if (action.type === 'MARK_UNLOADED' && action.stopId) await api.markUnloaded(action.stopId, timestamp)
+      if (action.type === 'MANUAL_STOP') await api.manualStop(row.vehicle.id, row.operationVersion ?? 0)
+      if (action.type === 'RESUME') await api.resumeVehicle(row.vehicle.id, row.operationVersion ?? 0)
+      await refetch()
+      if (selected?.vehicle.id === row.vehicle.id) await position.refetch()
+      setActionVehicleId(null)
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Не удалось выполнить действие')
+    } finally {
+      setActingId(null)
+    }
+  }
   function togglePin(vehicleId: string) {
     setPinned((current) => {
       const next = current.includes(vehicleId) ? current.filter((id) => id !== vehicleId) : [...current, vehicleId]
@@ -86,12 +116,17 @@ export function DashboardPage() {
                     <span className={classNames('attention-pill', `attention-pill-${attention.tone}`)}>{attention.label}</span>
                   </div>
                   <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
-                    <RailMetric label="Статус" value={statusLabel(row.statusText)} /><RailMetric label="ETA" value={formatDateTime(row.eta)} />
+                    <RailMetric label="Статус" value={statusLine(row)} /><RailMetric label="ETA" value={formatDateTime(row.eta)} />
                     <RailMetric label="Срок" value={formatAppointment(row.appointmentAt)} /><RailMetric label="Отклонение" value={formatDelay(row.delayMinutes)} accent={(row.delayMinutes ?? 0) > 0} />
+                    <RailMetric label="Руль" value={clockLine(row)} /><RailMetric label="GPS" value={telemetryLine(row)} accent={row.telemetry?.stale} />
                   </div>
                   <p className="mt-2 flex items-start gap-1.5 text-xs font-medium text-slate-600"><CircleDot className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" /><span className="text-balance-safe">{attention.reason}</span></p>
                 </button>
-                <button type="button" className="icon-button ml-1.5 self-start" onClick={() => togglePin(row.vehicle.id)} aria-label={isPinned ? `Открепить LKW ${row.vehicle.vehicleNumber}` : `Закрепить LKW ${row.vehicle.vehicleNumber}`} title={isPinned ? 'Открепить' : 'Закрепить'}>{isPinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}</button>
+                <div className="vehicle-card-actions">
+                  <VehicleActionButton row={row} busy={actingId === row.vehicle.id} onClick={() => openAction(row.vehicle.id)} />
+                  <button type="button" className="icon-button" onClick={() => togglePin(row.vehicle.id)} aria-label={isPinned ? `Открепить LKW ${row.vehicle.vehicleNumber}` : `Закрепить LKW ${row.vehicle.vehicleNumber}`} title={isPinned ? 'Открепить' : 'Закрепить'}>{isPinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}</button>
+                </div>
+                {actionVehicleId === row.vehicle.id && row.currentAction ? <ActionPopover row={row} value={actionTime} onChange={setActionTime} busy={actingId === row.vehicle.id} error={actionError} onClose={() => setActionVehicleId(null)} onConfirm={() => void handleVehicleAction(row)} /> : null}
               </article>
             )
           }) : <EmptyState label="По выбранному фильтру машины не найдены." />}
@@ -102,6 +137,58 @@ export function DashboardPage() {
         {position.error ? <button type="button" className="map-error" onClick={() => void position.refetch()}>Позиция временно недоступна · повторить</button> : null}
         {error ? <div className="dashboard-sync-warning">Данные автопарка не обновлены. Повторим автоматически.</div> : null}
       </section>
+    </div>
+  )
+}
+
+function VehicleActionButton({ row, busy, onClick }: { row: DashboardVehicle; busy: boolean; onClick: () => void }) {
+  const action = row.currentAction
+  if (!action) return null
+  const Icon = busy ? Loader2 : action.type === 'CONFIRM_ARRIVAL' ? CheckCircle2
+    : action.type === 'MARK_LOADED' || action.type === 'MARK_UNLOADED' ? PackageCheck
+      : action.type === 'RESUME' ? PlayCircle : PauseCircle
+  return (
+    <button type="button" className="icon-button vehicle-action-button" onClick={onClick} disabled={busy} aria-label={action.label} title={action.label}>
+      <Icon className={classNames('h-4 w-4', busy && 'animate-spin')} aria-hidden="true" />
+    </button>
+  )
+}
+
+function ActionPopover({
+  row,
+  value,
+  onChange,
+  busy,
+  error,
+  onClose,
+  onConfirm
+}: {
+  row: DashboardVehicle
+  value: string
+  onChange: (value: string) => void
+  busy: boolean
+  error: string
+  onClose: () => void
+  onConfirm: () => void
+}) {
+  const action = row.currentAction
+  if (!action) return null
+  const needsTime = action.type === 'CONFIRM_ARRIVAL' || action.type === 'MARK_LOADED' || action.type === 'MARK_UNLOADED'
+  return (
+    <div className="vehicle-action-popover" role="dialog" aria-label={`${action.label} LKW ${row.vehicle.vehicleNumber}`}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="text-sm font-black text-slate-950">{action.label}</p>
+          <p className="truncate text-xs font-semibold text-slate-500">{shortAddress(row.currentStop ?? row.to)} · LKW {row.vehicle.vehicleNumber}</p>
+        </div>
+        <button type="button" className="icon-button icon-button-compact" onClick={onClose} aria-label="Закрыть"><X className="h-3.5 w-3.5" /></button>
+      </div>
+      {needsTime ? <label className="mt-2 block text-xs font-bold text-slate-600">Фактическое время<input className="field-input mt-1 h-9" type="datetime-local" value={value} onChange={(event) => onChange(event.target.value)} /></label> : null}
+      {error ? <p role="alert" className="mt-2 text-xs font-semibold text-red-700">{error}</p> : null}
+      <div className="mt-3 flex justify-end gap-2">
+        <button type="button" className="secondary-button compact-button" onClick={onClose} disabled={busy}>Отмена</button>
+        <button type="button" className="primary-button compact-button" onClick={onConfirm} disabled={busy || (needsTime && !value)}>{busy ? 'Сохранение…' : 'Подтвердить'}</button>
+      </div>
     </div>
   )
 }
@@ -131,6 +218,38 @@ function StopCard({ stop }: { stop: Stop }) {
 function RailMetric({ label, value, accent = false }: { label: string; value: string; accent?: boolean }) { return <div className="min-w-0"><span className="metric-label">{label}</span><span className={classNames('block truncate font-bold', accent ? 'text-red-700' : 'text-slate-800')}>{value}</span></div> }
 function HudMetric({ label, value, alert = false }: { label: string; value: string; alert?: boolean }) { return <span className="hud-metric"><span>{label}</span><strong className={alert ? 'text-rose-300' : ''}>{value}</strong></span> }
 
+function statusLine(row: DashboardVehicle) {
+  const dwell = getDwellMinutes(row)
+  if (dwell > 0) return `${statusLabel(row.statusText)} · ${formatDurationMinutes(dwell)}`
+  if (row.statusDurationSeconds && row.statusDurationSeconds >= 60) return `${statusLabel(row.statusText)} · ${formatDurationMinutes(row.statusDurationSeconds / 60)}`
+  return statusLabel(row.statusText)
+}
+
+function clockLine(row: DashboardVehicle) {
+  const clock = row.clockSummary
+  if (!clock || clock.preliminary) return 'Не задано'
+  const driving = clock.remainingDrivingMinutes
+  const duty = clock.remainingDutyMinutes
+  if (typeof driving === 'number' && typeof duty === 'number') return `${formatDurationMinutes(driving)} / ${formatDurationMinutes(duty)}`
+  if (typeof driving === 'number') return formatDurationMinutes(driving)
+  return '–'
+}
+
+function telemetryLine(row: DashboardVehicle) {
+  const telemetry = row.telemetry
+  if (!telemetry) return 'Расчёт'
+  if (telemetry.source === 'WEBFLEET') {
+    const age = typeof telemetry.ageSeconds === 'number' ? formatDurationMinutes(telemetry.ageSeconds / 60) : '–'
+    return telemetry.stale ? `старые ${age}` : `live ${age}`
+  }
+  return 'Расчёт'
+}
+
+function localDateTime(date = new Date()) {
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
+  return local.toISOString().slice(0, 16)
+}
+
 function compareVehicles(a: DashboardVehicle, b: DashboardVehicle, pinned: string[]) {
   const rankDifference = getAttention(a).rank - getAttention(b).rank
   if (rankDifference) return rankDifference
@@ -154,9 +273,9 @@ function getAttention(row: DashboardVehicle): { rank: number; tone: AttentionTon
 }
 
 function getDwellMinutes(row: DashboardVehicle) {
-  if (typeof row.dwellMinutes === 'number') return row.dwellMinutes
+  if (typeof row.dwellMinutes === 'number') return row.dwellMinutes > 0 ? Math.max(1, Math.ceil(row.dwellMinutes)) : 0
   const stop = row.currentStop ?? row.tour?.stops?.find((item) => item.arrivedAt && !item.completedAt)
-  return stop?.arrivedAt ? Math.max(0, Math.floor((Date.now() - new Date(stop.arrivedAt).getTime()) / 60_000)) : 0
+  return stop?.arrivedAt ? Math.max(1, Math.ceil((Date.now() - new Date(stop.arrivedAt).getTime()) / 60_000)) : 0
 }
 
 function matchesFleetFilter(row: DashboardVehicle, filter: FleetFilter) {

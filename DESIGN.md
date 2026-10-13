@@ -2,7 +2,7 @@
 
 ## Source of truth
 - Status: Active
-- Last refreshed: 2026-10-13 (fullscreen dispatch workspace and import-first Auftrag flow)
+- Last refreshed: 2026-10-13 (live fleet workspace, free camera and Webfleet-ready telemetry)
 - Primary product surfaces: Dispatcher dashboard, vehicle detail/map, tours, new order form, alerts, vehicle history.
 - Evidence reviewed: User-provided product specification in the Codex attachment; repository contained no prior UI or brand assets.
 
@@ -13,8 +13,8 @@
 
 ## Product goals
 - Goals: Let one dispatcher understand every truck's current calculated movement, ETA, delay risk, and queued work within seconds.
-- Non-goals: GPS tracking, driver workflow, mobile app, accounting, CRM, Webfleet integration, multi-user administration.
-- Success signals: A dispatcher can create an order from a file with one confirmation, confirm loading/unloading, see the truck move on the routed polyline, and identify endangered appointments or excessive dwell without manual calculation.
+- Non-goals: Driver workflow, mobile app, accounting, CRM, bidirectional Webfleet job dispatch, multi-user administration.
+- Success signals: A dispatcher can create an order from a file with one confirmation, monitor fresh Webfleet GPS when configured, confirm loading/unloading from the fleet rail, and identify endangered appointments or excessive dwell without leaving the dashboard.
 
 ## Personas and jobs
 - Primary personas: One desktop dispatcher managing a small fleet.
@@ -28,7 +28,7 @@
 
 ## Design principles
 - Principle 1: Dense but legible — tables and timelines carry the information, with minimal chrome.
-- Principle 2: Every estimate states its status and origin; calculated position is never presented as telemetry.
+- Principle 2: Every position and estimate states its origin; fresh Webfleet GPS, stale GPS and calculated positions are visually distinct.
 - Principle 3: Color reinforces explicit text and never carries meaning alone.
 - Principle 4: Operational monitoring uses the full viewport; scrolling is confined to the fleet rail and expandable overlays instead of the dashboard document.
 - Tradeoffs: Desktop-first density over small-screen optimization; operational clarity over visual novelty.
@@ -39,12 +39,12 @@
 - Spacing/layout rhythm: Compact 4/8 px rhythm; no global desktop header; 80 px desktop navigation rail below 1536 px; 340–380 px vehicle rail; fullscreen map workspace; 44–52 px table rows.
 - Shape/radius/elevation: 6–10 px radii, restrained borders, almost no shadows.
 - Motion: Short state transitions only; truck marker may move smoothly between calculated positions; map HUD and route drawer reveal in 180–240 ms and honor reduced motion.
-- Imagery/iconography: Functional line icons; MapLibre/OpenStreetMap map is the primary visual surface.
+- Imagery/iconography: Functional line icons; MapLibre is the rendering surface with traffic and satellite modes. Provider attribution remains visible.
 
 ## Components
 - Existing components to reuse: App shell, status badges, data table, map panel, timeline, order import preview, appointment planner and operational states.
-- New/changed components: Urgency-sorted vehicle rail, fullscreen map stage, floating vehicle HUD, expandable route-stop drawer, import-first Auftrag review, filter chips, shared local page headers, work surfaces, icon buttons and overflow-safe text treatments.
-- Variants and states: dwell-critical VIOLET (highest priority), deadline RED, action ORANGE, watch YELLOW, moving BLUE, on-plan GREEN, idle GREY; DONE/CURRENT/NEXT/QUEUED; loading/arrived/waiting/cancelled.
+- New/changed components: Urgency-sorted vehicle rail with fixed-height contextual actions, fullscreen free-camera map, traffic/satellite switcher, one-shot camera controls, floating vehicle HUD, expandable route-stop drawer, import-first Auftrag review, filter chips, shared local page headers, work surfaces, icon buttons and overflow-safe text treatments.
+- Variants and states: dwell-critical VIOLET (highest priority), deadline RED, action ORANGE, watch YELLOW, moving BLUE, on-plan GREEN, idle GREY; waiting is visible from minute one; Webfleet fresh/stale/calculated source states; DONE/CURRENT/NEXT/QUEUED; loading/arrived/waiting/cancelled.
 - Token/component ownership: CSS custom properties and Tailwind theme in the web app; shared primitives under `apps/web/src/components`.
 
 ## Accessibility
@@ -57,7 +57,7 @@
 ## Responsive behavior
 - Supported breakpoints/devices: Primary 1280–1728 px MacBook desktop; usable down to 1024 px; narrow screens scroll dense tables horizontally.
 - Layout adaptations: From 1100 px the dashboard uses vehicle rail + map; below it the vehicle cards become a horizontal rail above the map. Side navigation becomes a compact top strip below 1024 px.
-- Touch/hover differences: Desktop map HUD expands on hover and focus; touch uses an explicit tap toggle. No action is hover-only; primary buttons maintain at least 40 px height.
+- Touch/hover differences: Desktop map HUD expands on hover and focus; touch uses an explicit tap toggle. Card actions use a fixed action rail and portal popover so cards never resize. No action is hover-only; primary buttons maintain at least 40 px height.
 
 ## Interaction states
 - Loading: Inline skeleton/quiet progress label without hiding existing data.
@@ -65,7 +65,7 @@
 - Error: Persistent German error message with retry where safe.
 - Success: Immediate data refresh and concise confirmation.
 - Disabled: Explain sequencing constraints (for example, unload before load).
-- Offline/slow network: Keep the last visible state and show that refresh failed; routing falls back to a clearly identified local approximation.
+- Offline/slow network: Keep the last visible state and show refresh age; stale Webfleet GPS is never silently replaced by a calculated position; routing fallback is clearly identified.
 
 ## Auftrag import flow
 - Default entry: PDF, Excel or screenshot import with automatic city, appointment and coordinate resolution.
@@ -81,10 +81,15 @@
 ## Implementation constraints
 - Framework/styling system: React, TypeScript, Vite, Tailwind CSS, MapLibre GL JS.
 - Design-token constraints: CSS custom properties plus existing Tailwind utilities; no second component framework. Shared controls must use the common button/input/surface/status classes.
-- Performance constraints: Dashboard state refresh every 10 seconds; marker interpolation every 5 seconds without database writes. Dashboard refresh must not trigger traffic-provider calls.
+- Performance constraints: Dashboard state refresh every 10 seconds; map updates never reset a dispatcher-controlled camera. Webfleet sync is globally leased and quota-aware; routing/traffic recalculation remains separate from telemetry refresh.
 - Compatibility constraints: Local macOS launch via `npm install` and `npm run dev`; desktop Safari/Chrome current versions.
 - Test/screenshot expectations: Business calculations have unit tests; core pages receive build/type checks and manual smoke verification.
 
+## Webfleet and map contract
+- Webfleet is read-only in v1 and supplies actual vehicle telemetry; driver data is neither requested nor stored.
+- Automatic arrival requires two fresh points inside 1 km with speed at or below 20 km/h. Loading and unloading remain dispatcher-confirmed.
+- The map opens near the selected truck at building-level zoom. Polling updates data layers only; camera changes occur only on vehicle selection or explicit controls.
+- Traffic mode is the default. Satellite and traffic layers use a browser-restricted TomTom map key and degrade to attributed OSM when unavailable.
+
 ## Open questions
-- [ ] Production HERE Truck Routing credentials and truck restrictions / owner / required only for later provider replacement.
 - [ ] Whether appointment timestamps should be displayed in a fixed depot timezone when used outside Europe/Berlin / owner / future deployment concern.

@@ -325,6 +325,7 @@ button:disabled {
   position: relative;
   display: flex;
   min-width: 0;
+  min-height: 10.75rem;
   border: 1px solid #e2e8f0;
   border-left-width: 5px;
   border-radius: 0.625rem;
@@ -339,6 +340,55 @@ button:disabled {
 
 .vehicle-card-selected {
   box-shadow: 0 0 0 2px rgb(14 165 233 / 0.22);
+}
+
+.vehicle-card-actions {
+  display: grid;
+  flex: 0 0 2.25rem;
+  gap: 0.35rem;
+  margin-left: 0.45rem;
+  align-self: start;
+}
+
+.vehicle-action-button {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.vehicle-action-button:hover {
+  background: #dbeafe;
+}
+
+.vehicle-action-popover {
+  position: absolute;
+  z-index: 9;
+  right: 0.45rem;
+  bottom: 0.45rem;
+  left: 0.65rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(9rem, 0.8fr);
+  gap: 0.55rem;
+  border: 1px solid rgb(148 163 184 / 0.35);
+  border-radius: 0.625rem;
+  background: rgb(255 255 255 / 0.96);
+  padding: 0.65rem;
+  box-shadow: 0 18px 38px rgb(15 23 42 / 0.18);
+  backdrop-filter: blur(16px);
+}
+
+.vehicle-action-error {
+  grid-column: 1 / -1;
+  color: #be123c;
+  font-size: 0.75rem;
+  font-weight: 750;
+}
+
+.vehicle-action-popover-buttons {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.45rem;
 }
 
 .vehicle-card-critical { border-left-color: #dc2626; background: #fff7f7; }
@@ -421,6 +471,67 @@ button:disabled {
   width: 100%;
   height: 100%;
   min-height: 0;
+}
+
+.map-controls {
+  position: absolute;
+  z-index: 7;
+  right: 0.75rem;
+  bottom: 5rem;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.45rem;
+}
+
+.map-controls button,
+.map-mode-toggle {
+  min-height: 2.15rem;
+  border: 1px solid rgb(15 23 42 / 0.16);
+  border-radius: 0.5rem;
+  background: rgb(255 255 255 / 0.92);
+  color: #0f172a;
+  box-shadow: 0 8px 24px rgb(15 23 42 / 0.16);
+  backdrop-filter: blur(12px);
+}
+
+.map-controls > button {
+  padding: 0.35rem 0.65rem;
+  font-size: 0.75rem;
+  font-weight: 850;
+}
+
+.map-mode-toggle {
+  display: inline-flex;
+  overflow: hidden;
+}
+
+.map-mode-toggle button {
+  min-height: 2.05rem;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.map-mode-toggle button.active {
+  background: #0f172a;
+  color: white;
+}
+
+.map-provider-note {
+  position: absolute;
+  z-index: 7;
+  right: 0.75rem;
+  bottom: 7.55rem;
+  border: 1px solid #fde68a;
+  border-radius: 0.5rem;
+  background: rgb(255 251 235 / 0.94);
+  padding: 0.35rem 0.55rem;
+  color: #92400e;
+  font-size: 0.7rem;
+  font-weight: 850;
+  box-shadow: 0 8px 24px rgb(15 23 42 / 0.16);
 }
 
 .vehicle-map-hud {

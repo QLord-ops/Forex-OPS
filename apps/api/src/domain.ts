@@ -98,7 +98,11 @@ export type CurrentPosition = {
     | "ANGEKOMMEN_WARTET_AUF_BESTAETIGUNG"
     | "COMPLETED";
   status: "IDLE" | "WAITING" | "MOVING" | "ARRIVED";
-  disclaimer: "Berechnete Position – keine GPS-Daten";
+  disclaimer: string;
+  positionSource?: "WEBFLEET" | "CALCULATED";
+  telemetryRecordedAt?: string | null;
+  telemetryAgeSeconds?: number | null;
+  telemetryStale?: boolean;
   position: Coordinate | null;
   coordinate: [number, number] | null;
   tourId: string | null;

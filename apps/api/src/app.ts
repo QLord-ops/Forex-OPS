@@ -2,7 +2,7 @@ import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
 import Fastify from "fastify";
 import { z } from "zod";
-import { CALCULATED_POSITION_DISCLAIMER } from "./domain.js";
+import { CALCULATED_POSITION_DISCLAIMER, type CurrentPosition } from "./domain.js";
 import { prisma } from "./lib/prisma.js";
 import { AlertService } from "./services/alerts.js";
 import { AppointmentService } from "./services/appointments.js";
@@ -17,13 +17,15 @@ import {
 } from "./services/pdf-order-import.js";
 import { OsrmRoutingProvider, RoutingError, RoutingService } from "./services/routing.js";
 import { validateXlsxArchive } from "./services/xlsx-validation.js";
-import { enrichTour, type TourAggregate, toIsoObject, tourInclude, TourService } from "./services/tours.js";
+import { enrichTour, snapshotVehicleClock, type TourAggregate, toIsoObject, tourInclude, TourService } from "./services/tours.js";
 import { VehicleService } from "./services/vehicles.js";
 import { calculateDwellState, NotificationService } from "./services/notifications.js";
 import { OperationsService } from "./services/operations.js";
 import { ReplanningService } from "./services/replanning.js";
 import { PrismaTrafficQuotaStore, TomTomRoutingProvider, TrafficRoutingService } from './services/traffic-routing.js';
 import { TrafficOperationsService } from './services/traffic-operations.js';
+import { VEHICLE_CLOCK_LIMITS } from './services/vehicle-clock.js';
+import { WebfleetSyncService, WebfleetTelemetryService } from './services/webfleet.js';
 
 const trafficQuota = new PrismaTrafficQuotaStore(prisma);
 const trafficProvider = new TomTomRoutingProvider(trafficQuota, new OsrmRoutingProvider());
@@ -37,6 +39,8 @@ const operationsService = new OperationsService(prisma, tourService);
 const appointmentService = new AppointmentService(prisma, etaService, (id, now) => tourService.getCurrentPosition(id, now));
 const replanningService = new ReplanningService(prisma, routingService, (id, now) => tourService.getCurrentPosition(id, now));
 const trafficService = new TrafficOperationsService(prisma, tourService, notificationService, new TrafficRoutingService(trafficProvider, trafficQuota));
+const webfleetSync = new WebfleetSyncService(prisma);
+const webfleetTelemetry = new WebfleetTelemetryService(prisma);
 
 const vehicleSchema = z.object({
   vehicleNumber: z.string().trim().min(1),
@@ -505,8 +509,12 @@ export async function buildApp(options: BuildAppOptions = {}) {
 
   app.get("/vehicles/:id/current-position", async (request) => {
     const { id } = z.object({ id: z.string() }).parse(request.params);
-    return tourService.getCurrentPosition(id);
+    try { await webfleetSync.refreshIfDue(); } catch (error) { request.log.warn({ err: error }, 'Webfleet sync failed'); }
+    const calculated = await tourService.getCurrentPosition(id);
+    return withWebfleetPosition(calculated, await webfleetTelemetry.latest(id));
   });
+
+  app.get('/integrations/webfleet/status', async () => webfleetSync.status());
 
   app.get("/vehicles/:id/timeline", async (request) => {
     const { id } = z.object({ id: z.string() }).parse(request.params);
@@ -574,6 +582,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   });
 
   app.get("/dashboard", async () => {
+    try { await webfleetSync.refreshIfDue(); } catch (error) { app.log.warn({ err: error }, 'Webfleet sync failed'); }
     await refreshAllAlerts();
     const generatedAt = new Date();
     const vehicles = await prisma.vehicle.findMany({
@@ -594,10 +603,40 @@ export async function buildApp(options: BuildAppOptions = {}) {
       const currentLeg = activeTour?.legs.find((leg) => leg.status === "ACTIVE" || leg.status === "ARRIVED");
       const fromStop = currentLeg ? activeTour?.stops.find((stop) => stop.id === currentLeg.fromStopId) : undefined;
       const toStop = currentLeg ? activeTour?.stops.find((stop) => stop.id === currentLeg.toStopId) : undefined;
-      const position = await tourService.getCurrentPosition(vehicle.id);
+      const calculatedPosition = await tourService.getCurrentPosition(vehicle.id);
+      const latestTelemetry = await webfleetTelemetry.latest(vehicle.id, generatedAt);
+      const position = withWebfleetPosition(calculatedPosition, latestTelemetry);
       const enriched = activeTour ? enrichTour(activeTour) : null;
       const currentStop = activeTour?.stops.find((stop) => !stop.completedAt) ?? null;
       const dwell = calculateDwellState(currentStop, generatedAt);
+      const lastOperation = await prisma.operationEvent.findFirst({ where: { vehicleId: vehicle.id }, orderBy: { createdAt: "desc" } });
+      const clockSnapshot = snapshotVehicleClock(vehicle, currentLeg ?? null, generatedAt).clockState;
+      const statusStartedAt = vehicle.manualStoppedAt
+        ?? currentStop?.arrivedAt
+        ?? currentLeg?.startedAt
+        ?? activeTour?.actualStartAt
+        ?? activeTour?.plannedStartAt
+        ?? null;
+      const currentAction = vehicle.manualStoppedAt
+        ? { type: "RESUME", label: "Продолжить", stopId: null }
+        : currentStop?.arrivedAt
+          ? {
+              type: currentStop.type === "LOAD" ? "MARK_LOADED" : "MARK_UNLOADED",
+              label: currentStop.type === "LOAD" ? "BELADEN" : "ENTLADEN",
+              stopId: currentStop.id
+            }
+          : currentStop && position.status === "ARRIVED"
+            ? { type: "CONFIRM_ARRIVAL", label: "Прибыла", stopId: currentStop.id }
+            : position.status === "MOVING"
+              ? { type: "MANUAL_STOP", label: "Стоп", stopId: null }
+              : null;
+      const clockSummary = {
+        preliminary: clockSnapshot.kind !== "KNOWN",
+        remainingDrivingMinutes: clockSnapshot.kind === "KNOWN" ? Math.max(0, Math.floor(((clockSnapshot.currentCycle.extendedDriveReservationId ? VEHICLE_CLOCK_LIMITS.extendedDailyDrivingSeconds : VEHICLE_CLOCK_LIMITS.normalDailyDrivingSeconds) - clockSnapshot.currentCycle.drivingSeconds) / 60)) : null,
+        breakInMinutes: clockSnapshot.kind === "KNOWN" ? Math.max(0, Math.floor((VEHICLE_CLOCK_LIMITS.breakAfterDrivingSeconds - clockSnapshot.currentCycle.continuousDrivingSeconds) / 60)) : null,
+        remainingDutyMinutes: clockSnapshot.kind === "KNOWN" ? Math.max(0, Math.floor(((clockSnapshot.currentCycle.reducedRestReservationId ? VEHICLE_CLOCK_LIMITS.extendedDutyWindowSeconds : VEHICLE_CLOCK_LIMITS.normalDutyWindowSeconds) - clockSnapshot.currentCycle.dutySeconds) / 60)) : null,
+        nextRestHours: clockSnapshot.kind === "KNOWN" ? ((clockSnapshot.currentCycle.reducedRestReservationId ? VEHICLE_CLOCK_LIMITS.reducedDailyRestSeconds : VEHICLE_CLOCK_LIMITS.normalDailyRestSeconds) / 3600) : null
+      };
 
       rows.push({
         vehicleId: vehicle.id,
@@ -622,6 +661,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
           createdAt: vehicle.createdAt,
           updatedAt: vehicle.updatedAt
         }),
+        operationVersion: vehicle.operationVersion,
         tour: activeTour ? enrichTour(activeTour) : null,
         statusText: position.status,
         from: fromStop ? toIsoObject(fromStop) : null,
@@ -635,7 +675,21 @@ export async function buildApp(options: BuildAppOptions = {}) {
         warning: enriched?.riskColor && enriched.riskColor !== "GREEN" && enriched.riskColor !== "GREY" ? enriched.riskColor : null,
         currentStop: currentStop ? toIsoObject(currentStop) : null,
         dwellMinutes: dwell.dwellMinutes,
-        dwellSeverity: dwell.dwellSeverity
+        dwellSeverity: dwell.dwellSeverity,
+        currentAction,
+        statusStartedAt: statusStartedAt?.toISOString() ?? null,
+        statusDurationSeconds: statusStartedAt ? Math.max(0, Math.floor((generatedAt.getTime() - statusStartedAt.getTime()) / 1000)) : null,
+        lastOperation: lastOperation ? toIsoObject(lastOperation) : null,
+        clockSummary,
+        telemetry: latestTelemetry ? {
+          source: "WEBFLEET",
+          checkedAt: latestTelemetry.recordedAt.toISOString(),
+          stale: latestTelemetry.stale,
+          ageSeconds: latestTelemetry.ageSeconds,
+          speedKmh: latestTelemetry.speedKmh,
+          ignitionOn: latestTelemetry.ignitionOn,
+          usable: latestTelemetry.usable
+        } : { source: "CALCULATED", checkedAt: generatedAt.toISOString(), stale: false, ageSeconds: 0, usable: true }
       });
     }
 
@@ -848,4 +902,23 @@ function enrichToursWithScheduleGroupedByVehicle(tours: TourAggregate[]) {
   }
 
   return tours.map((tour) => enrichedById.get(tour.id) ?? enrichTour(tour));
+}
+
+function withWebfleetPosition(
+  calculated: CurrentPosition,
+  telemetry: Awaited<ReturnType<WebfleetTelemetryService['latest']>>
+): CurrentPosition {
+  if (!telemetry || !telemetry.usable) return { ...calculated, positionSource: 'CALCULATED' };
+  return {
+    ...calculated,
+    position: { latitude: telemetry.latitude, longitude: telemetry.longitude },
+    coordinate: [telemetry.longitude, telemetry.latitude],
+    positionSource: 'WEBFLEET',
+    telemetryRecordedAt: telemetry.recordedAt.toISOString(),
+    telemetryAgeSeconds: telemetry.ageSeconds,
+    telemetryStale: telemetry.stale,
+    disclaimer: telemetry.stale
+      ? `Webfleet GPS устарел: ${Math.max(1, Math.ceil(telemetry.ageSeconds / 60))} мин назад`
+      : 'Фактическая позиция Webfleet GPS'
+  };
 }

@@ -135,6 +135,49 @@ CREATE TABLE "RoutePreview" (
     "expiresAt" DATETIME NOT NULL,
     "appliedAt" DATETIME
 );
+CREATE TABLE "VehicleIntegration" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "vehicleId" TEXT NOT NULL,
+    "provider" TEXT NOT NULL,
+    "externalId" TEXT NOT NULL,
+    "externalNumber" TEXT,
+    "externalPlate" TEXT,
+    "status" TEXT NOT NULL DEFAULT 'ACTIVE',
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL,
+    CONSTRAINT "VehicleIntegration_vehicleId_fkey" FOREIGN KEY ("vehicleId") REFERENCES "Vehicle" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+CREATE TABLE "VehicleTelemetry" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "vehicleId" TEXT NOT NULL,
+    "provider" TEXT NOT NULL,
+    "externalId" TEXT NOT NULL,
+    "latitude" REAL NOT NULL,
+    "longitude" REAL NOT NULL,
+    "speedKmh" REAL,
+    "ignitionOn" BOOLEAN,
+    "recordedAt" DATETIME NOT NULL,
+    "receivedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "rawJson" TEXT,
+    CONSTRAINT "VehicleTelemetry_vehicleId_fkey" FOREIGN KEY ("vehicleId") REFERENCES "Vehicle" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+CREATE TABLE "IntegrationSyncState" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "provider" TEXT NOT NULL,
+    "cursor" TEXT,
+    "lockedUntil" DATETIME,
+    "lastSnapshotAt" DATETIME,
+    "updatedAt" DATETIME NOT NULL
+);
+CREATE TABLE "IntegrationReceipt" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "provider" TEXT NOT NULL,
+    "messageId" TEXT NOT NULL,
+    "externalId" TEXT,
+    "processedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "acknowledgedAt" DATETIME,
+    "payloadJson" TEXT
+);
 CREATE UNIQUE INDEX "Vehicle_vehicleNumber_key" ON "Vehicle"("vehicleNumber");
 CREATE INDEX "Tour_vehicleId_status_idx" ON "Tour"("vehicleId", "status");
 CREATE INDEX "Tour_previousTourId_idx" ON "Tour"("previousTourId");
@@ -150,3 +193,12 @@ CREATE UNIQUE INDEX "Notification_dedupKey_key" ON "Notification"("dedupKey");
 CREATE INDEX "Notification_acknowledgedAt_createdAt_idx" ON "Notification"("acknowledgedAt", "createdAt");
 CREATE INDEX "RouteRevision_tourId_version_idx" ON "RouteRevision"("tourId", "version");
 CREATE INDEX "RoutePreview_tourId_createdAt_idx" ON "RoutePreview"("tourId", "createdAt");
+CREATE UNIQUE INDEX "VehicleIntegration_provider_externalId_key" ON "VehicleIntegration"("provider", "externalId");
+CREATE UNIQUE INDEX "VehicleIntegration_provider_vehicleId_key" ON "VehicleIntegration"("provider", "vehicleId");
+CREATE INDEX "VehicleIntegration_provider_externalNumber_idx" ON "VehicleIntegration"("provider", "externalNumber");
+CREATE INDEX "VehicleIntegration_provider_externalPlate_idx" ON "VehicleIntegration"("provider", "externalPlate");
+CREATE UNIQUE INDEX "VehicleTelemetry_provider_externalId_recordedAt_key" ON "VehicleTelemetry"("provider", "externalId", "recordedAt");
+CREATE INDEX "VehicleTelemetry_vehicleId_recordedAt_idx" ON "VehicleTelemetry"("vehicleId", "recordedAt");
+CREATE INDEX "IntegrationSyncState_provider_lockedUntil_idx" ON "IntegrationSyncState"("provider", "lockedUntil");
+CREATE UNIQUE INDEX "IntegrationReceipt_provider_messageId_key" ON "IntegrationReceipt"("provider", "messageId");
+CREATE INDEX "IntegrationReceipt_provider_acknowledgedAt_idx" ON "IntegrationReceipt"("provider", "acknowledgedAt");

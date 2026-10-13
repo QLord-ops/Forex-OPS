@@ -23,6 +23,8 @@ model Vehicle {
   tours  Tour[]
   events Event[]
   alerts Alert[]
+  integrations VehicleIntegration[]
+  telemetry VehicleTelemetry[]
 }
 
 model Tour {
@@ -194,4 +196,66 @@ model RoutePreview {
   appliedAt      DateTime?
 
   @@index([tourId, createdAt])
+}
+
+model VehicleIntegration {
+  id String @id @default(cuid())
+  vehicleId String
+  provider String
+  externalId String
+  externalNumber String?
+  externalPlate String?
+  status String @default("ACTIVE")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, externalId])
+  @@unique([provider, vehicleId])
+  @@index([provider, externalNumber])
+  @@index([provider, externalPlate])
+}
+
+model VehicleTelemetry {
+  id String @id @default(cuid())
+  vehicleId String
+  provider String
+  externalId String
+  latitude Float
+  longitude Float
+  speedKmh Float?
+  ignitionOn Boolean?
+  recordedAt DateTime
+  receivedAt DateTime @default(now())
+  rawJson String?
+
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, externalId, recordedAt])
+  @@index([vehicleId, recordedAt])
+}
+
+model IntegrationSyncState {
+  id String @id
+  provider String
+  cursor String?
+  lockedUntil DateTime?
+  lastSnapshotAt DateTime?
+  updatedAt DateTime @updatedAt
+
+  @@index([provider, lockedUntil])
+}
+
+model IntegrationReceipt {
+  id String @id @default(cuid())
+  provider String
+  messageId String
+  externalId String?
+  processedAt DateTime @default(now())
+  acknowledgedAt DateTime?
+  payloadJson String?
+
+  @@unique([provider, messageId])
+  @@index([provider, acknowledgedAt])
 }
