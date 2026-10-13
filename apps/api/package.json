@@ -16,6 +16,7 @@
     "test": "vitest run",
     "prisma:generate": "prisma generate && prisma generate --schema prisma/sqlite/schema.prisma",
     "db:deploy": "node scripts/migrate.mjs",
+    "db:import-sqlite": "node scripts/import-sqlite.mjs",
     "db:reset": "npm run db:deploy && npm run db:seed",
     "db:seed": "tsx prisma/seed.ts"
   },
