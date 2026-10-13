@@ -29,6 +29,8 @@ backups/
 *.log
 
 # Local tooling and editor state
+.vercel/
+**/.vercel/
 .codex/
 .omx/
 .idea/
@@ -39,3 +41,5 @@ backups/
 # Operating-system files
 .DS_Store
 Thumbs.db
+.neon
+apps/api/src/generated/

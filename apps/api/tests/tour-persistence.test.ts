@@ -1,11 +1,11 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient } from "../src/generated/sqlite-client/index.js";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { MockRoutingProvider } from "../src/services/routing.js";
 import { TourService } from "../src/services/tours.js";
-import { migrateTestDatabase } from "./test-database.js";
+import { asAppDatabase, migrateTestDatabase } from "./test-database.js";
 import { OperationsService } from "../src/services/operations.js";
 import { createInitialClockState } from "../src/services/vehicle-clock.js";
 import { parseClockState, readPersistedDrivePlan } from "../src/services/tours.js";
@@ -31,8 +31,8 @@ it("carries machine hours and dwell into the queued transfer, and resumes with o
   const vehicle = await db.vehicle.create({ data: { vehicleNumber: "CLOCK-CARRY", clockState: JSON.stringify(initial) } });
   const provider = new MockRoutingProvider();
   provider.calculateRoute = async (from, to) => ({ provider: "test", geometry: [from, to], distanceMeters: 100_000, durationSeconds: 7200 });
-  const tours = new TourService(db, provider);
-  const operations = new OperationsService(db, tours);
+  const tours = new TourService(asAppDatabase(db), provider);
+  const operations = new OperationsService(asAppDatabase(db), tours);
   const input = { vehicleId: vehicle.id, orderNumber: "CLOCK-1", stops: [
     { sequence: 1, type: "LOAD" as const, address: "Berlin", appointmentAt: null },
     { sequence: 2, type: "UNLOAD" as const, address: "Hamburg", appointmentAt: null }
@@ -63,7 +63,7 @@ it("carries machine hours and dwell into the queued transfer, and resumes with o
 
 it("persists new and edited tours, preserves transfer legs, and activates the queue after confirmation", async () => {
   const vehicle = await db.vehicle.create({ data: { vehicleNumber: "TEST-ONLY" } });
-  const service = new TourService(db, new MockRoutingProvider());
+  const service = new TourService(asAppDatabase(db), new MockRoutingProvider());
   const input = {
     vehicleId: vehicle.id, orderNumber: "TEST-1",
     stops: [

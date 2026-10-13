@@ -1,9 +1,9 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from '../src/generated/sqlite-client/index.js';
 import { afterAll, beforeAll, expect, it } from 'vitest';
-import { migrateTestDatabase } from './test-database.js';
+import { asAppDatabase, migrateTestDatabase } from './test-database.js';
 import { TourService, makePersistedDrivePlan } from '../src/services/tours.js';
 import { MockRoutingProvider } from '../src/services/routing.js';
 import { OperationsService } from '../src/services/operations.js';
@@ -24,8 +24,8 @@ afterAll(async () => { await db?.$disconnect(); if (directory) await rm(director
 async function fixture(label: string, options: { clock?: ClockState; appointmentAt?: string } = {}) {
   const clock = options.clock ?? createInitialClockState({ effectiveAt: start });
   const vehicle = await db.vehicle.create({ data: { vehicleNumber: label, clockState: JSON.stringify(clock) } });
-  const tours = new TourService(db, new MockRoutingProvider());
-  const service = new OperationsService(db, tours);
+  const tours = new TourService(asAppDatabase(db), new MockRoutingProvider());
+  const service = new OperationsService(asAppDatabase(db), tours);
   const tour = await tours.createTour({ vehicleId: vehicle.id, orderNumber: label, stops: [
     { sequence: 1, type: 'LOAD', address: 'Berlin', city: 'Berlin', latitude: 52.52, longitude: 13.405 },
     { sequence: 2, type: 'UNLOAD', address: 'Hamburg', city: 'Hamburg', latitude: 53.55, longitude: 9.99, appointmentAt: options.appointmentAt }
@@ -35,7 +35,7 @@ async function fixture(label: string, options: { clock?: ClockState; appointment
     status: 'ACTIVE', startedAt: start, simulatedDurationSeconds: 7200,
     drivePlan: JSON.stringify(makePersistedDrivePlan(clock, 7200, start))
   } });
-  return { vehicle, tours, service, tour, leg, stop: tour.stops[1], notices: new NotificationService(db, tours) };
+  return { vehicle, tours, service, tour, leg, stop: tour.stops[1], notices: new NotificationService(asAppDatabase(db), tours) };
 }
 
 it('keeps existing unknown machine clocks preliminary and refuses undated exception proposals', async () => {
@@ -54,7 +54,7 @@ it('keeps existing unknown machine clocks preliminary and refuses undated except
 it('persists and deduplicates predicted arrival without recording an actual arrival', async () => {
   const f = await fixture('ARRIVAL');
   await f.notices.refresh(at(121));
-  await new NotificationService(db, new TourService(db, new MockRoutingProvider())).refresh(at(125));
+  await new NotificationService(asAppDatabase(db), new TourService(asAppDatabase(db), new MockRoutingProvider())).refresh(at(125));
   const rows = await db.notification.findMany({ where: { vehicleId: f.vehicle.id, type: 'PREDICTED_ARRIVAL' } });
   expect(rows).toHaveLength(1);
   expect(rows[0].message).toContain('ARRIVAL');
@@ -117,7 +117,7 @@ it('freezes movement but consumes duty during manual stop, and resumes without l
   const f = await fixture('MANUAL');
   const before = await f.service.get(f.vehicle.id, at(30));
   const stopped = await f.service.manualStop(f.vehicle.id, before.version, at(30));
-  const later = await new OperationsService(db, f.tours).get(f.vehicle.id, at(90));
+  const later = await new OperationsService(asAppDatabase(db), f.tours).get(f.vehicle.id, at(90));
   expect(later.position.progress).toBe(stopped.position.progress);
   expect(later.position.status).toBe('WAITING');
   expect(later.clock.currentCycle.drivingSeconds).toBe(1800);

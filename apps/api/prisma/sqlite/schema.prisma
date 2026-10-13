@@ -1,0 +1,197 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../src/generated/sqlite-client"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Vehicle {
+  id               String    @id @default(cuid())
+  vehicleNumber    String    @unique
+  licensePlate     String?
+  maxSpeedKmh      Int       @default(85)
+  clockState       String?
+  manualStoppedAt  DateTime?
+  operationVersion Int       @default(0)
+  truckProfile     String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  tours  Tour[]
+  events Event[]
+  alerts Alert[]
+}
+
+model Tour {
+  id             String    @id @default(cuid())
+  vehicleId      String
+  orderNumber    String
+  planVersion    Int       @default(0)
+  queueIndex     Int       @default(0)
+  status         String    @default("DRAFT")
+  previousTourId String?
+  plannedStartAt DateTime?
+  actualStartAt  DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  vehicle      Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  previousTour Tour?   @relation("TourChain", fields: [previousTourId], references: [id])
+  nextTours    Tour[]  @relation("TourChain")
+  stops        Stop[]
+  legs         Leg[]
+  events       Event[]
+  alerts       Alert[]
+
+  @@index([vehicleId, status])
+  @@index([previousTourId])
+}
+
+model Stop {
+  id                String    @id @default(cuid())
+  tourId            String
+  sequence          Int
+  type              String
+  company           String?
+  address           String
+  city              String?
+  latitude          Float
+  longitude         Float
+  appointmentAt     DateTime?
+  arrivedAt         DateTime?
+  serviceMinMinutes Int       @default(60)
+  serviceMaxMinutes Int       @default(120)
+  completedAt       DateTime?
+  createdAt         DateTime  @default(now())
+
+  tour     Tour    @relation(fields: [tourId], references: [id], onDelete: Cascade)
+  fromLegs Leg[]   @relation("LegFromStop")
+  toLegs   Leg[]   @relation("LegToStop")
+  events   Event[]
+  alerts   Alert[]
+
+  @@unique([tourId, sequence])
+  @@index([tourId, sequence])
+}
+
+model Leg {
+  id                       String    @id @default(cuid())
+  tourId                   String
+  fromStopId               String
+  toStopId                 String
+  distanceMeters           Int
+  routeGeometry            String
+  routingDurationSeconds   Int
+  simulatedDurationSeconds Int
+  drivePlan                String?
+  routeDetails             String?
+  startedAt                DateTime?
+  finishedAt               DateTime?
+  status                   String    @default("WAITING")
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+
+  tour     Tour @relation(fields: [tourId], references: [id], onDelete: Cascade)
+  fromStop Stop @relation("LegFromStop", fields: [fromStopId], references: [id], onDelete: Cascade)
+  toStop   Stop @relation("LegToStop", fields: [toStopId], references: [id], onDelete: Cascade)
+
+  @@index([tourId, status])
+}
+
+model Event {
+  id        String   @id @default(cuid())
+  vehicleId String
+  tourId    String
+  stopId    String
+  type      String
+  timestamp DateTime
+  note      String?
+
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  tour    Tour    @relation(fields: [tourId], references: [id], onDelete: Cascade)
+  stop    Stop    @relation(fields: [stopId], references: [id], onDelete: Cascade)
+
+  @@index([vehicleId, timestamp])
+  @@index([tourId, timestamp])
+}
+
+model Alert {
+  id                   String    @id @default(cuid())
+  vehicleId            String
+  tourId               String
+  stopId               String
+  type                 String
+  appointmentAt        DateTime
+  predictedEta         DateTime
+  predictedLateMinutes Int
+  createdAt            DateTime  @default(now())
+  resolvedAt           DateTime?
+
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  tour    Tour    @relation(fields: [tourId], references: [id], onDelete: Cascade)
+  stop    Stop    @relation(fields: [stopId], references: [id], onDelete: Cascade)
+
+  @@unique([stopId, type])
+  @@index([vehicleId, resolvedAt])
+}
+
+model ApiQuota {
+  id        String   @id
+  used      Int      @default(0)
+  updatedAt DateTime @updatedAt
+}
+
+model OperationEvent {
+  id          String   @id @default(cuid())
+  vehicleId   String
+  tourId      String?
+  stopId      String?
+  type        String
+  payloadJson String
+  reason      String?
+  createdAt   DateTime @default(now())
+
+  @@index([vehicleId, createdAt])
+}
+
+model Notification {
+  id             String    @id @default(cuid())
+  dedupKey       String    @unique
+  vehicleId      String
+  stopId         String?
+  type           String
+  message        String
+  payloadJson    String
+  createdAt      DateTime  @default(now())
+  acknowledgedAt DateTime?
+
+  @@index([acknowledgedAt, createdAt])
+}
+
+model RouteRevision {
+  id           String   @id @default(cuid())
+  tourId       String
+  version      Int
+  snapshotJson String
+  createdAt    DateTime @default(now())
+
+  @@index([tourId, version])
+}
+
+model RoutePreview {
+  id             String    @id @default(cuid())
+  tourId         String
+  version        Int
+  vehicleVersion Int
+  inputJson      String
+  planJson       String
+  createdAt      DateTime  @default(now())
+  expiresAt      DateTime
+  appliedAt      DateTime?
+
+  @@index([tourId, createdAt])
+}

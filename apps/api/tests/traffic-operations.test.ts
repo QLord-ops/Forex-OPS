@@ -1,9 +1,9 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from '../src/generated/sqlite-client/index.js';
 import { beforeAll, beforeEach, afterAll, expect, it, vi } from 'vitest';
-import { migrateTestDatabase } from './test-database.js';
+import { asAppDatabase, migrateTestDatabase } from './test-database.js';
 import { TourService, makePersistedDrivePlan } from '../src/services/tours.js';
 import { MockRoutingProvider } from '../src/services/routing.js';
 import { NotificationService } from '../src/services/notifications.js';
@@ -31,7 +31,7 @@ it('adapts the interval to remaining free quota and disables exhausted backgroun
 async function fixture(label: string) {
   const clock = createInitialClockState({ effectiveAt: now });
   const vehicle = await db.vehicle.create({ data: { vehicleNumber: label, clockState: JSON.stringify(clock) } });
-  const tours = new TourService(db, new MockRoutingProvider());
+  const tours = new TourService(asAppDatabase(db), new MockRoutingProvider());
   const tour = await tours.createTour({ vehicleId: vehicle.id, orderNumber: label, stops: [
     { sequence: 1, type: 'LOAD', address: 'Berlin', latitude: 52.52, longitude: 13.405 },
     { sequence: 2, type: 'UNLOAD', address: 'Hamburg', latitude: 53.5511, longitude: 9.9937 }
@@ -46,7 +46,7 @@ async function fixture(label: string) {
   };
   const refresh = vi.fn(async () => ({ activeRoute: route, alternatives: [] }));
   const routing = { refreshCurrentRoute: refresh, quotaStatus: async () => ({ availableForSource: 18000 }) } as unknown as TrafficRoutingService;
-  const service = new TrafficOperationsService(db, tours, new NotificationService(db, tours), routing);
+  const service = new TrafficOperationsService(asAppDatabase(db), tours, new NotificationService(asAppDatabase(db), tours), routing);
   return { vehicle, leg, route, refresh, service, tours };
 }
 
@@ -105,9 +105,9 @@ it('saves traffic as a revision without erasing driven prefix or accumulated hou
 });
 
 it('persists quota across store reconstruction and refuses requests beyond the hard cap', async () => {
-  const store = new PrismaTrafficQuotaStore(db, { namespace: 'integration-test', monthlyCap: 2 });
+  const store = new PrismaTrafficQuotaStore(asAppDatabase(db), { namespace: 'integration-test', monthlyCap: 2 });
   expect((await store.consume('manual', now)).used).toBe(1);
-  const restarted = new PrismaTrafficQuotaStore(db, { namespace: 'integration-test', monthlyCap: 2 });
+  const restarted = new PrismaTrafficQuotaStore(asAppDatabase(db), { namespace: 'integration-test', monthlyCap: 2 });
   expect((await restarted.consume('manual', now)).used).toBe(2);
   await expect(restarted.consume('manual', now)).rejects.toMatchObject({ statusCode: 429 });
 });

@@ -77,6 +77,7 @@ export interface BuildAppOptions {
 
 export async function buildApp(options: BuildAppOptions = {}) {
   const app = Fastify({ logger: true });
+  const isServerless = Boolean(process.env.VERCEL);
 
   await app.register(cors, { origin: true });
   await app.register(multipart, {
@@ -94,20 +95,27 @@ export async function buildApp(options: BuildAppOptions = {}) {
   const subscribers = new Set<import('node:http').ServerResponse>();
   let notificationTimer: ReturnType<typeof setInterval> | undefined;
   let refreshingNotifications = false;
+  let lastNotificationRefreshAt = 0;
   const refreshNotifications = async () => {
     if (refreshingNotifications) return;
     refreshingNotifications = true;
     try {
       await notificationService.refresh();
       await trafficService.tick();
+      lastNotificationRefreshAt = Date.now();
       for (const client of subscribers) client.write(`event: operations\ndata: ${JSON.stringify({ at: Date.now() })}\n\n`);
     } catch (error) { app.log.error(error); }
     finally { refreshingNotifications = false; }
   };
   app.addHook('onListen', async () => {
+    if (isServerless) return;
     await refreshNotifications();
     notificationTimer = setInterval(() => { void refreshNotifications(); }, 15_000);
     notificationTimer.unref();
+  });
+  app.addHook('onRequest', async request => {
+    if (!isServerless || request.method !== 'GET' || request.url === '/health' || request.url === '/events/stream') return;
+    if (Date.now() - lastNotificationRefreshAt >= 10_000) await refreshNotifications();
   });
   app.addHook('onClose', async () => {
     if (notificationTimer) clearInterval(notificationTimer);
@@ -661,6 +669,12 @@ export async function buildApp(options: BuildAppOptions = {}) {
 
   return app;
 }
+
+// Vercel's Fastify adapter loads src/app.ts and requires the application as the
+// default export. Local development continues to use src/server.ts.
+const vercelApp = process.env.VERCEL ? await buildApp() : null;
+if (vercelApp) await vercelApp.ready();
+export default vercelApp?.server;
 
 async function refreshAllAlerts() {
   const vehicles = await prisma.vehicle.findMany({

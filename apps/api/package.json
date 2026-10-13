@@ -3,15 +3,19 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": "22.x"
+  },
   "main": "dist/server.js",
   "scripts": {
+    "postinstall": "prisma generate",
     "dev": "tsx watch src/server.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "npm run prisma:generate && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "prisma:generate": "prisma generate",
-    "db:deploy": "prisma migrate deploy",
+    "prisma:generate": "prisma generate && prisma generate --schema prisma/sqlite/schema.prisma",
+    "db:deploy": "node scripts/migrate.mjs",
     "db:reset": "npm run db:deploy && npm run db:seed",
     "db:seed": "tsx prisma/seed.ts"
   },

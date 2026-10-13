@@ -1,3 +1,4 @@
+import "../src/env.js";
 import { PrismaClient } from "@prisma/client";
 import { MockRoutingProvider } from "../src/services/routing.js";
 import { TourService } from "../src/services/tours.js";

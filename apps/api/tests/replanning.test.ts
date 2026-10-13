@@ -1,11 +1,11 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from '../src/generated/sqlite-client/index.js';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ReplanningService } from '../src/services/replanning.js';
 import { MockRoutingProvider } from '../src/services/routing.js';
-import { migrateTestDatabase } from './test-database.js';
+import { asAppDatabase, migrateTestDatabase } from './test-database.js';
 import { createInitialClockState } from '../src/services/vehicle-clock.js';
 import { makePersistedDrivePlan } from '../src/services/tours.js';
 
@@ -25,7 +25,7 @@ async function fixture(arrived = false) {
   const leg = await db.leg.create({ data: { tourId: tour.id, fromStopId: load.id, toStopId: unload.id, status: 'ACTIVE', startedAt: now, routeGeometry: JSON.stringify([load, unload]), distanceMeters: 100000, routingDurationSeconds: 3600, simulatedDurationSeconds: 3600 } });
   const routing = new MockRoutingProvider();
   const route = vi.spyOn(routing, 'calculateRoute');
-  return { vehicle, tour, load, unload, leg, route, service: new ReplanningService(db, routing) };
+  return { vehicle, tour, load, unload, leg, route, service: new ReplanningService(asAppDatabase(db), routing) };
 }
 const replacement = { type: 'UNLOAD' as const, address: 'Kassel', latitude: 51.3, longitude: 9.5, appointmentAt: null };
 it('applies atomically without network; keeps completed stops, revision, and queue transfers', async () => {

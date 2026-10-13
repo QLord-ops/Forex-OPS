@@ -1,14 +1,14 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient } from "../src/generated/sqlite-client/index.js";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import type { CurrentPosition } from "../src/domain.js";
 import { AppointmentService } from "../src/services/appointments.js";
 import { EtaService } from "../src/services/eta.js";
 import { makePersistedDrivePlan } from "../src/services/tours.js";
 import { createInitialClockState } from "../src/services/vehicle-clock.js";
-import { migrateTestDatabase } from "./test-database.js";
+import { asAppDatabase, migrateTestDatabase } from "./test-database.js";
 
 let db: PrismaClient;
 let directory: string;
@@ -44,7 +44,7 @@ it("previews and atomically attaches a late-arriving appointment to an active Au
     drivePlan: JSON.stringify(makePersistedDrivePlan(clock, 7_200, now))
   } });
   const position = { legId: leg.id, status: "MOVING" } as CurrentPosition;
-  const service = new AppointmentService(db, new EtaService(), async () => position);
+  const service = new AppointmentService(asAppDatabase(db), new EtaService(), async () => position);
   const appointmentAt = new Date(now.getTime() + 3 * 3_600_000).toISOString();
 
   const preview = await service.preview(unload.id, { appointmentAt }, now);
@@ -75,7 +75,7 @@ it("marks the first point forecast as preliminary when the machine position is u
     tourId: tour.id, sequence: 1, type: "LOAD", address: "Bremen", city: "Bremen",
     latitude: 53.08, longitude: 8.8
   } });
-  const service = new AppointmentService(db, new EtaService());
+  const service = new AppointmentService(asAppDatabase(db), new EtaService());
   const preview = await service.preview(load.id, { appointmentAt: new Date(now.getTime() + 4 * 3_600_000).toISOString() }, now);
 
   expect(preview).toMatchObject({
@@ -106,7 +106,7 @@ it("calculates when a queued machine must leave for a newly received appointment
     routeGeometry: JSON.stringify([previousStop, load]), distanceMeters: 100_000,
     routingDurationSeconds: 7_200, simulatedDurationSeconds: 7_200
   } });
-  const service = new AppointmentService(db, new EtaService());
+  const service = new AppointmentService(asAppDatabase(db), new EtaService());
   const appointmentAt = new Date(now.getTime() + 5 * 3_600_000).toISOString();
 
   const preview = await service.preview(load.id, { appointmentAt }, now);

@@ -13,6 +13,8 @@ export function OperationsNotifications() {
   const [correcting, setCorrecting] = useState(false)
   const [coordinate, setCoordinate] = useState({ latitude: '', longitude: '' })
   useEffect(() => {
+    // Vercel Functions are request-bound; production uses the durable polling path.
+    if (!import.meta.env.DEV) return
     const stream = new EventSource(`${operationsBase}/events/stream`)
     stream.addEventListener('operations', notifications.refetch)
     stream.addEventListener('open', notifications.refetch)
