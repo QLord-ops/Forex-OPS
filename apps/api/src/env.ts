@@ -8,6 +8,6 @@ const localEnvCandidates = [
   resolve(process.cwd(), ".env")
 ];
 
-// Hosted environment variables always win. Locally, prefer the Neon-managed root file
+// Hosted environment variables always win. Locally, prefer the root environment file
 // and keep apps/api/.env only as a backwards-compatible fallback.
 for (const path of localEnvCandidates) config({ path, override: false });

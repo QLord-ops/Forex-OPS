@@ -3,11 +3,12 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 
 import { MapPanel } from '../components/MapPanel'
+import { QuickOrderPanel } from '../components/QuickOrderPanel'
 import { EmptyState, ErrorState, LoadingState } from '../components/States'
 import { usePolling } from '../hooks/usePolling'
 import { api } from '../lib/api'
 import { classNames, formatAppointment, formatDateTime, formatDelay, formatDurationMinutes, formatKm, shortAddress, statusLabel, stopTypeLabel } from '../lib/format'
-import type { DashboardVehicle, Stop } from '../types/domain'
+import type { Coordinate, DashboardVehicle, Stop } from '../types/domain'
 
 const PIN_STORAGE_KEY = 'ops-dashboard-pinned-vehicles'
 type FleetFilter = 'ALL' | 'ATTENTION' | 'MOVING' | 'AT_STOP' | 'IDLE'
@@ -30,6 +31,8 @@ export function DashboardPage() {
   const [actionVehicleId, setActionVehicleId] = useState<string | null>(null)
   const [actionTime, setActionTime] = useState(localDateTime())
   const [actionError, setActionError] = useState('')
+  const [mapFocus, setMapFocus] = useState<Coordinate | null>(null)
+  const [draftRoute, setDraftRoute] = useState<Coordinate[]>([])
   const vehicles = useMemo(() => data?.vehicles ?? [], [data?.vehicles])
   const orderedVehicles = useMemo(() => vehicles.slice().sort((a, b) => compareVehicles(a, b, pinned)), [pinned, vehicles])
   const selectedId = searchParams.get('vehicleId') ?? ''
@@ -111,6 +114,7 @@ export function DashboardPage() {
                   <div className="flex min-w-0 items-start justify-between gap-2">
                     <div className="min-w-0">
                       <div className="flex min-w-0 items-center gap-2"><span className="text-lg font-black tabular-nums">LKW {row.vehicle.vehicleNumber}</span>{row.vehicle.licensePlate ? <span className="truncate text-xs font-semibold text-slate-500">{row.vehicle.licensePlate}</span> : null}</div>
+                      {row.vehicle.currentTrailerPlate ? <p className="truncate text-[11px] font-semibold text-slate-500">Прицеп {row.vehicle.currentTrailerPlate}</p> : null}
                       <p className="mt-0.5 truncate text-sm font-semibold text-slate-800">{shortAddress(row.to)}{row.to ? ` · ${stopTypeLabel(row.to.type)}` : ''}</p>
                     </div>
                     <span className={classNames('attention-pill', `attention-pill-${attention.tone}`)}>{attention.label}</span>
@@ -133,7 +137,9 @@ export function DashboardPage() {
         </div>
       </aside>
       <section className="dashboard-stage" aria-label="Карта выбранного грузовика">
-        {selected ? <><MapPanel tour={selected.tour} position={position.data} height="100%" fill /><VehicleMapHud row={selected} open={hudOpen} onToggle={() => setHudOpen((value) => !value)} /><RouteStopsDrawer row={selected} open={drawerOpen} onToggle={() => setDrawerOpen((value) => !value)} /></> : <div className="grid h-full place-items-center bg-slate-100 p-6"><EmptyState label="Добавьте грузовик и Auftrag, чтобы увидеть рабочую карту." /></div>}
+        <MapPanel tour={selected?.tour} position={position.data} vehicleNumber={selected?.vehicle.vehicleNumber} focusCoordinate={mapFocus} previewRoute={draftRoute} height="100%" fill />
+        {selected ? <><VehicleMapHud row={selected} open={hudOpen} onToggle={() => setHudOpen((value) => !value)} /><RouteStopsDrawer row={selected} open={drawerOpen} onToggle={() => setDrawerOpen((value) => !value)} /></> : null}
+        <QuickOrderPanel row={selected} vehicles={vehicles.map((item) => item.vehicle)} onAddressFound={setMapFocus} onRoutePreview={setDraftRoute} onCreated={async (vehicleId) => { selectVehicle(vehicleId); await refetch() }} />
         {position.error ? <button type="button" className="map-error" onClick={() => void position.refetch()}>Позиция временно недоступна · повторить</button> : null}
         {error ? <div className="dashboard-sync-warning">Данные автопарка не обновлены. Повторим автоматически.</div> : null}
       </section>
@@ -148,8 +154,8 @@ function VehicleActionButton({ row, busy, onClick }: { row: DashboardVehicle; bu
     : action.type === 'MARK_LOADED' || action.type === 'MARK_UNLOADED' ? PackageCheck
       : action.type === 'RESUME' ? PlayCircle : PauseCircle
   return (
-    <button type="button" className="icon-button vehicle-action-button" onClick={onClick} disabled={busy} aria-label={action.label} title={action.label}>
-      <Icon className={classNames('h-4 w-4', busy && 'animate-spin')} aria-hidden="true" />
+    <button type="button" className={classNames('icon-button vehicle-action-button', action.type === 'CONFIRM_ARRIVAL' && 'vehicle-arrival-button')} onClick={onClick} disabled={busy} aria-label={action.label} title={action.label}>
+      <Icon className={classNames('h-4 w-4', busy && 'animate-spin')} aria-hidden="true" />{action.type === 'CONFIRM_ARRIVAL' ? <span>Прибытие</span> : null}
     </button>
   )
 }
@@ -212,8 +218,11 @@ function RouteStopsDrawer({ row, open, onToggle }: { row: DashboardVehicle; open
 }
 
 function StopCard({ stop }: { stop: Stop }) {
-  return <article className={classNames('route-stop-card', stop.status === 'CURRENT' && 'route-stop-card-current')}><div className="flex items-center justify-between gap-2"><span className="badge border-slate-200 bg-slate-50 text-slate-700">{stop.sequence} · {stopTypeLabel(stop.type)}</span><span className="text-xs font-bold text-slate-500">{stop.status ? statusLabel(stop.status) : ''}</span></div><p className="mt-2 truncate font-black" title={stop.city || stop.address}>{shortAddress(stop)}</p><p className="mt-1 line-clamp-2 text-xs text-slate-500" title={stop.address}>{stop.address}</p><div className="mt-3 grid gap-1 text-xs font-semibold text-slate-600"><span className="inline-flex items-center gap-1"><Clock3 className="h-3.5 w-3.5" /> {formatAppointment(stop.appointmentAt)}</span><span className="inline-flex items-center gap-1"><MapPin className="h-3.5 w-3.5" /> ETA {formatDateTime(stop.predictedEta)}</span></div></article>
+  const references = stop.referenceNumbers ?? parseStopReferences(stop.referenceNumbersJson)
+  return <article className={classNames('route-stop-card', stop.status === 'CURRENT' && 'route-stop-card-current')}><div className="flex items-center justify-between gap-2"><span className="badge border-slate-200 bg-slate-50 text-slate-700">{stop.sequence} · {stopTypeLabel(stop.type)}</span><span className="text-xs font-bold text-slate-500">{stop.status ? statusLabel(stop.status) : ''}</span></div><p className="mt-2 truncate font-black" title={stop.city || stop.address}>{shortAddress(stop)}</p><p className="mt-1 line-clamp-2 text-xs text-slate-500" title={stop.address}>{stop.address}</p><div className="mt-3 grid gap-1 text-xs font-semibold text-slate-600"><span className="inline-flex items-center gap-1"><Clock3 className="h-3.5 w-3.5" /> {formatAppointment(stop.appointmentAt)}</span><span className="inline-flex items-center gap-1"><MapPin className="h-3.5 w-3.5" /> ETA {formatDateTime(stop.predictedEta)}</span>{stop.loadingMeters ? <span>{stop.loadingMeters} LDM</span> : null}{references.length ? <span>Ref: {references.join(', ')}</span> : null}{stop.instructions ? <span className="line-clamp-2">{stop.instructions}</span> : null}</div></article>
 }
+
+function parseStopReferences(value?: string | null): string[] { if (!value) return []; try { const parsed = JSON.parse(value) as unknown; return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [] } catch { return [] } }
 
 function RailMetric({ label, value, accent = false }: { label: string; value: string; accent?: boolean }) { return <div className="min-w-0"><span className="metric-label">{label}</span><span className={classNames('block truncate font-bold', accent ? 'text-red-700' : 'text-slate-800')}>{value}</span></div> }
 function HudMetric({ label, value, alert = false }: { label: string; value: string; alert?: boolean }) { return <span className="hud-metric"><span>{label}</span><strong className={alert ? 'text-rose-300' : ''}>{value}</strong></span> }

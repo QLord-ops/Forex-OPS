@@ -1,6 +1,6 @@
 import { GeoJSONSource, Map, Marker, NavigationControl, setWorkerUrl, type StyleSpecification } from 'maplibre-gl'
 import mapLibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
-import { LocateFixed, Map as MapIcon, Route, Satellite } from 'lucide-react'
+import { LocateFixed, Route, Satellite, TrafficCone } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { boundsFor, geometryToCoordinates, stopCoordinates, toLineString } from '../lib/geometry'
@@ -41,11 +41,17 @@ type MapMode = 'traffic' | 'satellite'
 export function MapPanel({
   tour,
   position,
+  vehicleNumber,
+  focusCoordinate,
+  previewRoute,
   height = 520,
   fill = false
 }: {
   tour?: Tour | null
   position?: CurrentPosition | null
+  vehicleNumber?: string | null
+  focusCoordinate?: Coordinate | null
+  previewRoute?: Coordinate[]
   height?: number | string
   fill?: boolean
 }) {
@@ -76,7 +82,7 @@ export function MapPanel({
       center: readCamera()?.center ?? [10.4515, 51.1657],
       zoom: readCamera()?.zoom ?? 5.2
     })
-    mapRef.current.addControl(new NavigationControl({ visualizePitch: false }), 'top-right')
+    mapRef.current.addControl(new NavigationControl({ visualizePitch: false }), 'top-left')
     mapRef.current.on('moveend', () => {
       const map = mapRef.current
       if (!map) return
@@ -129,7 +135,7 @@ export function MapPanel({
     if (!map) return
 
     const render = () => {
-      renderMapContent(map, fullRoute, position)
+      renderMapContent(map, fullRoute, position, previewRoute)
       stopMarkersRef.current.forEach((marker) => marker.remove())
       stopMarkersRef.current = stops.map((stop) => {
         const element = document.createElement('div')
@@ -150,7 +156,17 @@ export function MapPanel({
     if (map.isStyleLoaded()) render()
     else map.once('style.load', render)
     return () => { map.off('style.load', render) }
-  }, [fullRoute, mode, position, stops, tour?.id])
+  }, [fullRoute, mode, position, previewRoute, stops, tour?.id])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (map && focusCoordinate) map.easeTo({ center: focusCoordinate, zoom: Math.max(map.getZoom(), 15), duration: 350 })
+  }, [focusCoordinate])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (map && previewRoute?.length) fitRoute(map, previewRoute, 14, 350)
+  }, [previewRoute])
 
   useEffect(() => {
     const map = mapRef.current
@@ -176,21 +192,25 @@ export function MapPanel({
     if (!markerRef.current) {
       const element = document.createElement('div')
       element.className = 'truck-marker'
-      element.setAttribute('aria-label', position?.positionSource === 'WEBFLEET' ? 'Фактическая позиция Webfleet GPS' : calculatedPositionLabel)
+      element.setAttribute('aria-label', markerDescription(vehicleNumber, position?.positionSource))
       markerRef.current = new Marker({ element }).setLngLat(coordinate).addTo(map)
     } else {
       markerRef.current.setLngLat(coordinate)
     }
-  }, [position?.coordinate, position?.positionSource])
+    const element = markerRef.current.getElement()
+    element.setAttribute('aria-label', markerDescription(vehicleNumber, position?.positionSource))
+    element.innerHTML = ''
+    const label = document.createElement('span')
+    label.className = 'truck-marker-label'
+    label.textContent = `${vehicleNumber ? `LKW ${vehicleNumber}` : 'LKW'} · ${position?.positionSource === 'WEBFLEET' ? 'GPS' : 'Расчёт'}`
+    element.append(label)
+  }, [position?.coordinate, position?.positionSource, vehicleNumber])
 
   return (
     <section className={fill ? 'map-panel-fill' : 'work-surface min-w-0 overflow-hidden'}>
       <div ref={containerRef} style={{ height }} className={fill ? 'h-full w-full' : 'rounded-lg'} />
       <div className="map-controls" aria-label="Управление картой">
-        <div className="map-mode-toggle" role="group" aria-label="Режим карты">
-          <button type="button" className={mode === 'traffic' ? 'active' : ''} onClick={() => setMode('traffic')} aria-pressed={mode === 'traffic'} title="Карта и слой пробок"><MapIcon className="h-4 w-4" /><span>Пробки</span></button>
-          <button type="button" className={mode === 'satellite' ? 'active' : ''} onClick={() => setMode('satellite')} aria-pressed={mode === 'satellite'} title="Спутниковая карта"><Satellite className="h-4 w-4" /><span>Спутник</span></button>
-        </div>
+        <button type="button" className="map-mode-switch" onClick={() => setMode((current) => current === 'traffic' ? 'satellite' : 'traffic')} aria-label={mode === 'traffic' ? 'Переключить на спутник' : 'Переключить на карту пробок'} title={mode === 'traffic' ? 'Показать спутник' : 'Показать пробки'}>{mode === 'traffic' ? <Satellite className="h-4 w-4" /> : <TrafficCone className="h-4 w-4" />}<span>{mode === 'traffic' ? 'Спутник' : 'Пробки'}</span></button>
         <button type="button" onClick={() => setCameraRequest('vehicle')} disabled={!position?.coordinate} title="Показать выбранную машину"><LocateFixed className="h-4 w-4" /><span>К машине</span></button>
         <button type="button" onClick={() => setCameraRequest('route')} disabled={!fullRoute.length && !stops.length} title="Показать весь маршрут"><Route className="h-4 w-4" /><span>Маршрут</span></button>
       </div>
@@ -199,11 +219,12 @@ export function MapPanel({
   )
 }
 
-function renderMapContent(map: Map, fullRoute: Coordinate[], position?: CurrentPosition | null) {
+function renderMapContent(map: Map, fullRoute: Coordinate[], position?: CurrentPosition | null, previewRoute?: Coordinate[]) {
   if (!map.isStyleLoaded()) return
   upsertLine(map, 'route-full', fullRoute, '#64748b', 4, 0.45)
   upsertLine(map, 'route-travelled', geometryToCoordinates(position?.travelledGeometry), '#059669', 5, 0.95)
   upsertLine(map, 'route-remaining', geometryToCoordinates(position?.remainingGeometry), '#2563eb', 5, 0.9)
+  upsertLine(map, 'route-preview', previewRoute ?? [], '#d97706', 5, 0.85)
 }
 
 function styleFor(mode: MapMode): StyleSpecification {
@@ -251,6 +272,10 @@ function readCamera(): { center: Coordinate; zoom: number } | null {
 
 function readMapMode(): MapMode {
   return window.localStorage.getItem('ops-dashboard-map-mode') === 'satellite' ? 'satellite' : 'traffic'
+}
+
+function markerDescription(vehicleNumber?: string | null, source?: CurrentPosition['positionSource']): string {
+  return `${vehicleNumber ? `LKW ${vehicleNumber}` : 'Грузовик'} · ${source === 'WEBFLEET' ? 'фактическая позиция Webfleet GPS' : calculatedPositionLabel}`
 }
 
 function upsertLine(

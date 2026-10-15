@@ -16,8 +16,15 @@ interface StopDraft {
   address: string
   city: string
   appointmentAt: string
+  appointmentWindowStartAt: string
+  appointmentWindowEndAt: string
+  loadingMeters: string
+  referenceNumbers: string
+  instructions: string
   serviceMinMinutes: number
   serviceMaxMinutes: number
+  sourceExcerpt?: string | null
+  sourcePage?: number | null
   geocode?: GeocodeResult
   geocodeError?: string
 }
@@ -39,7 +46,7 @@ interface ImportQueueItem {
 interface ImportSelection { itemId: string; draftIndex: number }
 
 function createStop(type: StopType): StopDraft {
-  return { id: crypto.randomUUID(), type, company: '', address: '', city: '', appointmentAt: '', serviceMinMinutes: 60, serviceMaxMinutes: 120 }
+  return { id: crypto.randomUUID(), type, company: '', address: '', city: '', appointmentAt: '', appointmentWindowStartAt: '', appointmentWindowEndAt: '', loadingMeters: '', referenceNumbers: '', instructions: '', serviceMinMinutes: 60, serviceMaxMinutes: 120 }
 }
 
 function createInitialStops() { return [createStop('LOAD'), createStop('UNLOAD')] }
@@ -75,7 +82,9 @@ function findNextImportSelection(items: ImportQueueItem[], current?: ImportSelec
 function buildStopsFromImport(draft: ImportedOrderDraft): StopDraft[] {
   const result = draft.stops.slice().sort((a, b) => a.sequence - b.sequence).map((stop): StopDraft => ({
     id: crypto.randomUUID(), type: stop.type, company: stop.company ?? '', address: stop.address ?? '', city: stop.city ?? '',
-    appointmentAt: stop.appointmentLocal ?? '', serviceMinMinutes: 60, serviceMaxMinutes: 120
+    appointmentAt: stop.appointmentLocal ?? '', appointmentWindowStartAt: stop.appointmentWindowStartLocal ?? '', appointmentWindowEndAt: stop.appointmentWindowEndLocal ?? '', loadingMeters: stop.loadingMeters?.toString() ?? '',
+    referenceNumbers: stop.referenceNumbers?.join(', ') ?? '', instructions: stop.instructions ?? '', serviceMinMinutes: 60, serviceMaxMinutes: 120,
+    sourceExcerpt: stop.sourceExcerpt, sourcePage: stop.sourcePage
   }))
   if (!result.length) return createInitialStops()
   if (result[0].type !== 'LOAD') result.unshift(createStop('LOAD'))
@@ -95,11 +104,20 @@ function appointmentLabel(value: string) {
   return Number.isNaN(date.getTime()) ? value.replace('T', ' ') : new Intl.DateTimeFormat('ru-RU', { dateStyle: 'medium', timeStyle: 'short' }).format(date)
 }
 
+function normalizeVehicleIdentifier(value: string) {
+  return value.toLocaleUpperCase().replace(/^LKW\s*/i, '').replace(/[^A-Z0-9]/g, '')
+}
+
 export function NewOrderPage() {
   const navigate = useNavigate()
   const vehicles = usePolling(api.vehicles, 30_000)
   const [vehicleId, setVehicleId] = useState('')
   const [orderNumber, setOrderNumber] = useState('')
+  const [createNewVehicle, setCreateNewVehicle] = useState(false)
+  const [newVehicleNumber, setNewVehicleNumber] = useState('')
+  const [newVehiclePlate, setNewVehiclePlate] = useState('')
+  const [trailerPlate, setTrailerPlate] = useState('')
+  const [tourRemarks, setTourRemarks] = useState('')
   const [stops, setStops] = useState<StopDraft[]>(createInitialStops)
   const [manualMode, setManualMode] = useState(false)
   const [editing, setEditing] = useState(false)
@@ -121,13 +139,14 @@ export function NewOrderPage() {
   const importWarnings = selectedImportItem?.preview ? [...selectedImportItem.preview.warnings, ...(selectedImportDraft?.warnings ?? [])] : []
   const remainingImportDrafts = importItems.reduce((total, item) => total + (item.preview?.drafts.filter((_, index) => !isDraftCompleted(item, index)).length ?? 0), 0)
   const hasOrderDraft = manualMode || Boolean(selectedImportDraft)
-  const readyToConfirm = Boolean(vehicleId && orderNumber.trim() && stops.length >= 2 && stops.every((stop) => stop.address.trim()))
+  const readyToConfirm = Boolean((createNewVehicle ? newVehicleNumber.trim() : vehicleId) && orderNumber.trim() && stops.length >= 2 && stops.every((stop) => stop.address.trim()))
   const sequenceHint = useMemo(() => selectedVehicle ? `LKW ${selectedVehicle.vehicleNumber}: Auftrag станет активным или будет добавлен в очередь.` : null, [selectedVehicle])
 
   function findVehicleId(draft: ImportedOrderDraft) {
-    if (!draft.vehicleNumber || !vehicles.data) return ''
-    const requested = draft.vehicleNumber.trim().toLocaleLowerCase()
-    return vehicles.data.find((vehicle) => vehicle.vehicleNumber.toLocaleLowerCase() === requested || vehicle.licensePlate?.toLocaleLowerCase() === requested)?.id ?? ''
+    if (!vehicles.data) return ''
+    const requested = [draft.vehicleNumber, draft.vehiclePlate].filter((value): value is string => Boolean(value)).map(normalizeVehicleIdentifier)
+    const matches = vehicles.data.filter((vehicle) => [vehicle.vehicleNumber, vehicle.licensePlate].some((value) => value && requested.includes(normalizeVehicleIdentifier(value))))
+    return matches.length === 1 ? matches[0].id : ''
   }
 
   async function geocodeStop(stop: StopDraft) {
@@ -150,7 +169,13 @@ export function NewOrderPage() {
 
   function hydrateDraft(selection: ImportSelection, draft: ImportedOrderDraft) {
     const importedStops = buildStopsFromImport(draft)
-    setImportSelection(selection); setAppliedImportSelection(selection); setVehicleId(findVehicleId(draft)); setOrderNumber(draft.orderNumber ?? '')
+    const matchedId = findVehicleId(draft)
+    setImportSelection(selection); setAppliedImportSelection(selection); setVehicleId(matchedId); setOrderNumber(draft.orderNumber ?? '')
+    setCreateNewVehicle(!matchedId && Boolean(draft.vehicleNumber || draft.vehiclePlate))
+    setNewVehicleNumber((draft.vehicleNumber || draft.vehiclePlate || '').replace(/^LKW\s*/i, '').trim())
+    setNewVehiclePlate(draft.vehiclePlate ?? '')
+    setTrailerPlate(draft.trailerPlate ?? '')
+    setTourRemarks(draft.tourRemarks ?? '')
     setStops(importedStops); setManualMode(false); setEditing(false); setActiveStopId(null); setError(null); setSuccessMessage(null)
     importedStops.forEach((stop) => { if (stop.address.trim()) void geocodeStop(stop) })
   }
@@ -203,7 +228,7 @@ export function NewOrderPage() {
   }
 
   function beginManualMode() {
-    setManualMode(true); setEditing(true); setAppliedImportSelection(null); setVehicleId(''); setOrderNumber(''); setStops(createInitialStops()); setError(null); setSuccessMessage(null)
+    setManualMode(true); setEditing(true); setAppliedImportSelection(null); setVehicleId(''); setOrderNumber(''); setTrailerPlate(''); setTourRemarks(''); setCreateNewVehicle(false); setStops(createInitialStops()); setError(null); setSuccessMessage(null)
   }
 
   function returnToImport() {
@@ -237,12 +262,14 @@ export function NewOrderPage() {
       requestAnimationFrame(() => document.getElementById(`order-stop-${firstFailedStopId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }))
       return
     }
-    const payload = {
-      vehicleId, orderNumber: orderNumber.trim(),
-      stops: resolvedStops.map((stop, index): CreateTourStopInput => ({ sequence: index + 1, type: stop.type, company: stop.company.trim() || undefined, address: stop.geocode!.address || stop.address.trim(), city: stop.city.trim() || undefined, latitude: stop.geocode!.latitude, longitude: stop.geocode!.longitude, appointmentAt: stop.appointmentAt ? new Date(stop.appointmentAt).toISOString() : null, serviceMinMinutes: 60, serviceMaxMinutes: 120 }))
+    const tourInput = {
+      orderNumber: orderNumber.trim(), trailerPlate: trailerPlate.trim() || null, tourRemarks: tourRemarks.trim() || null,
+      stops: resolvedStops.map((stop, index): CreateTourStopInput => ({ sequence: index + 1, type: stop.type, company: stop.company.trim() || undefined, address: stop.address.trim(), city: stop.city.trim() || undefined, latitude: stop.geocode!.latitude, longitude: stop.geocode!.longitude, appointmentAt: stop.appointmentAt ? new Date(stop.appointmentAt).toISOString() : null, appointmentWindowStartAt: stop.appointmentWindowStartAt ? new Date(stop.appointmentWindowStartAt).toISOString() : null, appointmentWindowEndAt: stop.appointmentWindowEndAt ? new Date(stop.appointmentWindowEndAt).toISOString() : null, loadingMeters: stop.loadingMeters ? Number(stop.loadingMeters.replace(',', '.')) : null, referenceNumbers: stop.referenceNumbers.split(/[,;\n]+/).map((value) => value.trim()).filter(Boolean), instructions: stop.instructions.trim() || null, serviceMinMinutes: stop.serviceMinMinutes, serviceMaxMinutes: stop.serviceMaxMinutes }))
     }
     try {
-      const tour = await api.createTour(payload)
+      const tour = createNewVehicle
+        ? (await api.createTourWithVehicle({ vehicle: { vehicleNumber: newVehicleNumber.trim(), licensePlate: newVehiclePlate.trim() || undefined }, tour: tourInput })).tour
+        : await api.createTour({ ...tourInput, vehicleId })
       if (appliedImportSelection) {
         const nextItems = importItems.map((item) => item.id === appliedImportSelection.itemId ? { ...item, completedDraftIndexes: Array.from(new Set([...item.completedDraftIndexes, appliedImportSelection.draftIndex])) } : item)
         const nextSelection = findNextImportSelection(nextItems, appliedImportSelection)
@@ -279,23 +306,23 @@ export function NewOrderPage() {
         </div></div> : null}
       </section> : null}
 
-      {vehicles.data?.length && hasOrderDraft ? <section className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
+      {vehicles.data && hasOrderDraft ? <section className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
         <div className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-4"><div><h3 className="text-lg font-bold">Маршрут Auftrag</h3><p className="text-sm text-slate-500">Загрузка идёт первой, выгрузка — следующей. Норма точки: 60 минут.</p></div>{selectedImportItem ? <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">{selectedImportItem.fileName}</span> : null}</div>
           <div className="space-y-3 p-4 sm:p-5">{stops.map((stop, index) => {
             const isActive = editing && activeStopId === stop.id; const geocoding = geocodingStopIds.includes(stop.id)
             return <article id={`order-stop-${stop.id}`} key={stop.id} className={`overflow-hidden rounded-xl border transition ${stop.geocodeError ? 'border-red-400 bg-red-50/40' : isActive ? 'border-sky-500 ring-2 ring-sky-100' : 'border-slate-200'}`}>
-              <button type="button" className="flex w-full min-w-0 items-start gap-4 p-4 text-left" onClick={() => { setEditing(true); setActiveStopId(stop.id) }}><span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-sm font-black ${stop.type === 'LOAD' ? 'bg-sky-100 text-sky-800' : 'bg-emerald-100 text-emerald-800'}`}>{index + 1}</span><span className="min-w-0 flex-1"><span className="flex flex-wrap items-center gap-2"><span className="font-bold">{stop.type === 'LOAD' ? 'Загрузка' : 'Выгрузка'}</span><span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600"><Clock3 className="mr-1 inline h-3 w-3" />60 мин · контроль 120</span>{geocoding ? <span className="text-xs text-sky-700">Проверяем…</span> : stop.geocode ? <span className="text-xs font-semibold text-emerald-700">Адрес найден</span> : null}</span><span className="mt-2 block truncate font-semibold text-slate-800">{stop.address || 'Укажите адрес'}</span><span className="mt-1 block truncate text-sm text-slate-500">{[stop.city, stop.company].filter(Boolean).join(' · ') || 'Город и компания не указаны'}</span></span><span className="hidden shrink-0 text-right sm:block"><span className="block text-xs font-semibold uppercase text-slate-400">Термин</span><span className="mt-1 block text-sm font-semibold">{appointmentLabel(stop.appointmentAt)}</span></span><ChevronRight className="mt-3 h-5 w-5 shrink-0 text-slate-400" /></button>
-              {isActive ? <div className="grid gap-3 border-t border-slate-200 bg-slate-50/80 p-4 md:grid-cols-2"><label><span className="field-label">Тип точки</span><select className="field-input" value={stop.type} onChange={(event) => updateStop(stop.id, { type: event.target.value as StopType })}><option value="LOAD">Загрузка</option><option value="UNLOAD">Выгрузка</option></select></label><label><span className="field-label">Компания</span><input className="field-input" value={stop.company} onChange={(event) => updateStop(stop.id, { company: event.target.value })} /></label><label className="md:col-span-2"><span className="field-label">Адрес</span><input autoFocus className="field-input" value={stop.address} onChange={(event) => updateStop(stop.id, { address: event.target.value })} onBlur={() => void geocodeStop(stop)} required /></label><label><span className="field-label">Город</span><input className="field-input" value={stop.city} onChange={(event) => updateStop(stop.id, { city: event.target.value })} onBlur={() => void geocodeStop(stop)} /></label><label><span className="field-label">Термин</span><input className="field-input" type="datetime-local" value={stop.appointmentAt} onChange={(event) => updateStop(stop.id, { appointmentAt: event.target.value })} /></label>{stop.geocodeError ? <div className="md:col-span-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-800"><AlertTriangle className="mr-2 inline h-4 w-4" />{stop.geocodeError}</div> : null}<div className="flex justify-between gap-2 md:col-span-2"><button type="button" className="danger-button" disabled={stops.length <= 2} onClick={() => setStops((current) => current.filter((item) => item.id !== stop.id))}><Trash2 className="h-4 w-4" />Удалить</button><button type="button" className="secondary-button" onClick={() => setActiveStopId(null)}><Check className="h-4 w-4" />Готово</button></div></div> : null}
+              <button type="button" className="flex w-full min-w-0 items-start gap-4 p-4 text-left" onClick={() => { setEditing(true); setActiveStopId(stop.id) }}><span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-sm font-black ${stop.type === 'LOAD' ? 'bg-sky-100 text-sky-800' : 'bg-emerald-100 text-emerald-800'}`}>{index + 1}</span><span className="min-w-0 flex-1"><span className="flex flex-wrap items-center gap-2"><span className="font-bold">{stop.type === 'LOAD' ? 'Загрузка' : 'Выгрузка'}</span><span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600"><Clock3 className="mr-1 inline h-3 w-3" />60 мин · контроль 120</span>{geocoding ? <span className="text-xs text-sky-700">Проверяем…</span> : stop.geocode ? <span className="text-xs font-semibold text-emerald-700">Адрес найден</span> : null}</span><span className="mt-2 block truncate font-semibold text-slate-800">{stop.address || 'Укажите адрес'}</span><span className="mt-1 block truncate text-sm text-slate-500">{[stop.city, stop.company].filter(Boolean).join(' · ') || 'Город и компания не указаны'}</span>{stop.sourceExcerpt ? <span className="mt-2 block break-words text-xs text-slate-500">Источник{stop.sourcePage ? `, стр. ${stop.sourcePage}` : ''}: {stop.sourceExcerpt}</span> : null}</span><span className="hidden shrink-0 text-right sm:block"><span className="block text-xs font-semibold uppercase text-slate-400">Термин</span><span className="mt-1 block text-sm font-semibold">{stop.appointmentWindowStartAt && stop.appointmentWindowEndAt ? `${appointmentLabel(stop.appointmentWindowStartAt)} — ${appointmentLabel(stop.appointmentWindowEndAt)}` : appointmentLabel(stop.appointmentAt)}</span></span><ChevronRight className="mt-3 h-5 w-5 shrink-0 text-slate-400" /></button>
+              {isActive ? <div className="grid gap-3 border-t border-slate-200 bg-slate-50/80 p-4 md:grid-cols-2"><label><span className="field-label">Тип точки</span><select className="field-input" value={stop.type} onChange={(event) => updateStop(stop.id, { type: event.target.value as StopType })}><option value="LOAD">Загрузка</option><option value="UNLOAD">Выгрузка</option></select></label><label><span className="field-label">Компания</span><input className="field-input" value={stop.company} onChange={(event) => updateStop(stop.id, { company: event.target.value })} /></label><label className="md:col-span-2"><span className="field-label">Адрес</span><input autoFocus className="field-input" value={stop.address} onChange={(event) => updateStop(stop.id, { address: event.target.value })} onBlur={() => void geocodeStop(stop)} required /></label><label><span className="field-label">Город</span><input className="field-input" value={stop.city} onChange={(event) => updateStop(stop.id, { city: event.target.value })} onBlur={() => void geocodeStop(stop)} /></label><label><span className="field-label">Точный термин</span><input className="field-input" type="datetime-local" value={stop.appointmentAt} onChange={(event) => updateStop(stop.id, { appointmentAt: event.target.value, appointmentWindowStartAt: '', appointmentWindowEndAt: '' })} /></label><label><span className="field-label">Начало окна</span><input className="field-input" type="datetime-local" value={stop.appointmentWindowStartAt} onChange={(event) => updateStop(stop.id, { appointmentWindowStartAt: event.target.value, appointmentAt: '' })} /></label><label><span className="field-label">Конец окна</span><input className="field-input" type="datetime-local" value={stop.appointmentWindowEndAt} onChange={(event) => updateStop(stop.id, { appointmentWindowEndAt: event.target.value, appointmentAt: '' })} /></label><label><span className="field-label">Погрузочные метры (LM)</span><input className="field-input" inputMode="decimal" value={stop.loadingMeters} onChange={(event) => updateStop(stop.id, { loadingMeters: event.target.value })} placeholder="Например, 10,4" /></label><label><span className="field-label">Референсы</span><input className="field-input" value={stop.referenceNumbers} onChange={(event) => updateStop(stop.id, { referenceNumbers: event.target.value })} placeholder="Через запятую" /></label><label className="md:col-span-2"><span className="field-label">Примечания и инструкции</span><textarea className="field-input min-h-24 resize-y" value={stop.instructions} onChange={(event) => updateStop(stop.id, { instructions: event.target.value })} /></label>{stop.geocodeError ? <div className="md:col-span-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-800"><AlertTriangle className="mr-2 inline h-4 w-4" />{stop.geocodeError}</div> : null}<div className="flex justify-between gap-2 md:col-span-2"><button type="button" className="danger-button" disabled={stops.length <= 2} onClick={() => setStops((current) => current.filter((item) => item.id !== stop.id))}><Trash2 className="h-4 w-4" />Удалить</button><button type="button" className="secondary-button" onClick={() => setActiveStopId(null)}><Check className="h-4 w-4" />Готово</button></div></div> : null}
             </article>
           })}</div>
           {editing ? <div className="flex gap-2 border-t border-slate-200 bg-slate-50 px-5 py-3"><button type="button" className="secondary-button" onClick={() => { const stop = createStop('LOAD'); setStops((current) => [...current, stop]); setActiveStopId(stop.id) }}><Plus className="h-4 w-4" />Загрузка</button><button type="button" className="secondary-button" onClick={() => { const stop = createStop('UNLOAD'); setStops((current) => [...current, stop]); setActiveStopId(stop.id) }}><Plus className="h-4 w-4" />Выгрузка</button></div> : null}
         </div>
-        <aside className="space-y-4 xl:sticky xl:top-4 xl:self-start"><section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><label><span className="field-label">Назначить LKW</span><select className="field-input" value={vehicleId} onChange={(event) => setVehicleId(event.target.value)} required><option value="">Выберите машину</option>{vehicles.data.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.vehicleNumber} {vehicle.licensePlate ? `· ${vehicle.licensePlate}` : ''}</option>)}</select></label><label className="mt-4 block"><span className="field-label">Номер Auftrag</span><input className="field-input" value={orderNumber} onChange={(event) => setOrderNumber(event.target.value)} required /></label>{sequenceHint ? <p className="mt-3 text-xs leading-5 text-slate-500">{sequenceHint}</p> : null}{selectedImportDraft?.vehicleNumber && !findVehicleId(selectedImportDraft) ? <p className="mt-3 rounded-lg bg-amber-50 p-3 text-xs font-medium text-amber-900">LKW «{selectedImportDraft.vehicleNumber}» не найден однозначно. Выберите машину.</p> : null}</section>
+        <aside className="space-y-4 xl:sticky xl:top-4 xl:self-start"><section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><label><span className="field-label">Назначить LKW</span><select className="field-input" value={createNewVehicle ? '' : vehicleId} onChange={(event) => { setVehicleId(event.target.value); setCreateNewVehicle(false) }} required={!createNewVehicle} disabled={createNewVehicle}><option value="">Выберите машину</option>{vehicles.data.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.vehicleNumber} {vehicle.licensePlate ? `· ${vehicle.licensePlate}` : ''}</option>)}</select></label><label className="mt-3 flex items-center gap-2 text-sm"><input type="checkbox" checked={createNewVehicle} onChange={(event) => setCreateNewVehicle(event.target.checked)} />Добавить новую машину из Auftrag</label>{createNewVehicle ? <div className="mt-3 grid gap-2"><input className="field-input" aria-label="Номер новой машины" placeholder="Номер LKW" value={newVehicleNumber} onChange={(event) => setNewVehicleNumber(event.target.value)} required /><input className="field-input" aria-label="Госномер новой машины" placeholder="Госномер (необязательно)" value={newVehiclePlate} onChange={(event) => setNewVehiclePlate(event.target.value)} /></div> : null}<label className="mt-4 block"><span className="field-label">Номер Auftrag</span><input className="field-input" value={orderNumber} onChange={(event) => setOrderNumber(event.target.value)} required /></label><label className="mt-3 block"><span className="field-label">Прицеп этого тура</span><input className="field-input" value={trailerPlate} onChange={(event) => setTrailerPlate(event.target.value)} placeholder="Например, Z-S3153" /></label>{sequenceHint && !createNewVehicle ? <p className="mt-3 text-xs leading-5 text-slate-500">{sequenceHint}</p> : null}{selectedImportDraft?.vehicleNumber && !findVehicleId(selectedImportDraft) ? <p className="mt-3 rounded-lg bg-amber-50 p-3 text-xs font-medium text-amber-900">LKW «{selectedImportDraft.vehicleNumber}» не найден однозначно. Проверьте машину или создайте новую.</p> : null}</section>{tourRemarks ? <section className="rounded-xl border border-slate-200 bg-white p-4"><label><span className="field-label">Tourbemerkung</span><textarea className="field-input min-h-24" value={tourRemarks} onChange={(event) => setTourRemarks(event.target.value)} /></label></section> : null}
           {importWarnings.length ? <section className="space-y-2 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">{importWarnings.map((warning, index) => <p key={`${warning.code}-${index}`} className="flex gap-2"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />{warning.message}</p>)}</section> : null}{error ? <ErrorState error={error} /> : null}{successMessage ? <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">{successMessage}</div> : null}
           <div className="grid grid-cols-2 gap-3"><button type="button" className="secondary-button min-h-12 justify-center" onClick={() => { setEditing(true); setActiveStopId(stops[0]?.id ?? null) }}><Pencil className="h-4 w-4" />Редактировать</button><button type="submit" className="primary-button min-h-12 justify-center" disabled={!readyToConfirm || submitting}>{submitting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}{submitting ? 'Создаём…' : 'Подтвердить'}</button></div>
         </aside>
-      </section> : vehicles.data?.length ? <EmptyState label="Добавьте PDF, Excel или скриншот Auftrag — либо выберите ручное создание." /> : <EmptyState label="Нет доступных грузовиков. Сначала добавьте грузовик." />}
+      </section> : <EmptyState label="Добавьте PDF, Excel или скриншот Auftrag — либо выберите ручное создание." />}
     </form>
   )
 }

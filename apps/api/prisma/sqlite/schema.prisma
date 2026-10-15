@@ -12,6 +12,11 @@ model Vehicle {
   id               String    @id @default(cuid())
   vehicleNumber    String    @unique
   licensePlate     String?
+  currentTrailerPlate String?
+  manualPositionAddress String?
+  manualPositionLatitude Float?
+  manualPositionLongitude Float?
+  manualPositionAt DateTime?
   maxSpeedKmh      Int       @default(85)
   clockState       String?
   manualStoppedAt  DateTime?
@@ -31,6 +36,11 @@ model Tour {
   id             String    @id @default(cuid())
   vehicleId      String
   orderNumber    String
+  trailerPlate   String?
+  tourRemarks    String?
+  approachDurationSeconds Int?
+  approachDistanceMeters Int?
+  approachGeometry String?
   planVersion    Int       @default(0)
   queueIndex     Int       @default(0)
   status         String    @default("DRAFT")
@@ -64,6 +74,11 @@ model Stop {
   latitude          Float
   longitude         Float
   appointmentAt     DateTime?
+  appointmentWindowStartAt DateTime?
+  appointmentWindowEndAt DateTime?
+  loadingMeters     Float?
+  referenceNumbersJson String?
+  instructions     String?
   arrivedAt         DateTime?
   serviceMinMinutes Int       @default(60)
   serviceMaxMinutes Int       @default(120)

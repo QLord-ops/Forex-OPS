@@ -48,7 +48,7 @@ describe("ETA schedule, alerts and queue behavior", () => {
     expect(() => assertStopActionAllowed(null, "ACTIVE", new Date())).not.toThrow();
   });
 
-  it("calculates a chained schedule across active and queued tours", () => {
+  it("does not invent the first queued-stop ETA when its transfer leg is missing", () => {
     const service = new EtaService();
     const schedule = service.calculateVehicleSchedule(
       [
@@ -84,11 +84,11 @@ describe("ETA schedule, alerts and queue behavior", () => {
       new Date("2026-09-29T10:00:00Z")
     );
 
-    expect(schedule[0].predictedEta.toISOString()).toBe("2026-09-29T12:17:00.000Z");
+    expect(schedule[0].predictedEta?.toISOString()).toBe("2026-09-29T12:17:00.000Z");
     expect(schedule[0].predictedDelayMinutes).toBe(0);
-    expect(schedule[1].earliestArrival.toISOString()).toBe("2026-09-29T14:00:00.000Z");
-    expect(schedule[1].latestArrival.toISOString()).toBe("2026-09-29T15:00:00.000Z");
-    expect(schedule[1].earliestDeparture.toISOString()).toBe("2026-09-29T17:00:00.000Z");
+    expect(schedule[1].earliestArrival).toBeNull();
+    expect(schedule[1].latestArrival).toBeNull();
+    expect(schedule[1].earliestDeparture).toBeNull();
   });
 
   it("adds transfer time from the previous final stop to the first queued stop", () => {
@@ -136,9 +136,9 @@ describe("ETA schedule, alerts and queue behavior", () => {
       new Date("2026-09-29T13:00:00Z")
     );
 
-    expect(schedule[0].predictedEta.toISOString()).toBe("2026-09-29T14:40:00.000Z");
-    expect(schedule[1].predictedEta.toISOString()).toBe("2026-09-29T17:05:00.000Z");
-    expect(schedule[1].latestArrival.toISOString()).toBe("2026-09-29T18:05:00.000Z");
+    expect(schedule[0].predictedEta?.toISOString()).toBe("2026-09-29T14:40:00.000Z");
+    expect(schedule[1].predictedEta?.toISOString()).toBe("2026-09-29T17:05:00.000Z");
+    expect(schedule[1].latestArrival?.toISOString()).toBe("2026-09-29T18:05:00.000Z");
     expect(schedule[1].predictedDelayMinutes).toBe(125);
   });
 
@@ -170,9 +170,44 @@ describe("ETA schedule, alerts and queue behavior", () => {
       new Date("2026-10-05T12:00:00Z")
     );
 
-    expect(schedule[0].predictedEta.toISOString()).toBe("2026-09-29T11:00:00.000Z");
+    expect(schedule[0].predictedEta?.toISOString()).toBe("2026-09-29T11:00:00.000Z");
     expect(schedule[0].predictedDelayMinutes).toBe(0);
-    expect(schedule[0].earliestDeparture.toISOString()).toBe("2026-10-05T12:00:00.000Z");
+    expect(schedule[0].earliestDeparture?.toISOString()).toBe("2026-10-05T12:00:00.000Z");
+  });
+
+  it("waits for a loading window and measures lateness against its end without inventing an exact term", () => {
+    const service = new EtaService();
+    const now = new Date("2026-09-29T08:00:00Z");
+    const makeTour = (durationSeconds: number) => ({
+      id: `window-${durationSeconds}`, status: "ACTIVE", createdAt: now,
+      stops: [
+        completedStop("previous", 1, "LOAD", "Berlin", "2026-09-29T08:00:00Z", "2026-09-29T08:00:00Z"),
+        {
+          ...openStop("window-stop", 2, "UNLOAD", "Hamburg", "2026-09-29T08:00:00Z"),
+          appointmentAt: null,
+          appointmentWindowStartAt: new Date("2026-09-29T10:00:00Z"),
+          appointmentWindowEndAt: new Date("2026-09-29T11:00:00Z"),
+          serviceMinMinutes: 60,
+          serviceMaxMinutes: 120
+        }
+      ],
+      legs: [{
+        fromStopId: "previous", toStopId: "window-stop", status: "ACTIVE", startedAt: now,
+        simulatedDurationSeconds: durationSeconds, createdAt: now
+      }]
+    });
+
+    const early = service.calculateVehicleSchedule([makeTour(3_600)] as never, now)[0];
+    expect(early.appointmentAt).toBeNull();
+    expect(early.deadlineAt?.toISOString()).toBe("2026-09-29T11:00:00.000Z");
+    expect(early.earliestArrival?.toISOString()).toBe("2026-09-29T09:00:00.000Z");
+    expect(early.earliestDeparture?.toISOString()).toBe("2026-09-29T11:00:00.000Z");
+    expect(early.predictedDelayMinutes).toBe(0);
+
+    const late = service.calculateVehicleSchedule([makeTour(4 * 3_600)] as never, now)[0];
+    expect(late.earliestArrival?.toISOString()).toBe("2026-09-29T12:00:00.000Z");
+    expect(late.predictedDelayMinutes).toBe(60);
+    expect(late.definiteDelayMinutes).toBe(60);
   });
 
   it("creates at most one TWO_HOURS or ONE_HOUR alert per stop", async () => {
@@ -217,6 +252,7 @@ describe("ETA schedule, alerts and queue behavior", () => {
           type: "UNLOAD",
           address: "Zwickau",
           appointmentAt: new Date("2026-09-29T12:00:00Z"),
+          deadlineAt: new Date("2026-09-29T12:00:00Z"),
           earliestArrival: new Date("2026-09-29T12:45:00Z"),
           earliestDeparture: new Date("2026-09-29T12:45:00Z"),
           predictedEta: new Date("2026-09-29T12:45:00Z"),
@@ -238,6 +274,7 @@ describe("ETA schedule, alerts and queue behavior", () => {
           type: "UNLOAD",
           address: "Zwickau",
           appointmentAt: new Date("2026-09-29T12:00:00Z"),
+          deadlineAt: new Date("2026-09-29T12:00:00Z"),
           earliestArrival: new Date("2026-09-29T12:45:00Z"),
           earliestDeparture: new Date("2026-09-29T12:45:00Z"),
           predictedEta: new Date("2026-09-29T12:45:00Z"),

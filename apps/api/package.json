@@ -10,11 +10,12 @@
   "scripts": {
     "postinstall": "prisma generate",
     "dev": "tsx watch src/server.ts",
-    "build": "npm run prisma:generate && tsc -p tsconfig.json",
+    "build": "node scripts/migrate-on-deploy.mjs && npm run prisma:generate && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "prisma:generate": "prisma generate && prisma generate --schema prisma/sqlite/schema.prisma",
+    "db:check": "node scripts/check-database.mjs",
     "db:deploy": "node scripts/migrate.mjs",
     "db:import-sqlite": "node scripts/import-sqlite.mjs",
     "db:reset": "npm run db:deploy && npm run db:seed",

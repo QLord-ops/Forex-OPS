@@ -14,10 +14,10 @@ export interface AppointmentAnalysis {
   generatedAt: string;
   appointmentAt: string;
   previousAppointmentAt: string | null;
-  earliestArrival: string;
-  latestArrival: string;
+  earliestArrival: string | null;
+  latestArrival: string | null;
   recommendedStartAt: string | null;
-  bufferMinutes: number;
+  bufferMinutes: number | null;
   risk: AppointmentRisk;
   action: AppointmentAction;
   message: string;
@@ -49,23 +49,26 @@ export class AppointmentService {
 
     const position = this.getPosition ? await this.getPosition(context.vehicle.id, now) : null;
     const targetTour = context.vehicle.tours.find((tour) => tour.id === context.stop.tourId)!;
-    const pendingStops = targetTour.stops.filter((stop) => !stop.completedAt).sort((a, b) => a.sequence - b.sequence);
     const approachLeg = targetTour.legs.find((leg) => leg.toStopId === stopId && leg.status !== "COMPLETED");
-    const unknownStartPosition = !context.stop.arrivedAt && pendingStops[0]?.id === stopId && !approachLeg;
+    const unknownStartPosition = !target.earliestArrival || !target.latestArrival;
     const movingToTarget = Boolean(position?.legId && approachLeg?.id === position.legId && position.status === "MOVING");
     const earliestArrival = target.earliestArrival;
     const latestArrival = target.latestArrival;
-    const bufferMinutes = Math.floor((appointmentAt.getTime() - latestArrival.getTime()) / 60_000);
+    const bufferMinutes = latestArrival
+      ? Math.floor((appointmentAt.getTime() - latestArrival.getTime()) / 60_000)
+      : null;
 
-    let risk: AppointmentRisk = earliestArrival > appointmentAt
+    let risk: AppointmentRisk = !earliestArrival || !latestArrival
+      ? "UNKNOWN"
+      : earliestArrival > appointmentAt
       ? "LATE"
       : latestArrival > appointmentAt
         ? "RISK"
         : "ON_TIME";
     let action: AppointmentAction;
-    let recommendedStartAt: Date | null = new Date(
+    let recommendedStartAt: Date | null = latestArrival ? new Date(
       appointmentAt.getTime() - Math.max(0, latestArrival.getTime() - now.getTime())
-    );
+    ) : null;
     let message: string;
 
     if (context.stop.arrivedAt) {
@@ -85,14 +88,18 @@ export class AppointmentService {
         : risk === "RISK"
           ? "Машина уже в пути; верхняя граница ETA позже термина. Контролируйте пробки и остановки."
           : "Машина уже в пути и текущий расчёт позволяет прибыть вовремя.";
-    } else if (recommendedStartAt <= now) {
+    } else if (recommendedStartAt && recommendedStartAt <= now) {
       action = "LEAVE_NOW";
       message = risk === "LATE"
         ? "Расчёт уже показывает опоздание. Выезжать нужно немедленно и согласовать новый термин."
         : "Чтобы сохранить рассчитанный запас, начинать движение нужно сейчас.";
-    } else {
+    } else if (recommendedStartAt) {
       action = "LEAVE_BY";
       message = `Рекомендуемое начало движения — не позднее ${recommendedStartAt.toISOString()}.`;
+    } else {
+      action = "UNKNOWN_POSITION";
+      risk = "UNKNOWN";
+      message = "Для расчёта времени выезда недостаточно данных о маршруте.";
     }
 
     return {
@@ -103,8 +110,8 @@ export class AppointmentService {
       generatedAt: now.toISOString(),
       appointmentAt: appointmentAt.toISOString(),
       previousAppointmentAt: context.stop.appointmentAt?.toISOString() ?? null,
-      earliestArrival: earliestArrival.toISOString(),
-      latestArrival: latestArrival.toISOString(),
+      earliestArrival: earliestArrival?.toISOString() ?? null,
+      latestArrival: latestArrival?.toISOString() ?? null,
       recommendedStartAt: recommendedStartAt?.toISOString() ?? null,
       bufferMinutes,
       risk,
@@ -132,7 +139,6 @@ export class AppointmentService {
         },
         data: {
           planVersion: { increment: 1 },
-          ...(context.stop.sequence === 1 ? { plannedStartAt: appointmentAt } : {})
         }
       });
       if (!changedTour.count) throw new TourPlanConflictError("Маршрут изменился. Обновите данные и рассчитайте термин повторно.");

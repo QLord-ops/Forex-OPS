@@ -40,6 +40,8 @@ export type TourAggregate = Prisma.TourGetPayload<{
 export type CreateTourInput = {
   vehicleId: string;
   orderNumber: string;
+  trailerPlate?: string | null;
+  tourRemarks?: string | null;
   stops: Array<{
     sequence: number;
     type: "LOAD" | "UNLOAD";
@@ -47,6 +49,11 @@ export type CreateTourInput = {
     address: string;
     city?: string | StructuredCity | null;
     appointmentAt?: string | null;
+    appointmentWindowStartAt?: string | null;
+    appointmentWindowEndAt?: string | null;
+    loadingMeters?: number | null;
+    referenceNumbers?: string[] | null;
+    instructions?: string | null;
     serviceMinMinutes?: number | null;
     serviceMaxMinutes?: number | null;
     latitude?: number;
@@ -75,12 +82,14 @@ export class TourService {
     return this.db.$transaction(async (tx) => {
       assertPlanningContextUnchanged(context, await readPlanningContext(tx, input));
       const { previousTourId, status } = context;
-      const plannedStartAt = toNullableDate(orderedStops[0].appointmentAt);
+      const plannedStartAt = null;
 
       const tour = await tx.tour.create({
         data: {
           vehicleId: context.vehicle.id,
           orderNumber: input.orderNumber,
+          trailerPlate: input.trailerPlate?.trim() || null,
+          tourRemarks: input.tourRemarks?.trim() || null,
           planVersion: 0,
           queueIndex: context.queueIndex,
           status,
@@ -89,11 +98,48 @@ export class TourService {
         }
       });
       await persistTourPlan(tx, tour.id, plan);
+      if (status === "ACTIVE" && input.trailerPlate?.trim()) {
+        await updateCurrentTrailer(tx, context.vehicle.id, tour.id, input.trailerPlate.trim());
+      }
 
       return tx.tour.findUniqueOrThrow({
         where: { id: tour.id },
         include: tourInclude
       });
+    });
+  }
+
+  async createTourForNewVehicle(input: {
+    vehicle: { vehicleNumber: string; licensePlate?: string | null };
+    tour: Omit<CreateTourInput, "vehicleId">;
+  }) {
+    validateTourInput({ ...input.tour, vehicleId: "pending" });
+    const orderedStops = [...input.tour.stops].sort((a, b) => a.sequence - b.sequence);
+    const plan = await prepareTourPlan(this.routingProvider, orderedStops, undefined, 85);
+    return this.db.$transaction(async (tx) => {
+      const vehicle = await tx.vehicle.create({ data: {
+        vehicleNumber: input.vehicle.vehicleNumber.trim(),
+        licensePlate: input.vehicle.licensePlate?.trim() || null,
+        currentTrailerPlate: input.tour.trailerPlate?.trim() || null
+      } });
+      const tour = await tx.tour.create({ data: {
+        vehicleId: vehicle.id,
+        orderNumber: input.tour.orderNumber.trim(),
+        trailerPlate: input.tour.trailerPlate?.trim() || null,
+        tourRemarks: input.tour.tourRemarks?.trim() || null,
+        status: "ACTIVE",
+        queueIndex: 0,
+        plannedStartAt: null
+      } });
+      await persistTourPlan(tx, tour.id, plan);
+      if (input.tour.trailerPlate?.trim()) {
+        await tx.operationEvent.create({ data: {
+          vehicleId: vehicle.id, tourId: tour.id, type: "TRAILER_CHANGED",
+          reason: "Прицеп назначен при создании первого тура.",
+          payloadJson: JSON.stringify({ previous: null, current: input.tour.trailerPlate.trim() })
+        } });
+      }
+      return { vehicle, tour: await tx.tour.findUniqueOrThrow({ where: { id: tour.id }, include: tourInclude }) };
     });
   }
 
@@ -114,11 +160,13 @@ export class TourService {
         data: {
           vehicleId: input.vehicleId,
           orderNumber: input.orderNumber,
+          trailerPlate: input.trailerPlate?.trim() || null,
+          tourRemarks: input.tourRemarks?.trim() || null,
           planVersion: { increment: 1 },
           queueIndex: context.queueIndex,
           status,
           previousTourId,
-          plannedStartAt: toNullableDate(orderedStops[0].appointmentAt)
+          plannedStartAt: null
         }
       });
       await persistTourPlan(tx, tourId, plan);
@@ -432,6 +480,11 @@ async function persistTourPlan(
         longitude: stop.longitude,
         city: normalizeCity(stop.city),
         appointmentAt: toNullableDate(stop.appointmentAt),
+        appointmentWindowStartAt: toNullableDate(stop.appointmentWindowStartAt),
+        appointmentWindowEndAt: toNullableDate(stop.appointmentWindowEndAt),
+        loadingMeters: stop.loadingMeters ?? null,
+        referenceNumbersJson: stop.referenceNumbers?.length ? JSON.stringify(stop.referenceNumbers) : null,
+        instructions: stop.instructions?.trim() || null,
         serviceMinMinutes: normalizeServiceMinutes(stop.serviceMinMinutes, 60),
         serviceMaxMinutes: normalizeServiceMinutes(stop.serviceMaxMinutes, 120)
       }
@@ -524,6 +577,7 @@ async function activateNextQueuedTour(tx: Prisma.TransactionClient, vehicleId: s
   const nextTour = selectNextQueuedTour(queuedTours);
   if (!nextTour) return null;
   const activatedTour = await tx.tour.update({ where: { id: nextTour.id }, data: { status: "ACTIVE" } });
+  if (activatedTour.trailerPlate) await updateCurrentTrailer(tx, vehicleId, activatedTour.id, activatedTour.trailerPlate);
   const firstStop = await tx.stop.findFirst({
     where: { tourId: nextTour.id },
     orderBy: { sequence: "asc" }
@@ -540,6 +594,17 @@ async function activateNextQueuedTour(tx: Prisma.TransactionClient, vehicleId: s
     }
   }
   return activatedTour;
+}
+
+async function updateCurrentTrailer(tx: Prisma.TransactionClient, vehicleId: string, tourId: string, trailerPlate: string): Promise<void> {
+  const vehicle = await tx.vehicle.findUniqueOrThrow({ where: { id: vehicleId } });
+  if (vehicle.currentTrailerPlate === trailerPlate) return;
+  await tx.vehicle.update({ where: { id: vehicleId }, data: { currentTrailerPlate: trailerPlate } });
+  await tx.operationEvent.create({ data: {
+    vehicleId, tourId, type: "TRAILER_CHANGED",
+    reason: "Смена прицепа при начале тура.",
+    payloadJson: JSON.stringify({ previous: vehicle.currentTrailerPlate, current: trailerPlate })
+  } });
 }
 
 export function selectNextQueuedTour<T extends Pick<Tour, "id" | "status" | "plannedStartAt" | "createdAt"> & Partial<Pick<Tour, "queueIndex">>>(

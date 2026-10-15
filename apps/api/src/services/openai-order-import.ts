@@ -17,6 +17,9 @@ const stopSchema = z.object({
     .refine(isValidLocalDateTime, "appointmentLocal должен содержать корректные локальные дату и время")
     .nullable()
     .default(null),
+  loadingMeters: z.number().min(0).max(100).nullable().default(null),
+  referenceNumbers: z.array(z.string().trim().min(1).max(200)).max(20).default([]),
+  instructions: z.string().trim().max(4000).nullable().default(null),
   sourceRow: z.number().int().positive(),
   confidence: z.number().min(0).max(1).default(0.65)
 });
@@ -87,7 +90,7 @@ export async function importOrdersWithOpenAi(
             role: "user",
             content: JSON.stringify({
               task:
-                "Find loading and unloading stops in these Excel rows. appointmentLocal must be YYYY-MM-DDTHH:mm or null. Write all warning messages in Russian.",
+                "Find loading and unloading stops in these Excel rows. Extract explicit LDM/loading meters, stop reference numbers and operational notes. Missing optional metadata is allowed; never invent it. appointmentLocal must be YYYY-MM-DDTHH:mm or null. Write warnings in Russian.",
               rows: openAiInput.rows
             })
           }
@@ -125,6 +128,9 @@ export async function importOrdersWithOpenAi(
                             "company",
                             "address",
                             "appointmentLocal",
+                            "loadingMeters",
+                            "referenceNumbers",
+                            "instructions",
                             "sourceRow",
                             "confidence"
                           ],
@@ -137,6 +143,9 @@ export async function importOrdersWithOpenAi(
                               type: ["string", "null"],
                               pattern: "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}$"
                             },
+                            loadingMeters: { type: ["number", "null"], minimum: 0, maximum: 100 },
+                            referenceNumbers: { type: "array", maxItems: 20, items: { type: "string", minLength: 1, maxLength: 200 } },
+                            instructions: { type: ["string", "null"], maxLength: 4000 },
                             sourceRow: { type: "integer", minimum: 1 },
                             confidence: { type: "number", minimum: 0, maximum: 1 }
                           }

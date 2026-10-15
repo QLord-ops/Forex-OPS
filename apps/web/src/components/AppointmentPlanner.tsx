@@ -18,6 +18,7 @@ export function AppointmentPlanner({ tour, onChange }: { tour: Tour; onChange: (
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+  const [manualAddress, setManualAddress] = useState('')
 
   const selectedStop = pendingStops.find((stop) => stop.id === stopId) ?? pendingStops[0]
 
@@ -70,6 +71,21 @@ export function AppointmentPlanner({ tour, onChange }: { tour: Tour; onChange: (
     } catch (requestError) {
       setError((requestError as Error).message)
       setAnalysis(null)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function setOrigin() {
+    if (!manualAddress.trim()) return
+    setBusy(true)
+    setError('')
+    try {
+      await api.setManualPosition(tour.vehicleId, manualAddress.trim())
+      setAnalysis(null)
+      await onChange()
+    } catch (requestError) {
+      setError((requestError as Error).message)
     } finally {
       setBusy(false)
     }
@@ -133,6 +149,11 @@ export function AppointmentPlanner({ tour, onChange }: { tour: Tour; onChange: (
               onApply={() => void apply()}
             />
           ) : null}
+          {analysis?.action === 'UNKNOWN_POSITION' ? <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm">
+            <p className="font-semibold text-amber-950">Для расчёта ETA первой точки укажите текущий адрес машины.</p>
+            <p className="mt-1 text-xs text-amber-900">Это ручная позиция диспетчера, не GPS. По ней будет построен путь до загрузки.</p>
+            <div className="mt-2 flex flex-wrap gap-2"><input className="field-input min-w-52 flex-1" value={manualAddress} onChange={(event) => setManualAddress(event.target.value)} placeholder="Улица, дом, индекс, город" aria-label="Текущий адрес машины" /><button type="button" className="primary-button" disabled={busy || !manualAddress.trim()} onClick={() => void setOrigin()}>Сохранить позицию и пересчитать</button></div>
+          </div> : null}
           {error ? <p role="alert" className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</p> : null}
           {success ? <p className="flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800"><CheckCircle2 className="h-4 w-4" />{success}</p> : null}
         </div>
@@ -165,9 +186,9 @@ function AppointmentResult({
     <div className={`space-y-2 rounded-md border p-3 text-sm ${tone}`}>
       <p className="font-semibold">{riskLabel}</p>
       <p>Термин: {formatDateTime(analysis.appointmentAt)}</p>
-      <p>ETA: {formatDateTime(analysis.earliestArrival)}–{formatDateTime(analysis.latestArrival)}</p>
+      <p>ETA: {analysis.earliestArrival && analysis.latestArrival ? `${formatDateTime(analysis.earliestArrival)}–${formatDateTime(analysis.latestArrival)}` : 'недоступна без позиции машины'}</p>
       {analysis.recommendedStartAt ? <p>Начать движение не позднее: <strong>{formatDateTime(analysis.recommendedStartAt)}</strong></p> : null}
-      <p>Запас по верхней ETA: {analysis.bufferMinutes >= 0 ? formatDurationMinutes(analysis.bufferMinutes) : `опоздание ${formatDurationMinutes(Math.abs(analysis.bufferMinutes))}`}</p>
+      {analysis.bufferMinutes !== null ? <p>Запас по верхней ETA: {analysis.bufferMinutes >= 0 ? formatDurationMinutes(analysis.bufferMinutes) : `опоздание ${formatDurationMinutes(Math.abs(analysis.bufferMinutes))}`}</p> : null}
       <p>{analysis.message}</p>
       {analysis.preliminary ? <p className="text-xs">Расчёт предварительный: GPS отсутствует или исходные часы машины заполнены не полностью.</p> : null}
       {saved ? (

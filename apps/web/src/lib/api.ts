@@ -71,6 +71,21 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload)
     }),
+  createTourWithVehicle: (payload: { vehicle: { vehicleNumber: string; licensePlate?: string }; tour: Omit<CreateTourInput, 'vehicleId'> }) =>
+    request<{ vehicle: Vehicle; tour: Tour }>('/tours/with-new-vehicle', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  previewNewTour: (payload: { vehicleId?: string; stops: Array<Pick<CreateTourInput['stops'][number], 'address' | 'latitude' | 'longitude'>> }) =>
+    request<{ distanceMeters: number; durationSeconds: number; estimatedArrivalAt: string | null; preliminary: boolean; geometry: Array<[number, number]> }>('/tours/preview', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  setManualPosition: (vehicleId: string, address: string) =>
+    request<{ address: string; latitude: number; longitude: number; approachDurationSeconds: number | null }>(`/vehicles/${vehicleId}/manual-position`, {
+      method: 'PUT',
+      body: JSON.stringify({ address })
+    }),
   updateTour: (id: string, payload: CreateTourInput | { status: 'CANCELLED' }) =>
     request<Tour>(`/tours/${id}`, {
       method: 'PATCH',

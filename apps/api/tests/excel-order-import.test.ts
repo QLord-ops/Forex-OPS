@@ -72,6 +72,19 @@ describe("Excel order import", () => {
     expect(drafts[1].stops[0]).toMatchObject({ type: "LOAD", address: "Bremen, Am Markt 1" });
   });
 
+  it("extracts LDM, references and notes from structured Excel columns", () => {
+    const parsed = parseRowsWithRules([
+      row(1, ["Auftragsnummer", "Typ", "Adresse", "LDM", "Referenznummer", "Bemerkung"]),
+      row(2, ["META-1", "load", "Berlin", "13,6 LDM", "L-1; L-2", "Tor 4"]),
+      row(3, ["", "unload", "Hamburg", "", "E-9", "Avis 30 min"])
+    ]);
+
+    expect(parsed.drafts[0].stops).toEqual([
+      expect.objectContaining({ loadingMeters: 13.6, referenceNumbers: ["L-1", "L-2"], instructions: "Tor 4" }),
+      expect.objectContaining({ loadingMeters: null, referenceNumbers: ["E-9"], instructions: "Avis 30 min" })
+    ]);
+  });
+
   it("uses cached formula results and warns without evaluating formulas", async () => {
     const workbook = new Workbook();
     const sheet = workbook.addWorksheet("Formula Auftrag");

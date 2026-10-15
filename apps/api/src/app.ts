@@ -26,6 +26,9 @@ import { PrismaTrafficQuotaStore, TomTomRoutingProvider, TrafficRoutingService }
 import { TrafficOperationsService } from './services/traffic-operations.js';
 import { VEHICLE_CLOCK_LIMITS } from './services/vehicle-clock.js';
 import { WebfleetSyncService, WebfleetTelemetryService } from './services/webfleet.js';
+import { calculateSimulatedDuration } from './services/simulation.js';
+import { forecastDrive } from './services/vehicle-clock.js';
+import { parseClockState } from './services/tours.js';
 
 const trafficQuota = new PrismaTrafficQuotaStore(prisma);
 const trafficProvider = new TomTomRoutingProvider(trafficQuota, new OsrmRoutingProvider());
@@ -56,16 +59,26 @@ const stopSchema = z.object({
   latitude: z.number().min(-90).max(90).optional(),
   longitude: z.number().min(-180).max(180).optional(),
   city: z.string().trim().max(200).nullable().optional(),
+  appointmentWindowStartAt: z.string().datetime().nullable().optional(),
+  appointmentWindowEndAt: z.string().datetime().nullable().optional(),
+  loadingMeters: z.number().min(0).max(100).nullable().optional(),
+  referenceNumbers: z.array(z.string().trim().min(1).max(200)).max(20).nullable().optional(),
+  instructions: z.string().trim().max(4000).nullable().optional(),
   serviceMinMinutes: z.number().int().min(0).max(10080).default(60),
   serviceMaxMinutes: z.number().int().min(0).max(10080).default(120),
   appointmentAt: z.string().datetime().nullable().optional()
-}).refine(stop => stop.serviceMaxMinutes >= stop.serviceMinMinutes, {
-  message: "Максимальное время стоянки не может быть меньше минимального."
+}).superRefine((stop, context) => {
+  if (stop.serviceMaxMinutes < stop.serviceMinMinutes) context.addIssue({ code: "custom", message: "Максимальное время стоянки не может быть меньше минимального." });
+  if (Boolean(stop.appointmentWindowStartAt) !== Boolean(stop.appointmentWindowEndAt)) context.addIssue({ code: "custom", message: "Для временного окна нужны начало и конец." });
+  if (stop.appointmentWindowStartAt && stop.appointmentWindowEndAt && stop.appointmentWindowStartAt > stop.appointmentWindowEndAt) context.addIssue({ code: "custom", message: "Конец временного окна раньше начала." });
+  if (stop.appointmentAt && (stop.appointmentWindowStartAt || stop.appointmentWindowEndAt)) context.addIssue({ code: "custom", message: "Точный термин и временное окно задаются отдельно." });
 });
 
 const createTourSchema = z.object({
   vehicleId: z.string().min(1),
   orderNumber: z.string().trim().min(1),
+  trailerPlate: z.string().trim().max(100).nullable().optional(),
+  tourRemarks: z.string().trim().max(4000).nullable().optional(),
   stops: z.array(stopSchema).min(2)
 });
 
@@ -118,7 +131,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     notificationTimer.unref();
   });
   app.addHook('onRequest', async request => {
-    if (!isServerless || request.method !== 'GET' || request.url === '/health' || request.url === '/events/stream') return;
+    if (!isServerless || request.method !== 'GET' || request.url === '/' || request.url === '/health' || request.url === '/events/stream') return;
     if (Date.now() - lastNotificationRefreshAt >= 10_000) await refreshNotifications();
   });
   app.addHook('onClose', async () => {
@@ -158,6 +171,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     });
   });
 
+  app.get("/", async (_request, reply) => reply.redirect("https://ops-disponent-web.vercel.app/"));
   app.get("/health", async () => ({ ok: true, service: "@ops/api", timestamp: new Date().toISOString() }));
 
   const idParams = z.object({ id: z.string().min(1) });
@@ -450,6 +464,54 @@ export async function buildApp(options: BuildAppOptions = {}) {
     return enrichToursWithSchedule(tours);
   });
 
+  app.put("/vehicles/:id/manual-position", async (request) => {
+    const { id } = z.object({ id: z.string().min(1) }).parse(request.params);
+    const { address } = z.object({ address: z.string().trim().min(3).max(2000) }).parse(request.body);
+    const vehicle = await prisma.vehicle.findUniqueOrThrow({ where: { id } });
+    const place = await routingService.geocode(address);
+    const activeTour = await prisma.tour.findFirst({
+      where: { vehicleId: id, status: "ACTIVE" },
+      include: { stops: { orderBy: { sequence: "asc" } }, legs: true }
+    });
+    const first = activeTour?.stops.find((stop) => !stop.completedAt);
+    const needsApproach = first && first.sequence === 1 && !first.arrivedAt
+      && !activeTour?.legs.some((leg) => leg.toStopId === first.id && leg.status !== "COMPLETED");
+    const route = needsApproach ? await routingService.calculateRoute(
+      { latitude: place.latitude, longitude: place.longitude },
+      { latitude: first.latitude, longitude: first.longitude },
+      { traffic: true, source: "manual", truck: { maxSpeedKmh: vehicle.maxSpeedKmh } }
+    ) : null;
+    const duration = route ? calculateSimulatedDuration(route.distanceMeters, route.durationSeconds, vehicle.maxSpeedKmh) : null;
+    await prisma.$transaction(async (tx) => {
+      await tx.vehicle.update({ where: { id }, data: {
+        manualPositionAddress: address,
+        manualPositionLatitude: place.latitude,
+        manualPositionLongitude: place.longitude,
+        manualPositionAt: new Date()
+      } });
+      if (activeTour && route) {
+        const changed = await tx.tour.updateMany({
+          where: { id: activeTour.id, planVersion: activeTour.planVersion, status: "ACTIVE" },
+          data: {
+            approachDurationSeconds: duration,
+            approachDistanceMeters: route.distanceMeters,
+            approachGeometry: JSON.stringify(route.geometry),
+            planVersion: { increment: 1 }
+          }
+        });
+        if (!changed.count) throw Object.assign(new Error("Маршрут изменился. Укажите позицию повторно."), { statusCode: 409 });
+      }
+      await tx.operationEvent.create({ data: {
+        vehicleId: id, tourId: activeTour?.id ?? null,
+        type: "MANUAL_POSITION_SET",
+        reason: "Позиция указана диспетчером; не GPS.",
+        payloadJson: JSON.stringify({ address, latitude: place.latitude, longitude: place.longitude })
+      } });
+    });
+    await refreshAlertsForVehicle(id);
+    return { address, latitude: place.latitude, longitude: place.longitude, approachDurationSeconds: duration };
+  });
+
   app.get("/geocode", async (request) => {
     const { address } = z.object({ address: z.string().trim().min(1) }).parse(request.query);
     const result = await routingService.geocode(address);
@@ -473,6 +535,51 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const input = createTourSchema.parse(request.body);
     const tour = await tourService.createTour(input);
     return reply.status(201).send(enrichTour(tour));
+  });
+
+  app.post("/tours/with-new-vehicle", async (request, reply) => {
+    const input = z.object({
+      vehicle: z.object({ vehicleNumber: z.string().trim().min(1).max(100), licensePlate: z.string().trim().max(100).optional() }),
+      tour: createTourSchema.omit({ vehicleId: true })
+    }).parse(request.body);
+    const result = await tourService.createTourForNewVehicle(input);
+    return reply.status(201).send({ vehicle: toIsoObject(result.vehicle), tour: enrichTour(result.tour) });
+  });
+
+  app.post("/tours/preview", async (request) => {
+    const input = z.object({
+      vehicleId: z.string().optional(),
+      stops: z.array(z.object({
+        address: z.string().trim().min(1),
+        latitude: z.number().min(-90).max(90).optional(),
+        longitude: z.number().min(-180).max(180).optional()
+      })).min(2).max(20)
+    }).parse(request.body);
+    const vehicle = input.vehicleId ? await prisma.vehicle.findUniqueOrThrow({ where: { id: input.vehicleId } }) : null;
+    const coordinates = [];
+    for (const stop of input.stops) {
+      const place = typeof stop.latitude === "number" && typeof stop.longitude === "number"
+        ? { latitude: stop.latitude, longitude: stop.longitude }
+        : await routingService.geocode(stop.address);
+      coordinates.push({ latitude: place.latitude, longitude: place.longitude });
+    }
+    let origin = vehicle?.manualPositionLatitude != null && vehicle.manualPositionLongitude != null
+      ? { latitude: vehicle.manualPositionLatitude, longitude: vehicle.manualPositionLongitude } : null;
+    if (vehicle) {
+      const current = await tourService.getCurrentPosition(vehicle.id);
+      if (current.position) origin = current.position;
+    }
+    const points = origin ? [origin, ...coordinates] : coordinates;
+    const route = await routingService.calculateMultiStopRoute(points, { traffic: true, source: "manual", truck: vehicle ? { maxSpeedKmh: vehicle.maxSpeedKmh } : undefined });
+    const durationSeconds = calculateSimulatedDuration(route.distanceMeters, route.durationSeconds, vehicle?.maxSpeedKmh ?? 85);
+    const forecast = origin && vehicle ? forecastDrive(parseClockState(vehicle.clockState, new Date()), durationSeconds, new Date()) : null;
+    return {
+      distanceMeters: route.distanceMeters,
+      durationSeconds,
+      estimatedArrivalAt: forecast?.endAt ?? null,
+      preliminary: !origin || !vehicle?.clockState,
+      geometry: route.geometry.map((point) => [point.longitude, point.latitude])
+    };
   });
 
   app.get("/tours/:id", async (request) => {
@@ -608,6 +715,9 @@ export async function buildApp(options: BuildAppOptions = {}) {
       const position = withWebfleetPosition(calculatedPosition, latestTelemetry);
       const enriched = activeTour ? enrichTour(activeTour) : null;
       const currentStop = activeTour?.stops.find((stop) => !stop.completedAt) ?? null;
+      const scheduledStop = currentStop ? etaService.calculateVehicleSchedule(vehicle.tours, generatedAt).find((stop) => stop.stopId === currentStop.id) : null;
+      const displayedEta = position.eta ?? scheduledStop?.predictedEta?.toISOString() ?? null;
+      const displayedDelayMinutes = scheduledStop?.predictedDelayMinutes ?? enriched?.currentDelayMinutes ?? position.delayMinutes;
       const dwell = calculateDwellState(currentStop, generatedAt);
       const lastOperation = await prisma.operationEvent.findFirst({ where: { vehicleId: vehicle.id }, orderBy: { createdAt: "desc" } });
       const clockSnapshot = snapshotVehicleClock(vehicle, currentLeg ?? null, generatedAt).clockState;
@@ -645,10 +755,10 @@ export async function buildApp(options: BuildAppOptions = {}) {
         von: fromStop?.address ?? null,
         nach: toStop?.address ?? null,
         termin: toStop?.appointmentAt?.toISOString() ?? null,
-        eta: position.eta,
+        eta: displayedEta,
         gefahrenMeters: position.distanceTravelledMeters,
         reststreckeMeters: position.remainingDistanceMeters,
-        verspaetungMinutes: enriched?.currentDelayMinutes ?? 0,
+        verspaetungMinutes: displayedDelayMinutes,
         warnung: enriched?.riskColor ?? "GREY",
         disclaimer: CALCULATED_POSITION_DISCLAIMER
       });
@@ -657,6 +767,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
           id: vehicle.id,
           vehicleNumber: vehicle.vehicleNumber,
           licensePlate: vehicle.licensePlate,
+          currentTrailerPlate: vehicle.currentTrailerPlate,
           maxSpeedKmh: vehicle.maxSpeedKmh,
           createdAt: vehicle.createdAt,
           updatedAt: vehicle.updatedAt
@@ -667,10 +778,10 @@ export async function buildApp(options: BuildAppOptions = {}) {
         from: fromStop ? toIsoObject(fromStop) : null,
         to: toStop ? toIsoObject(toStop) : null,
         appointmentAt: toStop?.appointmentAt?.toISOString() ?? null,
-        eta: position.eta,
+        eta: displayedEta,
         travelledKm: Math.round((position.distanceTravelledMeters / 1000) * 10) / 10,
         remainingKm: Math.round((position.remainingDistanceMeters / 1000) * 10) / 10,
-        delayMinutes: enriched?.currentDelayMinutes ?? position.delayMinutes,
+        delayMinutes: displayedDelayMinutes,
         risk: enriched?.riskColor ?? "GREY",
         warning: enriched?.riskColor && enriched.riskColor !== "GREEN" && enriched.riskColor !== "GREY" ? enriched.riskColor : null,
         currentStop: currentStop ? toIsoObject(currentStop) : null,
@@ -880,7 +991,7 @@ function enrichToursWithSchedule(tours: TourAggregate[]) {
     const item = scheduleByTour.get(tour.id);
     return {
       ...enriched,
-      predictedEta: item?.predictedEta.toISOString() ?? enriched.currentEta,
+      predictedEta: item?.predictedEta?.toISOString() ?? enriched.currentEta,
       predictedDelayMinutes: item?.predictedDelayMinutes ?? enriched.currentDelayMinutes
     };
   });

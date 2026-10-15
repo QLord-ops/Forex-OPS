@@ -25,6 +25,9 @@ export interface ImportedStopDraft {
   company: string | null;
   address: string | null;
   appointmentLocal: string | null;
+  loadingMeters: number | null;
+  referenceNumbers: string[];
+  instructions: string | null;
   sourceRow: number;
   confidence: number;
 }
@@ -68,6 +71,9 @@ type FieldKey =
   | "company"
   | "address"
   | "appointmentAt"
+  | "loadingMeters"
+  | "referenceNumbers"
+  | "instructions"
   | "loadCompany"
   | "loadAddress"
   | "loadAppointmentAt"
@@ -117,6 +123,9 @@ const aliases: Record<FieldKey, string[]> = {
   company: ["firma", "kunde", "company", "customer", "client", "компания", "клиент", "фирма"],
   address: ["adresse", "anschrift", "address", "место", "адрес", "адрес места"],
   appointmentAt: ["termin", "zeit", "datum", "appointment", "date", "time", "дата", "время", "дата время"],
+  loadingMeters: ["ldm", "lademeter", "loading meters", "load meters", "погрузочные метры", "метры загрузки"],
+  referenceNumbers: ["referenz", "referenznummer", "reference", "reference number", "ref", "референс", "номер референса"],
+  instructions: ["bemerkung", "hinweis", "notiz", "instructions", "notes", "comment", "примечание", "инструкция", "комментарий"],
   loadCompany: [
     "ladefirma",
     "ladestelle firma",
@@ -462,6 +471,9 @@ function matchHeader(value: string): FieldKey | null {
     "unloadCompany",
     "orderNumber",
     "vehicleNumber",
+    "loadingMeters",
+    "referenceNumbers",
+    "instructions",
     "appointmentAt",
     "stopType",
     "address",
@@ -514,6 +526,7 @@ function parseWideRows(rows: BoundedExcelRow[], header: HeaderMatch): ImportedOr
         company: getField(row, header.columns, "loadCompany"),
         address: loadAddress,
         appointmentLocal,
+        ...readCargoMetadata(row, header.columns),
         sourceRow: row.rowNumber,
         confidence: 0.92
       });
@@ -529,6 +542,7 @@ function parseWideRows(rows: BoundedExcelRow[], header: HeaderMatch): ImportedOr
         company: getField(row, header.columns, "unloadCompany"),
         address: unloadAddress,
         appointmentLocal,
+        ...emptyCargoMetadata(),
         sourceRow: row.rowNumber,
         confidence: 0.92
       });
@@ -634,6 +648,7 @@ function parseRowPerStopRows(rows: BoundedExcelRow[], header: HeaderMatch): Impo
         company: getField(row, header.columns, "company"),
         address: null,
         appointmentLocal,
+        ...readCargoMetadata(row, header.columns),
         sourceRow: row.rowNumber,
         confidence: 0.45
       });
@@ -647,6 +662,7 @@ function parseRowPerStopRows(rows: BoundedExcelRow[], header: HeaderMatch): Impo
       company: getField(row, header.columns, "company"),
       address,
       appointmentLocal,
+      ...readCargoMetadata(row, header.columns),
       sourceRow: row.rowNumber,
       confidence: 0.88
     });
@@ -664,6 +680,26 @@ function getField(row: BoundedExcelRow, columns: Map<FieldKey, number>, field: F
 
   const value = row.values[index]?.trim();
   return value ? value : null;
+}
+
+function readCargoMetadata(row: BoundedExcelRow, columns: Map<FieldKey, number>) {
+  const rawMeters = getField(row, columns, "loadingMeters");
+  const normalizedMeters = rawMeters?.replace(",", ".").match(/\d+(?:\.\d+)?/)?.[0];
+  const loadingMeters = normalizedMeters ? Number(normalizedMeters) : null;
+  const referenceNumbers = (getField(row, columns, "referenceNumbers") ?? "")
+    .split(/[;,|\n]+/)
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .slice(0, 20);
+  return {
+    loadingMeters: Number.isFinite(loadingMeters) ? loadingMeters : null,
+    referenceNumbers,
+    instructions: getField(row, columns, "instructions")
+  };
+}
+
+function emptyCargoMetadata() {
+  return { loadingMeters: null, referenceNumbers: [] as string[], instructions: null as string | null };
 }
 
 function normalizeStopType(value: string | null): ImportedStopType | null {

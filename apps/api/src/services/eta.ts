@@ -12,8 +12,9 @@ type TourWithStopsAndLegs = Prisma.TourGetPayload<{ include: { stops: true; legs
 export type ScheduleStop = {
   tourId: string; stopId: string; sequence: number; type: string; address: string;
   city: string | null; appointmentAt: Date | null;
-  earliestArrival: Date; latestArrival: Date; earliestDeparture: Date; latestDeparture: Date;
-  predictedEta: Date; predictedDelayMinutes: number; definiteDelayMinutes: number;
+  appointmentWindowStartAt: Date | null; appointmentWindowEndAt: Date | null; deadlineAt: Date | null;
+  earliestArrival: Date | null; latestArrival: Date | null; earliestDeparture: Date | null; latestDeparture: Date | null;
+  predictedEta: Date | null; predictedDelayMinutes: number; definiteDelayMinutes: number;
   riskColor: RiskColor; tourStatus: TourStatus; preliminary: boolean;
 };
 
@@ -21,8 +22,8 @@ export class EtaService {
   calculateVehicleSchedule(tours: TourWithStopsAndLegs[], now = new Date()): ScheduleStop[] {
     const relevant = tours.filter((tour) => ["ACTIVE", "QUEUED"].includes(tour.status))
       .sort((a, b) => Number(a.status === "QUEUED") - Number(b.status === "QUEUED") || compareQueuedItems(a, b));
-    let early = now;
-    let late = now;
+    let early: Date | null = now;
+    let late: Date | null = now;
     let earlyClock = parseClockState(relevant[0]?.vehicle?.clockState, now);
     let lateClock = structuredClone(earlyClock);
     const result: ScheduleStop[] = [];
@@ -39,27 +40,42 @@ export class EtaService {
           late = early;
           if (stored) earlyClock = lateClock = structuredClone(stored.clockPlan.finalState);
         } else if (leg) {
-          const earliest = forecastDrive(earlyClock, leg.simulatedDurationSeconds, early);
-          const latest = forecastDrive(lateClock, leg.simulatedDurationSeconds, late);
+          if (early && late) {
+            const earliest = forecastDrive(earlyClock, leg.simulatedDurationSeconds, early);
+            const latest = forecastDrive(lateClock, leg.simulatedDurationSeconds, late);
+            early = new Date(earliest.endAt); late = new Date(latest.endAt);
+            earlyClock = earliest.state; lateClock = latest.state;
+          }
+        } else if (tour.approachDurationSeconds != null && result.length === 0 && stop.sequence === 1) {
+          const earliest = forecastDrive(earlyClock, tour.approachDurationSeconds, early ?? now);
+          const latest = forecastDrive(lateClock, tour.approachDurationSeconds, late ?? now);
           early = new Date(earliest.endAt); late = new Date(latest.endAt);
           earlyClock = earliest.state; lateClock = latest.state;
+        } else {
+          // A pending stop without an approach leg has no trustworthy ETA.
+          early = null;
+          late = null;
         }
         const window = normalizeServiceWindow(stop.serviceMinMinutes, stop.serviceMaxMinutes);
-        const earlyService = maxDate(early, stop.appointmentAt ?? early);
-        const lateService = maxDate(late, stop.appointmentAt ?? late);
-        const earliestDeparture = maxDate(now, addMinutes(earlyService, window.minMinutes));
-        const latestDeparture = maxDate(now, addMinutes(lateService, window.maxMinutes));
+        const serviceStart = stop.appointmentAt ?? stop.appointmentWindowStartAt;
+        const deadlineAt = stop.appointmentAt ?? stop.appointmentWindowEndAt;
+        const earlyService: Date | null = early ? maxDate(early, serviceStart ?? early) : null;
+        const lateService: Date | null = late ? maxDate(late, serviceStart ?? late) : null;
+        const earliestDeparture: Date | null = earlyService ? maxDate(now, addMinutes(earlyService, window.minMinutes)) : null;
+        const latestDeparture: Date | null = lateService ? maxDate(now, addMinutes(lateService, window.maxMinutes)) : null;
         result.push({
           tourId: tour.id, stopId: stop.id, sequence: stop.sequence, type: stop.type,
           address: stop.address, city: stop.city ?? null, appointmentAt: stop.appointmentAt,
+          appointmentWindowStartAt: stop.appointmentWindowStartAt,
+          appointmentWindowEndAt: stop.appointmentWindowEndAt, deadlineAt,
           earliestArrival: early, latestArrival: late, earliestDeparture, latestDeparture,
-          predictedEta: early, predictedDelayMinutes: calculateLateMinutes(late, stop.appointmentAt),
-          definiteDelayMinutes: calculateLateMinutes(early, stop.appointmentAt),
-          riskColor: calculateRiskColor(late, stop.appointmentAt), tourStatus: tour.status as TourStatus,
-          preliminary: earlyClock.kind === "UNKNOWN" || Boolean(tour.vehicle?.manualStoppedAt)
+          predictedEta: early, predictedDelayMinutes: calculateLateMinutes(late, deadlineAt),
+          definiteDelayMinutes: calculateLateMinutes(early, deadlineAt),
+          riskColor: calculateRiskColor(late, deadlineAt), tourStatus: tour.status as TourStatus,
+          preliminary: !early || earlyClock.kind === "UNKNOWN" || Boolean(tour.vehicle?.manualStoppedAt)
         });
-        earlyClock = waitUntil(earlyClock, earliestDeparture);
-        lateClock = waitUntil(lateClock, latestDeparture);
+        if (earliestDeparture) earlyClock = waitUntil(earlyClock, earliestDeparture);
+        if (latestDeparture) lateClock = waitUntil(lateClock, latestDeparture);
         early = earliestDeparture; late = latestDeparture;
       }
     }

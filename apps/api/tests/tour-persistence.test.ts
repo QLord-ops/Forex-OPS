@@ -67,13 +67,14 @@ it("persists new and edited tours, preserves transfer legs, and activates the qu
   const input = {
     vehicleId: vehicle.id, orderNumber: "TEST-1",
     stops: [
-      { sequence: 1, type: "LOAD" as const, address: "Berlin", appointmentAt: "2026-10-08T08:00:00Z" },
+      { sequence: 1, type: "LOAD" as const, address: "Berlin", appointmentAt: "2026-10-08T08:00:00Z", loadingMeters: 13.6, referenceNumbers: ["L-4711"], instructions: "Tor 4" },
       { sequence: 2, type: "UNLOAD" as const, address: "Hamburg", appointmentAt: "2026-10-08T12:00:00Z" }
     ]
   };
   const first = await service.createTour(input);
   const second = await service.createTour({ ...input, orderNumber: "TEST-2" });
   expect(first.status).toBe("ACTIVE");
+  expect(first.stops[0]).toMatchObject({ loadingMeters: 13.6, referenceNumbersJson: '["L-4711"]', instructions: "Tor 4" });
   expect(second.status).toBe("QUEUED");
   expect(second.legs).toHaveLength(2);
   const edited = await service.updateFutureTour(second.id, { ...input, orderNumber: "TEST-2-EDITED" });

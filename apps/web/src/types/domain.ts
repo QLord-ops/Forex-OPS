@@ -10,6 +10,11 @@ export interface Vehicle {
   id: string
   vehicleNumber: string
   licensePlate?: string | null
+  currentTrailerPlate?: string | null
+  manualPositionAddress?: string | null
+  manualPositionLatitude?: number | null
+  manualPositionLongitude?: number | null
+  manualPositionAt?: string | null
   maxSpeedKmh: number
   createdAt?: string
   updatedAt?: string
@@ -26,6 +31,10 @@ export interface Stop {
   latitude: number
   longitude: number
   appointmentAt?: string | null
+  loadingMeters?: number | null
+  referenceNumbers?: string[] | null
+  referenceNumbersJson?: string | null
+  instructions?: string | null
   serviceMinMinutes?: number | null
   serviceMaxMinutes?: number | null
   arrivedAt?: string | null
@@ -54,6 +63,11 @@ export interface Tour {
   id: string
   vehicleId: string
   orderNumber: string
+  trailerPlate?: string | null
+  tourRemarks?: string | null
+  approachDurationSeconds?: number | null
+  approachDistanceMeters?: number | null
+  approachGeometry?: RouteGeometry | null
   planVersion?: number
   status: TourStatus
   previousTourId?: string | null
@@ -81,6 +95,8 @@ export interface DashboardVehicle {
   from?: Stop | null
   to?: Stop | null
   appointmentAt?: string | null
+  appointmentWindowStartAt?: string | null
+  appointmentWindowEndAt?: string | null
   eta?: string | null
   travelledKm?: number | null
   remainingKm?: number | null
@@ -253,10 +269,10 @@ export interface AppointmentAnalysis {
   generatedAt: string
   appointmentAt: string
   previousAppointmentAt?: string | null
-  earliestArrival: string
-  latestArrival: string
+  earliestArrival: string | null
+  latestArrival: string | null
   recommendedStartAt?: string | null
-  bufferMinutes: number
+  bufferMinutes: number | null
   risk: 'ON_TIME' | 'RISK' | 'LATE' | 'UNKNOWN'
   action: 'LEAVE_BY' | 'LEAVE_NOW' | 'IN_TRANSIT' | 'ARRIVED' | 'UNKNOWN_POSITION'
   message: string
@@ -280,6 +296,11 @@ export interface CreateTourStopInput {
   latitude: number
   longitude: number
   appointmentAt?: string | null
+  appointmentWindowStartAt?: string | null
+  appointmentWindowEndAt?: string | null
+  loadingMeters?: number | null
+  referenceNumbers?: string[] | null
+  instructions?: string | null
   serviceMinMinutes?: number
   serviceMaxMinutes?: number
 }
@@ -287,6 +308,8 @@ export interface CreateTourStopInput {
 export interface CreateTourInput {
   vehicleId: string
   orderNumber: string
+  trailerPlate?: string | null
+  tourRemarks?: string | null
   stops: CreateTourStopInput[]
 }
 
@@ -308,14 +331,24 @@ export interface ImportedStopDraft {
   address: string | null
   city?: string | null
   appointmentLocal: string | null
+  appointmentWindowStartLocal?: string | null
+  appointmentWindowEndLocal?: string | null
+  loadingMeters?: number | null
+  referenceNumbers?: string[]
+  instructions?: string | null
   sourceRow?: number
   sourcePage?: number | null
+  sourceExcerpt?: string | null
   confidence: number
 }
 
 export interface ImportedOrderDraft {
   orderNumber: string | null
   vehicleNumber: string | null
+  vehiclePlate?: string | null
+  trailerPlate?: string | null
+  tourRemarks?: string | null
+  tourRemarksSourcePage?: number | null
   stops: ImportedStopDraft[]
   warnings: ImportWarning[]
 }

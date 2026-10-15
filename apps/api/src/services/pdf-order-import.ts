@@ -17,8 +17,32 @@ const stopSchema = z.object({
     .refine(isValidLocalDateTime, "appointmentLocal должен содержать корректные локальные дату и время")
     .nullable()
     .default(null),
+  appointmentWindowStartLocal: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/)
+    .refine(isValidLocalDateTime, "Некорректное начало временного окна")
+    .nullable()
+    .default(null),
+  appointmentWindowEndLocal: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/)
+    .refine(isValidLocalDateTime, "Некорректный конец временного окна")
+    .nullable()
+    .default(null),
+  loadingMeters: z.number().min(0).max(100).nullable().default(null),
+  referenceNumbers: z.array(z.string().trim().min(1).max(200)).max(20).default([]),
+  instructions: z.string().trim().max(4000).nullable().default(null),
   sourcePage: z.number().int().positive().nullable().default(null),
+  sourceExcerpt: z.string().trim().max(1000).nullable().default(null),
   confidence: z.number().min(0).max(1).default(0.65)
+}).superRefine((stop, context) => {
+  if ((stop.appointmentWindowStartLocal === null) !== (stop.appointmentWindowEndLocal === null)) {
+    context.addIssue({ code: "custom", message: "Временное окно должно содержать начало и конец" });
+  }
+  if (stop.appointmentWindowStartLocal && stop.appointmentWindowEndLocal &&
+      stop.appointmentWindowStartLocal > stop.appointmentWindowEndLocal) {
+    context.addIssue({ code: "custom", message: "Конец временного окна раньше начала" });
+  }
 });
 
 const warningSchema = z.object({
@@ -30,6 +54,10 @@ const warningSchema = z.object({
 const draftSchema = z.object({
   orderNumber: z.string().trim().max(200).nullable().default(null),
   vehicleNumber: z.string().trim().max(200).nullable().default(null),
+  vehiclePlate: z.string().trim().max(200).nullable().default(null),
+  trailerPlate: z.string().trim().max(200).nullable().default(null),
+  tourRemarks: z.string().trim().max(4000).nullable().default(null),
+  tourRemarksSourcePage: z.number().int().positive().nullable().default(null),
   stops: z.array(stopSchema).min(1).max(20),
   warnings: z.array(warningSchema).max(20).default([])
 });
@@ -52,13 +80,23 @@ export interface PdfImportedStopDraft {
   address: string | null;
   city?: string | null;
   appointmentLocal: string | null;
+  appointmentWindowStartLocal?: string | null;
+  appointmentWindowEndLocal?: string | null;
+  loadingMeters?: number | null;
+  referenceNumbers?: string[];
+  instructions?: string | null;
   sourcePage: number | null;
+  sourceExcerpt?: string | null;
   confidence: number;
 }
 
 export interface PdfImportedOrderDraft {
   orderNumber: string | null;
   vehicleNumber: string | null;
+  vehiclePlate?: string | null;
+  trailerPlate?: string | null;
+  tourRemarks?: string | null;
+  tourRemarksSourcePage?: number | null;
   stops: PdfImportedStopDraft[];
   warnings: PdfImportWarning[];
 }
@@ -99,7 +137,7 @@ export async function importPdfPreview(
         detail: "high"
       },
     instruction:
-      "Read this Auftrag and extract every loading and unloading stop in operational order. Build the most complete postal address that is explicitly supported by the document. For each stop, return city as a separate locality field when it is visible in the document or unambiguously present in the postal address; otherwise null. appointmentLocal must be YYYY-MM-DDTHH:mm or null when no exact time is printed. vehicleNumber may be an explicitly assigned internal LKW number or license plate; otherwise null. Use sourcePage for traceability and add warnings for unclear or missing fields. Write all warning messages in Russian.",
+      "Read every PDF page. FIRST locate and read Tourbemerkung: it is the primary source for which location is loading, which is unloading, and their operational order. Record its exact relevant text in tourRemarks and page in tourRemarksSourcePage. SECOND find those same locations in tables or address blocks elsewhere in the PDF and copy the complete printed postal address, including street, house number, postcode and city when visible. Match by place/company/reference; never replace a printed street with city-only geocoding and never infer an unprinted street. If Tourbemerkung is absent, use the stop table as a fallback and warn. For each stop extract references from its row, nearby text, right-hand unloading notes, or Tourbemerkung only when attribution is supported; otherwise retain ambiguous text in tourRemarks and warn. Extract loadingMeters specifically from the LM column (German Lademeter), NOT adjacent RM or LMJ columns; use an explicitly labeled LDM value only when no LM column value is available and warn if values conflict. Read LKW and Trailer/Kennzeichen above Abteilung: vehicleNumber is the printed internal LKW identifier if present, vehiclePlate the truck registration, trailerPlate the trailer registration. Never treat Fahrer/SZM MEGA as a driver's identity. appointmentLocal is an exact printed FIX time as YYYY-MM-DDTHH:mm; a time range belongs in appointmentWindowStartLocal and appointmentWindowEndLocal, not appointmentLocal. Include a brief sourceExcerpt and sourcePage for each stop. Return city separately when visible or unambiguous. Missing fields must be null; add Russian warnings for uncertain or conflicting data. Never invent facts.",
     options
   }) as Promise<PdfImportPreview>;
 }
@@ -124,7 +162,7 @@ export async function importImagePreview(
       detail: "high"
     },
     instruction:
-      "Read this screenshot. It may be an Auftrag, a photographed order, or an Excel/table screenshot with prepared loading and unloading addresses. Extract every loading and unloading stop in operational order. Build the most complete postal address explicitly visible in the image. For each stop, return city as a separate locality field when it is visible in the screenshot or unambiguously present in the postal address; otherwise null. appointmentLocal must be YYYY-MM-DDTHH:mm or null when no exact time is visible. vehicleNumber may be an explicitly assigned internal LKW number or license plate; otherwise null. Set sourcePage to null for image screenshots and add Russian warnings for unclear or missing fields.",
+      "Read this screenshot. It may be an Auftrag, a photographed order, or an Excel/table screenshot. If Tourbemerkung is visible, use it FIRST to identify load/unload places and order, then match their full printed street addresses in the table; otherwise use the visible stop table. Extract complete visible address, city, exact FIX appointment or separate time-window start/end, LM-column loading meters (not RM/LMJ), references and operational notes. Read truck and trailer plates when visible. Never invent an unprinted street. Put a short supporting text in sourceExcerpt; set sourcePage and tourRemarksSourcePage to null. Missing optional metadata is null and unclear fields receive Russian warnings.",
     options
   }) as Promise<ImageImportPreview>;
 }
@@ -203,11 +241,21 @@ async function importVisualOrderPreview(input: {
       drafts: parsed.drafts.map((draft) => ({
         orderNumber: draft.orderNumber,
         vehicleNumber: draft.vehicleNumber,
+        vehiclePlate: draft.vehiclePlate,
+        trailerPlate: draft.trailerPlate,
+        tourRemarks: draft.tourRemarks,
+        tourRemarksSourcePage: draft.tourRemarksSourcePage,
         stops: draft.stops.map((stop) => ({
           ...stop,
           city: cleanCity(stop.city) ?? inferCityFromAddress(stop.address)
         })),
-        warnings: draft.warnings.map(compactWarning)
+        warnings: [
+          ...draft.warnings.map(compactWarning),
+          ...(layout === "PDF" && !draft.tourRemarks ? [{ code: "TOUR_REMARKS_MISSING", message: "Tourbemerkung не найдено; порядок точек определён по таблице." }] : []),
+          ...draft.stops.flatMap((stop) => isCityOnlyAddress(stop.address, stop.city)
+            ? [{ code: "ADDRESS_INCOMPLETE", message: `Для точки ${stop.sequence} найден только город; улицу нужно проверить вручную.`, ...(stop.sourcePage ? { page: stop.sourcePage } : {}) }]
+            : [])
+        ]
       })),
       warnings: parsed.warnings.map(compactWarning),
       aiAvailable: true,
@@ -230,10 +278,14 @@ function responseJsonSchema(): Record<string, unknown> {
         items: {
           type: "object",
           additionalProperties: false,
-          required: ["orderNumber", "vehicleNumber", "stops", "warnings"],
+          required: ["orderNumber", "vehicleNumber", "vehiclePlate", "trailerPlate", "tourRemarks", "tourRemarksSourcePage", "stops", "warnings"],
           properties: {
             orderNumber: { type: ["string", "null"], maxLength: 200 },
             vehicleNumber: { type: ["string", "null"], maxLength: 200 },
+            vehiclePlate: { type: ["string", "null"], maxLength: 200 },
+            trailerPlate: { type: ["string", "null"], maxLength: 200 },
+            tourRemarks: { type: ["string", "null"], maxLength: 4000 },
+            tourRemarksSourcePage: { type: ["integer", "null"], minimum: 1 },
             stops: {
               type: "array",
               minItems: 1,
@@ -241,7 +293,7 @@ function responseJsonSchema(): Record<string, unknown> {
               items: {
                 type: "object",
                 additionalProperties: false,
-                required: ["sequence", "type", "company", "address", "city", "appointmentLocal", "sourcePage", "confidence"],
+                required: ["sequence", "type", "company", "address", "city", "appointmentLocal", "appointmentWindowStartLocal", "appointmentWindowEndLocal", "loadingMeters", "referenceNumbers", "instructions", "sourcePage", "sourceExcerpt", "confidence"],
                 properties: {
                   sequence: { type: "integer", minimum: 1 },
                   type: { type: "string", enum: ["LOAD", "UNLOAD"] },
@@ -252,7 +304,19 @@ function responseJsonSchema(): Record<string, unknown> {
                     type: ["string", "null"],
                     pattern: "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}$"
                   },
+                  appointmentWindowStartLocal: {
+                    type: ["string", "null"],
+                    pattern: "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}$"
+                  },
+                  appointmentWindowEndLocal: {
+                    type: ["string", "null"],
+                    pattern: "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}$"
+                  },
+                  loadingMeters: { type: ["number", "null"], minimum: 0, maximum: 100 },
+                  referenceNumbers: { type: "array", maxItems: 20, items: { type: "string", minLength: 1, maxLength: 200 } },
+                  instructions: { type: ["string", "null"], maxLength: 4000 },
                   sourcePage: { type: ["integer", "null"], minimum: 1 },
+                  sourceExcerpt: { type: ["string", "null"], maxLength: 1000 },
                   confidence: { type: "number", minimum: 0, maximum: 1 }
                 }
               }
@@ -290,6 +354,13 @@ function compactWarning(warning: z.infer<typeof warningSchema>): PdfImportWarnin
 function cleanCity(city: string | null | undefined): string | null {
   const value = city?.trim();
   return value ? value : null;
+}
+
+function isCityOnlyAddress(address: string | null, city: string | null): boolean {
+  if (!address) return true;
+  const normalize = (value: string) => value.toLocaleLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+  if (city && normalize(address) === normalize(city)) return true;
+  return /^\s*(?:[A-Z]{1,3}\s*)?\d{4,5}\s+[\p{L}.' -]+(?:,\s*[\p{L} ]+)?\s*$/iu.test(address);
 }
 
 function inferCityFromAddress(address: string | null): string | null {

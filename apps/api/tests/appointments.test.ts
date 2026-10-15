@@ -82,8 +82,50 @@ it("marks the first point forecast as preliminary when the machine position is u
     risk: "UNKNOWN",
     action: "UNKNOWN_POSITION",
     recommendedStartAt: null,
+    earliestArrival: null,
+    latestArrival: null,
+    bufferMinutes: null,
     preliminary: true
   });
+
+  const attached = await service.apply(load.id, {
+    appointmentAt: new Date(now.getTime() + 4 * 3_600_000).toISOString(),
+    version: preview.version
+  }, now);
+  expect(attached.earliestArrival).toBeNull();
+  expect((await db.tour.findUniqueOrThrow({ where: { id: tour.id } })).plannedStartAt).toBeNull();
+});
+
+it("uses a routed manual approach for the first stop without treating its appointment as the tour start", async () => {
+  const clock = createInitialClockState({ effectiveAt: now });
+  const vehicle = await db.vehicle.create({ data: {
+    vehicleNumber: "TERM-MANUAL-ORIGIN", clockState: JSON.stringify(clock),
+    manualPositionAddress: "Berlin", manualPositionLatitude: 52.52,
+    manualPositionLongitude: 13.405, manualPositionAt: now
+  } });
+  const tour = await db.tour.create({ data: {
+    vehicleId: vehicle.id, orderNumber: "TERM-ORIGIN", status: "ACTIVE",
+    approachDurationSeconds: 7_200, approachDistanceMeters: 100_000,
+    plannedStartAt: new Date(now.getTime() + 30 * 60_000)
+  } });
+  const load = await db.stop.create({ data: {
+    tourId: tour.id, sequence: 1, type: "LOAD", address: "Hamburg", city: "Hamburg",
+    latitude: 53.55, longitude: 9.99
+  } });
+  const service = new AppointmentService(asAppDatabase(db), new EtaService());
+  const appointmentAt = new Date(now.getTime() + 4 * 3_600_000).toISOString();
+
+  const preview = await service.preview(load.id, { appointmentAt }, now);
+  expect(preview).toMatchObject({
+    risk: "ON_TIME", action: "LEAVE_BY", bufferMinutes: 120,
+    earliestArrival: new Date(now.getTime() + 2 * 3_600_000).toISOString(),
+    latestArrival: new Date(now.getTime() + 2 * 3_600_000).toISOString(),
+    recommendedStartAt: new Date(now.getTime() + 2 * 3_600_000).toISOString()
+  });
+
+  await service.apply(load.id, { appointmentAt, version: preview.version }, now);
+  expect((await db.tour.findUniqueOrThrow({ where: { id: tour.id } })).plannedStartAt?.toISOString())
+    .toBe(new Date(now.getTime() + 30 * 60_000).toISOString());
 });
 
 it("calculates when a queued machine must leave for a newly received appointment", async () => {

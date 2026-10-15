@@ -2,7 +2,7 @@
 
 ## Source of truth
 - Status: Active
-- Last refreshed: 2026-10-13 (live fleet workspace, free camera and Webfleet-ready telemetry)
+- Last refreshed: 2026-10-14 (dashboard quick Auftrag intake and cargo metadata)
 - Primary product surfaces: Dispatcher dashboard, vehicle detail/map, tours, new order form, alerts, vehicle history.
 - Evidence reviewed: User-provided product specification in the Codex attachment; repository contained no prior UI or brand assets.
 
@@ -43,7 +43,7 @@
 
 ## Components
 - Existing components to reuse: App shell, status badges, data table, map panel, timeline, order import preview, appointment planner and operational states.
-- New/changed components: Urgency-sorted vehicle rail with fixed-height contextual actions, fullscreen free-camera map, traffic/satellite switcher, one-shot camera controls, floating vehicle HUD, expandable route-stop drawer, import-first Auftrag review, filter chips, shared local page headers, work surfaces, icon buttons and overflow-safe text treatments.
+- New/changed components: Urgency-sorted vehicle rail with fixed-height contextual actions, fullscreen free-camera map, traffic/satellite switcher, one-shot camera controls, floating vehicle HUD, expandable route-stop drawer, collapsible right-side Tour/Auftrag panel, import review modal, filter chips, shared local page headers, work surfaces, icon buttons and overflow-safe text treatments.
 - Variants and states: dwell-critical VIOLET (highest priority), deadline RED, action ORANGE, watch YELLOW, moving BLUE, on-plan GREEN, idle GREY; waiting is visible from minute one; Webfleet fresh/stale/calculated source states; DONE/CURRENT/NEXT/QUEUED; loading/arrived/waiting/cancelled.
 - Token/component ownership: CSS custom properties and Tailwind theme in the web app; shared primitives under `apps/web/src/components`.
 
@@ -68,9 +68,12 @@
 - Offline/slow network: Keep the last visible state and show refresh age; stale Webfleet GPS is never silently replaced by a calculated position; routing fallback is clearly identified.
 
 ## Auftrag import flow
-- Default entry: PDF, Excel or screenshot import with automatic city, appointment and coordinate resolution.
+- Default entry: PDF, Excel or screenshot import from the dashboard or dedicated page with automatic vehicle matching, city, appointment and coordinate resolution.
+- Dashboard pattern: A collapsible right overlay keeps the map as the primary surface. It has only Tour and New Auftrag tabs; importing opens a focused modal and never navigates away from fleet monitoring.
 - Review actions: Exactly two primary actions after recognition — Edit and Confirm. Confirm creates the Auftrag; there is no separate coordinate-check or save step.
 - Editing: Each loading/unloading card opens inline; unresolved addresses automatically open the affected card and block confirmation.
+- Cargo metadata: LDM/loading meters, stop-specific references and operational notes are optional, editable and visible on route stop cards. Their absence never blocks confirmation.
+- Privacy: Uploaded source files are processed in memory and are not retained by the application.
 - Stop defaults: Manual creation starts with Load then Unload. Normal dwell is 60 minutes and critical dwell is 120 minutes; these defaults are shown as compact metadata rather than editable table columns.
 
 ## Content voice

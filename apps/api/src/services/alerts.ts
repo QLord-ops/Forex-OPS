@@ -8,9 +8,9 @@ export class AlertService {
 
   async refreshVehicleAlerts(vehicleId: string, schedule: ScheduleStop[], now = new Date()) {
     const candidates = schedule.flatMap((item) => {
-      if (!item.appointmentAt || item.predictedDelayMinutes <= 0) return [];
+      if (!item.deadlineAt || !item.predictedEta || item.predictedDelayMinutes <= 0) return [];
 
-      const minutesToAppointment = (item.appointmentAt.getTime() - now.getTime()) / 60_000;
+      const minutesToAppointment = (item.deadlineAt.getTime() - now.getTime()) / 60_000;
       const type = getAlertType(minutesToAppointment);
       return type ? [{ item, type }] : [];
     });
@@ -40,13 +40,13 @@ export class AlertService {
           tourId: item.tourId,
           stopId: item.stopId,
           type,
-          appointmentAt: item.appointmentAt!,
-          predictedEta: item.predictedEta,
+          appointmentAt: item.deadlineAt!,
+          predictedEta: item.predictedEta!,
           predictedLateMinutes: item.predictedDelayMinutes
         },
         update: {
-          appointmentAt: item.appointmentAt!,
-          predictedEta: item.predictedEta,
+          appointmentAt: item.deadlineAt!,
+          predictedEta: item.predictedEta!,
           predictedLateMinutes: item.predictedDelayMinutes,
           resolvedAt: null
         }
