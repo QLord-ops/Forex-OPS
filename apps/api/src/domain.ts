@@ -107,6 +107,7 @@ export type CurrentPosition = {
   coordinate: [number, number] | null;
   tourId: string | null;
   legId: string | null;
+  geometryVersion: string | null;
   startedAt: string | null;
   delayMinutes: number;
   routeGeometry: Array<[number, number]>;
@@ -120,6 +121,11 @@ export type CurrentPosition = {
 
 export const CALCULATED_POSITION_DISCLAIMER =
   "Berechnete Position – keine GPS-Daten" as const;
+
+export function withoutPositionGeometry(position: CurrentPosition) {
+  const { routeGeometry: _route, travelledGeometry: _travelled, remainingGeometry: _remaining, ...summary } = position;
+  return summary;
+}
 
 export function normalizeServiceWindow(
   minMinutes: unknown,

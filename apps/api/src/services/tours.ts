@@ -35,7 +35,7 @@ export type TourAggregate = Prisma.TourGetPayload<{
     events: { orderBy: { timestamp: "asc" } };
     alerts: { orderBy: { createdAt: "desc" } };
   };
-}>;
+}> & { vehicle: { issues?: VehicleIssueTiming[] } };
 
 export type CreateTourInput = {
   vehicleId: string;
@@ -211,7 +211,7 @@ export class TourService {
       include: { stops: { orderBy: { sequence: "asc" } } },
       orderBy: [{ queueIndex: "asc" }, { createdAt: "asc" }]
     });
-    const vehicle = await this.db.vehicle.findUniqueOrThrow({ where: { id: vehicleId } });
+    const vehicle = await this.db.vehicle.findUniqueOrThrow({ where: { id: vehicleId }, include: { issues: { where: { resolvedAt: null } } } });
     const activeLeg = await this.db.leg.findFirst({
       where: { tour: { vehicleId, status: "ACTIVE" }, status: { in: ["ACTIVE", "ARRIVED"] } },
       include: { toStop: true },
@@ -230,7 +230,10 @@ export class TourService {
       : Math.max(0, Math.min(1, clock.driveElapsedSeconds / activeLeg.simulatedDurationSeconds));
     const geometry = parseGeometry(activeLeg.routeGeometry);
     const position = calculatePositionOnRoute(geometry, progress);
-    const eta = clock.eta;
+    const breakdown = breakdownTiming(vehicle, now);
+    const eta = breakdown.blocked ? breakdown.resumeAt
+      ? new Date(forecastDrive(waitClockUntil(clock.clockState, breakdown.resumeAt), Math.max(0, activeLeg.simulatedDurationSeconds - clock.driveElapsedSeconds), breakdown.resumeAt).endAt)
+      : null : clock.eta;
     const delayMinutes = activeLeg.toStop.appointmentAt ? calculateLateMinutes(eta, activeLeg.toStop.appointmentAt) : 0;
     const arrived = progress >= 1 && activeLeg.status !== "COMPLETED";
     const split = splitGeometryAtProgress(geometry, progress);
@@ -244,12 +247,13 @@ export class TourService {
 
     return {
       state: activeLeg.toStop.arrivedAt ? "DWELL" : arrived ? "ANGEKOMMEN_WARTET_AUF_BESTAETIGUNG" : "UNTERWEGS",
-      status: activeLeg.toStop.arrivedAt ? "WAITING" : arrived ? "ARRIVED" : clock.paused ? "WAITING" : "MOVING",
+      status: breakdown.blocked || activeLeg.toStop.arrivedAt ? "WAITING" : arrived ? "ARRIVED" : clock.paused ? "WAITING" : "MOVING",
       disclaimer: CALCULATED_POSITION_DISCLAIMER,
       position,
       coordinate: position ? [position.longitude, position.latitude] : null,
       tourId: activeLeg.tourId,
       legId: activeLeg.id,
+      geometryVersion: activeLeg.updatedAt.toISOString(),
       startedAt: activeLeg.startedAt?.toISOString() ?? null,
       delayMinutes,
       routeGeometry: [...travelledPrefix, ...geometry].map(toLonLat),
@@ -526,7 +530,7 @@ export function determineNewTourPlacement(
 }
 
 export const tourInclude = {
-  vehicle: true,
+  vehicle: { include: { issues: { where: { resolvedAt: null } } } },
   stops: { orderBy: { sequence: "asc" } },
   legs: { orderBy: { createdAt: "asc" } },
   events: { orderBy: { timestamp: "asc" } },
@@ -538,7 +542,7 @@ export function enrichTour(tour: TourAggregate, now = new Date()) {
   const nextStop = activeLeg
     ? tour.stops.find((stop) => stop.id === activeLeg.toStopId)
     : tour.stops.find((stop) => !stop.completedAt);
-  const eta = activeLeg ? snapshotVehicleClock(tour.vehicle, activeLeg, now).eta : null;
+  const eta = activeLeg ? positionEta(tour.vehicle, activeLeg, now) : null;
 
   const currentDelayMinutes = nextStop ? calculateLateMinutes(eta, nextStop.appointmentAt) : 0;
   return {
@@ -550,7 +554,7 @@ export function enrichTour(tour: TourAggregate, now = new Date()) {
       return {
         ...toIsoObject(leg),
         progress,
-        eta: snapshot.eta?.toISOString() ?? null
+        eta: positionEta(tour.vehicle, leg, now)?.toISOString() ?? null
       };
     }),
     events: tour.events.map(toIsoObject),
@@ -560,6 +564,15 @@ export function enrichTour(tour: TourAggregate, now = new Date()) {
     predictedEta: eta?.toISOString() ?? null,
     predictedDelayMinutes: currentDelayMinutes,
     riskColor: calculateRiskColor(eta, nextStop?.appointmentAt)
+  };
+}
+
+/** Lightweight active-tour contract for the frequently refreshed dashboard. */
+export function toDashboardTourSummary(tour: TourAggregate) {
+  const { vehicle: _vehicle, legs: _legs, events: _events, alerts: _alerts, stops, ...summary } = tour;
+  return {
+    ...toIsoObject(summary),
+    stops: stops.map(toIsoObject)
   };
 }
 
@@ -672,6 +685,28 @@ export type VehicleClockSnapshot = {
   pauseKind?: string;
   eta: Date | null;
 };
+
+export type VehicleIssueTiming = { kind: string; resolvedAt: Date | null; expectedResolvedAt: Date | null };
+
+export function breakdownTiming(vehicle: { issues?: VehicleIssueTiming[] }, now: Date): { blocked: boolean; resumeAt: Date | null } {
+  const issues = vehicle.issues?.filter(issue => issue.kind === "BREAKDOWN" && !issue.resolvedAt) ?? [];
+  if (!issues.length) return { blocked: false, resumeAt: null };
+  // An overdue repair estimate is no longer a trustworthy departure time.
+  if (issues.some(issue => !issue.expectedResolvedAt || issue.expectedResolvedAt <= now)) return { blocked: true, resumeAt: null };
+  return { blocked: true, resumeAt: new Date(Math.max(...issues.map(issue => issue.expectedResolvedAt!.getTime()))) };
+}
+
+export function waitClockUntil(clock: ClockState, at: Date): ClockState {
+  return applyStopTime(clock, Math.max(0, (at.getTime() - new Date(clock.updatedAt).getTime()) / 1000), clock.updatedAt).state;
+}
+
+function positionEta(vehicle: { clockState?: string | null; manualStoppedAt?: Date | null; issues?: VehicleIssueTiming[] }, leg: Parameters<typeof snapshotVehicleClock>[1], now: Date): Date | null {
+  const snapshot = snapshotVehicleClock(vehicle, leg, now);
+  const breakdown = breakdownTiming(vehicle, now);
+  if (!breakdown.blocked) return snapshot.eta;
+  if (!leg || !breakdown.resumeAt) return null;
+  return new Date(forecastDrive(waitClockUntil(snapshot.clockState, breakdown.resumeAt), Math.max(0, leg.simulatedDurationSeconds - snapshot.driveElapsedSeconds), breakdown.resumeAt).endAt);
+}
 
 export type PersistedDrivePlan = { clockPlan: VehicleClockPlan; drivenOffsetSeconds: number; totalDriveSeconds: number };
 
@@ -809,6 +844,7 @@ function emptyPosition(state: CurrentPosition["state"], tourId?: string): Curren
     coordinate: null,
     tourId: tourId ?? null,
     legId: null,
+    geometryVersion: null,
     startedAt: null,
     delayMinutes: 0,
     routeGeometry: [],

@@ -50,6 +50,30 @@ export function boundsFor(coordinates: Coordinate[]) {
   ] as const
 }
 
+export function splitRouteAtCoordinate(route: Coordinate[], coordinate?: Coordinate | null) {
+  if (!route.length || !coordinate) return { travelledGeometry: [], remainingGeometry: route }
+  if (route.length === 1) return { travelledGeometry: route, remainingGeometry: route }
+
+  let closestIndex = 0
+  let closestDistance = Number.POSITIVE_INFINITY
+  for (let index = 0; index < route.length; index += 1) {
+    const longitude = route[index][0] - coordinate[0]
+    const latitude = route[index][1] - coordinate[1]
+    const distance = longitude * longitude + latitude * latitude
+    if (distance < closestDistance) {
+      closestDistance = distance
+      closestIndex = index
+    }
+  }
+
+  const closest = route[closestIndex]
+  const isExactPoint = closest[0] === coordinate[0] && closest[1] === coordinate[1]
+  return {
+    travelledGeometry: isExactPoint ? route.slice(0, closestIndex + 1) : [...route.slice(0, closestIndex + 1), coordinate],
+    remainingGeometry: [coordinate, ...route.slice(closestIndex + 1)]
+  }
+}
+
 function isCoordinate(value: unknown): value is Coordinate {
   return (
     Array.isArray(value) &&

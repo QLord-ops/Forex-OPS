@@ -1,0 +1,8 @@
+CREATE TABLE "AssistantConversation" ("id" TEXT NOT NULL PRIMARY KEY, "title" TEXT NOT NULL, "createdAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, "updatedAt" TIMESTAMP NOT NULL);
+CREATE TABLE "AssistantMessage" ("id" TEXT NOT NULL PRIMARY KEY, "conversationId" TEXT NOT NULL REFERENCES "AssistantConversation"("id") ON DELETE CASCADE, "role" TEXT NOT NULL, "content" TEXT NOT NULL, "createdAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX "AssistantMessage_conversationId_createdAt_idx" ON "AssistantMessage"("conversationId", "createdAt");
+CREATE TABLE "AssistantProposal" ("id" TEXT NOT NULL PRIMARY KEY, "conversationId" TEXT NOT NULL REFERENCES "AssistantConversation"("id") ON DELETE CASCADE, "vehicleId" TEXT, "vehicleVersion" INTEGER, "contextJson" TEXT NOT NULL, "action" TEXT NOT NULL, "summary" TEXT NOT NULL, "inputJson" TEXT NOT NULL, "previewJson" TEXT NOT NULL, "status" TEXT NOT NULL DEFAULT 'PENDING', "resultJson" TEXT, "createdAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, "expiresAt" TIMESTAMP NOT NULL, "appliedAt" TIMESTAMP);
+CREATE INDEX "AssistantProposal_conversationId_createdAt_idx" ON "AssistantProposal"("conversationId", "createdAt");
+CREATE TABLE "AssistantUsage" ("id" TEXT NOT NULL PRIMARY KEY, "count" INTEGER NOT NULL DEFAULT 0, "expiresAt" TIMESTAMP NOT NULL);
+CREATE TABLE "VehicleIssue" ("id" TEXT NOT NULL PRIMARY KEY, "vehicleId" TEXT NOT NULL REFERENCES "Vehicle"("id") ON DELETE CASCADE, "kind" TEXT NOT NULL, "description" TEXT NOT NULL, "expectedResolvedAt" TIMESTAMP, "resolvedAt" TIMESTAMP, "createdAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX "VehicleIssue_vehicleId_resolvedAt_idx" ON "VehicleIssue"("vehicleId", "resolvedAt");

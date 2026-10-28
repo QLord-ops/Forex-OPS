@@ -1,57 +1,75 @@
-import { AlertTriangle, CheckCircle2, FileUp, LoaderCircle, MapPin, Pencil, Plus, Route, Search, Trash2, X } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, FileUp, LoaderCircle, MapPin, Pencil, Route, Search, X } from 'lucide-react'
 import type { ChangeEvent, DragEvent } from 'react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { api } from '../lib/api'
+import { previewRouteScenario } from '../lib/assistant-api'
 import { formatAppointment } from '../lib/format'
 import type { Coordinate, CreateTourStopInput, DashboardVehicle, ImportedOrderDraft, ImportedStopDraft, Vehicle } from '../types/domain'
 
 type DockTab = 'search' | 'route' | 'order'
 type DraftStop = ImportedStopDraft & { city: string; company: string; address: string; appointmentLocal: string; loadingMetersText: string; referenceText: string; instructionsText: string }
-type ManualStop = { type: 'LOAD' | 'UNLOAD'; address: string; appointmentLocal: string }
-type RoutePreview = { distanceMeters: number; durationSeconds: number; estimatedArrivalAt: string | null; preliminary: boolean; geometry: Coordinate[] }
+type RouteSummary = { distanceMeters: number; arrival: string | null; warnings: string[] }
 
 export function QuickOrderPanel({
   row,
   vehicles,
   onCreated,
   onAddressFound,
-  onRoutePreview
+  onRoutePreview,
+  importOnly = false,
+  onImportDraft,
+  onImportActivity
 }: {
+  importOnly?: boolean
+  onImportDraft?: (payload: Record<string, unknown>) => Promise<void>
+  onImportActivity?: () => void
   row?: DashboardVehicle | null
   vehicles: Vehicle[]
   onCreated: (vehicleId: string) => Promise<void> | void
   onAddressFound?: (coordinate: Coordinate) => void
   onRoutePreview?: (coordinates: Coordinate[]) => void
 }) {
-  const [tab, setTab] = useState<DockTab | null>(null)
+  const cachedImport = useMemo(() => { if (!importOnly) return null; try { return JSON.parse(sessionStorage.getItem('ops-assistant-import-v1') ?? 'null') as { draft: ImportedOrderDraft | null; stops: DraftStop[]; vehicleId: string; orderNumber: string; fileName: string; pendingDrafts: Array<{ draft: ImportedOrderDraft; fileName: string }>; editing: boolean; createVehicle: boolean; newVehicleNumber: string; newLicensePlate: string } | null } catch { return null } }, [importOnly])
+  const [tab, setTab] = useState<DockTab | null>(importOnly ? 'order' : null)
   const [dragging, setDragging] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [fileName, setFileName] = useState('')
-  const [draft, setDraft] = useState<ImportedOrderDraft | null>(null)
+  const [fileName, setFileName] = useState(cachedImport?.fileName ?? '')
+  const [draft, setDraft] = useState<ImportedOrderDraft | null>(cachedImport?.draft ?? null)
+  const [pendingDrafts, setPendingDrafts] = useState<Array<{ draft: ImportedOrderDraft; fileName: string }>>(cachedImport?.pendingDrafts ?? [])
   const [pendingFiles, setPendingFiles] = useState<File[]>([])
-  const [stops, setStops] = useState<DraftStop[]>([])
-  const [vehicleId, setVehicleId] = useState('')
-  const [orderNumber, setOrderNumber] = useState('')
-  const [editing, setEditing] = useState(false)
-  const [createVehicle, setCreateVehicle] = useState(false)
-  const [newVehicleNumber, setNewVehicleNumber] = useState('')
-  const [newLicensePlate, setNewLicensePlate] = useState('')
+  const [stops, setStops] = useState<DraftStop[]>(cachedImport?.stops ?? [])
+  const [vehicleId, setVehicleId] = useState(cachedImport?.vehicleId ?? '')
+  const [orderNumber, setOrderNumber] = useState(cachedImport?.orderNumber ?? '')
+  const [editing, setEditing] = useState(cachedImport?.editing ?? false)
+  const [createVehicle, setCreateVehicle] = useState(cachedImport?.createVehicle ?? false)
+  const [newVehicleNumber, setNewVehicleNumber] = useState(cachedImport?.newVehicleNumber ?? '')
+  const [newLicensePlate, setNewLicensePlate] = useState(cachedImport?.newLicensePlate ?? '')
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResult, setSearchResult] = useState('')
-  const [manualVehicleId, setManualVehicleId] = useState(row?.vehicle.id ?? '')
-  const [manualOrderNumber, setManualOrderNumber] = useState('')
-  const [manualStops, setManualStops] = useState<ManualStop[]>([
-    { type: 'LOAD', address: '', appointmentLocal: '' },
-    { type: 'UNLOAD', address: '', appointmentLocal: '' }
-  ])
-  const [preview, setPreview] = useState<RoutePreview | null>(null)
+  const selectedVehicleId = row?.vehicle.id
+  const selectedVehicleNumber = row?.vehicle.vehicleNumber
+  const [routeFrom, setRouteFrom] = useState(selectedVehicleNumber ? `LKW ${selectedVehicleNumber}` : '')
+  const [routeTo, setRouteTo] = useState('')
+  const [preview, setPreview] = useState<RouteSummary | null>(null)
+  const [routeBusy, setRouteBusy] = useState(false)
+  const routeRequest = useRef(0)
   const matchState = useMemo(() => vehicleMatch(draft?.vehiclePlate || draft?.vehicleNumber, vehicles), [draft?.vehiclePlate, draft?.vehicleNumber, vehicles])
 
   useEffect(() => {
-    if (row?.vehicle.id && !manualVehicleId) setManualVehicleId(row.vehicle.id)
-  }, [row?.vehicle.id, manualVehicleId])
+    if (!importOnly) return
+    try { sessionStorage.setItem('ops-assistant-import-v1', JSON.stringify({ draft, stops, vehicleId, orderNumber, fileName, pendingDrafts, editing, createVehicle, newVehicleNumber, newLicensePlate })) } catch { /* Storage may be unavailable. */ }
+  }, [importOnly, draft, stops, vehicleId, orderNumber, fileName, pendingDrafts, editing, createVehicle, newVehicleNumber, newLicensePlate])
+
+  useEffect(() => {
+    routeRequest.current += 1
+    setRouteFrom(selectedVehicleNumber ? `LKW ${selectedVehicleNumber}` : '')
+    setPreview(null)
+    setRouteBusy(false)
+  }, [selectedVehicleId, selectedVehicleNumber])
+
+  useEffect(() => () => { routeRequest.current += 1 }, [])
 
   useEffect(() => {
     function preventFileNavigation(event: DragEvent | globalThis.DragEvent) {
@@ -64,6 +82,7 @@ export function QuickOrderPanel({
       setTab('order')
       queueFiles(Array.from(event.dataTransfer.files))
     }
+    if (!importOnly) return
     window.addEventListener('dragover', preventFileNavigation as EventListener)
     window.addEventListener('drop', onWindowDrop)
     return () => {
@@ -73,6 +92,7 @@ export function QuickOrderPanel({
   })
 
   function queueFiles(files: File[]) {
+    onImportActivity?.()
     const supported = files.filter((file) => classifyFile(file) !== 'UNKNOWN')
     if (!supported.length) { setError('Поддерживаются PDF, XLSX, PNG, JPG и WEBP.'); return }
     if (draft || busy) setPendingFiles((current) => [...current, ...supported])
@@ -85,6 +105,7 @@ export function QuickOrderPanel({
       const kind = classifyFile(file)
       const result = kind === 'PDF' ? await api.importPdf(file) : kind === 'EXCEL' ? await api.importExcel(file) : kind === 'IMAGE' ? await api.importImage(file) : null
       if (!result?.drafts.length) throw new Error('В файле не найден Auftrag с точками маршрута.')
+      setPendingDrafts((current) => [...current, ...result.drafts.slice(1).map((item) => ({ draft: item, fileName: file.name }))])
       const next = result.drafts[0]
       const match = vehicleMatch(next.vehiclePlate || next.vehicleNumber, vehicles)
       setDraft(next); setOrderNumber(next.orderNumber ?? ''); setVehicleId(match.id ?? '')
@@ -100,6 +121,10 @@ export function QuickOrderPanel({
 
   function nextFile() {
     setDraft(null); setEditing(false)
+    const queued = pendingDrafts[0]
+    if (queued) {
+      setPendingDrafts((current) => current.slice(1)); setDraft(queued.draft); setFileName(queued.fileName); setOrderNumber(queued.draft.orderNumber ?? ''); setVehicleId(vehicleMatch(queued.draft.vehiclePlate || queued.draft.vehicleNumber, vehicles).id ?? ''); setStops(queued.draft.stops.slice().sort((a, b) => a.sequence - b.sequence).map(toDraftStop)); setCreateVehicle(false); setNewVehicleNumber(queued.draft.vehicleNumber ?? ''); setNewLicensePlate(queued.draft.vehiclePlate ?? ''); return
+    }
     const next = pendingFiles[0]
     setPendingFiles((current) => current.slice(1))
     if (next) queueMicrotask(() => void analyze(next))
@@ -138,6 +163,9 @@ export function QuickOrderPanel({
     try {
       const resolved = await resolveStops(stops)
       const metadata = { trailerPlate: draft?.trailerPlate || undefined, tourRemarks: draft?.tourRemarks || undefined }
+      if (onImportDraft && !createVehicle) {
+        await onImportDraft({ vehicleId, orderNumber: orderNumber.trim(), stops: resolved, ...metadata }); nextFile(); return
+      }
       const createdVehicleId = createVehicle
         ? (await api.createTourWithVehicle({ vehicle: { vehicleNumber: newVehicleNumber.trim(), licensePlate: newLicensePlate.trim() || undefined }, tour: { orderNumber: orderNumber.trim(), stops: resolved, ...metadata } })).vehicle.id
         : vehicleId
@@ -159,55 +187,75 @@ export function QuickOrderPanel({
     finally { setBusy(false) }
   }
 
-  async function previewManualTour() {
-    if (manualStops.length < 2 || manualStops.some((stop) => !stop.address.trim())) { setError('Заполните адреса минимум двух точек.'); return }
-    setBusy(true); setError(''); setPreview(null)
-    try {
-      const resolved = await resolveStops(manualStops)
-      const result = await api.previewNewTour({ vehicleId: manualVehicleId || undefined, stops: resolved })
-      setPreview(result); onRoutePreview?.(result.geometry)
-    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Не удалось рассчитать маршрут.') }
-    finally { setBusy(false) }
+  function invalidateRoute() {
+    routeRequest.current += 1
+    setPreview(null)
+    setRouteBusy(false)
+    setError('')
+    onRoutePreview?.([])
   }
 
-  async function createManualTour() {
-    if (!manualVehicleId || !manualOrderNumber.trim() || manualStops.length < 2 || manualStops.some((stop) => !stop.address.trim())) {
-      setError('Укажите машину, номер Auftrag и минимум две точки с адресами.'); return
+  async function previewManualTour() {
+    const from = routeFrom.trim()
+    const to = routeTo.trim()
+    if (!from || !to) { setError('Укажите откуда и куда построить маршрут.'); return }
+    const requestedVehicle = from.replace(/^LKW\s*/i, '')
+    const match = vehicleMatch(requestedVehicle, vehicles)
+    if (match.status === 'AMBIGUOUS') { setError('Номер найден у нескольких машин. Укажите уникальный госномер.'); return }
+    if (match.status !== 'MATCHED' && (/^LKW\b/i.test(from) || /^\d+$/.test(from))) {
+      setError('Машина не найдена. Укажите её номер, госномер или город отправления.'); return
     }
-    setBusy(true); setError('')
+    const requestId = ++routeRequest.current
+    setRouteBusy(true); setError(''); setPreview(null); onRoutePreview?.([])
     try {
-      const resolved = await resolveStops(manualStops)
-      await api.createTour({ vehicleId: manualVehicleId, orderNumber: manualOrderNumber.trim(), stops: resolved })
-      setManualOrderNumber('')
-      setManualStops([{ type: 'LOAD', address: '', appointmentLocal: '' }, { type: 'UNLOAD', address: '', appointmentLocal: '' }])
-      setPreview(null); onRoutePreview?.([]); setTab(null)
-      await onCreated(manualVehicleId)
-    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Не удалось создать маршрут.') }
-    finally { setBusy(false) }
+      if (match.id) {
+        const result = await previewRouteScenario({ vehicleId: match.id, startMode: 'NOW', stops: [{ address: to, type: 'VISIT', serviceMinMinutes: 0, serviceMaxMinutes: 0 }] })
+        if (requestId !== routeRequest.current) return
+        setPreview({ distanceMeters: result.distanceMeters, arrival: result.completion.latest, warnings: result.warnings })
+        onRoutePreview?.(result.geometry)
+      } else {
+        const result = await api.previewNewTour({ stops: [{ address: from }, { address: to }] })
+        if (requestId !== routeRequest.current) return
+        setPreview({ distanceMeters: result.distanceMeters, arrival: result.estimatedArrivalAt, warnings: result.preliminary ? ['Предварительный расчёт. Актуальные пробки и ограничения могут быть недоступны.'] : [] })
+        onRoutePreview?.(result.geometry)
+      }
+    } catch (cause) {
+      if (requestId === routeRequest.current) setError(cause instanceof Error ? cause.message : 'Не удалось рассчитать маршрут.')
+    } finally {
+      if (requestId === routeRequest.current) setRouteBusy(false)
+    }
   }
 
   function updateStop(index: number, patch: Partial<DraftStop>) { setStops((current) => current.map((stop, stopIndex) => stopIndex === index ? { ...stop, ...patch } : stop)) }
-  function updateManualStop(index: number, patch: Partial<ManualStop>) { setManualStops((current) => current.map((stop, stopIndex) => stopIndex === index ? { ...stop, ...patch } : stop)); setPreview(null); onRoutePreview?.([]) }
   function toggleTab(next: DockTab) { setTab((current) => current === next ? null : next); setError('') }
   function onFileInput(event: ChangeEvent<HTMLInputElement>) { const files = Array.from(event.target.files ?? []); event.target.value = ''; queueFiles(files) }
   function onDrop(event: DragEvent<HTMLDivElement>) { event.preventDefault(); event.stopPropagation(); setDragging(false); queueFiles(Array.from(event.dataTransfer.files)) }
 
   return <>
-    <aside className="map-action-dock" aria-label="Действия с картой и Auftrag">
-      <div className="map-action-bar">
+    <aside className={importOnly ? "dispatcher-import" : "map-action-dock"} aria-label="Действия с картой и Auftrag">
+      {!importOnly ? <div className="map-action-bar">
         <button type="button" className={tab === 'search' ? 'active' : ''} onClick={() => toggleTab('search')} aria-expanded={tab === 'search'}><Search className="h-4 w-4" />Адрес</button>
         <button type="button" className={tab === 'route' ? 'active' : ''} onClick={() => toggleTab('route')} aria-expanded={tab === 'route'}><Route className="h-4 w-4" />Маршрут</button>
-        <button type="button" className={tab === 'order' ? 'active' : ''} onClick={() => toggleTab('order')} aria-expanded={tab === 'order'}><FileUp className="h-4 w-4" />Auftrag{pendingFiles.length ? ' · ' + pendingFiles.length : ''}</button>
-      </div>
+
+      </div> : null}
       {tab ? <div className="map-action-body">
         <div className="map-action-heading"><strong>{tab === 'search' ? 'Найти адрес' : tab === 'route' ? 'Новый маршрут' : 'Добавить Auftrag'}</strong><button type="button" className="icon-button icon-button-compact" onClick={() => setTab(null)} aria-label="Свернуть"><X className="h-4 w-4" /></button></div>
         {tab === 'search' ? <div className="map-action-content"><label className="field-label" htmlFor="map-search-address">Полный адрес или город</label><div className="flex gap-2"><input id="map-search-address" className="field-input min-w-0" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void findAddress() }} placeholder="Улица, дом, город" /><button type="button" className="primary-button" onClick={() => void findAddress()} disabled={busy}><Search className="h-4 w-4" /></button></div>{searchResult ? <p className="map-action-result"><MapPin className="h-4 w-4" />{searchResult}</p> : null}</div> : null}
-        {tab === 'route' ? <div className="map-action-content"><label className="field-label">Машина<select className="field-input mt-1" value={manualVehicleId} onChange={(event) => { setManualVehicleId(event.target.value); setPreview(null); onRoutePreview?.([]) }}><option value="">Выберите LKW</option>{vehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>LKW {vehicle.vehicleNumber}{vehicle.licensePlate ? ' · ' + vehicle.licensePlate : ''}</option>)}</select></label><label className="field-label mt-3 block">Номер Auftrag<input className="field-input mt-1" value={manualOrderNumber} onChange={(event) => setManualOrderNumber(event.target.value)} placeholder="Номер заказа" /></label><div className="manual-route-stops">{manualStops.map((stop, index) => <article key={index}><div className="flex items-center gap-2"><span className="manual-route-index">{index + 1}</span><select className="field-input" value={stop.type} onChange={(event) => updateManualStop(index, { type: event.target.value as ManualStop['type'] })}><option value="LOAD">Загрузка</option><option value="UNLOAD">Выгрузка</option></select><button type="button" className="icon-button icon-button-compact" disabled={manualStops.length <= 2} onClick={() => { setManualStops((current) => current.filter((_, stopIndex) => stopIndex !== index)); setPreview(null); onRoutePreview?.([]) }} aria-label="Удалить точку"><Trash2 className="h-4 w-4" /></button></div><input className="field-input mt-2" value={stop.address} onChange={(event) => updateManualStop(index, { address: event.target.value })} placeholder="Улица, дом, индекс, город" /><input className="field-input mt-2" type="datetime-local" aria-label="Термин (необязательно)" value={stop.appointmentLocal} onChange={(event) => updateManualStop(index, { appointmentLocal: event.target.value })} /></article>)}</div><button type="button" className="secondary-button mt-2 w-full" onClick={() => { setManualStops((current) => [...current, { type: 'UNLOAD', address: '', appointmentLocal: '' }]); setPreview(null); onRoutePreview?.([]) }}><Plus className="h-4 w-4" />Добавить точку</button><div className="map-action-footer"><button type="button" className="secondary-button" disabled={busy} onClick={() => void previewManualTour()}>Показать путь и ETA</button><button type="button" className="primary-button" disabled={busy} onClick={() => void createManualTour()}>Подтвердить тур</button></div>{preview ? <p className="map-action-result"><Route className="h-4 w-4" />{Math.round(preview.distanceMeters / 1000)} км · {Math.round(preview.durationSeconds / 60)} мин{preview.estimatedArrivalAt ? ' · ETA ' + formatAppointment(preview.estimatedArrivalAt) : ''}{preview.preliminary ? ' · предварительно' : ''}</p> : <p className="quick-order-hint">До подтверждения тур не сохраняется. ETA появится после расчёта пути.</p>}</div> : null}
-        {tab === 'order' ? <div className="map-action-content"><div className={'quick-order-drop ' + (dragging ? 'dragging' : '')} onDragEnter={(event) => { event.preventDefault(); setDragging(true) }} onDragOver={(event) => event.preventDefault()} onDragLeave={() => setDragging(false)} onDrop={onDrop}><FileUp className="h-7 w-7" /><strong>{busy ? 'Распознаём Auftrag…' : 'Перетащите Auftrag сюда'}</strong><span>PDF, Excel или скриншот</span><label className="secondary-button cursor-pointer">Выбрать файлы<input className="sr-only" type="file" multiple accept=".pdf,.xlsx,.png,.jpg,.jpeg,.webp" onChange={onFileInput} disabled={busy} /></label></div><p className="quick-order-hint">Каждый файл проверяется отдельно. Исходный файл не сохраняется.</p></div> : null}
+        {tab === 'route' ? <form className="map-action-content" onSubmit={(event) => { event.preventDefault(); void previewManualTour() }}>
+          <label className="field-label" htmlFor="route-from">Откуда</label>
+          <input id="route-from" className="field-input mt-1" value={routeFrom} list="route-vehicles" onChange={(event) => { invalidateRoute(); setRouteFrom(event.target.value) }} placeholder="Номер машины, город или адрес" autoComplete="off" />
+          <datalist id="route-vehicles">{vehicles.map((vehicle) => <option key={vehicle.id} value={`LKW ${vehicle.vehicleNumber}`}>{vehicle.licensePlate || vehicle.vehicleNumber}</option>)}</datalist>
+          <label className="field-label mt-3 block" htmlFor="route-to">Куда</label>
+          <input id="route-to" className="field-input mt-1" value={routeTo} onChange={(event) => { invalidateRoute(); setRouteTo(event.target.value) }} placeholder="Город или полный адрес" autoComplete="off" />
+          <p className="quick-order-hint">Номер машины — от её текущей позиции. Два адреса — свободный маршрут без изменения тура.</p>
+          <button type="submit" className="primary-button mt-3 w-full" disabled={routeBusy || !routeFrom.trim() || !routeTo.trim()}>{routeBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Route className="h-4 w-4" />}{routeBusy ? 'Строим маршрут…' : 'Проложить маршрут'}</button>
+          {preview ? <div className="manual-scenario-result" aria-live="polite"><strong>{Math.round(preview.distanceMeters / 1000)} км</strong>{preview.arrival ? <p>Прибытие: {formatAppointment(preview.arrival)}</p> : <p>Время прибытия пока неизвестно.</p>}{preview.warnings.map((warning, index) => <p key={index} className="quick-order-warning">{warning}</p>)}</div> : null}
+        </form> : null}
+        {tab === 'order' ? <div className="map-action-content"><div className={'quick-order-drop ' + (dragging ? 'dragging' : '')} onDragEnter={(event) => { event.preventDefault(); setDragging(true) }} onDragOver={(event) => event.preventDefault()} onDragLeave={() => setDragging(false)} onDrop={onDrop}><FileUp className="h-7 w-7" /><strong>{busy ? 'Распознаём Auftrag…' : 'Перетащите Auftrag сюда'}</strong><span>PDF, Excel или скриншот</span><label className="secondary-button cursor-pointer">Выбрать файлы<input className="sr-only" type="file" multiple accept=".pdf,.xlsx,.png,.jpg,.jpeg,.webp" onChange={onFileInput} disabled={busy} /></label></div><p className="quick-order-hint">Каждый заказ проверяется отдельно. В очереди: {pendingDrafts.length + pendingFiles.length}. Исходный файл не сохраняется.</p></div> : null}
         {error && !draft ? <p className="quick-order-error"><AlertTriangle className="h-4 w-4" />{error}</p> : null}
       </div> : null}
     </aside>
-    {draft ? <div className="quick-order-modal-backdrop" role="presentation"><section className="quick-order-modal" role="dialog" aria-modal="true" aria-label="Проверка Auftrag"><header><div className="min-w-0"><p>Проверка распознавания</p><h2>{fileName}</h2></div><button type="button" className="icon-button" onClick={nextFile} aria-label="Закрыть"><X className="h-4 w-4" /></button></header><div className="quick-order-modal-body"><div className="quick-order-meta"><label><span className="field-label">LKW из документа: {draft.vehiclePlate || draft.vehicleNumber || 'не указан'}</span><select className="field-input" value={vehicleId} onChange={(event) => { setVehicleId(event.target.value); setCreateVehicle(false) }} disabled={createVehicle}><option value="">Выберите машину</option>{vehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>LKW {vehicle.vehicleNumber}{vehicle.licensePlate ? ' · ' + vehicle.licensePlate : ''}</option>)}</select></label><label><span className="field-label">Номер Auftrag</span><input className="field-input" value={orderNumber} onChange={(event) => setOrderNumber(event.target.value)} readOnly={!editing} /></label></div>{matchState.status !== 'MATCHED' ? <p className="quick-order-warning"><AlertTriangle className="h-4 w-4" />{matchState.status === 'AMBIGUOUS' ? 'Номер найден у нескольких машин.' : 'Машина из Auftrag не найдена.'} Выберите LKW или создайте новую.</p> : null}<label className="quick-create-vehicle"><input type="checkbox" checked={createVehicle} onChange={(event) => { setCreateVehicle(event.target.checked); if (event.target.checked) setVehicleId('') }} />Создать новую машину из Auftrag</label>{createVehicle ? <div className="quick-order-meta mt-2"><label><span className="field-label">Внутренний номер LKW</span><input className="field-input" value={newVehicleNumber} onChange={(event) => setNewVehicleNumber(event.target.value)} /></label><label><span className="field-label">Госномер</span><input className="field-input" value={newLicensePlate} onChange={(event) => setNewLicensePlate(event.target.value)} /></label></div> : null}{draft.trailerPlate ? <p className="quick-order-source">Прицеп: <strong>{draft.trailerPlate}</strong></p> : null}{draft.tourRemarks ? <p className="quick-order-source">Tourbemerkung{draft.tourRemarksSourcePage ? ' · стр. ' + draft.tourRemarksSourcePage : ''}: <strong>{draft.tourRemarks}</strong></p> : null}<div className="quick-order-stop-list">{stops.map((stop, index) => <article key={index} className="quick-order-review-stop"><div className="quick-order-review-title"><span>{index + 1}</span><strong>{stop.type === 'LOAD' ? 'Загрузка' : 'Выгрузка'}</strong>{stop.sourcePage ? <small>Стр. {stop.sourcePage}</small> : null}</div>{editing ? <div className="grid gap-3 md:grid-cols-2"><label className="md:col-span-2"><span className="field-label">Полный адрес</span><input className="field-input" value={stop.address} onChange={(event) => updateStop(index, { address: event.target.value })} /></label><label><span className="field-label">Город</span><input className="field-input" value={stop.city} onChange={(event) => updateStop(index, { city: event.target.value })} /></label><label><span className="field-label">Термин</span><input className="field-input" type="datetime-local" value={stop.appointmentLocal} onChange={(event) => updateStop(index, { appointmentLocal: event.target.value })} /></label><label><span className="field-label">LM, погрузочные метры</span><input className="field-input" value={stop.loadingMetersText} onChange={(event) => updateStop(index, { loadingMetersText: event.target.value })} /></label><label><span className="field-label">Референсы</span><input className="field-input" value={stop.referenceText} onChange={(event) => updateStop(index, { referenceText: event.target.value })} /></label><label className="md:col-span-2"><span className="field-label">Примечания</span><textarea className="field-input min-h-20" value={stop.instructionsText} onChange={(event) => updateStop(index, { instructionsText: event.target.value })} /></label></div> : <><p className="font-bold text-slate-900">{stop.address || 'Адрес не распознан'}</p><p className="text-sm text-slate-500">{stop.city || 'Город не указан'} · {formatAppointment(stop.appointmentLocal)}</p>{stop.appointmentWindowStartLocal && stop.appointmentWindowEndLocal ? <p className="text-xs text-slate-600">Окно: {formatAppointment(stop.appointmentWindowStartLocal)} — {formatAppointment(stop.appointmentWindowEndLocal)}</p> : null}{stop.sourceExcerpt ? <p className="quick-order-source">Источник: {stop.sourceExcerpt}</p> : null}{cargoSummary(stop.loadingMeters, stop.referenceNumbers, stop.instructions)}</>}</article>)}</div>{draft.warnings.length ? <div className="quick-order-warning"><AlertTriangle className="h-4 w-4" /><span>{draft.warnings.map((warning) => warning.message).join(' · ')}</span></div> : null}{error ? <p className="quick-order-error"><AlertTriangle className="h-4 w-4" />{error}</p> : null}</div><footer><button type="button" className="secondary-button" onClick={() => setEditing((value) => !value)}><Pencil className="h-4 w-4" />{editing ? 'Завершить правки' : 'Редактировать'}</button><button type="button" className="primary-button" disabled={busy} onClick={() => void confirm()}>{busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}{busy ? 'Создаём…' : 'Подтвердить'}</button></footer></section></div> : null}
+    {draft ? <div className="dispatcher-review"><section aria-label="Проверка Auftrag"><header><div className="min-w-0"><p>Проверка распознавания</p><h2>{fileName}</h2></div><button type="button" className="icon-button" onClick={nextFile} aria-label="Пропустить текущий заказ"><X className="h-4 w-4" /></button></header><div className="quick-order-modal-body"><div className="quick-order-meta"><label><span className="field-label">LKW из документа: {draft.vehiclePlate || draft.vehicleNumber || 'не указан'}</span><select className="field-input" value={vehicleId} onChange={(event) => { setVehicleId(event.target.value); setCreateVehicle(false) }} disabled={createVehicle}><option value="">Выберите машину</option>{vehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>LKW {vehicle.vehicleNumber}{vehicle.licensePlate ? ' · ' + vehicle.licensePlate : ''}</option>)}</select></label><label><span className="field-label">Номер Auftrag</span><input className="field-input" value={orderNumber} onChange={(event) => setOrderNumber(event.target.value)} readOnly={!editing} /></label></div>{matchState.status !== 'MATCHED' ? <p className="quick-order-warning"><AlertTriangle className="h-4 w-4" />{matchState.status === 'AMBIGUOUS' ? 'Номер найден у нескольких машин.' : 'Машина из Auftrag не найдена.'} Выберите LKW или создайте новую.</p> : null}<label className="quick-create-vehicle"><input type="checkbox" checked={createVehicle} onChange={(event) => { setCreateVehicle(event.target.checked); if (event.target.checked) setVehicleId('') }} />Создать новую машину из Auftrag</label>{createVehicle ? <div className="quick-order-meta mt-2"><label><span className="field-label">Внутренний номер LKW</span><input className="field-input" value={newVehicleNumber} onChange={(event) => setNewVehicleNumber(event.target.value)} /></label><label><span className="field-label">Госномер</span><input className="field-input" value={newLicensePlate} onChange={(event) => setNewLicensePlate(event.target.value)} /></label></div> : null}{draft.trailerPlate ? <p className="quick-order-source">Прицеп: <strong>{draft.trailerPlate}</strong></p> : null}{draft.tourRemarks ? <p className="quick-order-source">Tourbemerkung{draft.tourRemarksSourcePage ? ' · стр. ' + draft.tourRemarksSourcePage : ''}: <strong>{draft.tourRemarks}</strong></p> : null}<div className="quick-order-stop-list">{stops.map((stop, index) => <article key={index} className="quick-order-review-stop"><div className="quick-order-review-title"><span>{index + 1}</span><strong>{stop.type === 'LOAD' ? 'Загрузка' : 'Выгрузка'}</strong>{stop.sourcePage ? <small>Стр. {stop.sourcePage}</small> : null}</div>{editing ? <div className="grid gap-3 md:grid-cols-2"><label className="md:col-span-2"><span className="field-label">Полный адрес</span><input className="field-input" value={stop.address} onChange={(event) => updateStop(index, { address: event.target.value })} /></label><label><span className="field-label">Город</span><input className="field-input" value={stop.city} onChange={(event) => updateStop(index, { city: event.target.value })} /></label><label><span className="field-label">Термин</span><input className="field-input" type="datetime-local" value={stop.appointmentLocal} onChange={(event) => updateStop(index, { appointmentLocal: event.target.value })} /></label><label><span className="field-label">LM, погрузочные метры</span><input className="field-input" value={stop.loadingMetersText} onChange={(event) => updateStop(index, { loadingMetersText: event.target.value })} /></label><label><span className="field-label">Референсы</span><input className="field-input" value={stop.referenceText} onChange={(event) => updateStop(index, { referenceText: event.target.value })} /></label><label className="md:col-span-2"><span className="field-label">Примечания</span><textarea className="field-input min-h-20" value={stop.instructionsText} onChange={(event) => updateStop(index, { instructionsText: event.target.value })} /></label></div> : <><p className="font-bold text-slate-900">{stop.address || 'Адрес не распознан'}</p><p className="text-sm text-slate-500">{stop.city || 'Город не указан'} · {formatAppointment(stop.appointmentLocal)}</p>{stop.appointmentWindowStartLocal && stop.appointmentWindowEndLocal ? <p className="text-xs text-slate-600">Окно: {formatAppointment(stop.appointmentWindowStartLocal)} — {formatAppointment(stop.appointmentWindowEndLocal)}</p> : null}{stop.sourceExcerpt ? <p className="quick-order-source">Источник: {stop.sourceExcerpt}</p> : null}{cargoSummary(stop.loadingMeters, stop.referenceNumbers, stop.instructions)}</>}</article>)}</div>{draft.warnings.length ? <div className="quick-order-warning"><AlertTriangle className="h-4 w-4" /><span>{draft.warnings.map((warning) => warning.message).join(' · ')}</span></div> : null}{error ? <p className="quick-order-error"><AlertTriangle className="h-4 w-4" />{error}</p> : null}</div><footer><button type="button" className="secondary-button" onClick={() => setEditing((value) => !value)}><Pencil className="h-4 w-4" />{editing ? 'Завершить правки' : 'Редактировать'}</button><button type="button" className="primary-button" disabled={busy} onClick={() => void confirm()}>{busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}{busy ? 'Создаём…' : 'Подтвердить'}</button></footer></section></div> : null}
   </>
 }
 

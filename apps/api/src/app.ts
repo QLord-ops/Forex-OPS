@@ -2,7 +2,7 @@ import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
 import Fastify from "fastify";
 import { z } from "zod";
-import { CALCULATED_POSITION_DISCLAIMER, type CurrentPosition } from "./domain.js";
+import { CALCULATED_POSITION_DISCLAIMER, type CurrentPosition, withoutPositionGeometry } from "./domain.js";
 import { prisma } from "./lib/prisma.js";
 import { AlertService } from "./services/alerts.js";
 import { AppointmentService } from "./services/appointments.js";
@@ -17,7 +17,7 @@ import {
 } from "./services/pdf-order-import.js";
 import { OsrmRoutingProvider, RoutingError, RoutingService } from "./services/routing.js";
 import { validateXlsxArchive } from "./services/xlsx-validation.js";
-import { enrichTour, snapshotVehicleClock, type TourAggregate, toIsoObject, tourInclude, TourService } from "./services/tours.js";
+import { enrichTour, snapshotVehicleClock, type TourAggregate, toDashboardTourSummary, toIsoObject, tourInclude, TourService } from "./services/tours.js";
 import { VehicleService } from "./services/vehicles.js";
 import { calculateDwellState, NotificationService } from "./services/notifications.js";
 import { OperationsService } from "./services/operations.js";
@@ -26,9 +26,15 @@ import { PrismaTrafficQuotaStore, TomTomRoutingProvider, TrafficRoutingService }
 import { TrafficOperationsService } from './services/traffic-operations.js';
 import { VEHICLE_CLOCK_LIMITS } from './services/vehicle-clock.js';
 import { WebfleetSyncService, WebfleetTelemetryService } from './services/webfleet.js';
-import { calculateSimulatedDuration } from './services/simulation.js';
+import { calculateRiskColor, calculateSimulatedDuration } from './services/simulation.js';
 import { forecastDrive } from './services/vehicle-clock.js';
 import { parseClockState } from './services/tours.js';
+import { registerDispatcherAuth, type DispatcherAuthOptions } from './services/dispatcher-auth.js';
+import { RouteScenarioService, routeScenarioInputSchema } from './services/route-scenario.js';
+import { registerRouteScenarioRoutes } from './routes/route-scenario.js';
+import { DispatcherAssistantService } from './services/dispatcher-assistant.js';
+import { assistantSessionKey, registerDispatcherAssistantRoutes } from './routes/dispatcher-assistant.js';
+import { createDispatcherDependencies } from './services/dispatcher-adapters.js';
 
 const trafficQuota = new PrismaTrafficQuotaStore(prisma);
 const trafficProvider = new TomTomRoutingProvider(trafficQuota, new OsrmRoutingProvider());
@@ -39,11 +45,17 @@ const alertService = new AlertService(prisma);
 const vehicleService = new VehicleService(prisma);
 const notificationService = new NotificationService(prisma, tourService);
 const operationsService = new OperationsService(prisma, tourService);
-const appointmentService = new AppointmentService(prisma, etaService, (id, now) => tourService.getCurrentPosition(id, now));
-const replanningService = new ReplanningService(prisma, routingService, (id, now) => tourService.getCurrentPosition(id, now));
-const trafficService = new TrafficOperationsService(prisma, tourService, notificationService, new TrafficRoutingService(trafficProvider, trafficQuota));
 const webfleetSync = new WebfleetSyncService(prisma);
 const webfleetTelemetry = new WebfleetTelemetryService(prisma);
+const currentPosition = async (id: string, now = new Date()) => {
+  return withWebfleetPosition(await tourService.getCurrentPosition(id, now), await webfleetTelemetry.latest(id, now));
+};
+const appointmentService = new AppointmentService(prisma, etaService, currentPosition);
+const replanningService = new ReplanningService(prisma, routingService, currentPosition);
+const trafficService = new TrafficOperationsService(prisma, tourService, notificationService, new TrafficRoutingService(trafficProvider, trafficQuota), currentPosition);
+const scenarioService = new RouteScenarioService(prisma, routingService, currentPosition);
+const assistantService = new DispatcherAssistantService(prisma, createDispatcherDependencies(prisma, routingService,
+  (input, vehicleId, now) => scenarioService.calculate(routeScenarioInputSchema.parse({ ...input, vehicleId }), now)));
 
 const vehicleSchema = z.object({
   vehicleNumber: z.string().trim().min(1),
@@ -88,6 +100,7 @@ const patchTourSchema = z.union([
 ]);
 
 export interface BuildAppOptions {
+  auth?: DispatcherAuthOptions;
   pdfImport?: (buffer: Buffer, filename: string) => Promise<PdfImportPreview>;
   imageImport?: (buffer: Buffer, filename: string, mimeType: "image/png" | "image/jpeg" | "image/webp") => Promise<ImageImportPreview>;
 }
@@ -95,6 +108,9 @@ export interface BuildAppOptions {
 export async function buildApp(options: BuildAppOptions = {}) {
   const app = Fastify({ logger: true });
   const isServerless = Boolean(process.env.VERCEL);
+  registerDispatcherAuth(app, prisma, options.auth);
+  registerDispatcherAssistantRoutes(app, assistantService);
+  await registerRouteScenarioRoutes(app, { service: scenarioService });
 
   await app.register(cors, { origin: true });
   await app.register(multipart, {
@@ -113,16 +129,47 @@ export async function buildApp(options: BuildAppOptions = {}) {
   let notificationTimer: ReturnType<typeof setInterval> | undefined;
   let refreshingNotifications = false;
   let lastNotificationRefreshAt = 0;
+  const operationsRefreshStateId = 'SYSTEM:OPERATIONS_REFRESH';
+  const acquireOperationsRefreshLease = async () => {
+    if (!isServerless) return true;
+    const now = new Date();
+    await prisma.integrationSyncState.upsert({
+      where: { id: operationsRefreshStateId },
+      create: { id: operationsRefreshStateId, provider: 'SYSTEM' },
+      update: {}
+    });
+    const locked = await prisma.integrationSyncState.updateMany({
+      where: {
+        id: operationsRefreshStateId,
+        AND: [
+          { OR: [{ lastSnapshotAt: null }, { lastSnapshotAt: { lt: new Date(now.getTime() - 25_000) } }] },
+          { OR: [{ lockedUntil: null }, { lockedUntil: { lt: now } }] }
+        ]
+      },
+      data: { lockedUntil: new Date(now.getTime() + 60_000) }
+    });
+    return locked.count === 1;
+  };
   const refreshNotifications = async () => {
     if (refreshingNotifications) return;
+    if (!await acquireOperationsRefreshLease()) return;
     refreshingNotifications = true;
     try {
+      await webfleetSync.refreshIfDue().catch(() => undefined);
       await notificationService.refresh();
       await trafficService.tick();
       lastNotificationRefreshAt = Date.now();
       for (const client of subscribers) client.write(`event: operations\ndata: ${JSON.stringify({ at: Date.now() })}\n\n`);
     } catch (error) { app.log.error(error); }
-    finally { refreshingNotifications = false; }
+    finally {
+      refreshingNotifications = false;
+      if (isServerless) {
+        await prisma.integrationSyncState.updateMany({
+          where: { id: operationsRefreshStateId },
+          data: { lastSnapshotAt: new Date(), lockedUntil: null }
+        }).catch(() => undefined);
+      }
+    }
   };
   app.addHook('onListen', async () => {
     if (isServerless) return;
@@ -130,17 +177,16 @@ export async function buildApp(options: BuildAppOptions = {}) {
     notificationTimer = setInterval(() => { void refreshNotifications(); }, 15_000);
     notificationTimer.unref();
   });
-  app.addHook('onRequest', async request => {
-    if (!isServerless || request.method !== 'GET' || request.url === '/' || request.url === '/health' || request.url === '/events/stream') return;
-    if (Date.now() - lastNotificationRefreshAt >= 10_000) await refreshNotifications();
-  });
   app.addHook('onClose', async () => {
     if (notificationTimer) clearInterval(notificationTimer);
     for (const client of subscribers) client.end();
     subscribers.clear();
   });
 
-  app.get('/notifications', async () => ({ notifications: await notificationService.list() }));
+  app.get('/notifications', async () => {
+    if (isServerless && Date.now() - lastNotificationRefreshAt >= 25_000) await refreshNotifications();
+    return { notifications: await notificationService.list() };
+  });
   app.post('/notifications/:id/ack', async (request) => {
     const { id } = z.object({ id: z.string() }).parse(request.params);
     await notificationService.acknowledge(id);
@@ -369,6 +415,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
         return reply.status(415).send({ error: "Файл не является корректным PDF-заказом." });
       }
 
+      if (!options.auth?.disabled) await assistantService.consumeUsage(assistantSessionKey(request));
       try {
         return await pdfImport(buffer, filename);
       } catch (error) {
@@ -413,6 +460,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
         return reply.status(415).send({ error: "Файл не является корректным изображением PNG, JPG/JPEG или WebP." });
       }
 
+      if (!options.auth?.disabled) await assistantService.consumeUsage(assistantSessionKey(request));
       try {
         return await imageImport(buffer, filename, file.mimetype);
       } catch (error) {
@@ -616,12 +664,17 @@ export async function buildApp(options: BuildAppOptions = {}) {
 
   app.get("/vehicles/:id/current-position", async (request) => {
     const { id } = z.object({ id: z.string() }).parse(request.params);
-    try { await webfleetSync.refreshIfDue(); } catch (error) { request.log.warn({ err: error }, 'Webfleet sync failed'); }
-    const calculated = await tourService.getCurrentPosition(id);
-    return withWebfleetPosition(calculated, await webfleetTelemetry.latest(id));
+    const { geometry } = z.object({ geometry: z.enum(["0", "1"]).optional() }).parse(request.query);
+    const result = await currentPosition(id);
+    if (geometry !== "0") return result;
+    return withoutPositionGeometry(result);
   });
 
   app.get('/integrations/webfleet/status', async () => webfleetSync.status());
+  app.post('/integrations/webfleet/sync', async () => {
+    await webfleetSync.refreshIfDue();
+    return webfleetSync.status();
+  });
 
   app.get("/vehicles/:id/timeline", async (request) => {
     const { id } = z.object({ id: z.string() }).parse(request.params);
@@ -689,11 +742,10 @@ export async function buildApp(options: BuildAppOptions = {}) {
   });
 
   app.get("/dashboard", async () => {
-    try { await webfleetSync.refreshIfDue(); } catch (error) { app.log.warn({ err: error }, 'Webfleet sync failed'); }
-    await refreshAllAlerts();
     const generatedAt = new Date();
     const vehicles = await prisma.vehicle.findMany({
       include: {
+        issues: { where: { resolvedAt: null }, orderBy: { createdAt: 'desc' } },
         tours: {
           where: { status: { in: ["ACTIVE", "QUEUED"] } },
           include: tourInclude,
@@ -703,9 +755,9 @@ export async function buildApp(options: BuildAppOptions = {}) {
       orderBy: { vehicleNumber: "asc" }
     });
 
-    const rows = [];
     const frontendVehicles = [];
     for (const vehicle of vehicles) {
+      const breakdown = vehicle.issues.find(issue => issue.kind === 'BREAKDOWN');
       const activeTour = vehicle.tours.find((tour) => tour.status === "ACTIVE");
       const currentLeg = activeTour?.legs.find((leg) => leg.status === "ACTIVE" || leg.status === "ARRIVED");
       const fromStop = currentLeg ? activeTour?.stops.find((stop) => stop.id === currentLeg.fromStopId) : undefined;
@@ -713,11 +765,11 @@ export async function buildApp(options: BuildAppOptions = {}) {
       const calculatedPosition = await tourService.getCurrentPosition(vehicle.id);
       const latestTelemetry = await webfleetTelemetry.latest(vehicle.id, generatedAt);
       const position = withWebfleetPosition(calculatedPosition, latestTelemetry);
-      const enriched = activeTour ? enrichTour(activeTour) : null;
       const currentStop = activeTour?.stops.find((stop) => !stop.completedAt) ?? null;
       const scheduledStop = currentStop ? etaService.calculateVehicleSchedule(vehicle.tours, generatedAt).find((stop) => stop.stopId === currentStop.id) : null;
       const displayedEta = position.eta ?? scheduledStop?.predictedEta?.toISOString() ?? null;
-      const displayedDelayMinutes = scheduledStop?.predictedDelayMinutes ?? enriched?.currentDelayMinutes ?? position.delayMinutes;
+      const displayedDelayMinutes = scheduledStop?.predictedDelayMinutes ?? position.delayMinutes;
+      const riskColor = scheduledStop?.riskColor ?? calculateRiskColor(displayedEta ? new Date(displayedEta) : null, currentStop?.appointmentAt);
       const dwell = calculateDwellState(currentStop, generatedAt);
       const lastOperation = await prisma.operationEvent.findFirst({ where: { vehicleId: vehicle.id }, orderBy: { createdAt: "desc" } });
       const clockSnapshot = snapshotVehicleClock(vehicle, currentLeg ?? null, generatedAt).clockState;
@@ -727,7 +779,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
         ?? activeTour?.actualStartAt
         ?? activeTour?.plannedStartAt
         ?? null;
-      const currentAction = vehicle.manualStoppedAt
+      const currentAction = breakdown ? null : vehicle.manualStoppedAt
         ? { type: "RESUME", label: "Продолжить", stopId: null }
         : currentStop?.arrivedAt
           ? {
@@ -748,20 +800,6 @@ export async function buildApp(options: BuildAppOptions = {}) {
         nextRestHours: clockSnapshot.kind === "KNOWN" ? ((clockSnapshot.currentCycle.reducedRestReservationId ? VEHICLE_CLOCK_LIMITS.reducedDailyRestSeconds : VEHICLE_CLOCK_LIMITS.normalDailyRestSeconds) / 3600) : null
       };
 
-      rows.push({
-        vehicleId: vehicle.id,
-        lkw: vehicle.vehicleNumber,
-        aktuellerStatus: position.state,
-        von: fromStop?.address ?? null,
-        nach: toStop?.address ?? null,
-        termin: toStop?.appointmentAt?.toISOString() ?? null,
-        eta: displayedEta,
-        gefahrenMeters: position.distanceTravelledMeters,
-        reststreckeMeters: position.remainingDistanceMeters,
-        verspaetungMinutes: displayedDelayMinutes,
-        warnung: enriched?.riskColor ?? "GREY",
-        disclaimer: CALCULATED_POSITION_DISCLAIMER
-      });
       frontendVehicles.push({
         vehicle: toIsoObject({
           id: vehicle.id,
@@ -773,7 +811,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
           updatedAt: vehicle.updatedAt
         }),
         operationVersion: vehicle.operationVersion,
-        tour: activeTour ? enrichTour(activeTour) : null,
+        tour: activeTour ? toDashboardTourSummary(activeTour) : null,
         statusText: position.status,
         from: fromStop ? toIsoObject(fromStop) : null,
         to: toStop ? toIsoObject(toStop) : null,
@@ -782,12 +820,13 @@ export async function buildApp(options: BuildAppOptions = {}) {
         travelledKm: Math.round((position.distanceTravelledMeters / 1000) * 10) / 10,
         remainingKm: Math.round((position.remainingDistanceMeters / 1000) * 10) / 10,
         delayMinutes: displayedDelayMinutes,
-        risk: enriched?.riskColor ?? "GREY",
-        warning: enriched?.riskColor && enriched.riskColor !== "GREEN" && enriched.riskColor !== "GREY" ? enriched.riskColor : null,
+        risk: riskColor,
+        warning: riskColor !== "GREEN" && riskColor !== "GREY" ? riskColor : null,
         currentStop: currentStop ? toIsoObject(currentStop) : null,
         dwellMinutes: dwell.dwellMinutes,
         dwellSeverity: dwell.dwellSeverity,
         currentAction,
+        issues: vehicle.issues.map(toIsoObject),
         statusStartedAt: statusStartedAt?.toISOString() ?? null,
         statusDurationSeconds: statusStartedAt ? Math.max(0, Math.floor((generatedAt.getTime() - statusStartedAt.getTime()) / 1000)) : null,
         lastOperation: lastOperation ? toIsoObject(lastOperation) : null,
@@ -799,35 +838,15 @@ export async function buildApp(options: BuildAppOptions = {}) {
           ageSeconds: latestTelemetry.ageSeconds,
           speedKmh: latestTelemetry.speedKmh,
           ignitionOn: latestTelemetry.ignitionOn,
+          standstill: latestTelemetry.standstill,
           usable: latestTelemetry.usable
         } : { source: "CALCULATED", checkedAt: generatedAt.toISOString(), stale: false, ageSeconds: 0, usable: true }
       });
     }
 
-    const endangered = rows
-      .filter((row) => row.verspaetungMinutes > 0)
-      .sort((a, b) => b.verspaetungMinutes - a.verspaetungMinutes);
-
-    const alerts = await prisma.alert.findMany({
-      where: { resolvedAt: null },
-      include: { vehicle: true, tour: true, stop: true },
-      orderBy: [{ predictedLateMinutes: "desc" }, { appointmentAt: "asc" }]
-    });
-    const riskyAppointments = alerts.map((alert) => ({
-      vehicle: toIsoObject(alert.vehicle),
-      tour: toIsoObject(alert.tour),
-      stop: toIsoObject(alert.stop),
-      eta: alert.predictedEta.toISOString(),
-      delayMinutes: alert.predictedLateMinutes,
-      alertType: alert.type
-    }));
-
     return {
       generatedAt: generatedAt.toISOString(),
       vehicles: frontendVehicles,
-      riskyAppointments,
-      rows,
-      termineInGefahr: endangered,
       disclaimer: CALCULATED_POSITION_DISCLAIMER
     };
   });

@@ -10,6 +10,7 @@ import { ErrorState, LoadingState } from '../components/States'
 import { TourStatusBadge } from '../components/StatusBadge'
 import { TourTimeline } from '../components/Timeline'
 import { usePolling } from '../hooks/usePolling'
+import { useVehiclePosition } from '../hooks/useVehiclePosition'
 import { api } from '../lib/api'
 import {
   calculatedPositionLabel,
@@ -30,7 +31,7 @@ export function VehicleDetailPage() {
   const vehicle = usePolling(() => api.vehicle(id), 30_000, Boolean(id), id)
   const tours = usePolling(() => api.vehicleTours(id), 30_000, Boolean(id), id)
   const timeline = usePolling(() => api.vehicleTimeline(id), 30_000, Boolean(id), id)
-  const position = usePolling(() => api.currentPosition(id), 5_000, Boolean(id), id)
+  const position = useVehiclePosition(id)
   const refreshOperations = () => Promise.all([tours.refetch(), timeline.refetch(), position.refetch()])
 
   const activeTour = useMemo(() => {

@@ -1,12 +1,14 @@
 import { ArrowUpRight, CheckCircle2, ChevronDown, CircleDot, Clock3, Loader2, MapPin, PackageCheck, PauseCircle, Pin, PinOff, PlayCircle, Search, X } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 
 import { MapPanel } from '../components/MapPanel'
 import { QuickOrderPanel } from '../components/QuickOrderPanel'
 import { EmptyState, ErrorState, LoadingState } from '../components/States'
 import { usePolling } from '../hooks/usePolling'
+import { useVehiclePosition } from '../hooks/useVehiclePosition'
 import { api } from '../lib/api'
+import { getRoutePreview, setRoutePreview, subscribeRoutePreview } from '../lib/route-preview'
 import { classNames, formatAppointment, formatDateTime, formatDelay, formatDurationMinutes, formatKm, shortAddress, statusLabel, stopTypeLabel } from '../lib/format'
 import type { Coordinate, DashboardVehicle, Stop } from '../types/domain'
 
@@ -32,18 +34,27 @@ export function DashboardPage() {
   const [actionTime, setActionTime] = useState(localDateTime())
   const [actionError, setActionError] = useState('')
   const [mapFocus, setMapFocus] = useState<Coordinate | null>(null)
-  const [draftRoute, setDraftRoute] = useState<Coordinate[]>([])
+  const draftRoute = useSyncExternalStore(subscribeRoutePreview, getRoutePreview)
   const vehicles = useMemo(() => data?.vehicles ?? [], [data?.vehicles])
   const orderedVehicles = useMemo(() => vehicles.slice().sort((a, b) => compareVehicles(a, b, pinned)), [pinned, vehicles])
   const selectedId = searchParams.get('vehicleId') ?? ''
   const selected = vehicles.find((row) => row.vehicle.id === selectedId) ?? orderedVehicles[0] ?? null
-  const position = usePolling(() => api.currentPosition(selected?.vehicle.id ?? ''), 5_000, Boolean(selected?.vehicle.id), selected?.vehicle.id ?? 'none')
+  const position = useVehiclePosition(selected?.vehicle.id ?? '')
+  const refetchPosition = position.refetch
 
   useEffect(() => {
     if (!orderedVehicles.length || vehicles.some((row) => row.vehicle.id === selectedId)) return
     setSearchParams({ vehicleId: orderedVehicles[0].vehicle.id }, { replace: true })
   }, [orderedVehicles, selectedId, setSearchParams, vehicles])
   useEffect(() => { setDrawerOpen(false); setHudOpen(false) }, [selected?.vehicle.id])
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('ops:assistant-context', { detail: { vehicleId: selected?.vehicle.id } }))
+  }, [selected?.vehicle.id])
+  useEffect(() => {
+    const refresh = () => { void refetch(); void refetchPosition() }
+    window.addEventListener('ops:data-changed', refresh)
+    return () => window.removeEventListener('ops:data-changed', refresh)
+  }, [refetch, refetchPosition])
 
   const visibleVehicles = orderedVehicles.filter((row) => {
     const needle = query.trim().toLocaleLowerCase('ru-RU')
@@ -125,6 +136,7 @@ export function DashboardPage() {
                     <RailMetric label="Руль" value={clockLine(row)} /><RailMetric label="GPS" value={telemetryLine(row)} accent={row.telemetry?.stale} />
                   </div>
                   <p className="mt-2 flex items-start gap-1.5 text-xs font-medium text-slate-600"><CircleDot className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" /><span className="text-balance-safe">{attention.reason}</span></p>
+                  {row.issues?.filter(issue => issue.kind === 'NOTE').slice(0, 2).map(issue => <p key={issue.id} className="mt-1 line-clamp-2 text-xs text-slate-600" title={issue.description}>{issue.description}</p>)}
                 </button>
                 <div className="vehicle-card-actions">
                   <VehicleActionButton row={row} busy={actingId === row.vehicle.id} onClick={() => openAction(row.vehicle.id)} />
@@ -137,9 +149,10 @@ export function DashboardPage() {
         </div>
       </aside>
       <section className="dashboard-stage" aria-label="Карта выбранного грузовика">
-        <MapPanel tour={selected?.tour} position={position.data} vehicleNumber={selected?.vehicle.vehicleNumber} focusCoordinate={mapFocus} previewRoute={draftRoute} height="100%" fill />
+        <MapPanel tour={selected?.tour} position={position.data} vehicleNumber={selected?.vehicle.vehicleNumber} focusCoordinate={mapFocus} previewRoute={draftRoute?.geometry} height="100%" fill />
+        {draftRoute ? <div className="map-draft-banner"><span>{draftRoute.label} · черновик</span><button type="button" aria-label="Убрать черновой маршрут с карты" onClick={() => setRoutePreview(null)}><X size={16} /></button></div> : null}
         {selected ? <><VehicleMapHud row={selected} open={hudOpen} onToggle={() => setHudOpen((value) => !value)} /><RouteStopsDrawer row={selected} open={drawerOpen} onToggle={() => setDrawerOpen((value) => !value)} /></> : null}
-        <QuickOrderPanel row={selected} vehicles={vehicles.map((item) => item.vehicle)} onAddressFound={setMapFocus} onRoutePreview={setDraftRoute} onCreated={async (vehicleId) => { selectVehicle(vehicleId); await refetch() }} />
+        <QuickOrderPanel row={selected} vehicles={vehicles.map((item) => item.vehicle)} onAddressFound={setMapFocus} onRoutePreview={(geometry) => setRoutePreview(geometry.length ? { geometry, label: 'Предпросмотр маршрута' } : null)} onCreated={async (vehicleId) => { selectVehicle(vehicleId); await refetch() }} />
         {position.error ? <button type="button" className="map-error" onClick={() => void position.refetch()}>Позиция временно недоступна · повторить</button> : null}
         {error ? <div className="dashboard-sync-warning">Данные автопарка не обновлены. Повторим автоматически.</div> : null}
       </section>
@@ -249,7 +262,8 @@ function telemetryLine(row: DashboardVehicle) {
   if (!telemetry) return 'Расчёт'
   if (telemetry.source === 'WEBFLEET') {
     const age = typeof telemetry.ageSeconds === 'number' ? formatDurationMinutes(telemetry.ageSeconds / 60) : '–'
-    return telemetry.stale ? `старые ${age}` : `live ${age}`
+    const motion = telemetry.standstill === true ? ' · стоит' : telemetry.standstill === false ? ' · движется' : ''
+    return telemetry.stale ? `старые ${age}` : `live ${age}${motion}`
   }
   return 'Расчёт'
 }
@@ -269,6 +283,8 @@ function compareVehicles(a: DashboardVehicle, b: DashboardVehicle, pinned: strin
 }
 
 function getAttention(row: DashboardVehicle): { rank: number; tone: AttentionTone; label: string; reason: string } {
+  const breakdown = row.issues?.find(issue => issue.kind === 'BREAKDOWN')
+  if (breakdown) return { rank: -1, tone: 'critical', label: 'Ремонт', reason: `${breakdown.description} · ${breakdown.expectedResolvedAt ? `ETA условная, ремонт до ${formatDateTime(breakdown.expectedResolvedAt)}` : 'Срок ремонта и ETA неизвестны'}` }
   const dwellMinutes = getDwellMinutes(row)
   const dwellSeverity = row.dwellSeverity ?? (dwellMinutes > 120 ? 'CRITICAL' : dwellMinutes > 60 ? 'WARNING' : 'NONE')
   if (dwellSeverity === 'CRITICAL') return { rank: 0, tone: 'dwell', label: 'Долгая стоянка', reason: `На точке ${formatDurationMinutes(dwellMinutes)}` }

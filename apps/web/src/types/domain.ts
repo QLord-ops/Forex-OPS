@@ -88,6 +88,7 @@ export interface Tour {
 }
 
 export interface DashboardVehicle {
+  issues?: Array<{ id: string; kind: string; description: string; expectedResolvedAt: string | null; createdAt: string }>
   vehicle: Vehicle
   tour?: Tour | null
   statusText: string
@@ -131,6 +132,10 @@ export interface DashboardVehicle {
     checkedAt?: string | null
     stale: boolean
     ageSeconds?: number | null
+    speedKmh?: number | null
+    ignitionOn?: boolean | null
+    standstill?: boolean | null
+    usable?: boolean
   } | null
 }
 
@@ -146,7 +151,7 @@ export interface RiskAppointment {
 export interface DashboardResponse {
   generatedAt?: string
   vehicles: DashboardVehicle[]
-  riskyAppointments: RiskAppointment[]
+  riskyAppointments?: RiskAppointment[]
 }
 
 export interface Alert {
@@ -235,6 +240,7 @@ export interface CurrentPosition {
   vehicleId: string
   tourId?: string | null
   legId?: string | null
+  geometryVersion?: string | null
   status: 'IDLE' | 'WAITING' | 'MOVING' | 'ARRIVED'
   coordinate?: Coordinate | null
   progress?: number | null

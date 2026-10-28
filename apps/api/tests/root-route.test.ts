@@ -8,7 +8,7 @@ describe("API root route", () => {
 
   it("redirects people who open the API domain to the web application", async () => {
     process.env.VERCEL = "1";
-    const app = await buildApp();
+    const app = await buildApp({ auth: { disabled: true } });
 
     const response = await app.inject({ method: "GET", url: "/" });
 

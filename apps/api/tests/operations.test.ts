@@ -9,6 +9,8 @@ import { MockRoutingProvider } from '../src/services/routing.js';
 import { OperationsService } from '../src/services/operations.js';
 import { calculateDwellState, NotificationService } from '../src/services/notifications.js';
 import { createInitialClockState, type ClockState } from '../src/services/vehicle-clock.js';
+import { EtaService } from '../src/services/eta.js';
+import { tourInclude } from '../src/services/tours.js';
 
 let db: PrismaClient;
 let directory: string;
@@ -129,6 +131,35 @@ it('freezes movement but consumes duty during manual stop, and resumes without l
   expect(moved.clock.currentCycle.drivingSeconds).toBe(3600);
   expect(moved.clock.currentCycle.dutySeconds).toBe(7200);
   await expect(f.service.manualStop(f.vehicle.id, before.version, at(121))).rejects.toThrow();
+});
+
+it('blocks resume during breakdown and suppresses unknown or overdue repair ETA without changing drive hours', async () => {
+  const f = await fixture('BREAKDOWN');
+  await f.service.manualStop(f.vehicle.id, 0, at(30));
+  const issue = await db.vehicleIssue.create({ data: { vehicleId: f.vehicle.id, kind: 'BREAKDOWN', description: 'Engine fault' } });
+  const stopped = await f.tours.getCurrentPosition(f.vehicle.id, at(90));
+  expect(stopped.progress).toBeCloseTo(0.25);
+  expect(stopped.status).toBe('WAITING');
+  expect(stopped.eta).toBeNull();
+  const load = () => asAppDatabase(db).tour.findUniqueOrThrow({ where: { id: f.tour.id }, include: tourInclude });
+  const unknown = new EtaService().calculateVehicleSchedule([await load()], at(90));
+  expect(unknown[0].predictedEta).toBeNull();
+  expect(unknown[0].latestDeparture).toBeNull();
+  await expect(f.service.resume(f.vehicle.id, 1, at(90))).rejects.toThrow('завершение ремонта');
+  expect(await db.operationEvent.count({ where: { vehicleId: f.vehicle.id, type: 'MOVEMENT_RESUMED' } })).toBe(0);
+  await db.vehicleIssue.update({ where: { id: issue.id }, data: { expectedResolvedAt: at(120) } });
+  const conditional = new EtaService().calculateVehicleSchedule([await load()], at(90));
+  expect(conditional[0].predictedEta).toEqual(at(210));
+  expect(conditional[0].preliminary).toBe(true);
+  expect((await f.tours.getCurrentPosition(f.vehicle.id, at(90))).eta).toBe(at(210).toISOString());
+  expect((await f.tours.getCurrentPosition(f.vehicle.id, at(125))).eta).toBeNull();
+  const clock = (await f.service.get(f.vehicle.id, at(125))).clock;
+  expect(clock.currentCycle.drivingSeconds).toBe(1800);
+  expect(clock.currentCycle.dutySeconds).toBe(7500);
+  await db.vehicleIssue.update({ where: { id: issue.id }, data: { resolvedAt: at(125) } });
+  const resumed = await f.service.resume(f.vehicle.id, 1, at(125));
+  expect(resumed.position.status).toBe('MOVING');
+  expect(resumed.position.progress).toBeCloseTo(0.25);
 });
 
 it('reserves a useful extension once and restores its allowance when cancelled before use', async () => {

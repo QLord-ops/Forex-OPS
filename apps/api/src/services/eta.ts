@@ -2,11 +2,11 @@ import type { Prisma } from "@prisma/client";
 import { compareQueuedItems, normalizeServiceWindow, type RiskColor } from "../domain.js";
 import { calculateLateMinutes, calculateRiskColor } from "./simulation.js";
 import { applyStopTime, forecastDrive, type ClockState } from "./vehicle-clock.js";
-import { parseClockState, readPersistedDrivePlan } from "./tours.js";
+import { breakdownTiming, parseClockState, readPersistedDrivePlan, snapshotVehicleClock, waitClockUntil, type VehicleIssueTiming } from "./tours.js";
 
 type TourStatus = "DRAFT" | "QUEUED" | "ACTIVE" | "COMPLETED" | "CANCELLED";
 type TourWithStopsAndLegs = Prisma.TourGetPayload<{ include: { stops: true; legs: true } }> & {
-  vehicle?: { clockState?: string | null; manualStoppedAt?: Date | null };
+  vehicle?: { clockState?: string | null; manualStoppedAt?: Date | null; issues?: VehicleIssueTiming[] };
 };
 
 export type ScheduleStop = {
@@ -26,6 +26,12 @@ export class EtaService {
     let late: Date | null = now;
     let earlyClock = parseClockState(relevant[0]?.vehicle?.clockState, now);
     let lateClock = structuredClone(earlyClock);
+    const vehicle = relevant[0]?.vehicle;
+    const breakdown = breakdownTiming(vehicle ?? {}, now);
+    if (breakdown.blocked) {
+      early = late = breakdown.resumeAt;
+      if (breakdown.resumeAt) earlyClock = lateClock = waitClockUntil(earlyClock, breakdown.resumeAt);
+    }
     const result: ScheduleStop[] = [];
     for (const tour of relevant) {
       for (const stop of [...tour.stops].sort((a, b) => a.sequence - b.sequence)) {
@@ -34,6 +40,13 @@ export class EtaService {
         if (stop.arrivedAt) {
           early = stop.arrivedAt;
           late = stop.arrivedAt;
+        } else if (breakdown.blocked && !breakdown.resumeAt) {
+          early = late = null;
+        } else if (leg?.startedAt && ["ACTIVE", "ARRIVED"].includes(leg.status) && breakdown.blocked && breakdown.resumeAt) {
+          const snapshot = snapshotVehicleClock(vehicle ?? {}, leg, now);
+          const forecast = forecastDrive(waitClockUntil(snapshot.clockState, breakdown.resumeAt), Math.max(0, leg.simulatedDurationSeconds - snapshot.driveElapsedSeconds), breakdown.resumeAt);
+          early = late = new Date(forecast.endAt);
+          earlyClock = lateClock = forecast.state;
         } else if (leg?.startedAt && ["ACTIVE", "ARRIVED"].includes(leg.status)) {
           const stored = readPersistedDrivePlan(leg.drivePlan);
           early = new Date(stored?.clockPlan.endAt ?? leg.startedAt.getTime() + leg.simulatedDurationSeconds * 1000);
@@ -61,8 +74,9 @@ export class EtaService {
         const deadlineAt = stop.appointmentAt ?? stop.appointmentWindowEndAt;
         const earlyService: Date | null = early ? maxDate(early, serviceStart ?? early) : null;
         const lateService: Date | null = late ? maxDate(late, serviceStart ?? late) : null;
-        const earliestDeparture: Date | null = earlyService ? maxDate(now, addMinutes(earlyService, window.minMinutes)) : null;
-        const latestDeparture: Date | null = lateService ? maxDate(now, addMinutes(lateService, window.maxMinutes)) : null;
+        const departureFloor = breakdown.resumeAt ?? now;
+        const earliestDeparture: Date | null = breakdown.blocked && !breakdown.resumeAt ? null : earlyService ? maxDate(departureFloor, maxDate(now, addMinutes(earlyService, window.minMinutes))) : null;
+        const latestDeparture: Date | null = breakdown.blocked && !breakdown.resumeAt ? null : lateService ? maxDate(departureFloor, maxDate(now, addMinutes(lateService, window.maxMinutes))) : null;
         result.push({
           tourId: tour.id, stopId: stop.id, sequence: stop.sequence, type: stop.type,
           address: stop.address, city: stop.city ?? null, appointmentAt: stop.appointmentAt,
@@ -72,7 +86,7 @@ export class EtaService {
           predictedEta: early, predictedDelayMinutes: calculateLateMinutes(late, deadlineAt),
           definiteDelayMinutes: calculateLateMinutes(early, deadlineAt),
           riskColor: calculateRiskColor(late, deadlineAt), tourStatus: tour.status as TourStatus,
-          preliminary: !early || earlyClock.kind === "UNKNOWN" || Boolean(tour.vehicle?.manualStoppedAt)
+          preliminary: breakdown.blocked || !early || earlyClock.kind === "UNKNOWN" || Boolean(tour.vehicle?.manualStoppedAt)
         });
         if (earliestDeparture) earlyClock = waitUntil(earlyClock, earliestDeparture);
         if (latestDeparture) lateClock = waitUntil(lateClock, latestDeparture);

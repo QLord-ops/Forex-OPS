@@ -21,7 +21,8 @@ export class TrafficOperationsService {
   private ticking = false;
   private inFlight = new Set<string>();
   constructor(private readonly db: PrismaClient, private readonly tours: TourService,
-    private readonly notifications: NotificationService, private readonly routing: TrafficRoutingService) {}
+    private readonly notifications: NotificationService, private readonly routing: TrafficRoutingService,
+    private readonly getPosition = (vehicleId: string, now: Date) => tours.getCurrentPosition(vehicleId, now)) {}
 
   private async context(vehicleId: string) {
     const vehicle = await this.db.vehicle.findUniqueOrThrow({ where: { id: vehicleId } });
@@ -46,7 +47,7 @@ export class TrafficOperationsService {
       const vehicles = await this.db.vehicle.findMany({ where: { tours: { some: { status: 'ACTIVE' } }, manualStoppedAt: null } });
       const moving: Array<{ id: string; due: number; priority: number }> = [];
       for (const vehicle of vehicles) {
-        const position = await this.tours.getCurrentPosition(vehicle.id, now);
+        const position = await this.getPosition(vehicle.id, now);
         if (position.status !== 'MOVING') continue;
         const { details, leg } = await this.context(vehicle.id);
         moving.push({ id: vehicle.id, due: Date.parse(details.attemptedAt ?? details.checkedAt ?? '') || 0,
@@ -73,7 +74,7 @@ export class TrafficOperationsService {
     this.inFlight.add(vehicleId);
     try {
       const context = await this.context(vehicleId);
-      const position = await this.tours.getCurrentPosition(vehicleId, now);
+      const position = await this.getPosition(vehicleId, now);
       if (!context.leg || context.leg.toStop.arrivedAt || (source === 'background' && position.status !== 'MOVING')) return this.status(vehicleId, now);
       const remaining = position.remainingGeometry.map(([longitude, latitude]) => ({ latitude, longitude }));
       if (remaining.length < 2 || !position.position) return this.status(vehicleId, now);
@@ -106,7 +107,7 @@ export class TrafficOperationsService {
       await this.refresh(vehicleId, 'manual', now);
       throw new TourPlanConflictError('Объезд пересчитан. Проверьте актуальное предложение.');
     }
-    const position = await this.tours.getCurrentPosition(vehicleId, now);
+    const position = await this.getPosition(vehicleId, now);
     if (!origin && !position.position) throw new TourPlanConflictError('Текущая позиция отсутствует.');
     // Reconstruct the selected alternative from the current/confirmed position before accepting it.
     const selected = proposal.route;

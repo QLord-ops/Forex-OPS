@@ -199,6 +199,8 @@ export class OperationsService {
     const context = await this.context(vehicleId, now);
     if (!context.vehicle.manualStoppedAt) throw new TourPlanConflictError('Грузовик не был остановлен вручную.');
     await this.db.$transaction(async tx => {
+      const breakdown = await tx.vehicleIssue.findFirst({ where: { vehicleId, kind: 'BREAKDOWN', resolvedAt: null } });
+      if (breakdown) throw new TourPlanConflictError('Сначала подтвердите завершение ремонта машины.');
       // Rebase while the frozen timestamp is still available, then release movement.
       await rebaseActiveLeg(tx, vehicleId, context.snapshot.clockState, now);
       const changed = await tx.vehicle.updateMany({ where: { id: vehicleId, operationVersion: version },

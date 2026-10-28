@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import { DataTable } from '../components/DataTable'
+import { WebfleetConnectionPanel } from '../components/WebfleetConnectionPanel'
 import { EmptyState, ErrorState, LoadingState } from '../components/States'
 import { usePolling } from '../hooks/usePolling'
 import { api } from '../lib/api'
@@ -54,6 +55,8 @@ export function VehiclesPage() {
           Обновить
         </button>
       </div>
+
+      <WebfleetConnectionPanel />
 
       <form className="work-surface p-4" onSubmit={handleCreateVehicle}>
         <div className="grid items-end gap-3 md:grid-cols-[180px_220px_160px_auto]">

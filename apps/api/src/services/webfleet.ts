@@ -20,6 +20,7 @@ export type WebfleetPosition = WebfleetObject & {
   longitude: number;
   speedKmh?: number | null;
   ignitionOn?: boolean | null;
+  standstill?: boolean | null;
   recordedAt: Date;
   raw?: unknown;
 };
@@ -40,30 +41,23 @@ export async function matchWebfleetObject(db: PrismaClient, object: WebfleetObje
   const existing = await db.vehicleIntegration.findUnique({
     where: { provider_externalId: { provider: PROVIDER, externalId: object.objectUid } }
   });
-  if (existing) return { vehicleId: existing.vehicleId, matchedBy: 'integration' as const, ambiguous: false };
-
-  const byNumber = object.objectNo?.trim()
-    ? await db.vehicle.findMany({ where: { vehicleNumber: object.objectNo.trim() } })
-    : [];
-  if (byNumber.length === 1) return { vehicleId: byNumber[0].id, matchedBy: 'objectNo' as const, ambiguous: false };
-  if (byNumber.length > 1) return { vehicleId: null, matchedBy: 'objectNo' as const, ambiguous: true };
-
+  if (existing) return { vehicleId: existing.status === 'ACTIVE' ? existing.vehicleId : null, matchedBy: 'integration' as const, ambiguous: existing.status !== 'ACTIVE' };
   const plate = normalizePlate(object.licensePlate);
-  if (!plate) return { vehicleId: null, matchedBy: 'none' as const, ambiguous: false };
   const vehicles = await db.vehicle.findMany();
-  const matches = vehicles.filter((vehicle) => {
-    const vehiclePlate = normalizePlate(vehicle.licensePlate);
-    return Boolean(vehiclePlate) && (vehiclePlate === plate || vehiclePlate.includes(plate) || plate.includes(vehiclePlate));
-  });
-  if (matches.length === 1) return { vehicleId: matches[0].id, matchedBy: 'plate' as const, ambiguous: false };
-  return { vehicleId: null, matchedBy: 'plate' as const, ambiguous: matches.length > 1 };
+  const byNumber = vehicles.filter((vehicle) => Boolean(object.objectNo?.trim()) && vehicle.vehicleNumber.trim().toUpperCase() === object.objectNo!.trim().toUpperCase());
+  const byPlate = vehicles.filter((vehicle) => Boolean(plate) && normalizePlate(vehicle.licensePlate) === plate);
+  const matches = [...new Map([...byNumber, ...byPlate].map((vehicle) => [vehicle.id, vehicle])).values()];
+  if (matches.length !== 1) return { vehicleId: null, matchedBy: 'none' as const, ambiguous: matches.length > 1 };
+  const binding = await db.vehicleIntegration.findUnique({ where: { provider_vehicleId: { provider: PROVIDER, vehicleId: matches[0].id } } });
+  if (binding && binding.externalId !== object.objectUid) return { vehicleId: null, matchedBy: 'integration' as const, ambiguous: true };
+  return { vehicleId: matches[0].id, matchedBy: byNumber.length ? 'objectNo' as const : 'plate' as const, ambiguous: false };
 }
 
 export class WebfleetTelemetryService {
   constructor(private readonly db: PrismaClient) {}
 
   async applyPosition(input: WebfleetPosition, receivedAt = new Date()) {
-    if (!Number.isFinite(input.latitude) || !Number.isFinite(input.longitude)) throw new Error('Некорректные координаты Webfleet.');
+    if (!validCoordinates(input.latitude, input.longitude) || !Number.isFinite(input.recordedAt.getTime()) || input.recordedAt > receivedAt || !input.objectUid.trim()) throw new Error('Некорректная позиция Webfleet.');
     const messageId = input.messageId?.trim();
     if (messageId) {
       const receipt = await this.db.integrationReceipt.findUnique({ where: { provider_messageId: { provider: PROVIDER, messageId } } });
@@ -97,26 +91,38 @@ export class WebfleetTelemetryService {
       update: { receivedAt, speedKmh: input.speedKmh ?? null, rawJson: JSON.stringify(toSafeTelemetryPayload(input)) }
     });
 
-    const arrivalConfirmed = await this.confirmArrivalIfStable(match.vehicleId, input, previous, receivedAt);
+    const arrivalSuggested = await this.suggestArrivalIfStable(match.vehicleId, input, previous, receivedAt);
     if (messageId) {
       await this.db.integrationReceipt.create({ data: {
         provider: PROVIDER, messageId, externalId: input.objectUid, acknowledgedAt: receivedAt,
-        payloadJson: JSON.stringify({ matchedBy: match.matchedBy, vehicleId: match.vehicleId, arrivalConfirmed })
+        payloadJson: JSON.stringify({ matchedBy: match.matchedBy, vehicleId: match.vehicleId, arrivalSuggested })
       } });
     }
-    return { duplicate: false, matched: true, vehicleId: match.vehicleId, arrivalConfirmed };
+    return { duplicate: false, matched: true, vehicleId: match.vehicleId, arrivalConfirmed: false, arrivalSuggested };
   }
 
   async latest(vehicleId: string, now = new Date()) {
-    const telemetry = await this.db.vehicleTelemetry.findFirst({ where: { vehicleId, provider: PROVIDER }, orderBy: { recordedAt: 'desc' } });
+    const telemetry = await this.db.vehicleTelemetry.findFirst({ where: { vehicleId, provider: PROVIDER, recordedAt: { lte: now } }, orderBy: { recordedAt: 'desc' } });
     if (!telemetry) return null;
     const ageSeconds = Math.max(0, Math.floor((now.getTime() - telemetry.recordedAt.getTime()) / 1000));
-    return { ...telemetry, ageSeconds, stale: ageSeconds > FRESH_SECONDS, usable: ageSeconds <= FALLBACK_SECONDS };
+    const payload = telemetry.rawJson ? safeJson(telemetry.rawJson) : null;
+    return {
+      ...telemetry,
+      standstill: isRecord(payload) && typeof payload.standstill === 'boolean' ? payload.standstill : null,
+      ageSeconds,
+      stale: ageSeconds > FRESH_SECONDS,
+      usable: ageSeconds <= FALLBACK_SECONDS
+    };
   }
 
-  private async confirmArrivalIfStable(vehicleId: string, current: WebfleetPosition, previous: { latitude: number; longitude: number; speedKmh: number | null; recordedAt: Date } | null, now: Date) {
-    if (freshAgeSeconds(current.recordedAt, now) > FRESH_SECONDS || (current.speedKmh ?? Infinity) > ARRIVAL_SPEED_KMH || !previous) return false;
-    if ((previous.speedKmh ?? Infinity) > ARRIVAL_SPEED_KMH || previous.recordedAt >= current.recordedAt) return false;
+  private async suggestArrivalIfStable(vehicleId: string, current: WebfleetPosition, previous: { latitude: number; longitude: number; speedKmh: number | null; recordedAt: Date; rawJson: string | null } | null, now: Date) {
+    const currentStopped = current.standstill === true || (typeof current.speedKmh === 'number' && current.speedKmh <= ARRIVAL_SPEED_KMH);
+    const previousPayload = previous?.rawJson ? safeJson(previous.rawJson) : null;
+    const previousStandstill = isRecord(previousPayload) && previousPayload.standstill === true;
+    const previousStopped = previousStandstill || (typeof previous?.speedKmh === 'number' && previous.speedKmh <= ARRIVAL_SPEED_KMH);
+    if (freshAgeSeconds(current.recordedAt, now) > FRESH_SECONDS || !currentStopped || !previous) return false;
+    if (!previousStopped || previous.recordedAt >= current.recordedAt) return false;
+    if (freshAgeSeconds(previous.recordedAt, now) > FRESH_SECONDS) return false;
     const tour = await this.db.tour.findFirst({
       where: { vehicleId, status: 'ACTIVE' },
       include: { stops: { orderBy: { sequence: 'asc' } }, legs: true },
@@ -128,24 +134,14 @@ export class WebfleetTelemetryService {
     const previousDistance = distanceMeters(previous.latitude, previous.longitude, stop.latitude, stop.longitude);
     if (currentDistance > ARRIVAL_RADIUS_METERS || previousDistance > ARRIVAL_RADIUS_METERS) return false;
 
-    await this.db.$transaction(async (tx) => {
-      const changed = await tx.stop.updateMany({ where: { id: stop.id, arrivedAt: null, completedAt: null }, data: { arrivedAt: current.recordedAt } });
-      if (!changed.count) return;
-      const leg = tour.legs.find((item) => item.toStopId === stop.id);
-      if (leg) await tx.leg.update({ where: { id: leg.id }, data: { status: 'ARRIVED' } });
-      await tx.operationEvent.create({ data: {
-        vehicleId, tourId: tour.id, stopId: stop.id, type: 'ARRIVAL_CONFIRMED',
-        payloadJson: JSON.stringify({ source: 'WEBFLEET_GEOFENCE', latitude: current.latitude, longitude: current.longitude, recordedAt: current.recordedAt })
-      } });
-      await tx.notification.upsert({
-        where: { dedupKey: `webfleet-arrival:${stop.id}` },
-        create: {
-          dedupKey: `webfleet-arrival:${stop.id}`, vehicleId, stopId: stop.id, type: 'WEBFLEET_ARRIVAL',
-          message: `Webfleet: машина прибыла ${stop.type === 'LOAD' ? 'на загрузку' : 'на выгрузку'}, ${stop.city || stop.address}.`,
-          payloadJson: JSON.stringify({ source: 'WEBFLEET_GEOFENCE', stopId: stop.id, recordedAt: current.recordedAt })
-        },
-        update: { payloadJson: JSON.stringify({ source: 'WEBFLEET_GEOFENCE', stopId: stop.id, recordedAt: current.recordedAt }) }
-      });
+    await this.db.notification.upsert({
+      where: { dedupKey: `webfleet-arrival:${stop.id}` },
+      create: {
+        dedupKey: `webfleet-arrival:${stop.id}`, vehicleId, stopId: stop.id, type: 'PREDICTED_ARRIVAL',
+        message: `Webfleet: машина предположительно прибыла ${stop.type === 'LOAD' ? 'на загрузку' : 'на выгрузку'}, ${stop.city || stop.address}. Подтвердите прибытие.`,
+        payloadJson: JSON.stringify({ source: 'WEBFLEET_GEOFENCE', stopId: stop.id, recordedAt: current.recordedAt })
+      },
+      update: {}
     });
     return true;
   }
@@ -153,6 +149,7 @@ export class WebfleetTelemetryService {
 
 export class WebfleetSyncService {
   private readonly telemetry: WebfleetTelemetryService;
+  private nextCheckAt = 0;
 
   constructor(private readonly db: PrismaClient, private readonly config: WebfleetConfig | null = readWebfleetConfig()) {
     this.telemetry = new WebfleetTelemetryService(db);
@@ -164,6 +161,7 @@ export class WebfleetSyncService {
 
   async refreshIfDue(now = new Date()) {
     if (!this.config) return { configured: false, refreshed: false, reason: 'NOT_CONFIGURED' as const };
+    if (now.getTime() < this.nextCheckAt) return { configured: true, refreshed: false, reason: 'NOT_DUE' as const };
     const stateId = 'WEBFLEET:SNAPSHOT';
     await this.db.integrationSyncState.upsert({
       where: { id: stateId },
@@ -171,36 +169,50 @@ export class WebfleetSyncService {
       update: {}
     });
     const state = await this.db.integrationSyncState.findUnique({ where: { id: stateId } });
+    const summary = state?.cursor ? safeJson(state.cursor) : null;
+    if (isRecord(summary) && typeof summary.retryAfter === 'string' && new Date(summary.retryAfter) > now) {
+      this.nextCheckAt = new Date(summary.retryAfter).getTime();
+      return { configured: true, refreshed: false, reason: 'COOLDOWN' as const, lastSnapshotAt: state?.lastSnapshotAt ?? null };
+    }
     if (state?.lastSnapshotAt && now.getTime() - state.lastSnapshotAt.getTime() < SNAPSHOT_INTERVAL_MS) {
+      this.nextCheckAt = state.lastSnapshotAt.getTime() + SNAPSHOT_INTERVAL_MS;
       return { configured: true, refreshed: false, reason: 'NOT_DUE' as const, lastSnapshotAt: state.lastSnapshotAt };
     }
     const locked = await this.db.integrationSyncState.updateMany({
       where: { id: stateId, OR: [{ lockedUntil: null }, { lockedUntil: { lt: now } }] },
       data: { lockedUntil: new Date(now.getTime() + SYNC_LEASE_MS) }
     });
-    if (!locked.count) return { configured: true, refreshed: false, reason: 'LEASED' as const, lastSnapshotAt: state?.lastSnapshotAt ?? null };
+    if (!locked.count) { this.nextCheckAt = now.getTime() + 15_000; return { configured: true, refreshed: false, reason: 'LEASED' as const, lastSnapshotAt: state?.lastSnapshotAt ?? null }; }
 
     try {
       const positions = await fetchObjectReport(this.config);
       let matched = 0;
+      let rejected = 0;
+      const unmatched: Array<WebfleetObject & { ambiguous: boolean }> = [];
       for (const position of positions) {
+        if (position.recordedAt > now || freshAgeSeconds(position.recordedAt, now) > FALLBACK_SECONDS) { rejected += 1; continue; }
         const result = await this.telemetry.applyPosition(position, now);
         if (result.matched) matched += 1;
+        else if (!result.duplicate && unmatched.length < 500) unmatched.push({ objectUid: position.objectUid, objectNo: position.objectNo, licensePlate: position.licensePlate, ambiguous: 'ambiguous' in result && Boolean(result.ambiguous) });
       }
       await this.db.integrationSyncState.update({
         where: { id: stateId },
-        data: { lastSnapshotAt: now, lockedUntil: null, cursor: JSON.stringify({ received: positions.length, matched }) }
+        data: { lastSnapshotAt: now, lockedUntil: null, cursor: JSON.stringify({ received: positions.length, matched, rejected, unmatched, lastError: null }) }
       });
+      this.nextCheckAt = now.getTime() + SNAPSHOT_INTERVAL_MS;
       return { configured: true, refreshed: true, received: positions.length, matched, lastSnapshotAt: now };
-    } catch (error) {
-      await this.db.integrationSyncState.update({ where: { id: stateId }, data: { lockedUntil: null } });
-      throw error;
+    } catch {
+      const retryAfter = new Date(now.getTime() + 5 * SNAPSHOT_INTERVAL_MS);
+      this.nextCheckAt = retryAfter.getTime();
+      await this.db.integrationSyncState.update({ where: { id: stateId }, data: { lockedUntil: null, cursor: JSON.stringify({ ...(isRecord(summary) ? summary : {}), lastError: 'SYNC_FAILED', retryAfter: retryAfter.toISOString() }) } });
+      return { configured: true, refreshed: false, reason: 'SYNC_FAILED' as const, lastSnapshotAt: state?.lastSnapshotAt ?? null };
     }
   }
 
   async status() {
     const state = await this.db.integrationSyncState.findUnique({ where: { id: 'WEBFLEET:SNAPSHOT' } });
-    return { configured: this.configured, lastSnapshotAt: state?.lastSnapshotAt ?? null, summary: state?.cursor ? safeJson(state.cursor) : null };
+    const summary = state?.cursor ? safeJson(state.cursor) : null;
+    return { configured: this.configured, mode: 'READ_ONLY' as const, pollingIntervalSeconds: SNAPSHOT_INTERVAL_MS / 1000, lastSnapshotAt: state?.lastSnapshotAt ?? null, summary, lastError: isRecord(summary) ? summary.lastError ?? null : null, retryAfter: isRecord(summary) ? summary.retryAfter ?? null : null };
   }
 }
 
@@ -221,6 +233,7 @@ export function readWebfleetConfig(env = process.env): WebfleetConfig | null {
 
 async function fetchObjectReport(config: WebfleetConfig): Promise<WebfleetPosition[]> {
   const url = new URL(config.baseUrl);
+  if (url.protocol !== 'https:' || url.hostname !== 'csv.webfleet.com' || url.pathname !== '/extern' || url.username || url.password) throw new Error('Недопустимый адрес Webfleet.');
   url.searchParams.set('account', config.account);
   url.searchParams.set('apikey', config.apiKey);
   url.searchParams.set('action', 'showObjectReportExtern');
@@ -228,29 +241,35 @@ async function fetchObjectReport(config: WebfleetConfig): Promise<WebfleetPositi
   url.searchParams.set('useUTF8', 'true');
   url.searchParams.set('useISO8601', 'true');
   const authorization = Buffer.from(`${config.username}:${config.password}`).toString('base64');
-  const response = await fetch(url, { headers: { Authorization: `Basic ${authorization}`, Accept: 'application/json' }, signal: AbortSignal.timeout(12_000) });
-  if (!response.ok) throw new Error(`Webfleet ответил HTTP ${response.status}.`);
+  const response = await fetch(url, { redirect: 'error', headers: { Authorization: `Basic ${authorization}`, Accept: 'application/json' }, signal: AbortSignal.timeout(12_000) });
+  if (!response.ok || response.headers.has('X-Webfleet-Errorcode')) throw new Error('Ошибка Webfleet.');
   const payload = await response.json() as unknown;
-  const rows = Array.isArray(payload) ? payload : isRecord(payload) && Array.isArray(payload.records) ? payload.records : [];
-  return rows.map(parseObjectRow).filter((row): row is WebfleetPosition => row !== null);
+  if (!Array.isArray(payload)) throw new Error('Неизвестный формат Webfleet.');
+  const rows = payload;
+  return rows.map(parseWebfleetObjectRow).filter((row): row is WebfleetPosition => row !== null);
 }
 
-function parseObjectRow(value: unknown): WebfleetPosition | null {
+export function parseWebfleetObjectRow(value: unknown): WebfleetPosition | null {
   if (!isRecord(value)) return null;
-  const objectUid = stringField(value, ['objectuid', 'objectUid', 'objectid', 'objectId', 'objectno', 'objectNo']);
-  const latitude = numberField(value, ['latitude', 'lat']);
-  const longitude = numberField(value, ['longitude', 'lng', 'lon']);
-  const recordedAtValue = stringField(value, ['pos_time', 'position_time', 'recordedAt', 'timestamp', 'msgtime']);
-  const recordedAt = recordedAtValue ? new Date(recordedAtValue) : new Date();
-  if (!objectUid || latitude === null || longitude === null || Number.isNaN(recordedAt.getTime())) return null;
+  if (value.status !== 'A') return null;
+  const objectUid = stringField(value, ['objectuid']);
+  const latitudeRaw = numberField(value, ['latitude_mdeg']);
+  const longitudeRaw = numberField(value, ['longitude_mdeg']);
+  const latitude = latitudeRaw === null ? NaN : latitudeRaw / 1e6;
+  const longitude = longitudeRaw === null ? NaN : longitudeRaw / 1e6;
+  const recordedAtValue = stringField(value, ['pos_time']);
+  const recordedAt = new Date(recordedAtValue ?? '');
+  if (!objectUid || !validCoordinates(latitude, longitude) || Number.isNaN(recordedAt.getTime())) return null;
   return {
     objectUid,
     objectNo: stringField(value, ['objectno', 'objectNo', 'objectname', 'objectName']),
     licensePlate: stringField(value, ['licenseplate', 'licensePlate', 'numberplate']),
     latitude,
     longitude,
-    speedKmh: numberField(value, ['speed', 'speedKmh']),
+    // Units for this report are not yet verified; never infer km/h from an untyped value.
+    speedKmh: null,
     ignitionOn: booleanField(value, ['ignition', 'ignitionOn']),
+    standstill: booleanField(value, ['standstill']),
     recordedAt,
     raw: undefined
   };
@@ -265,6 +284,7 @@ function toSafeTelemetryPayload(input: WebfleetPosition) {
     longitude: input.longitude,
     speedKmh: input.speedKmh ?? null,
     ignitionOn: input.ignitionOn ?? null,
+    standstill: input.standstill ?? null,
     recordedAt: input.recordedAt.toISOString()
   };
 }
@@ -280,10 +300,14 @@ function stringField(value: Record<string, unknown>, keys: string[]) {
 
 function numberField(value: Record<string, unknown>, keys: string[]) {
   for (const key of keys) {
-    const parsed = typeof value[key] === 'number' ? value[key] : typeof value[key] === 'string' ? Number(value[key]) : NaN;
+    const parsed = typeof value[key] === 'number' ? value[key] : typeof value[key] === 'string' && value[key].trim() ? Number(value[key]) : NaN;
     if (Number.isFinite(parsed)) return parsed as number;
   }
   return null;
+}
+
+function validCoordinates(latitude: number, longitude: number) {
+  return Number.isFinite(latitude) && Number.isFinite(longitude) && Math.abs(latitude) <= 90 && Math.abs(longitude) <= 180;
 }
 
 function booleanField(value: Record<string, unknown>, keys: string[]) {

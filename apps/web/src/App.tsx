@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
 
 import { AppShell } from './components/AppShell'
+import { AuthGate } from './components/AuthGate'
 import { AlertsPage } from './pages/AlertsPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { EditTourPage } from './pages/EditTourPage'
@@ -12,7 +13,7 @@ import { VehiclesPage } from './pages/VehiclesPage'
 
 export function App() {
   return (
-    <Routes>
+    <AuthGate><Routes>
       <Route element={<AppShell />}>
         <Route index element={<DashboardPage />} />
         <Route path="vehicles" element={<VehiclesPage />} />
@@ -24,6 +25,6 @@ export function App() {
         <Route path="history" element={<HistoryPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
-    </Routes>
+    </Routes></AuthGate>
   )
 }

@@ -2,14 +2,16 @@ import { useState } from 'react'
 import { usePolling } from '../hooks/usePolling'
 import { formatDateTime, formatDurationMinutes, statusLabel } from '../lib/format'
 import type { Stop } from '../types/domain'
+import { authHeaders, notifySessionExpired } from '../lib/auth'
 
 // Shared exclusively by the operations components in this feature.
 // eslint-disable-next-line react-refresh/only-export-components
-export const operationsBase = import.meta.env.VITE_API_BASE_URL || '/api'
+export const operationsBase = '/api'
 // eslint-disable-next-line react-refresh/only-export-components
 export async function operationsRequest<T = unknown>(path: string, method = 'GET', body?: unknown): Promise<T> {
-  const response = await fetch(`${operationsBase}${path}`, { method, headers: body === undefined ? undefined : { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
+  const response = await fetch(`${operationsBase}${path}`, { method, credentials: 'same-origin', headers: { ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...authHeaders() }, body: body === undefined ? undefined : JSON.stringify(body) })
   if (!response.ok) {
+    if (response.status === 401) notifySessionExpired()
     const text = await response.text()
     let message = text
     try { const parsed = JSON.parse(text); message = parsed.error || parsed.message || text } catch { /* Keep plain error. */ }

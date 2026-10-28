@@ -113,7 +113,7 @@ export class ReplanningService {
     return { id: preview.id, version: preview.version, expiresAt: preview.expiresAt.toISOString(), stops, affectedTourIds,
       etaWindows,
       before: { distanceMeters: Math.max(0, beforeLegs.reduce((n, l) => n + l.distanceMeters, 0) - position.distanceTravelledMeters), durationSeconds: beforeSchedule.reduce((n, l) => n + l.duration, 0), roads: [...new Set(beforeLegs.flatMap(l => storedRoads(l.routeDetails)))], etaWindows: beforeWindows },
-      after: { distanceMeters: legs.reduce((n, l) => n + l.route.distanceMeters, 0), durationSeconds: legs.reduce((n, l) => n + l.duration, 0), roads: [...new Set(legs.flatMap(l => roads(l.route)))], etaWindows } };
+      after: { geometry: legs.flatMap(l => l.route.geometry.map(p => [p.longitude, p.latitude])), distanceMeters: legs.reduce((n, l) => n + l.route.distanceMeters, 0), durationSeconds: legs.reduce((n, l) => n + l.duration, 0), roads: [...new Set(legs.flatMap(l => roads(l.route)))], etaWindows } };
   }
 
   async apply(tourId: string, input: { previewId: string; version: number }, now = new Date()) {

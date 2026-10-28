@@ -12,7 +12,8 @@ import type {
   VehicleTimeline
 } from '../types/domain'
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api'
+import { authHeaders, notifySessionExpired } from './auth'
+const API_BASE = '/api'
 
 export class ApiError extends Error {
   status: number
@@ -30,10 +31,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     : init?.headers
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
-    headers
+    credentials: 'same-origin',
+    headers: { ...headers, ...authHeaders() }
   })
 
   if (!response.ok) {
+    if (response.status === 401) notifySessionExpired()
     const text = await response.text()
     let message = text
     try {
@@ -63,7 +66,7 @@ export const api = {
   vehicle: (id: string) => request<Vehicle>(`/vehicles/${id}`),
   vehicleTours: (id: string) => request<Tour[]>(`/vehicles/${id}/tours`),
   vehicleTimeline: (id: string) => request<VehicleTimeline>(`/vehicles/${id}/timeline`),
-  currentPosition: (id: string) => request<CurrentPosition>(`/vehicles/${id}/current-position`),
+  currentPosition: (id: string, includeGeometry = true) => request<CurrentPosition>(`/vehicles/${id}/current-position${includeGeometry ? '' : '?geometry=0'}`),
   tours: () => request<Tour[]>('/tours'),
   tour: (id: string) => request<Tour>(`/tours/${id}`),
   createTour: (payload: CreateTourInput) =>
@@ -76,7 +79,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload)
     }),
-  previewNewTour: (payload: { vehicleId?: string; stops: Array<Pick<CreateTourInput['stops'][number], 'address' | 'latitude' | 'longitude'>> }) =>
+  previewNewTour: (payload: { vehicleId?: string; stops: Array<Pick<CreateTourInput['stops'][number], 'address'> & Partial<Pick<CreateTourInput['stops'][number], 'latitude' | 'longitude'>>> }) =>
     request<{ distanceMeters: number; durationSeconds: number; estimatedArrivalAt: string | null; preliminary: boolean; geometry: Array<[number, number]> }>('/tours/preview', {
       method: 'POST',
       body: JSON.stringify(payload)

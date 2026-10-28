@@ -148,8 +148,10 @@ export function MapPanel({
       const fitKey = tour?.id ?? (stops.length ? `stops:${stops.map((stop) => stop.id).join(':')}` : null)
       if (fitKey && fittedTourRef.current !== fitKey) {
         fittedTourRef.current = fitKey
-        if (position?.coordinate) map.jumpTo({ center: position.coordinate, zoom: 15.5 })
-        else fitRoute(map, [...fullRoute, ...stopCoordinates(stops)], 15.5, 0)
+        if (!previewRoute?.length) {
+          if (position?.coordinate) map.jumpTo({ center: position.coordinate, zoom: 15.5 })
+          else fitRoute(map, [...fullRoute, ...stopCoordinates(stops)], 15.5, 0)
+        }
       }
     }
 
@@ -176,9 +178,9 @@ export function MapPanel({
       setCameraRequest(null)
       return
     }
-    fitRoute(map, [...fullRoute, ...stopCoordinates(stops)], 15.5, 260)
+    fitRoute(map, previewRoute?.length ? previewRoute : [...fullRoute, ...stopCoordinates(stops)], 15.5, 260)
     setCameraRequest(null)
-  }, [cameraRequest, fullRoute, position?.coordinate, stops])
+  }, [cameraRequest, fullRoute, position?.coordinate, previewRoute, stops])
 
   useEffect(() => {
     const map = mapRef.current

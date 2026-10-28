@@ -10,7 +10,7 @@ afterEach(async () => {
 
 describe("POST /imports/excel/preview", () => {
   it("returns a non-persistent preview for a valid xlsx upload", async () => {
-    const app = await buildApp();
+    const app = await buildApp({ auth: { disabled: true } });
     apps.push(app);
     const workbook = new Workbook();
     const sheet = workbook.addWorksheet("Orders");
@@ -42,7 +42,7 @@ describe("POST /imports/excel/preview", () => {
   });
 
   it("rejects legacy or disguised files", async () => {
-    const app = await buildApp();
+    const app = await buildApp({ auth: { disabled: true } });
     apps.push(app);
     const multipart = buildMultipart("auftrag.xls", Buffer.from("not an xlsx"), "application/vnd.ms-excel");
 
@@ -57,7 +57,7 @@ describe("POST /imports/excel/preview", () => {
   });
 
   it("rejects missing and fake xlsx uploads", async () => {
-    const app = await buildApp();
+    const app = await buildApp({ auth: { disabled: true } });
     apps.push(app);
 
     const missing = await app.inject({ method: "POST", url: "/imports/excel/preview" });
@@ -74,7 +74,7 @@ describe("POST /imports/excel/preview", () => {
   });
 
   it("enforces the five megabyte upload limit", async () => {
-    const app = await buildApp();
+    const app = await buildApp({ auth: { disabled: true } });
     apps.push(app);
     const oversized = Buffer.alloc(5 * 1024 * 1024 + 1, 0x61);
     oversized[0] = 0x50;
@@ -130,7 +130,7 @@ describe("POST /imports/pdf/preview", () => {
       aiAvailable: true as const,
       usedAi: true as const
     }));
-    const app = await buildApp({ pdfImport });
+    const app = await buildApp({ pdfImport, auth: { disabled: true } });
     apps.push(app);
     const file = Buffer.from("%PDF-1.7\n1 0 obj\n<<>>\nendobj\n%%EOF");
     const multipart = buildMultipart("auftrag.pdf", file, "application/pdf");
@@ -153,7 +153,7 @@ describe("POST /imports/pdf/preview", () => {
 
   it("rejects disguised and malformed PDF uploads before calling OpenAI", async () => {
     const pdfImport = vi.fn();
-    const app = await buildApp({ pdfImport });
+    const app = await buildApp({ pdfImport, auth: { disabled: true } });
     apps.push(app);
     const wrongExtension = buildMultipart("auftrag.txt", Buffer.from("%PDF-1.7"), "text/plain");
     const fakePdf = buildMultipart("auftrag.pdf", Buffer.from("not a pdf"), "application/pdf");
@@ -215,7 +215,7 @@ describe("POST /imports/image/preview", () => {
       aiAvailable: true as const,
       usedAi: true as const
     }));
-    const app = await buildApp({ imageImport });
+    const app = await buildApp({ imageImport, auth: { disabled: true } });
     apps.push(app);
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
     const multipart = buildMultipart("auftrag.png", png, "image/png");
@@ -245,7 +245,7 @@ describe("POST /imports/image/preview", () => {
       aiAvailable: true as const,
       usedAi: true as const
     }));
-    const app = await buildApp({ imageImport });
+    const app = await buildApp({ imageImport, auth: { disabled: true } });
     apps.push(app);
     const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00]);
     const webp = Buffer.from("RIFF\u0004\u0000\u0000\u0000WEBPVP8 ", "binary");
@@ -270,7 +270,7 @@ describe("POST /imports/image/preview", () => {
 
   it("rejects disguised screenshot uploads before calling OpenAI", async () => {
     const imageImport = vi.fn();
-    const app = await buildApp({ imageImport });
+    const app = await buildApp({ imageImport, auth: { disabled: true } });
     apps.push(app);
     const wrongExtension = buildMultipart("auftrag.gif", Buffer.from("GIF89a"), "image/gif");
     const fakePng = buildMultipart("auftrag.png", Buffer.from("not a png"), "image/png");
@@ -303,7 +303,7 @@ describe("POST /imports/image/preview", () => {
 
   it("enforces the ten megabyte screenshot limit before calling OpenAI", async () => {
     const imageImport = vi.fn();
-    const app = await buildApp({ imageImport });
+    const app = await buildApp({ imageImport, auth: { disabled: true } });
     apps.push(app);
     const oversized = Buffer.alloc(10 * 1024 * 1024 + 1, 0x00);
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(oversized);

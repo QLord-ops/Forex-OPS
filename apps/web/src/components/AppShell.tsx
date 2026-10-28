@@ -9,6 +9,8 @@ import {
 } from 'lucide-react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { OperationsNotifications } from './OperationsNotifications'
+import { DispatcherLogout } from './AuthGate'
+import { DispatcherAssistant } from './DispatcherAssistant'
 
 const navItems = [
   { to: '/', label: 'Панель управления', icon: LayoutDashboard },
@@ -54,6 +56,7 @@ export function AppShell() {
             </NavLink>
           ))}
         </nav>
+        <DispatcherLogout />
       </aside>
 
       <div className={isDashboard ? 'h-dvh lg:pl-20 2xl:pl-64' : 'lg:pl-20 2xl:pl-64'}>
@@ -81,6 +84,7 @@ export function AppShell() {
           <Outlet />
           <OperationsNotifications />
         </main>
+        <DispatcherAssistant />
       </div>
     </div>
   )

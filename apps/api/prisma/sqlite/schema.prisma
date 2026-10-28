@@ -9,6 +9,7 @@ datasource db {
 }
 
 model Vehicle {
+  issues VehicleIssue[]
   id               String    @id @default(cuid())
   vehicleNumber    String    @unique
   licensePlate     String?
@@ -273,4 +274,55 @@ model IntegrationReceipt {
 
   @@unique([provider, messageId])
   @@index([provider, acknowledgedAt])
+}
+model AssistantConversation {
+  id String @id @default(cuid())
+  title String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  messages AssistantMessage[]
+  proposals AssistantProposal[]
+}
+model AssistantMessage {
+  id String @id @default(cuid())
+  conversationId String
+  role String
+  content String
+  createdAt DateTime @default(now())
+  conversation AssistantConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  @@index([conversationId, createdAt])
+}
+model AssistantProposal {
+  id String @id @default(cuid())
+  conversationId String
+  vehicleId String?
+  vehicleVersion Int?
+  contextJson String
+  action String
+  summary String
+  inputJson String
+  previewJson String
+  status String @default("PENDING")
+  resultJson String?
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+  appliedAt DateTime?
+  conversation AssistantConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  @@index([conversationId, createdAt])
+}
+model AssistantUsage {
+  id String @id
+  count Int @default(0)
+  expiresAt DateTime
+}
+model VehicleIssue {
+  id String @id @default(cuid())
+  vehicleId String
+  kind String
+  description String
+  expectedResolvedAt DateTime?
+  resolvedAt DateTime?
+  createdAt DateTime @default(now())
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  @@index([vehicleId, resolvedAt])
 }
