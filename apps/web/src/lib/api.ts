@@ -1,6 +1,7 @@
 import type {
   Alert,
   AppointmentAnalysis,
+  AddressResolution,
   CreateTourInput,
   CurrentPosition,
   DashboardResponse,
@@ -71,6 +72,11 @@ export const api = {
   tour: (id: string) => request<Tour>(`/tours/${id}`),
   createTour: (payload: CreateTourInput) =>
     request<Tour>('/tours', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  confirmImportedTour: (payload: CreateTourInput & { importAttemptId: string; importFingerprint: string }) =>
+    request<{ tour: Tour; created: boolean; reused: boolean }>('/imports/tours/confirm', {
       method: 'POST',
       body: JSON.stringify(payload)
     }),
@@ -147,5 +153,7 @@ export const api = {
     body.append('file', file)
     return request<OrderImportPreview>('/imports/image/preview', { method: 'POST', body })
   },
-  geocode: (address: string) => request<GeocodeResult>(`/geocode?address=${encodeURIComponent(address)}`)
+  geocode: (address: string) => request<GeocodeResult>(`/geocode?address=${encodeURIComponent(address)}`),
+  resolveAddress: (payload: { address: string; city?: string | null }) =>
+    request<AddressResolution>('/geocode/resolve', { method: 'POST', body: JSON.stringify(payload) })
 }

@@ -27,6 +27,10 @@ export interface Stop {
   type: StopType
   company?: string | null
   address: string
+  sourceAddress?: string | null
+  resolvedAddress?: string | null
+  geocodePrecision?: 'EXACT' | 'STREET' | 'POSTCODE_CITY' | 'CITY' | null
+  geocodeProvider?: string | null
   city?: string | null
   latitude: number
   longitude: number
@@ -267,6 +271,19 @@ export interface GeocodeResult {
   provider?: string
 }
 
+export interface AddressResolution extends GeocodeResult {
+  sourceAddress: string
+  resolvedAddress: string
+  precision: 'EXACT' | 'STREET' | 'POSTCODE_CITY' | 'CITY'
+  attempts: string[]
+  researchUsed?: boolean
+  researchCandidates?: Array<{
+    address: string
+    rationale: string
+    sourceUrls: string[]
+  }>
+}
+
 export interface AppointmentAnalysis {
   stopId: string
   tourId: string
@@ -298,6 +315,10 @@ export interface CreateTourStopInput {
   type: StopType
   company?: string
   address: string
+  sourceAddress?: string | null
+  resolvedAddress?: string | null
+  geocodePrecision?: AddressResolution['precision'] | null
+  geocodeProvider?: string | null
   city?: string
   latitude: number
   longitude: number

@@ -19,6 +19,8 @@ CREATE TABLE "Tour" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "vehicleId" TEXT NOT NULL,
     "orderNumber" TEXT NOT NULL,
+    "importAttemptId" TEXT,
+    "importFingerprint" TEXT,
     "trailerPlate" TEXT,
     "tourRemarks" TEXT,
     "approachDurationSeconds" INTEGER,
@@ -43,6 +45,10 @@ CREATE TABLE "Stop" (
     "type" TEXT NOT NULL,
     "company" TEXT,
     "address" TEXT NOT NULL,
+    "sourceAddress" TEXT,
+    "resolvedAddress" TEXT,
+    "geocodePrecision" TEXT,
+    "geocodeProvider" TEXT,
     "city" TEXT,
     "latitude" REAL NOT NULL,
     "longitude" REAL NOT NULL,
@@ -194,6 +200,8 @@ CREATE TABLE "IntegrationReceipt" (
     "payloadJson" TEXT
 );
 CREATE UNIQUE INDEX "Vehicle_vehicleNumber_key" ON "Vehicle"("vehicleNumber");
+CREATE UNIQUE INDEX "Tour_importAttemptId_key" ON "Tour"("importAttemptId");
+CREATE UNIQUE INDEX "Tour_importFingerprint_key" ON "Tour"("importFingerprint");
 CREATE INDEX "Tour_vehicleId_status_idx" ON "Tour"("vehicleId", "status");
 CREATE INDEX "Tour_previousTourId_idx" ON "Tour"("previousTourId");
 CREATE INDEX "Stop_tourId_sequence_idx" ON "Stop"("tourId", "sequence");

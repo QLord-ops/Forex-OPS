@@ -91,3 +91,47 @@ it("persists new and edited tours, preserves transfer legs, and activates the qu
   expect((await db.tour.findUniqueOrThrow({ where: { id: second.id } })).status).toBe("ACTIVE");
   expect(await db.event.count({ where: { tourId: first.id } })).toBe(2);
 });
+
+it("confirms an imported Auftrag once and returns the attached tour on retry", async () => {
+  const firstVehicle = await db.vehicle.create({ data: { vehicleNumber: "IMPORT-ONE" } });
+  const secondVehicle = await db.vehicle.create({ data: { vehicleNumber: "IMPORT-TWO" } });
+  const service = new TourService(asAppDatabase(db), new MockRoutingProvider());
+  const input = {
+    vehicleId: firstVehicle.id,
+    orderNumber: "AUFTRAG-2056258",
+    stops: [
+      {
+        sequence: 1,
+        type: "LOAD" as const,
+        address: "Rudolf-Diesel-Straße 2, 14974 Ludwigsfelde",
+        sourceAddress: "Rudolf-Diesel-Straße 2, D 14974 Ludwigsfelde",
+        resolvedAddress: "Rudolf-Diesel-Straße, 14974 Ludwigsfelde, Deutschland",
+        geocodePrecision: "STREET" as const,
+        geocodeProvider: "nominatim",
+        latitude: 52.3,
+        longitude: 13.2
+      },
+      { sequence: 2, type: "UNLOAD" as const, address: "Sickingenstraße 28-38, 10553 Berlin", latitude: 52.5, longitude: 13.3 }
+    ]
+  };
+  const metadata = { importAttemptId: "attempt-import-one", importFingerprint: "fingerprint-import-one" };
+
+  const first = await service.createImportedTour(input, metadata);
+  const retry = await service.createImportedTour(input, { ...metadata, importAttemptId: "attempt-import-retry" });
+
+  expect(first.created).toBe(true);
+  expect(retry.created).toBe(false);
+  expect(retry.tour.id).toBe(first.tour.id);
+  expect(retry.tour.vehicleId).toBe(firstVehicle.id);
+  expect(retry.tour.stops[0]).toMatchObject({
+    sourceAddress: "Rudolf-Diesel-Straße 2, D 14974 Ludwigsfelde",
+    geocodePrecision: "STREET",
+    geocodeProvider: "nominatim"
+  });
+  expect(await db.tour.count({ where: { importFingerprint: metadata.importFingerprint } })).toBe(1);
+
+  await expect(service.createImportedTour({ ...input, vehicleId: secondVehicle.id }, {
+    importAttemptId: "attempt-import-other-vehicle",
+    importFingerprint: metadata.importFingerprint
+  })).rejects.toMatchObject({ statusCode: 409 });
+});

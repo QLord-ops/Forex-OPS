@@ -47,6 +47,10 @@ export type CreateTourInput = {
     type: "LOAD" | "UNLOAD";
     company?: string;
     address: string;
+    sourceAddress?: string | null;
+    resolvedAddress?: string | null;
+    geocodePrecision?: "EXACT" | "STREET" | "POSTCODE_CITY" | "CITY" | null;
+    geocodeProvider?: string | null;
     city?: string | StructuredCity | null;
     appointmentAt?: string | null;
     appointmentWindowStartAt?: string | null;
@@ -63,6 +67,11 @@ export type CreateTourInput = {
 
 export type UpdateFutureTourInput = CreateTourInput;
 
+export type ImportTourMetadata = {
+  importAttemptId: string;
+  importFingerprint: string;
+};
+
 export class TourPlanConflictError extends Error {
   readonly statusCode = 409;
 }
@@ -74,6 +83,43 @@ export class TourService {
   ) {}
 
   async createTour(input: CreateTourInput): Promise<TourAggregate> {
+    return this.createTourInternal(input);
+  }
+
+  async createImportedTour(
+    input: CreateTourInput,
+    metadata: ImportTourMetadata
+  ): Promise<{ tour: TourAggregate; created: boolean }> {
+    if (!metadata.importAttemptId.trim() || !metadata.importFingerprint.trim()) {
+      throw Object.assign(new Error("Для импорта отсутствует идентификатор повторной попытки."), { statusCode: 400 });
+    }
+
+    const existing = await this.findImportedTour(metadata);
+    if (existing) return { tour: assertImportedTourVehicle(existing, input.vehicleId), created: false };
+
+    try {
+      return { tour: await this.createTourInternal(input, metadata), created: true };
+    } catch (error) {
+      // A concurrent retry may win the unique key race after route calculation.
+      const concurrent = await this.findImportedTour(metadata);
+      if (concurrent) return { tour: assertImportedTourVehicle(concurrent, input.vehicleId), created: false };
+      throw error;
+    }
+  }
+
+  private async findImportedTour(metadata: ImportTourMetadata): Promise<TourAggregate | null> {
+    return this.db.tour.findFirst({
+      where: {
+        OR: [
+          { importAttemptId: metadata.importAttemptId },
+          { importFingerprint: metadata.importFingerprint }
+        ]
+      },
+      include: tourInclude
+    });
+  }
+
+  private async createTourInternal(input: CreateTourInput, metadata?: ImportTourMetadata): Promise<TourAggregate> {
     validateTourInput(input);
     const context = await readPlanningContext(this.db, input);
     const orderedStops = [...input.stops].sort((a, b) => a.sequence - b.sequence);
@@ -88,6 +134,8 @@ export class TourService {
         data: {
           vehicleId: context.vehicle.id,
           orderNumber: input.orderNumber,
+          importAttemptId: metadata?.importAttemptId,
+          importFingerprint: metadata?.importFingerprint,
           trailerPlate: input.trailerPlate?.trim() || null,
           tourRemarks: input.tourRemarks?.trim() || null,
           planVersion: 0,
@@ -424,6 +472,16 @@ function assertPlanningContextUnchanged(
   }
 }
 
+function assertImportedTourVehicle(tour: TourAggregate, vehicleId: string): TourAggregate {
+  if (tour.vehicleId !== vehicleId) {
+    throw Object.assign(
+      new Error(`Этот Auftrag уже прикреплён к LKW ${tour.vehicle.vehicleNumber}. Откройте существующий тур или измените его вручную.`),
+      { statusCode: 409 }
+    );
+  }
+  return tour;
+}
+
 async function prepareTourPlan(
   routingProvider: RoutingProvider,
   orderedStops: CreateTourInput["stops"],
@@ -480,6 +538,10 @@ async function persistTourPlan(
         type: stop.type,
         company: stop.company,
         address: stop.address,
+        sourceAddress: stop.sourceAddress?.trim() || stop.address,
+        resolvedAddress: stop.resolvedAddress?.trim() || null,
+        geocodePrecision: stop.geocodePrecision ?? null,
+        geocodeProvider: stop.geocodeProvider?.trim() || null,
         latitude: stop.latitude,
         longitude: stop.longitude,
         city: normalizeCity(stop.city),

@@ -36,6 +36,8 @@ model Tour {
   id             String     @id @default(cuid())
   vehicleId      String
   orderNumber    String
+  importAttemptId String?   @unique
+  importFingerprint String? @unique
   trailerPlate   String?
   tourRemarks    String?
   approachDurationSeconds Int?
@@ -70,6 +72,10 @@ model Stop {
   type          String
   company       String?
   address       String
+  sourceAddress String?
+  resolvedAddress String?
+  geocodePrecision String?
+  geocodeProvider String?
   city          String?
   latitude      Float
   longitude     Float

@@ -5,10 +5,10 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api'
 import { previewRouteScenario } from '../lib/assistant-api'
 import { formatAppointment } from '../lib/format'
-import type { Coordinate, CreateTourStopInput, DashboardVehicle, ImportedOrderDraft, ImportedStopDraft, Vehicle } from '../types/domain'
+import type { AddressResolution, Coordinate, CreateTourStopInput, DashboardVehicle, ImportedOrderDraft, ImportedStopDraft, Vehicle } from '../types/domain'
 
 type DockTab = 'search' | 'route' | 'order'
-type DraftStop = ImportedStopDraft & { city: string; company: string; address: string; appointmentLocal: string; loadingMetersText: string; referenceText: string; instructionsText: string }
+type DraftStop = ImportedStopDraft & { city: string; company: string; address: string; appointmentLocal: string; loadingMetersText: string; referenceText: string; instructionsText: string; resolution?: AddressResolution | null }
 type RouteSummary = { distanceMeters: number; arrival: string | null; warnings: string[] }
 
 export function QuickOrderPanel({
@@ -18,11 +18,9 @@ export function QuickOrderPanel({
   onAddressFound,
   onRoutePreview,
   importOnly = false,
-  onImportDraft,
   onImportActivity
 }: {
   importOnly?: boolean
-  onImportDraft?: (payload: Record<string, unknown>) => Promise<void>
   onImportActivity?: () => void
   row?: DashboardVehicle | null
   vehicles: Vehicle[]
@@ -30,7 +28,7 @@ export function QuickOrderPanel({
   onAddressFound?: (coordinate: Coordinate) => void
   onRoutePreview?: (coordinates: Coordinate[]) => void
 }) {
-  const cachedImport = useMemo(() => { if (!importOnly) return null; try { return JSON.parse(sessionStorage.getItem('ops-assistant-import-v1') ?? 'null') as { draft: ImportedOrderDraft | null; stops: DraftStop[]; vehicleId: string; orderNumber: string; fileName: string; pendingDrafts: Array<{ draft: ImportedOrderDraft; fileName: string }>; editing: boolean; createVehicle: boolean; newVehicleNumber: string; newLicensePlate: string } | null } catch { return null } }, [importOnly])
+  const cachedImport = useMemo(() => { if (!importOnly) return null; try { return JSON.parse(sessionStorage.getItem('ops-assistant-import-v1') ?? 'null') as { draft: ImportedOrderDraft | null; stops: DraftStop[]; vehicleId: string; orderNumber: string; fileName: string; pendingDrafts: Array<{ draft: ImportedOrderDraft; fileName: string }>; editing: boolean; createVehicle: boolean; newVehicleNumber: string; newLicensePlate: string; importAttemptId?: string } | null } catch { return null } }, [importOnly])
   const [tab, setTab] = useState<DockTab | null>(importOnly ? 'order' : null)
   const [dragging, setDragging] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -46,6 +44,7 @@ export function QuickOrderPanel({
   const [createVehicle, setCreateVehicle] = useState(cachedImport?.createVehicle ?? false)
   const [newVehicleNumber, setNewVehicleNumber] = useState(cachedImport?.newVehicleNumber ?? '')
   const [newLicensePlate, setNewLicensePlate] = useState(cachedImport?.newLicensePlate ?? '')
+  const [importAttemptId, setImportAttemptId] = useState(cachedImport?.importAttemptId ?? createImportAttemptId())
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResult, setSearchResult] = useState('')
   const selectedVehicleId = row?.vehicle.id
@@ -55,12 +54,13 @@ export function QuickOrderPanel({
   const [preview, setPreview] = useState<RouteSummary | null>(null)
   const [routeBusy, setRouteBusy] = useState(false)
   const routeRequest = useRef(0)
+  const addressRequest = useRef(0)
   const matchState = useMemo(() => vehicleMatch(draft?.vehiclePlate || draft?.vehicleNumber, vehicles), [draft?.vehiclePlate, draft?.vehicleNumber, vehicles])
 
   useEffect(() => {
     if (!importOnly) return
-    try { sessionStorage.setItem('ops-assistant-import-v1', JSON.stringify({ draft, stops, vehicleId, orderNumber, fileName, pendingDrafts, editing, createVehicle, newVehicleNumber, newLicensePlate })) } catch { /* Storage may be unavailable. */ }
-  }, [importOnly, draft, stops, vehicleId, orderNumber, fileName, pendingDrafts, editing, createVehicle, newVehicleNumber, newLicensePlate])
+    try { sessionStorage.setItem('ops-assistant-import-v1', JSON.stringify({ draft, stops, vehicleId, orderNumber, fileName, pendingDrafts, editing, createVehicle, newVehicleNumber, newLicensePlate, importAttemptId })) } catch { /* Storage may be unavailable. */ }
+  }, [importOnly, draft, stops, vehicleId, orderNumber, fileName, pendingDrafts, editing, createVehicle, newVehicleNumber, newLicensePlate, importAttemptId])
 
   useEffect(() => {
     routeRequest.current += 1
@@ -70,6 +70,32 @@ export function QuickOrderPanel({
   }, [selectedVehicleId, selectedVehicleNumber])
 
   useEffect(() => () => { routeRequest.current += 1 }, [])
+
+  useEffect(() => {
+    if (!draft || !stops.length) return
+    const requestId = ++addressRequest.current
+    const snapshot = stops
+    setBusy(true)
+    void (async () => {
+      const next: DraftStop[] = []
+      const failures: string[] = []
+      for (const [index, stop] of snapshot.entries()) {
+        if (!stop.address.trim()) { next.push({ ...stop, resolution: null }); continue }
+        try {
+          next.push({ ...stop, resolution: await api.resolveAddress({ address: stop.address.trim(), city: stop.city.trim() || null }) })
+        } catch (cause) {
+          next.push({ ...stop, resolution: null })
+          failures.push(`Точка ${index + 1}: ${cause instanceof Error ? cause.message : 'адрес не найден'}`)
+        }
+      }
+      if (requestId !== addressRequest.current) return
+      setStops(next)
+      if (failures.length) setError(failures.join(' · '))
+    })().finally(() => { if (requestId === addressRequest.current) setBusy(false) })
+    return () => { addressRequest.current += 1 }
+    // A new parsed draft starts one address-resolution pass; edits are resolved on confirmation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft])
 
   useEffect(() => {
     function preventFileNavigation(event: DragEvent | globalThis.DragEvent) {
@@ -108,6 +134,7 @@ export function QuickOrderPanel({
       setPendingDrafts((current) => [...current, ...result.drafts.slice(1).map((item) => ({ draft: item, fileName: file.name }))])
       const next = result.drafts[0]
       const match = vehicleMatch(next.vehiclePlate || next.vehicleNumber, vehicles)
+      setImportAttemptId(createImportAttemptId())
       setDraft(next); setOrderNumber(next.orderNumber ?? ''); setVehicleId(match.id ?? '')
       setCreateVehicle(false)
       setNewVehicleNumber(next.vehicleNumber && !looksLikePlate(next.vehicleNumber) ? next.vehicleNumber : '')
@@ -120,7 +147,7 @@ export function QuickOrderPanel({
   }
 
   function nextFile() {
-    setDraft(null); setEditing(false)
+    setDraft(null); setEditing(false); setImportAttemptId(createImportAttemptId())
     const queued = pendingDrafts[0]
     if (queued) {
       setPendingDrafts((current) => current.slice(1)); setDraft(queued.draft); setFileName(queued.fileName); setOrderNumber(queued.draft.orderNumber ?? ''); setVehicleId(vehicleMatch(queued.draft.vehiclePlate || queued.draft.vehicleNumber, vehicles).id ?? ''); setStops(queued.draft.stops.slice().sort((a, b) => a.sequence - b.sequence).map(toDraftStop)); setCreateVehicle(false); setNewVehicleNumber(queued.draft.vehicleNumber ?? ''); setNewLicensePlate(queued.draft.vehiclePlate ?? ''); return
@@ -133,12 +160,19 @@ export function QuickOrderPanel({
   async function resolveStops(input: Array<{ type: 'LOAD' | 'UNLOAD'; address: string; city?: string; company?: string; appointmentLocal: string; appointmentWindowStartLocal?: string | null; appointmentWindowEndLocal?: string | null; loadingMetersText?: string; referenceText?: string; instructionsText?: string }>): Promise<CreateTourStopInput[]> {
     const resolved: CreateTourStopInput[] = []
     for (const [index, stop] of input.entries()) {
-      const place = await api.geocode([stop.address.trim(), stop.city?.trim()].filter(Boolean).join(', '))
+      const cached = 'resolution' in stop ? (stop as DraftStop).resolution : undefined
+      const place = cached?.sourceAddress === stop.address.trim()
+        ? cached
+        : await api.resolveAddress({ address: stop.address.trim(), city: stop.city?.trim() || null })
       resolved.push({
         sequence: index + 1,
         type: stop.type,
         company: stop.company?.trim() || undefined,
         address: stop.address.trim(),
+        sourceAddress: stop.address.trim(),
+        resolvedAddress: place.resolvedAddress,
+        geocodePrecision: place.precision,
+        geocodeProvider: place.provider || null,
         city: stop.city?.trim() || place.city || undefined,
         latitude: place.latitude,
         longitude: place.longitude,
@@ -163,13 +197,13 @@ export function QuickOrderPanel({
     try {
       const resolved = await resolveStops(stops)
       const metadata = { trailerPlate: draft?.trailerPlate || undefined, tourRemarks: draft?.tourRemarks || undefined }
-      if (onImportDraft && !createVehicle) {
-        await onImportDraft({ vehicleId, orderNumber: orderNumber.trim(), stops: resolved, ...metadata }); nextFile(); return
-      }
       const createdVehicleId = createVehicle
         ? (await api.createTourWithVehicle({ vehicle: { vehicleNumber: newVehicleNumber.trim(), licensePlate: newLicensePlate.trim() || undefined }, tour: { orderNumber: orderNumber.trim(), stops: resolved, ...metadata } })).vehicle.id
         : vehicleId
-      if (!createVehicle) await api.createTour({ vehicleId, orderNumber: orderNumber.trim(), stops: resolved, ...metadata })
+      if (!createVehicle) {
+        const importFingerprint = await createImportFingerprint({ fileName, orderNumber: orderNumber.trim(), stops, trailerPlate: draft?.trailerPlate })
+        await api.confirmImportedTour({ vehicleId, orderNumber: orderNumber.trim(), stops: resolved, ...metadata, importAttemptId, importFingerprint })
+      }
       await onCreated(createdVehicleId)
       nextFile()
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Не удалось создать Auftrag.') }
@@ -226,7 +260,7 @@ export function QuickOrderPanel({
     }
   }
 
-  function updateStop(index: number, patch: Partial<DraftStop>) { setStops((current) => current.map((stop, stopIndex) => stopIndex === index ? { ...stop, ...patch } : stop)) }
+  function updateStop(index: number, patch: Partial<DraftStop>) { setStops((current) => current.map((stop, stopIndex) => stopIndex === index ? { ...stop, ...patch, ...(('address' in patch || 'city' in patch) ? { resolution: undefined } : {}) } : stop)) }
   function toggleTab(next: DockTab) { setTab((current) => current === next ? null : next); setError('') }
   function onFileInput(event: ChangeEvent<HTMLInputElement>) { const files = Array.from(event.target.files ?? []); event.target.value = ''; queueFiles(files) }
   function onDrop(event: DragEvent<HTMLDivElement>) { event.preventDefault(); event.stopPropagation(); setDragging(false); queueFiles(Array.from(event.dataTransfer.files)) }
@@ -255,7 +289,7 @@ export function QuickOrderPanel({
         {error && !draft ? <p className="quick-order-error"><AlertTriangle className="h-4 w-4" />{error}</p> : null}
       </div> : null}
     </aside>
-    {draft ? <div className="dispatcher-review"><section aria-label="Проверка Auftrag"><header><div className="min-w-0"><p>Проверка распознавания</p><h2>{fileName}</h2></div><button type="button" className="icon-button" onClick={nextFile} aria-label="Пропустить текущий заказ"><X className="h-4 w-4" /></button></header><div className="quick-order-modal-body"><div className="quick-order-meta"><label><span className="field-label">LKW из документа: {draft.vehiclePlate || draft.vehicleNumber || 'не указан'}</span><select className="field-input" value={vehicleId} onChange={(event) => { setVehicleId(event.target.value); setCreateVehicle(false) }} disabled={createVehicle}><option value="">Выберите машину</option>{vehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>LKW {vehicle.vehicleNumber}{vehicle.licensePlate ? ' · ' + vehicle.licensePlate : ''}</option>)}</select></label><label><span className="field-label">Номер Auftrag</span><input className="field-input" value={orderNumber} onChange={(event) => setOrderNumber(event.target.value)} readOnly={!editing} /></label></div>{matchState.status !== 'MATCHED' ? <p className="quick-order-warning"><AlertTriangle className="h-4 w-4" />{matchState.status === 'AMBIGUOUS' ? 'Номер найден у нескольких машин.' : 'Машина из Auftrag не найдена.'} Выберите LKW или создайте новую.</p> : null}<label className="quick-create-vehicle"><input type="checkbox" checked={createVehicle} onChange={(event) => { setCreateVehicle(event.target.checked); if (event.target.checked) setVehicleId('') }} />Создать новую машину из Auftrag</label>{createVehicle ? <div className="quick-order-meta mt-2"><label><span className="field-label">Внутренний номер LKW</span><input className="field-input" value={newVehicleNumber} onChange={(event) => setNewVehicleNumber(event.target.value)} /></label><label><span className="field-label">Госномер</span><input className="field-input" value={newLicensePlate} onChange={(event) => setNewLicensePlate(event.target.value)} /></label></div> : null}{draft.trailerPlate ? <p className="quick-order-source">Прицеп: <strong>{draft.trailerPlate}</strong></p> : null}{draft.tourRemarks ? <p className="quick-order-source">Tourbemerkung{draft.tourRemarksSourcePage ? ' · стр. ' + draft.tourRemarksSourcePage : ''}: <strong>{draft.tourRemarks}</strong></p> : null}<div className="quick-order-stop-list">{stops.map((stop, index) => <article key={index} className="quick-order-review-stop"><div className="quick-order-review-title"><span>{index + 1}</span><strong>{stop.type === 'LOAD' ? 'Загрузка' : 'Выгрузка'}</strong>{stop.sourcePage ? <small>Стр. {stop.sourcePage}</small> : null}</div>{editing ? <div className="grid gap-3 md:grid-cols-2"><label className="md:col-span-2"><span className="field-label">Полный адрес</span><input className="field-input" value={stop.address} onChange={(event) => updateStop(index, { address: event.target.value })} /></label><label><span className="field-label">Город</span><input className="field-input" value={stop.city} onChange={(event) => updateStop(index, { city: event.target.value })} /></label><label><span className="field-label">Термин</span><input className="field-input" type="datetime-local" value={stop.appointmentLocal} onChange={(event) => updateStop(index, { appointmentLocal: event.target.value })} /></label><label><span className="field-label">LM, погрузочные метры</span><input className="field-input" value={stop.loadingMetersText} onChange={(event) => updateStop(index, { loadingMetersText: event.target.value })} /></label><label><span className="field-label">Референсы</span><input className="field-input" value={stop.referenceText} onChange={(event) => updateStop(index, { referenceText: event.target.value })} /></label><label className="md:col-span-2"><span className="field-label">Примечания</span><textarea className="field-input min-h-20" value={stop.instructionsText} onChange={(event) => updateStop(index, { instructionsText: event.target.value })} /></label></div> : <><p className="font-bold text-slate-900">{stop.address || 'Адрес не распознан'}</p><p className="text-sm text-slate-500">{stop.city || 'Город не указан'} · {formatAppointment(stop.appointmentLocal)}</p>{stop.appointmentWindowStartLocal && stop.appointmentWindowEndLocal ? <p className="text-xs text-slate-600">Окно: {formatAppointment(stop.appointmentWindowStartLocal)} — {formatAppointment(stop.appointmentWindowEndLocal)}</p> : null}{stop.sourceExcerpt ? <p className="quick-order-source">Источник: {stop.sourceExcerpt}</p> : null}{cargoSummary(stop.loadingMeters, stop.referenceNumbers, stop.instructions)}</>}</article>)}</div>{draft.warnings.length ? <div className="quick-order-warning"><AlertTriangle className="h-4 w-4" /><span>{draft.warnings.map((warning) => warning.message).join(' · ')}</span></div> : null}{error ? <p className="quick-order-error"><AlertTriangle className="h-4 w-4" />{error}</p> : null}</div><footer><button type="button" className="secondary-button" onClick={() => setEditing((value) => !value)}><Pencil className="h-4 w-4" />{editing ? 'Завершить правки' : 'Редактировать'}</button><button type="button" className="primary-button" disabled={busy} onClick={() => void confirm()}>{busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}{busy ? 'Создаём…' : 'Подтвердить'}</button></footer></section></div> : null}
+    {draft ? <div className="dispatcher-review"><section aria-label="Проверка Auftrag"><header><div className="min-w-0"><p>Проверка распознавания</p><h2>{fileName}</h2></div><button type="button" className="icon-button" onClick={nextFile} aria-label="Пропустить текущий заказ"><X className="h-4 w-4" /></button></header><div className="quick-order-modal-body"><div className="quick-order-meta"><label><span className="field-label">LKW из документа: {draft.vehiclePlate || draft.vehicleNumber || 'не указан'}</span><select className="field-input" value={vehicleId} onChange={(event) => { setVehicleId(event.target.value); setCreateVehicle(false) }} disabled={createVehicle}><option value="">Выберите машину</option>{vehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>LKW {vehicle.vehicleNumber}{vehicle.licensePlate ? ' · ' + vehicle.licensePlate : ''}</option>)}</select></label><label><span className="field-label">Номер Auftrag</span><input className="field-input" value={orderNumber} onChange={(event) => setOrderNumber(event.target.value)} readOnly={!editing} /></label></div>{matchState.status !== 'MATCHED' ? <p className="quick-order-warning"><AlertTriangle className="h-4 w-4" />{matchState.status === 'AMBIGUOUS' ? 'Номер найден у нескольких машин.' : 'Машина из Auftrag не найдена.'} Выберите LKW или создайте новую.</p> : null}<label className="quick-create-vehicle"><input type="checkbox" checked={createVehicle} onChange={(event) => { setCreateVehicle(event.target.checked); if (event.target.checked) setVehicleId('') }} />Создать новую машину из Auftrag</label>{createVehicle ? <div className="quick-order-meta mt-2"><label><span className="field-label">Внутренний номер LKW</span><input className="field-input" value={newVehicleNumber} onChange={(event) => setNewVehicleNumber(event.target.value)} /></label><label><span className="field-label">Госномер</span><input className="field-input" value={newLicensePlate} onChange={(event) => setNewLicensePlate(event.target.value)} /></label></div> : null}{draft.trailerPlate ? <p className="quick-order-source">Прицеп: <strong>{draft.trailerPlate}</strong></p> : null}{draft.tourRemarks ? <p className="quick-order-source">Tourbemerkung{draft.tourRemarksSourcePage ? ' · стр. ' + draft.tourRemarksSourcePage : ''}: <strong>{draft.tourRemarks}</strong></p> : null}<div className="quick-order-stop-list">{stops.map((stop, index) => <article key={index} className="quick-order-review-stop"><div className="quick-order-review-title"><span>{index + 1}</span><strong>{stop.type === 'LOAD' ? 'Загрузка' : 'Выгрузка'}</strong>{stop.sourcePage ? <small>Стр. {stop.sourcePage}</small> : null}</div>{editing ? <div className="grid gap-3 md:grid-cols-2"><label className="md:col-span-2"><span className="field-label">Полный адрес</span><input className="field-input" value={stop.address} onChange={(event) => updateStop(index, { address: event.target.value })} /></label><label><span className="field-label">Город</span><input className="field-input" value={stop.city} onChange={(event) => updateStop(index, { city: event.target.value })} /></label><label><span className="field-label">Термин</span><input className="field-input" type="datetime-local" value={stop.appointmentLocal} onChange={(event) => updateStop(index, { appointmentLocal: event.target.value })} /></label><label><span className="field-label">LM, погрузочные метры</span><input className="field-input" value={stop.loadingMetersText} onChange={(event) => updateStop(index, { loadingMetersText: event.target.value })} /></label><label><span className="field-label">Референсы</span><input className="field-input" value={stop.referenceText} onChange={(event) => updateStop(index, { referenceText: event.target.value })} /></label><label className="md:col-span-2"><span className="field-label">Примечания</span><textarea className="field-input min-h-20" value={stop.instructionsText} onChange={(event) => updateStop(index, { instructionsText: event.target.value })} /></label></div> : <><p className="font-bold text-slate-900">{stop.address || 'Адрес не распознан'}</p><p className="text-sm text-slate-500">{stop.city || 'Город не указан'} · {formatAppointment(stop.appointmentLocal)}</p>{stop.resolution ? <p className={stop.resolution.precision === 'EXACT' && !stop.resolution.researchUsed ? 'quick-order-source' : 'quick-order-warning'}>{resolutionLabel(stop.resolution)}</p> : null}{stop.appointmentWindowStartLocal && stop.appointmentWindowEndLocal ? <p className="text-xs text-slate-600">Окно: {formatAppointment(stop.appointmentWindowStartLocal)} — {formatAppointment(stop.appointmentWindowEndLocal)}</p> : null}{stop.sourceExcerpt ? <p className="quick-order-source">Источник: {stop.sourceExcerpt}</p> : null}{cargoSummary(stop.loadingMeters, stop.referenceNumbers, stop.instructions)}</>}</article>)}</div>{draft.warnings.length ? <div className="quick-order-warning"><AlertTriangle className="h-4 w-4" /><span>{draft.warnings.map((warning) => warning.message).join(' · ')}</span></div> : null}{error ? <p className="quick-order-error"><AlertTriangle className="h-4 w-4" />{error}</p> : null}</div><footer><button type="button" className="secondary-button" onClick={() => setEditing((value) => !value)}><Pencil className="h-4 w-4" />{editing ? 'Завершить правки' : 'Редактировать'}</button><button type="button" className="primary-button" disabled={busy} onClick={() => void confirm()}>{busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}{busy ? 'Проверяем…' : 'Подтвердить'}</button></footer></section></div> : null}
   </>
 }
 
@@ -275,6 +309,36 @@ function classifyFile(file: File): 'PDF' | 'EXCEL' | 'IMAGE' | 'UNKNOWN' {
   if (name.endsWith('.xlsx')) return 'EXCEL'
   if (/[.](png|jpe?g|webp)$/.test(name)) return 'IMAGE'
   return 'UNKNOWN'
+}
+function createImportAttemptId() {
+  return globalThis.crypto?.randomUUID?.() ?? `import-${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
+async function createImportFingerprint(input: { fileName: string; orderNumber: string; trailerPlate?: string | null; stops: DraftStop[] }) {
+  const canonical = JSON.stringify({
+    fileName: input.fileName.trim().toLocaleLowerCase('de-DE'),
+    orderNumber: input.orderNumber.trim().toLocaleUpperCase('de-DE'),
+    trailerPlate: normalizeVehicle(input.trailerPlate ?? ''),
+    stops: input.stops.map((stop) => ({
+      type: stop.type,
+      address: stop.address.trim().toLocaleLowerCase('de-DE').replace(/\s+/g, ' '),
+      appointment: stop.appointmentLocal || null,
+      references: splitReferences(stop.referenceText).map((value) => value.toLocaleUpperCase('de-DE'))
+    }))
+  })
+  if (globalThis.crypto?.subtle) {
+    const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical))
+    return `auftrag-${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')}`
+  }
+  let hash = 2166136261
+  for (const character of canonical) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619)
+  return `auftrag-${(hash >>> 0).toString(16).padStart(8, '0')}`
+}
+function resolutionLabel(resolution: AddressResolution) {
+  if (resolution.researchUsed) return `ИИ нашёл вероятный полный адрес: ${resolution.resolvedAddress}. Проверьте перед подтверждением.`
+  if (resolution.precision === 'EXACT') return `Точный адрес подтверждён: ${resolution.resolvedAddress}`
+  if (resolution.precision === 'STREET') return `Найдена улица без подтверждённого номера дома: ${resolution.resolvedAddress}`
+  if (resolution.precision === 'POSTCODE_CITY') return `Найдены только индекс и город: ${resolution.resolvedAddress}. ETA предварительная.`
+  return `Используется центр города: ${resolution.resolvedAddress}. ETA предварительная.`
 }
 function cargoSummary(meters?: number | null, references?: string[] | null, instructions?: string | null) {
   if (!meters && !references?.length && !instructions) return null

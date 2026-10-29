@@ -16,6 +16,8 @@ import {
   type PdfImportPreview
 } from "./services/pdf-order-import.js";
 import { OsrmRoutingProvider, RoutingError, RoutingService } from "./services/routing.js";
+import { geocodePrecisions, resolveAddressWithFallback } from "./services/address-resolution.js";
+import { BudgetedAddressResearcher } from "./services/address-research.js";
 import { validateXlsxArchive } from "./services/xlsx-validation.js";
 import { enrichTour, snapshotVehicleClock, type TourAggregate, toDashboardTourSummary, toIsoObject, tourInclude, TourService } from "./services/tours.js";
 import { VehicleService } from "./services/vehicles.js";
@@ -39,6 +41,7 @@ import { createDispatcherDependencies } from './services/dispatcher-adapters.js'
 const trafficQuota = new PrismaTrafficQuotaStore(prisma);
 const trafficProvider = new TomTomRoutingProvider(trafficQuota, new OsrmRoutingProvider());
 const routingService = new RoutingService(trafficProvider);
+const addressResearcher = new BudgetedAddressResearcher(prisma);
 const tourService = new TourService(prisma, routingService);
 const etaService = new EtaService();
 const alertService = new AlertService(prisma);
@@ -68,6 +71,10 @@ const stopSchema = z.object({
   type: z.enum(["LOAD", "UNLOAD"]),
   company: z.string().optional(),
   address: z.string().trim().min(1),
+  sourceAddress: z.string().trim().max(2000).nullable().optional(),
+  resolvedAddress: z.string().trim().max(2000).nullable().optional(),
+  geocodePrecision: z.enum(geocodePrecisions).nullable().optional(),
+  geocodeProvider: z.string().trim().max(100).nullable().optional(),
   latitude: z.number().min(-90).max(90).optional(),
   longitude: z.number().min(-180).max(180).optional(),
   city: z.string().trim().max(200).nullable().optional(),
@@ -92,6 +99,11 @@ const createTourSchema = z.object({
   trailerPlate: z.string().trim().max(100).nullable().optional(),
   tourRemarks: z.string().trim().max(4000).nullable().optional(),
   stops: z.array(stopSchema).min(2)
+});
+
+const confirmImportedTourSchema = createTourSchema.extend({
+  importAttemptId: z.string().trim().min(8).max(200),
+  importFingerprint: z.string().trim().min(8).max(200)
 });
 
 const patchTourSchema = z.union([
@@ -566,6 +578,15 @@ export async function buildApp(options: BuildAppOptions = {}) {
     return { address: result.label, ...result };
   });
 
+  app.post("/geocode/resolve", async (request) => {
+    const input = z.object({
+      address: z.string().trim().min(1).max(2000),
+      city: z.string().trim().max(300).nullable().optional()
+    }).parse(request.body);
+    const result = await resolveAddressWithFallback(routingService, input, addressResearcher);
+    return { address: result.resolvedAddress, ...result };
+  });
+
   app.get("/tours", async (request) => {
     const query = z.object({ vehicleId: z.string().optional(), status: z.string().optional() }).parse(request.query);
     const tours = await prisma.tour.findMany({
@@ -583,6 +604,16 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const input = createTourSchema.parse(request.body);
     const tour = await tourService.createTour(input);
     return reply.status(201).send(enrichTour(tour));
+  });
+
+  app.post("/imports/tours/confirm", async (request, reply) => {
+    const { importAttemptId, importFingerprint, ...input } = confirmImportedTourSchema.parse(request.body);
+    const result = await tourService.createImportedTour(input, { importAttemptId, importFingerprint });
+    return reply.status(result.created ? 201 : 200).send({
+      tour: enrichTour(result.tour),
+      created: result.created,
+      reused: !result.created
+    });
   });
 
   app.post("/tours/with-new-vehicle", async (request, reply) => {

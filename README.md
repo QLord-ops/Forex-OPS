@@ -68,10 +68,10 @@ curl -X POST http://localhost:3001/vehicles \
 
 1. Navigation **Neuer Auftrag** öffnen.
 2. Einen PDF-Auftrag bis 20 MB, eine Excel-Datei `.xlsx` bis 5 MB oder einen Screenshot als PNG/JPG/WebP bis 10 MB auswählen oder in die Dropzone ziehen. Der Agent extrahiert Auftragsnummer, einen eventuell angegebenen LKW, Lade-/Entladestellen und vorhandene Termine.
-3. Die Vorschau kontrollieren und den konkreten LKW auswählen. Ein im Dokument erkannter LKW wird nur vorgeschlagen, nie automatisch gespeichert.
-4. **Für LKW übernehmen und prüfen** wählen. Erst jetzt werden die Daten in das Formular übertragen und die Adressen nacheinander über Nominatim geokodiert.
-5. Fehlende oder unsichere Daten korrigieren. Termine dürfen leer bleiben; zusätzliche Stopps können über **Laden** oder **Entladen** ergänzt werden.
-6. **Auftrag speichern** wählen. Erst dieser zweite ausdrückliche Schritt legt Tour, Stopps und Straßenabschnitte an. Ist bereits eine Tour aktiv, wird der neue Auftrag als `QUEUED` angehängt.
+3. Die Vorschau kontrollieren und den konkreten LKW auswählen. Ein im Dokument erkannter LKW wird vorgeschlagen, bleibt aber vor der Bestätigung änderbar.
+4. Die Adressprüfung versucht nacheinander vollständige Adresse, Straße ohne Hausnummer, Postleitzahl mit Ort und zuletzt den Ort. Ein ungenaues Ergebnis wird sichtbar als vorläufig markiert.
+5. Fehlende oder unsichere Daten korrigieren. Termine dürfen leer bleiben; LM, Referenzen und Hinweise bleiben im jeweiligen Stopp erhalten.
+6. **Bestätigen** wählen. Dieser eine ausdrückliche Schritt legt den Auftrag direkt am ausgewählten LKW an. Eine Wiederholung derselben Anfrage liefert den bereits erzeugten Auftrag zurück und erzeugt kein Duplikat. Ist bereits eine Tour aktiv, wird der neue Auftrag als `QUEUED` angehängt.
 
 Verarbeitet werden PDF-Aufträge, Excel-Dateien `.xlsx` und Screenshots von Aufträgen oder Excel-Tabellen. Die Originaldatei wird weder auf der Festplatte noch in der Datenbank gespeichert. Excel wird zuerst lokal gelesen; unbekannte Layouts können optional mit OpenAI ausgewertet werden. PDF- und Bildimporte werden mit `store: false`, hoher Detailstufe und Strict Structured Output an die OpenAI Responses API gesendet. Dokumentinhalt gilt als nicht vertrauenswürdig und kann die Extraktionsanweisungen nicht überschreiben. Das Ergebnis ist immer nur eine Vorschau und erzeugt niemals automatisch eine Tour.
 
@@ -80,9 +80,12 @@ Für die spätere Aktivierung in der bestehenden `apps/api/.env` ergänzen (ande
 ```dotenv
 OPENAI_API_KEY="Ihr-Schlüssel"
 OPENAI_IMPORT_MODEL="gpt-5.4-mini"
+OPENAI_ADDRESS_RESEARCH_ENABLED="true"
+OPENAI_ADDRESS_RESEARCH_MODEL="gpt-5.4-mini"
+OPENAI_ADDRESS_RESEARCH_MONTHLY_LIMIT="100"
 ```
 
-Danach das Backend neu starten. Der Schlüssel bleibt ausschließlich auf dem Server; niemals in `VITE_*` eintragen. Die OpenAI-Nutzung des PDF- und Screenshot-Imports ist kostenpflichtig und ohne Schlüssel nicht verfügbar, unabhängig von den kostenlosen Karten. Für den Produktionsstart sollte ein repräsentativer echter Auftrag getestet werden. Fehlende Zeiten, Auftragsnummern und LKW müssen vor dem Speichern ergänzt werden. Zeitangaben ohne Zone werden als lokale Zeit des Browsers behandelt. Mehrere erkannte Aufträge können einzeln ausgewählt werden; es gibt keinen automatischen Massenimport.
+Danach das Backend neu starten. Der Schlüssel bleibt ausschließlich auf dem Server; niemals in `VITE_*` eintragen. Die OpenAI-Nutzung des PDF- und Screenshot-Imports sowie die optionale Web-Adresssuche sind kostenpflichtig und ohne Schlüssel nicht verfügbar, unabhängig von den kostenlosen Karten. Die Adresssuche wird erst verwendet, wenn die kostenlose Prüfung keine Straße oder genaue Adresse liefert, und ist standardmäßig auf 100 Aufrufe pro Monat begrenzt. `OPENAI_ADDRESS_RESEARCH_ENABLED="false"` schaltet sie vollständig ab. Für den Produktionsstart sollte ein repräsentativer echter Auftrag getestet werden. Fehlende Zeiten, Auftragsnummern und LKW müssen vor dem Speichern ergänzt werden. Zeitangaben ohne Zone werden als lokale Zeit des Browsers behandelt. Mehrere erkannte Aufträge können einzeln ausgewählt werden; es gibt keinen automatischen Massenimport.
 
 Beim Screenshot-Import extrahiert das KI-Schema den Ort zusätzlich zur vollständigen Adresse. Fehlt der Ort oder ist er unsicher, übernimmt die Adressprüfung anschließend den strukturierten Ort aus Nominatim. Vor dem Speichern bleibt der erkannte Ort sichtbar und korrigierbar.
 
