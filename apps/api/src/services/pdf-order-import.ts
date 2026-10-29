@@ -4,7 +4,7 @@ import { isValidLocalDateTime } from "./excel-order-import.js";
 const DEFAULT_TIMEOUT_MS = 45_000;
 const MAX_OPENAI_OUTPUT_CHARS = 100_000;
 const TOUR_REMARKS_ROUTE_RULE =
-  "Interpret Tourbemerkung as German route syntax: every location before the first word 'für' is a LOAD in written order, and every location after 'für' is an UNLOAD in written order. A '+' separates additional stops of the same type on that side. Example: 'Hydro Crimmitschau + Voestalpine Schmölln für VW Braunschweig' means exactly 1) LOAD Hydro Crimmitschau, 2) LOAD Voestalpine Schmölln, 3) UNLOAD VW Braunschweig. Tourbemerkung determines stop type and order; table rows and address blocks only provide the matching full postal address and stop details.";
+  "Interpret Tourbemerkung as German route syntax: every location before the first word 'für' is a LOAD in written order, and every location after 'für' is an UNLOAD in written order. A '+' separates additional stops of the same type on that side. Example: 'Hydro Crimmitschau + Voestalpine Schmölln für VW Braunschweig' means exactly 1) LOAD Hydro Crimmitschau, 2) LOAD Voestalpine Schmölln, 3) UNLOAD VW Braunschweig. Return only locations explicitly named in Tourbemerkung. Never add a city merely because it appears in a table, direct-delivery note or address block. If the same loading or unloading location appears in several rows or pages, return exactly one stop for it and combine its supported references and notes. Tourbemerkung determines stop type and order; table rows and address blocks only provide the matching full postal address and stop details.";
 export const supportedImageMimeTypes = ["image/png", "image/jpeg", "image/webp"] as const;
 
 const stopSchema = z.object({
@@ -241,13 +241,14 @@ async function importVisualOrderPreview(input: {
       source: "OPENAI",
       detectedLayout: layout,
       drafts: parsed.drafts.map((draft) => {
-        const routeTypes = parseTourRemarksRouteTypes(draft.tourRemarks);
-        const routeMatchesStopCount = routeTypes !== null && routeTypes.length === draft.stops.length;
         const orderedStops = [...draft.stops].sort((left, right) => left.sequence - right.sequence);
-        const stops = orderedStops.map((stop, index) => ({
+        const route = parseTourRemarksRoute(draft.tourRemarks);
+        const reconciled = route
+          ? reconcileStopsWithTourRemarks(route, orderedStops, draft.tourRemarksSourcePage)
+          : { stops: orderedStops, warnings: [] as PdfImportWarning[] };
+        const stops = reconciled.stops.map((stop, index) => ({
           ...stop,
           sequence: index + 1,
-          type: routeMatchesStopCount ? routeTypes[index] : stop.type,
           city: cleanCity(stop.city) ?? inferCityFromAddress(stop.address)
         }));
         return {
@@ -261,11 +262,8 @@ async function importVisualOrderPreview(input: {
           warnings: [
             ...draft.warnings.map(compactWarning),
             ...(layout === "PDF" && !draft.tourRemarks ? [{ code: "TOUR_REMARKS_MISSING", message: "Tourbemerkung не найдено; порядок точек определён по таблице." }] : []),
-            ...(routeTypes && !routeMatchesStopCount ? [{
-              code: "TOUR_REMARKS_ROUTE_MISMATCH",
-              message: `Tourbemerkung задаёт ${routeTypes.length} точки, но в Auftrag распознано ${draft.stops.length}; маршрут нужно проверить.`
-            }] : []),
-            ...draft.stops.flatMap((stop) => isCityOnlyAddress(stop.address, stop.city)
+            ...reconciled.warnings,
+            ...stops.flatMap((stop) => isCityOnlyAddress(stop.address, stop.city)
               ? [{ code: "ADDRESS_INCOMPLETE", message: `Для точки ${stop.sequence} найден только город; улицу нужно проверить вручную.`, ...(stop.sourcePage ? { page: stop.sourcePage } : {}) }]
               : [])
           ]
@@ -280,14 +278,27 @@ async function importVisualOrderPreview(input: {
   }
 }
 
-function parseTourRemarksRouteTypes(tourRemarks: string | null): Array<"LOAD" | "UNLOAD"> | null {
+type ParsedStop = z.infer<typeof stopSchema>;
+type TourRemarkStop = { type: "LOAD" | "UNLOAD"; label: string; cityHint: string };
+
+function parseTourRemarksRoute(tourRemarks: string | null): TourRemarkStop[] | null {
   if (!tourRemarks) return null;
   const parts = tourRemarks.split(/\s+für\s+/i);
   if (parts.length !== 2) return null;
   const loads = splitTourRemarkStops(parts[0]);
   const unloads = splitTourRemarkStops(parts[1]);
   if (!loads.length || !unloads.length) return null;
-  return [...loads.map(() => "LOAD" as const), ...unloads.map(() => "UNLOAD" as const)];
+  const route = [
+    ...loads.map((label) => ({ type: "LOAD" as const, label, cityHint: lastRouteToken(label) })),
+    ...unloads.map((label) => ({ type: "UNLOAD" as const, label, cityHint: lastRouteToken(label) }))
+  ];
+  const seen = new Set<string>();
+  return route.filter((stop) => {
+    const key = `${stop.type}:${normalizeRouteText(stop.cityHint || stop.label)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function splitTourRemarkStops(value: string): string[] {
@@ -295,6 +306,99 @@ function splitTourRemarkStops(value: string): string[] {
     .split(/\s*\+\s*/)
     .map((part) => part.replace(/\s*\/\/.*$/, "").trim())
     .filter(Boolean);
+}
+
+function reconcileStopsWithTourRemarks(
+  route: TourRemarkStop[],
+  candidates: ParsedStop[],
+  tourRemarksSourcePage: number | null
+): { stops: ParsedStop[]; warnings: PdfImportWarning[] } {
+  const used = new Set<number>();
+  const warnings: PdfImportWarning[] = [];
+  const stops = route.map((routeStop, sequence) => {
+    const ranked = candidates
+      .map((candidate, index) => ({ candidate, index, score: tourRemarkMatchScore(routeStop, candidate) }))
+      .filter((match) => !used.has(match.index) && match.score > 0)
+      .sort((left, right) => right.score - left.score || right.candidate.confidence - left.candidate.confidence);
+    const selected = ranked[0];
+    if (!selected || selected.score < 40) {
+      warnings.push({
+        code: "TOUR_REMARKS_STOP_NOT_FOUND",
+        message: `Для точки «${routeStop.label}» из Tourbemerkung не найден надёжный адрес; проверьте его вручную.`,
+        ...(tourRemarksSourcePage ? { page: tourRemarksSourcePage } : {})
+      });
+      return placeholderStop(routeStop, sequence + 1, tourRemarksSourcePage);
+    }
+    used.add(selected.index);
+    const duplicates = ranked.filter((match) =>
+      match.index !== selected.index && sameTourRemarkCity(routeStop, match.candidate));
+    duplicates.forEach((match) => used.add(match.index));
+    return mergeDuplicateStopDetails({ ...selected.candidate, type: routeStop.type }, duplicates.map((match) => match.candidate));
+  });
+  return { stops, warnings };
+}
+
+function tourRemarkMatchScore(routeStop: TourRemarkStop, stop: ParsedStop): number {
+  const city = normalizeRouteText(cleanCity(stop.city) ?? inferCityFromAddress(stop.address) ?? "");
+  const cityHint = normalizeRouteText(routeStop.cityHint);
+  const primary = normalizeRouteText([stop.company, stop.address, stop.city, stop.sourceExcerpt].filter(Boolean).join(" "));
+  const secondary = normalizeRouteText(stop.instructions ?? "");
+  const tokens = normalizeRouteText(routeStop.label).split(" ").filter((token) => token.length >= 2);
+  let score = city && cityHint && city === cityHint ? 100 : 0;
+  if (cityHint && primary.includes(cityHint)) score += 45;
+  for (const token of tokens) {
+    if (primary.includes(token)) score += 12;
+    else if (secondary.includes(token)) score += 1;
+  }
+  return score;
+}
+
+function sameTourRemarkCity(routeStop: TourRemarkStop, stop: ParsedStop): boolean {
+  const city = normalizeRouteText(cleanCity(stop.city) ?? inferCityFromAddress(stop.address) ?? "");
+  return Boolean(city && city === normalizeRouteText(routeStop.cityHint));
+}
+
+function mergeDuplicateStopDetails(primary: ParsedStop, duplicates: ParsedStop[]): ParsedStop {
+  const references = [...new Set([primary, ...duplicates].flatMap((stop) => stop.referenceNumbers))];
+  const notes = [...new Set([primary, ...duplicates].map((stop) => stop.instructions?.trim()).filter((value): value is string => Boolean(value)))];
+  return {
+    ...primary,
+    referenceNumbers: references,
+    instructions: notes.length ? notes.join("\n") : null
+  };
+}
+
+function placeholderStop(routeStop: TourRemarkStop, sequence: number, sourcePage: number | null): ParsedStop {
+  return {
+    sequence,
+    type: routeStop.type,
+    company: routeStop.label,
+    address: routeStop.cityHint || routeStop.label,
+    city: routeStop.cityHint || null,
+    appointmentLocal: null,
+    appointmentWindowStartLocal: null,
+    appointmentWindowEndLocal: null,
+    loadingMeters: null,
+    referenceNumbers: [],
+    instructions: null,
+    sourcePage,
+    sourceExcerpt: routeStop.label,
+    confidence: 0.4
+  };
+}
+
+function lastRouteToken(label: string): string {
+  return label.trim().split(/\s+/).at(-1)?.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}-]+$/gu, "") ?? "";
+}
+
+function normalizeRouteText(value: string): string {
+  return value
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .replace(/ß/g, "ss")
+    .toLocaleLowerCase("de-DE")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
 }
 
 function responseJsonSchema(): Record<string, unknown> {

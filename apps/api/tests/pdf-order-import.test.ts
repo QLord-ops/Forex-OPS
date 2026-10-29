@@ -13,7 +13,7 @@ describe("PDF Auftrag import", () => {
                 vehicleNumber: "LKW 936",
                 vehiclePlate: "B-CY7490",
                 trailerPlate: "Z-S3153",
-                tourRemarks: "Freising für Barsinghausen // Fixtermin 13:30 Uhr",
+                tourRemarks: "Werk Berlin für Hafen Hamburg // Fixtermin 13:30 Uhr",
                 tourRemarksSourcePage: 1,
                 stops: [
                   {
@@ -158,22 +158,29 @@ describe("PDF Auftrag import", () => {
     ]));
   });
 
-  it("warns when plus and für describe more stops than were extracted", async () => {
+  it("keeps only Tourbemerkung cities and collapses repeated rows into one stop", async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ output_text: JSON.stringify({
       drafts: [{
         orderNumber: "20564735", vehicleNumber: null, vehiclePlate: "GÖ-FX321", trailerPlate: null,
         tourRemarks: "Hydro Crimmitschau + Voestalpine Schmölln für VW Braunschweig", tourRemarksSourcePage: 1,
         stops: [
-          { sequence: 1, type: "LOAD", company: "Hydro", address: "Gewerbering 26a, 08451 Crimmitschau", city: "Crimmitschau", appointmentLocal: null, sourcePage: 1, confidence: 0.9 },
-          { sequence: 2, type: "UNLOAD", company: "VW", address: "Gifhorner Straße 180, 38112 Braunschweig", city: "Braunschweig", appointmentLocal: null, sourcePage: 4, confidence: 0.9 }
+          { sequence: 1, type: "LOAD", company: "Hydro", address: "Gewerbering 26a, 08451 Crimmitschau", city: "Crimmitschau", appointmentLocal: null, referenceNumbers: ["H-1"], sourcePage: 1, confidence: 0.9 },
+          { sequence: 2, type: "UNLOAD", company: "Voestalpine", address: "Zum Wasserturm 79/2, 04626 Schmölln", city: "Schmölln", appointmentLocal: null, referenceNumbers: ["V-1"], sourcePage: 2, confidence: 0.8 },
+          { sequence: 3, type: "UNLOAD", company: "VW", address: "Gifhorner Straße 180, 38112 Braunschweig", city: "Braunschweig", appointmentLocal: null, referenceNumbers: ["B-1"], sourcePage: 4, confidence: 0.9 },
+          { sequence: 4, type: "UNLOAD", company: "VW duplicate", address: "Gifhorner Straße 180, 38112 Braunschweig", city: "Braunschweig", appointmentLocal: null, referenceNumbers: ["B-2"], sourcePage: 5, confidence: 0.7 },
+          { sequence: 5, type: "UNLOAD", company: "VW Logistikzentrum", address: "Harvesser Kamp 1, 38176 Wendeburg", city: "Wendeburg", appointmentLocal: null, referenceNumbers: ["W-1"], sourcePage: 6, confidence: 0.95 }
         ], warnings: []
       }], warnings: []
     }) }), { status: 200 })) as unknown as typeof fetch;
 
     const result = await importPdfPreview(Buffer.from("%PDF-1.7"), "auftrag.pdf", { apiKey: "test-key", fetchImpl });
-    expect(result.drafts[0].warnings).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: "TOUR_REMARKS_ROUTE_MISMATCH" })
-    ]));
+    expect(result.drafts[0].stops).toHaveLength(3);
+    expect(result.drafts[0].stops).toMatchObject([
+      { sequence: 1, type: "LOAD", city: "Crimmitschau" },
+      { sequence: 2, type: "LOAD", city: "Schmölln" },
+      { sequence: 3, type: "UNLOAD", city: "Braunschweig", referenceNumbers: ["B-1", "B-2"] }
+    ]);
+    expect(result.drafts[0].stops.some((stop) => stop.city === "Wendeburg")).toBe(false);
   });
 
   it("marks a city-only address and missing Tourbemerkung as requiring review", async () => {
