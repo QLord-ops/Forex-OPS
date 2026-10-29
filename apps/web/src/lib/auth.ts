@@ -1,7 +1,7 @@
 let csrfToken = ''
 export const authHeaders = (): Record<string, string> => csrfToken ? { 'X-CSRF-Token': csrfToken } : {}
 export const notifySessionExpired = () => window.dispatchEvent(new Event('ops:session-expired'))
-export interface DispatcherSession { authenticated: boolean; expiresAt?: string | null; csrfToken?: string }
+export interface DispatcherSession { authenticated: boolean; role?: 'admin' | 'dispatcher'; expiresAt?: string | null; csrfToken?: string }
 
 export class DispatcherAuthError extends Error {
   constructor(

@@ -31,7 +31,7 @@ import { WebfleetSyncService, WebfleetTelemetryService } from './services/webfle
 import { calculateRiskColor, calculateSimulatedDuration } from './services/simulation.js';
 import { forecastDrive } from './services/vehicle-clock.js';
 import { parseClockState } from './services/tours.js';
-import { registerDispatcherAuth, type DispatcherAuthOptions } from './services/dispatcher-auth.js';
+import { registerDispatcherAuth, requireDispatcherRoles, type DispatcherAuthOptions } from './services/dispatcher-auth.js';
 import { RouteScenarioService, routeScenarioInputSchema } from './services/route-scenario.js';
 import { registerRouteScenarioRoutes } from './routes/route-scenario.js';
 import { DispatcherAssistantService } from './services/dispatcher-assistant.js';
@@ -138,6 +138,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
   const pdfImport = options.pdfImport ?? importPdfPreview;
   const imageImport = options.imageImport ?? importImagePreview;
   const subscribers = new Set<import('node:http').ServerResponse>();
+  const subscriberSessions = new Map<string, number>();
+  const maxSseConnectionsPerSession = Math.max(1, Number.parseInt(process.env.SSE_MAX_CONNECTIONS_PER_SESSION ?? '3', 10) || 3);
   let notificationTimer: ReturnType<typeof setInterval> | undefined;
   let refreshingNotifications = false;
   let lastNotificationRefreshAt = 0;
@@ -193,6 +195,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     if (notificationTimer) clearInterval(notificationTimer);
     for (const client of subscribers) client.end();
     subscribers.clear();
+    subscriberSessions.clear();
   });
 
   app.get('/notifications', async () => {
@@ -205,6 +208,10 @@ export async function buildApp(options: BuildAppOptions = {}) {
     return { ok: true };
   });
   app.get('/events/stream', async (request, reply) => {
+    const sessionId = request.dispatcherSession?.sessionId;
+    if (!sessionId) return reply.code(401).send({ error: 'Войдите в диспетчерскую.' });
+    const activeConnections = subscriberSessions.get(sessionId) ?? 0;
+    if (activeConnections >= maxSseConnectionsPerSession) return reply.code(429).send({ error: 'Слишком много открытых подключений событий.' });
     reply.hijack();
     reply.raw.writeHead(200, {
       'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive',
@@ -213,7 +220,16 @@ export async function buildApp(options: BuildAppOptions = {}) {
     // On reconnect clients reload durable unread notifications rather than relying on transient event IDs.
     reply.raw.write('retry: 3000\nevent: operations\ndata: {}\n\n');
     subscribers.add(reply.raw);
-    request.raw.on('close', () => subscribers.delete(reply.raw));
+    subscriberSessions.set(sessionId, activeConnections + 1);
+    let closed = false;
+    request.raw.on('close', () => {
+      if (closed) return;
+      closed = true;
+      subscribers.delete(reply.raw);
+      const remaining = (subscriberSessions.get(sessionId) ?? 1) - 1;
+      if (remaining > 0) subscriberSessions.set(sessionId, remaining);
+      else subscriberSessions.delete(sessionId);
+    });
   });
 
   app.setErrorHandler((error, _request, reply) => {
@@ -702,7 +718,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   });
 
   app.get('/integrations/webfleet/status', async () => webfleetSync.status());
-  app.post('/integrations/webfleet/sync', async () => {
+  app.post('/integrations/webfleet/sync', { preHandler: requireDispatcherRoles('admin') }, async () => {
     await webfleetSync.refreshIfDue();
     return webfleetSync.status();
   });
