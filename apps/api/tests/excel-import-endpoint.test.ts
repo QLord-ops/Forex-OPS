@@ -157,6 +157,7 @@ describe("POST /imports/pdf/preview", () => {
     apps.push(app);
     const wrongExtension = buildMultipart("auftrag.txt", Buffer.from("%PDF-1.7"), "text/plain");
     const fakePdf = buildMultipart("auftrag.pdf", Buffer.from("not a pdf"), "application/pdf");
+    const prefixedPdf = buildMultipart("auftrag.pdf", Buffer.from("not-pdf-prefix%PDF-1.7"), "application/pdf");
 
     const wrongExtensionResponse = await app.inject({
       method: "POST",
@@ -170,9 +171,16 @@ describe("POST /imports/pdf/preview", () => {
       headers: { "content-type": `multipart/form-data; boundary=${fakePdf.boundary}` },
       payload: fakePdf.body
     });
+    const prefixedPdfResponse = await app.inject({
+      method: "POST",
+      url: "/imports/pdf/preview",
+      headers: { "content-type": `multipart/form-data; boundary=${prefixedPdf.boundary}` },
+      payload: prefixedPdf.body
+    });
 
     expect(wrongExtensionResponse.statusCode).toBe(415);
     expect(fakePdfResponse.statusCode).toBe(415);
+    expect(prefixedPdfResponse.statusCode).toBe(415);
     expect(pdfImport).not.toHaveBeenCalled();
   });
 });

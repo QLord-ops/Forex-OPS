@@ -5,6 +5,7 @@ import { AssistantError, dispatcherMessageSchema, type DispatcherAssistantServic
 /** Authentication is supplied by the application's global session hook. */
 export function registerDispatcherAssistantRoutes(app: FastifyInstance, service: DispatcherAssistantService,
   sessionKey: (request: FastifyRequest) => string = assistantSessionKey) {
+  const idParams = z.object({ id: z.string().trim().min(1).max(200) }).strict();
   const run = async <T>(work: () => Promise<T>) => {
     try { return await work(); }
     catch (error) {
@@ -19,10 +20,10 @@ export function registerDispatcherAssistantRoutes(app: FastifyInstance, service:
     const body = z.object({ title: z.string().trim().max(120).optional() }).strict().parse(request.body ?? {});
     return service.createConversation(body.title);
   }));
-  app.get<{ Params: { id: string } }>('/assistant/conversations/:id/messages', request => run(() => service.getMessages(request.params.id)));
-  app.post<{ Params: { id: string } }>('/assistant/conversations/:id/messages', { bodyLimit: 150000 }, request => run(() => service.message(request.params.id, dispatcherMessageSchema.parse(request.body), sessionKey(request))));
-  app.post<{ Params: { id: string } }>('/assistant/proposals/:id/confirm', request => run(() => service.confirm(request.params.id)));
-  app.post<{ Params: { id: string } }>('/assistant/proposals/:id/cancel', request => run(() => service.cancel(request.params.id)));
+  app.get('/assistant/conversations/:id/messages', request => run(() => service.getMessages(idParams.parse(request.params).id)));
+  app.post('/assistant/conversations/:id/messages', { bodyLimit: 150000 }, request => run(() => service.message(idParams.parse(request.params).id, dispatcherMessageSchema.parse(request.body), sessionKey(request))));
+  app.post('/assistant/proposals/:id/confirm', request => run(() => service.confirm(idParams.parse(request.params).id)));
+  app.post('/assistant/proposals/:id/cancel', request => run(() => service.cancel(idParams.parse(request.params).id)));
 }
 
 export function assistantSessionKey(request: FastifyRequest): string {

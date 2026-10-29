@@ -1,5 +1,6 @@
 import { createHmac, randomBytes, scryptSync, timingSafeEqual, createHash } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { z } from 'zod';
 
 const COOKIE = 'ops_dispatcher';
 const SESSION_MS = 12 * 60 * 60 * 1000;
@@ -104,7 +105,8 @@ export function registerDispatcherAuth(app: FastifyInstance, prisma: QuotaStore,
       const quota = await prisma.apiQuota.upsert({ where: { id }, create: { id, used: 1 }, update: { used: { increment: 1 } } });
       if (quota.used > limit) return reply.header('Retry-After', String(Math.ceil((900_000 - now() % 900_000) / 1000))).code(429).send({ error: 'Слишком много попыток. Попробуйте позднее.' });
     }
-    const password = (request.body as { password?: unknown } | null)?.password;
+    const parsed = z.object({ password: z.string().min(1).max(1024) }).strict().safeParse(request.body);
+    const password = parsed.success ? parsed.data.password : null;
     const verify = (hash: string) => {
       const [, salt, expected] = hash.split(':');
       return Boolean(salt && expected && typeof password === 'string' && password.length <= 1024 && equal(scryptSync(password, salt, 64).toString('hex'), expected));

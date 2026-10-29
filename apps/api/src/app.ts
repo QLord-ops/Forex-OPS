@@ -372,7 +372,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
 
     activeOrderImports += 1;
     try {
-      const file = await request.file();
+      const file = await request.file({ limits: { fileSize: 5 * 1024 * 1024 } });
       if (!file) return reply.status(400).send({ error: "Excel-Datei fehlt." });
 
       const filename = file.filename.trim();
@@ -390,21 +390,21 @@ export async function buildApp(options: BuildAppOptions = {}) {
       if (buffer.length > 5 * 1024 * 1024) {
         return reply.status(413).send({ error: "Размер файла Excel не должен превышать 5 МБ." });
       }
-      if (buffer.length < 4 || buffer[0] !== 0x50 || buffer[1] !== 0x4b) {
+      if (buffer.length < 4 || buffer[0] !== 0x50 || buffer[1] !== 0x4b || buffer[2] !== 0x03 || buffer[3] !== 0x04) {
         return reply.status(415).send({ error: "Файл не является корректной книгой .xlsx." });
       }
 
       try {
         validateXlsxArchive(buffer);
       } catch (error) {
-        request.log.warn({ err: error, filename }, "Отклонена небезопасная или повреждённая книга Excel");
+        request.log.warn({ errorType: error instanceof Error ? error.name : 'unknown' }, "Отклонена небезопасная или повреждённая книга Excel");
         return reply.status(422).send({ error: "Не удалось безопасно прочитать книгу Excel." });
       }
       let result;
       try {
         result = await importExcelPreview(buffer, filename);
       } catch (error) {
-        request.log.error({ err: error, filename }, "Не удалось разобрать книгу Excel");
+        request.log.error({ errorType: error instanceof Error ? error.name : 'unknown' }, "Не удалось разобрать книгу Excel");
         return reply.status(422).send({ error: "Не удалось безопасно прочитать книгу Excel." });
       }
       return {
@@ -442,7 +442,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
 
     activeOrderImports += 1;
     try {
-      const file = await request.file();
+      const file = await request.file({ limits: { fileSize: 20 * 1024 * 1024 } });
       if (!file) return reply.status(400).send({ error: "PDF-заказ не приложен." });
 
       const filename = file.filename.trim();
@@ -485,7 +485,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
 
     activeOrderImports += 1;
     try {
-      const file = await request.file();
+      const file = await request.file({ limits: { fileSize: 10 * 1024 * 1024 } });
       if (!file) return reply.status(400).send({ error: "Скриншот не приложен." });
 
       const filename = file.filename.trim();
@@ -960,8 +960,7 @@ function hasStatusCode(error: unknown): error is { statusCode: number } {
 }
 
 function hasPdfHeader(buffer: Buffer): boolean {
-  const headerWindow = buffer.subarray(0, Math.min(buffer.length, 1024)).toString("latin1");
-  return headerWindow.includes("%PDF-");
+  return buffer.length >= 5 && buffer.subarray(0, 5).toString("ascii") === "%PDF-";
 }
 
 function hasImageHeader(buffer: Buffer, mimeType: string): boolean {
