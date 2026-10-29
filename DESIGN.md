@@ -35,6 +35,7 @@
 
 ## Visual language
 - Color: Light control-center workspace with compact navy navigation, white work surfaces, blue selection/accent, and semantic red/orange/yellow/blue/green/grey attention states. Color always has a text label and icon/context.
+- Authentication exception: The secure OPS FOREX entry surface uses a cinematic static fleet photograph with a deep-navy panel, electric-blue primary action and restrained light motion. It is isolated from the light operational workspace and never changes dispatcher-page styling.
 - Typography: System sans-serif with tabular numerals for times, distances, and vehicle numbers.
 - Spacing/layout rhythm: Compact 4/8 px rhythm; no global desktop header; 80 px desktop navigation rail below 1536 px; 340–380 px vehicle rail; fullscreen map workspace; 44–52 px table rows.
 - Shape/radius/elevation: 6–10 px radii, restrained borders, almost no shadows.
@@ -56,6 +57,7 @@
 
 ## Responsive behavior
 - Supported breakpoints/devices: Primary 1280–1728 px MacBook desktop; usable down to 1024 px; narrow screens scroll dense tables horizontally.
+- Authentication: Desktop uses an approximately 65/35 image-to-form split. On mobile the same static fleet photograph becomes a full-viewport background beneath a high-contrast translucent form surface.
 - Layout adaptations: From 1100 px the dashboard uses vehicle rail + map; below it the vehicle cards become a horizontal rail above the map. Side navigation becomes a compact top strip below 1024 px.
 - Touch/hover differences: Desktop map HUD expands on hover and focus; touch uses an explicit tap toggle. Card actions use a fixed action rail and portal popover so cards never resize. No action is hover-only; primary buttons maintain at least 40 px height.
 
