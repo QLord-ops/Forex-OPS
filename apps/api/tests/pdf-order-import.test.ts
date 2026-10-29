@@ -111,6 +111,8 @@ describe("PDF Auftrag import", () => {
     expect(instruction).toContain("SECOND find those same locations");
     expect(instruction).toContain("every location before the first word 'für' is a LOAD");
     expect(instruction).toContain("Hydro Crimmitschau + Voestalpine Schmölln für VW Braunschweig");
+    expect(instruction).toContain("vorladen/Lager");
+    expect(instruction).toContain("departmentAddress");
     expect(instruction).toContain("NOT adjacent RM or LMJ");
     expect(instruction).toContain("above Abteilung");
     expect(body.text.format).toMatchObject({
@@ -118,7 +120,7 @@ describe("PDF Auftrag import", () => {
         properties: {
           drafts: {
             items: {
-              required: expect.arrayContaining(["vehiclePlate", "trailerPlate", "tourRemarks", "tourRemarksSourcePage"]),
+              required: expect.arrayContaining(["vehiclePlate", "trailerPlate", "departmentAddress", "departmentCity", "tourRemarks", "tourRemarksSourcePage"]),
               properties: {
                 stops: {
                   items: {
@@ -181,6 +183,41 @@ describe("PDF Auftrag import", () => {
       { sequence: 3, type: "UNLOAD", city: "Braunschweig", referenceNumbers: ["B-1", "B-2"] }
     ]);
     expect(result.drafts[0].stops.some((stop) => stop.city === "Wendeburg")).toBe(false);
+  });
+
+  it("uses Abteilung for vorladen and ignores a parenthetical city after the unload destination", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ output_text: JSON.stringify({
+      drafts: [{
+        orderNumber: "20564785", vehicleNumber: null, vehiclePlate: "GÖ-FX952", trailerPlate: "HH-PN6618",
+        departmentCompany: "Schnellecke Transportlogistik GmbH",
+        departmentAddress: "Büttenstraße 4, 08058 Zwickau, Deutschland",
+        departmentCity: "Zwickau", departmentSourcePage: 1,
+        tourRemarks: "vorladen//Lager für Rudolph Großmehring (Győr)", tourRemarksSourcePage: 1,
+        stops: [
+          { sequence: 1, type: "UNLOAD", company: "Rudolph General Solutions GmbH", address: "Gutenbergstr. 5, 85098 Großmehring, Deutschland", city: "Großmehring", appointmentLocal: null, referenceNumbers: ["23293289"], sourcePage: 1, confidence: 0.95 }
+        ], warnings: []
+      }], warnings: []
+    }) }), { status: 200 })) as unknown as typeof fetch;
+
+    const result = await importPdfPreview(Buffer.from("%PDF-1.7"), "auftrag.pdf", { apiKey: "test-key", fetchImpl });
+
+    expect(result.drafts[0].stops).toMatchObject([
+      {
+        sequence: 1,
+        type: "LOAD",
+        company: "Schnellecke Transportlogistik GmbH",
+        address: "Büttenstraße 4, 08058 Zwickau, Deutschland",
+        city: "Zwickau"
+      },
+      {
+        sequence: 2,
+        type: "UNLOAD",
+        company: "Rudolph General Solutions GmbH",
+        address: "Gutenbergstr. 5, 85098 Großmehring, Deutschland",
+        city: "Großmehring"
+      }
+    ]);
+    expect(result.drafts[0].stops.some((stop) => stop.city === "Győr")).toBe(false);
   });
 
   it("marks a city-only address and missing Tourbemerkung as requiring review", async () => {

@@ -4,7 +4,7 @@ import { isValidLocalDateTime } from "./excel-order-import.js";
 const DEFAULT_TIMEOUT_MS = 45_000;
 const MAX_OPENAI_OUTPUT_CHARS = 100_000;
 const TOUR_REMARKS_ROUTE_RULE =
-  "Interpret Tourbemerkung as German route syntax: every location before the first word 'für' is a LOAD in written order, and every location after 'für' is an UNLOAD in written order. A '+' separates additional stops of the same type on that side. Example: 'Hydro Crimmitschau + Voestalpine Schmölln für VW Braunschweig' means exactly 1) LOAD Hydro Crimmitschau, 2) LOAD Voestalpine Schmölln, 3) UNLOAD VW Braunschweig. Return only locations explicitly named in Tourbemerkung. Never add a city merely because it appears in a table, direct-delivery note or address block. If the same loading or unloading location appears in several rows or pages, return exactly one stop for it and combine its supported references and notes. Tourbemerkung determines stop type and order; table rows and address blocks only provide the matching full postal address and stop details.";
+  "Interpret Tourbemerkung as German route syntax: every location before the first word 'für' is a LOAD in written order, and every location after 'für' is an UNLOAD in written order. A '+' separates additional stops of the same type on that side. Example: 'Hydro Crimmitschau + Voestalpine Schmölln für VW Braunschweig' means exactly 1) LOAD Hydro Crimmitschau, 2) LOAD Voestalpine Schmölln, 3) UNLOAD VW Braunschweig. A trailing parenthetical place after a destination is supplementary information, not the city: 'für Rudolph Großmehring (Győr)' means company Rudolph in city Großmehring. If the loading side says 'vorladen' or 'vorladen/Lager', it is an operational instruction meaning LOAD at the complete postal address printed under Abteilung; never create a city or company named vorladen/Lager. Return only locations explicitly named in Tourbemerkung, except this Abteilung loading rule. Never add a city merely because it appears in a table, direct-delivery note or address block. If the same loading or unloading location appears in several rows or pages, return exactly one stop for it and combine its supported references and notes. Tourbemerkung determines stop type and order; table rows, Abteilung and address blocks only provide the matching full postal address and stop details.";
 export const supportedImageMimeTypes = ["image/png", "image/jpeg", "image/webp"] as const;
 
 const stopSchema = z.object({
@@ -58,6 +58,10 @@ const draftSchema = z.object({
   vehicleNumber: z.string().trim().max(200).nullable().default(null),
   vehiclePlate: z.string().trim().max(200).nullable().default(null),
   trailerPlate: z.string().trim().max(200).nullable().default(null),
+  departmentCompany: z.string().trim().max(500).nullable().default(null),
+  departmentAddress: z.string().trim().max(2000).nullable().default(null),
+  departmentCity: z.string().trim().max(300).nullable().default(null),
+  departmentSourcePage: z.number().int().positive().nullable().default(null),
   tourRemarks: z.string().trim().max(4000).nullable().default(null),
   tourRemarksSourcePage: z.number().int().positive().nullable().default(null),
   stops: z.array(stopSchema).min(1).max(20),
@@ -139,7 +143,7 @@ export async function importPdfPreview(
         detail: "high"
       },
     instruction:
-      `Read every PDF page. FIRST locate and read Tourbemerkung: it is the primary source for which location is loading, which is unloading, and their operational order. ${TOUR_REMARKS_ROUTE_RULE} Record its exact relevant text in tourRemarks and page in tourRemarksSourcePage. SECOND find those same locations in tables or address blocks elsewhere in the PDF and copy the complete printed postal address, including street, house number, postcode and city when visible. Match by place/company/reference; never replace a printed street with city-only geocoding and never infer an unprinted street. If Tourbemerkung is absent, use the stop table as a fallback and warn. For each stop extract references from its row, nearby text, right-hand unloading notes, or Tourbemerkung only when attribution is supported; otherwise retain ambiguous text in tourRemarks and warn. Extract loadingMeters specifically from the LM column (German Lademeter), NOT adjacent RM or LMJ columns; use an explicitly labeled LDM value only when no LM column value is available and warn if values conflict. Read LKW and Trailer/Kennzeichen above Abteilung: vehicleNumber is the printed internal LKW identifier if present, vehiclePlate the truck registration, trailerPlate the trailer registration. Never treat Fahrer/SZM MEGA as a driver's identity. appointmentLocal is an exact printed FIX time as YYYY-MM-DDTHH:mm; a time range belongs in appointmentWindowStartLocal and appointmentWindowEndLocal, not appointmentLocal. Include a brief sourceExcerpt and sourcePage for each stop. Return city separately when visible or unambiguous. Missing fields must be null; add Russian warnings for uncertain or conflicting data. Never invent facts.`,
+      `Read every PDF page. FIRST locate and read Tourbemerkung: it is the primary source for which location is loading, which is unloading, and their operational order. ${TOUR_REMARKS_ROUTE_RULE} Record its exact relevant text in tourRemarks and page in tourRemarksSourcePage. Independently copy the complete Abteilung block into departmentCompany, departmentAddress, departmentCity and departmentSourcePage, because vorladen may refer to it. SECOND find those same locations and named destinations in tables or address blocks elsewhere in the PDF and copy the complete printed postal address, including street, house number, postcode and city when visible. Match by place/company/reference; never replace a printed street with city-only geocoding and never infer an unprinted street. If Tourbemerkung is absent, use the stop table as a fallback and warn. For each stop extract references from its row, nearby text, right-hand unloading notes, or Tourbemerkung only when attribution is supported; otherwise retain ambiguous text in tourRemarks and warn. Extract loadingMeters specifically from the LM column (German Lademeter), NOT adjacent RM or LMJ columns; use an explicitly labeled LDM value only when no LM column value is available and warn if values conflict. Read LKW and Trailer/Kennzeichen above Abteilung: vehicleNumber is the printed internal LKW identifier if present, vehiclePlate the truck registration, trailerPlate the trailer registration. Never treat Fahrer/SZM MEGA as a driver's identity. appointmentLocal is an exact printed FIX time as YYYY-MM-DDTHH:mm; a time range belongs in appointmentWindowStartLocal and appointmentWindowEndLocal, not appointmentLocal. Include a brief sourceExcerpt and sourcePage for each stop. Return city separately when visible or unambiguous. Missing fields must be null; add Russian warnings for uncertain or conflicting data. Never invent facts.`,
     options
   }) as Promise<PdfImportPreview>;
 }
@@ -164,7 +168,7 @@ export async function importImagePreview(
       detail: "high"
     },
     instruction:
-      `Read this screenshot. It may be an Auftrag, a photographed order, or an Excel/table screenshot. If Tourbemerkung is visible, use it FIRST to identify load/unload places and order. ${TOUR_REMARKS_ROUTE_RULE} Then match every named stop to its full printed street address in the table; otherwise use the visible stop table. Extract complete visible address, city, exact FIX appointment or separate time-window start/end, LM-column loading meters (not RM/LMJ), references and operational notes. Read truck and trailer plates when visible. Never invent an unprinted street. Put a short supporting text in sourceExcerpt; set sourcePage and tourRemarksSourcePage to null. Missing optional metadata is null and unclear fields receive Russian warnings.`,
+      `Read this screenshot. It may be an Auftrag, a photographed order, or an Excel/table screenshot. If Tourbemerkung is visible, use it FIRST to identify load/unload places and order. ${TOUR_REMARKS_ROUTE_RULE} Independently copy a visible Abteilung block into departmentCompany, departmentAddress and departmentCity; departmentSourcePage is null for an image. Then match every named stop to its full printed street address in the table; otherwise use the visible stop table. Extract complete visible address, city, exact FIX appointment or separate time-window start/end, LM-column loading meters (not RM/LMJ), references and operational notes. Read truck and trailer plates when visible. Never invent an unprinted street. Put a short supporting text in sourceExcerpt; set sourcePage and tourRemarksSourcePage to null. Missing optional metadata is null and unclear fields receive Russian warnings.`,
     options
   }) as Promise<ImageImportPreview>;
 }
@@ -244,7 +248,12 @@ async function importVisualOrderPreview(input: {
         const orderedStops = [...draft.stops].sort((left, right) => left.sequence - right.sequence);
         const route = parseTourRemarksRoute(draft.tourRemarks);
         const reconciled = route
-          ? reconcileStopsWithTourRemarks(route, orderedStops, draft.tourRemarksSourcePage)
+          ? reconcileStopsWithTourRemarks(route, orderedStops, draft.tourRemarksSourcePage, {
+              company: draft.departmentCompany,
+              address: draft.departmentAddress,
+              city: draft.departmentCity,
+              sourcePage: draft.departmentSourcePage
+            })
           : { stops: orderedStops, warnings: [] as PdfImportWarning[] };
         const stops = reconciled.stops.map((stop, index) => ({
           ...stop,
@@ -279,7 +288,18 @@ async function importVisualOrderPreview(input: {
 }
 
 type ParsedStop = z.infer<typeof stopSchema>;
-type TourRemarkStop = { type: "LOAD" | "UNLOAD"; label: string; cityHint: string };
+type TourRemarkStop = {
+  type: "LOAD" | "UNLOAD";
+  label: string;
+  cityHint: string;
+  addressSource: "TOUR_REMARKS" | "DEPARTMENT";
+};
+type DepartmentDetails = {
+  company: string | null;
+  address: string | null;
+  city: string | null;
+  sourcePage: number | null;
+};
 
 function parseTourRemarksRoute(tourRemarks: string | null): TourRemarkStop[] | null {
   if (!tourRemarks) return null;
@@ -289,12 +309,22 @@ function parseTourRemarksRoute(tourRemarks: string | null): TourRemarkStop[] | n
   const unloads = splitTourRemarkStops(parts[1]);
   if (!loads.length || !unloads.length) return null;
   const route = [
-    ...loads.map((label) => ({ type: "LOAD" as const, label, cityHint: lastRouteToken(label) })),
-    ...unloads.map((label) => ({ type: "UNLOAD" as const, label, cityHint: lastRouteToken(label) }))
+    ...loads.map((label) => ({
+      type: "LOAD" as const,
+      label,
+      cityHint: isDepartmentLoadLabel(label) ? "" : lastRouteToken(label),
+      addressSource: isDepartmentLoadLabel(label) ? "DEPARTMENT" as const : "TOUR_REMARKS" as const
+    })),
+    ...unloads.map((label) => ({
+      type: "UNLOAD" as const,
+      label,
+      cityHint: lastRouteToken(label),
+      addressSource: "TOUR_REMARKS" as const
+    }))
   ];
   const seen = new Set<string>();
   return route.filter((stop) => {
-    const key = `${stop.type}:${normalizeRouteText(stop.cityHint || stop.label)}`;
+    const key = `${stop.type}:${stop.addressSource}:${normalizeRouteText(stop.cityHint || stop.label)}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -311,11 +341,27 @@ function splitTourRemarkStops(value: string): string[] {
 function reconcileStopsWithTourRemarks(
   route: TourRemarkStop[],
   candidates: ParsedStop[],
-  tourRemarksSourcePage: number | null
+  tourRemarksSourcePage: number | null,
+  department: DepartmentDetails
 ): { stops: ParsedStop[]; warnings: PdfImportWarning[] } {
   const used = new Set<number>();
   const warnings: PdfImportWarning[] = [];
   const stops = route.map((routeStop, sequence) => {
+    if (routeStop.addressSource === "DEPARTMENT") {
+      const candidateIndex = candidates.findIndex((candidate, index) =>
+        !used.has(index) && isDepartmentCandidate(candidate));
+      const candidate = candidateIndex >= 0 ? candidates[candidateIndex] : null;
+      if (candidateIndex >= 0) used.add(candidateIndex);
+      if (department.address || candidate?.address) {
+        return departmentLoadStop(routeStop, sequence + 1, department, candidate);
+      }
+      warnings.push({
+        code: "DEPARTMENT_ADDRESS_NOT_FOUND",
+        message: "Tourbemerkung содержит vorladen, но полный адрес Abteilung не найден; проверьте загрузку вручную.",
+        ...(department.sourcePage ?? tourRemarksSourcePage ? { page: department.sourcePage ?? tourRemarksSourcePage ?? undefined } : {})
+      });
+      return placeholderStop({ ...routeStop, label: "Abteilung" }, sequence + 1, department.sourcePage ?? tourRemarksSourcePage);
+    }
     const ranked = candidates
       .map((candidate, index) => ({ candidate, index, score: tourRemarkMatchScore(routeStop, candidate) }))
       .filter((match) => !used.has(match.index) && match.score > 0)
@@ -387,8 +433,43 @@ function placeholderStop(routeStop: TourRemarkStop, sequence: number, sourcePage
   };
 }
 
+function departmentLoadStop(
+  routeStop: TourRemarkStop,
+  sequence: number,
+  department: DepartmentDetails,
+  candidate: ParsedStop | null
+): ParsedStop {
+  const address = department.address ?? candidate?.address ?? "Abteilung";
+  return {
+    sequence,
+    type: "LOAD",
+    company: department.company ?? candidate?.company ?? routeStop.label,
+    address,
+    city: cleanCity(department.city) ?? inferCityFromAddress(address) ?? cleanCity(candidate?.city),
+    appointmentLocal: candidate?.appointmentLocal ?? null,
+    appointmentWindowStartLocal: candidate?.appointmentWindowStartLocal ?? null,
+    appointmentWindowEndLocal: candidate?.appointmentWindowEndLocal ?? null,
+    loadingMeters: candidate?.loadingMeters ?? null,
+    referenceNumbers: candidate?.referenceNumbers ?? [],
+    instructions: candidate?.instructions ?? null,
+    sourcePage: department.sourcePage ?? candidate?.sourcePage ?? null,
+    sourceExcerpt: candidate?.sourceExcerpt ?? `Abteilung: ${[department.company, address].filter(Boolean).join(", ")}`,
+    confidence: Math.max(candidate?.confidence ?? 0, 0.9)
+  };
+}
+
+function isDepartmentCandidate(stop: ParsedStop): boolean {
+  const evidence = normalizeRouteText([stop.company, stop.address, stop.sourceExcerpt, stop.instructions].filter(Boolean).join(" "));
+  return stop.type === "LOAD" && evidence.includes("abteilung");
+}
+
+function isDepartmentLoadLabel(label: string): boolean {
+  return /\bvorladen\b/i.test(normalizeRouteText(label));
+}
+
 function lastRouteToken(label: string): string {
-  return label.trim().split(/\s+/).at(-1)?.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}-]+$/gu, "") ?? "";
+  const withoutParentheticalSuffix = label.replace(/\s*\([^)]*\)\s*$/u, "").trim();
+  return withoutParentheticalSuffix.split(/\s+/).at(-1)?.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}-]+$/gu, "") ?? "";
 }
 
 function normalizeRouteText(value: string): string {
@@ -413,12 +494,16 @@ function responseJsonSchema(): Record<string, unknown> {
         items: {
           type: "object",
           additionalProperties: false,
-          required: ["orderNumber", "vehicleNumber", "vehiclePlate", "trailerPlate", "tourRemarks", "tourRemarksSourcePage", "stops", "warnings"],
+          required: ["orderNumber", "vehicleNumber", "vehiclePlate", "trailerPlate", "departmentCompany", "departmentAddress", "departmentCity", "departmentSourcePage", "tourRemarks", "tourRemarksSourcePage", "stops", "warnings"],
           properties: {
             orderNumber: { type: ["string", "null"], maxLength: 200 },
             vehicleNumber: { type: ["string", "null"], maxLength: 200 },
             vehiclePlate: { type: ["string", "null"], maxLength: 200 },
             trailerPlate: { type: ["string", "null"], maxLength: 200 },
+            departmentCompany: { type: ["string", "null"], maxLength: 500 },
+            departmentAddress: { type: ["string", "null"], maxLength: 2000 },
+            departmentCity: { type: ["string", "null"], maxLength: 300 },
+            departmentSourcePage: { type: ["integer", "null"], minimum: 1 },
             tourRemarks: { type: ["string", "null"], maxLength: 4000 },
             tourRemarksSourcePage: { type: ["integer", "null"], minimum: 1 },
             stops: {
