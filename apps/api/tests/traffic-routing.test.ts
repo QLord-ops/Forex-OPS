@@ -162,6 +162,17 @@ describe("PrismaTrafficQuotaStore", () => {
     expect(manual.used).toBe(14_401);
     expect(manual.reservedForManual).toBe(3_600);
   });
+  it("reserves the last available request atomically under parallel calls", async () => {
+    const delegate = quotaDelegate({ "tomtom-routing:2026-10": { used: 17_999, updatedAt: new Date("2026-10-10T00:00:00Z") } });
+    const store = new PrismaTrafficQuotaStore({ $transaction: async (callback) => callback({ apiQuota: delegate }) }, { monthlyCap: 18_000 });
+    const results = await Promise.allSettled([
+      store.consume("manual", new Date("2026-10-10T12:00:00Z")),
+      store.consume("manual", new Date("2026-10-10T12:00:00Z"))
+    ]);
+    expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter(result => result.status === "rejected")).toHaveLength(1);
+    expect((await store.getStatus("manual", new Date("2026-10-10T12:00:00Z"))).used).toBe(18_000);
+  });
 });
 
 function fakeFallback(): RoutingProvider {
@@ -235,17 +246,19 @@ function quotaDelegate(initial: Record<string, { used: number; updatedAt: Date }
       const row = rows.get(where.id);
       return row ? { id: where.id, ...row } : null;
     },
-    async create({ data }: { data: { id: string; used: number } }) {
-      const row = { used: data.used, updatedAt: new Date("2026-10-10T12:00:00Z") };
-      rows.set(data.id, row);
-      return { id: data.id, ...row };
+    async upsert({ where, create }: { where: { id: string }; create: { id: string; used: number }; update: Record<string, never> }) {
+      const existing = rows.get(where.id);
+      if (existing) return { id: where.id, ...existing };
+      const row = { used: create.used, updatedAt: new Date("2026-10-10T12:00:00Z") };
+      rows.set(create.id, row);
+      return { id: create.id, ...row };
     },
-    async update({ where, data }: { where: { id: string }; data: { used: { increment: number } } }) {
+    async updateMany({ where, data }: { where: { id: string; used: { lt: number } }; data: { used: { increment: number } } }) {
       const current = rows.get(where.id);
-      if (!current) throw new Error("missing quota row");
+      if (!current || current.used >= where.used.lt) return { count: 0 };
       const row = { used: current.used + data.used.increment, updatedAt: new Date("2026-10-10T12:00:00Z") };
       rows.set(where.id, row);
-      return { id: where.id, ...row };
+      return { count: 1 };
     }
   };
 }

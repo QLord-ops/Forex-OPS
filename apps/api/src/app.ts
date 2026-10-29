@@ -1,5 +1,7 @@
 import cors from "@fastify/cors";
+import helmet from "@fastify/helmet";
 import multipart from "@fastify/multipart";
+import rateLimit from "@fastify/rate-limit";
 import Fastify from "fastify";
 import { z } from "zod";
 import { CALCULATED_POSITION_DISCLAIMER, type CurrentPosition, withoutPositionGeometry } from "./domain.js";
@@ -120,11 +122,24 @@ export interface BuildAppOptions {
 export async function buildApp(options: BuildAppOptions = {}) {
   const app = Fastify({ logger: true });
   const isServerless = Boolean(process.env.VERCEL);
-  registerDispatcherAuth(app, prisma, options.auth);
-  registerDispatcherAssistantRoutes(app, assistantService);
-  await registerRouteScenarioRoutes(app, { service: scenarioService });
-
-  await app.register(cors, { origin: true });
+  const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? process.env.DISPATCHER_ALLOWED_ORIGINS ?? 'https://ops-disponent-web.vercel.app,http://localhost:5173,http://127.0.0.1:5173')
+    .split(',').map(value => value.trim()).filter(Boolean);
+  const allowedOriginSet = new Set(allowedOrigins);
+  await app.register(cors, {
+    origin: (origin, callback) => callback(null, !origin || allowedOriginSet.has(origin)),
+    credentials: true
+  });
+  await app.register(helmet, {
+    contentSecurityPolicy: false,
+    crossOriginResourcePolicy: { policy: 'same-site' }
+  });
+  registerDispatcherAuth(app, prisma, options.auth?.origins ? options.auth : { ...options.auth, origins: allowedOrigins });
+  await app.register(rateLimit, {
+    global: true,
+    max: 300,
+    timeWindow: '1 minute',
+    keyGenerator: request => request.dispatcherSession?.sessionId ?? request.ip
+  });
   await app.register(multipart, {
     limits: {
       files: 1,
@@ -133,6 +148,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
       fileSize: 20 * 1024 * 1024
     }
   });
+  registerDispatcherAssistantRoutes(app, assistantService);
+  await registerRouteScenarioRoutes(app, { service: scenarioService });
 
   let activeOrderImports = 0;
   const pdfImport = options.pdfImport ?? importPdfPreview;
@@ -274,7 +291,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     return operationsService.resume(id, refreshed.version);
   });
   app.get('/vehicles/:id/traffic', async request => trafficService.status(idParams.parse(request.params).id));
-  app.post('/vehicles/:id/traffic/refresh', async request => trafficService.refresh(idParams.parse(request.params).id, 'manual'));
+  app.post('/vehicles/:id/traffic/refresh', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async request => trafficService.refresh(idParams.parse(request.params).id, 'manual'));
   app.post('/vehicles/:id/traffic/accept', async request => {
     const input = versionInput.extend({ index: z.number().int().min(0).max(1), origin: z.object({ latitude: z.number().min(-90).max(90), longitude: z.number().min(-180).max(180) }).optional() }).parse(request.body);
     return trafficService.accept(idParams.parse(request.params).id, input.index, input.version, input.origin);
@@ -328,7 +345,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     await refreshAlertsForVehicle(analysis.vehicleId);
     return analysis;
   });
-  app.post('/tours/:id/replan/preview', async request => {
+  app.post('/tours/:id/replan/preview', { config: { rateLimit: { max: 15, timeWindow: '1 minute' } } }, async request => {
     const input = versionInput.extend({
       futureStops: z.array(z.object({
         id: z.string().optional(), type: z.enum(['LOAD', 'UNLOAD']), address: z.string().trim().min(1),
@@ -340,12 +357,12 @@ export async function buildApp(options: BuildAppOptions = {}) {
     }).parse(request.body);
     return replanningService.preview(idParams.parse(request.params).id, input);
   });
-  app.post('/tours/:id/replan/apply', async request => {
+  app.post('/tours/:id/replan/apply', { config: { rateLimit: { max: 15, timeWindow: '1 minute' } } }, async request => {
     const input = versionInput.extend({ previewId: z.string().min(1) }).parse(request.body);
     return replanningService.apply(idParams.parse(request.params).id, input);
   });
 
-  app.post("/imports/excel/preview", async (request, reply) => {
+  app.post("/imports/excel/preview", { config: { rateLimit: { max: 5, timeWindow: '1 minute' } } }, async (request, reply) => {
     if (!request.isMultipart()) {
       return reply.status(400).send({ error: "Файл Excel необходимо отправить как multipart/form-data в поле 'file'." });
     }
@@ -415,7 +432,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     }
   });
 
-  app.post("/imports/pdf/preview", async (request, reply) => {
+  app.post("/imports/pdf/preview", { config: { rateLimit: { max: 5, timeWindow: '1 minute' } } }, async (request, reply) => {
     if (!request.isMultipart()) {
       return reply.status(400).send({ error: "PDF-заказ необходимо отправить как multipart/form-data в поле 'file'." });
     }
@@ -458,7 +475,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     }
   });
 
-  app.post("/imports/image/preview", async (request, reply) => {
+  app.post("/imports/image/preview", { config: { rateLimit: { max: 5, timeWindow: '1 minute' } } }, async (request, reply) => {
     if (!request.isMultipart()) {
       return reply.status(400).send({ error: "Скриншот необходимо отправить как multipart/form-data в поле 'file'." });
     }
@@ -588,13 +605,13 @@ export async function buildApp(options: BuildAppOptions = {}) {
     return { address, latitude: place.latitude, longitude: place.longitude, approachDurationSeconds: duration };
   });
 
-  app.get("/geocode", async (request) => {
+  app.get("/geocode", { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (request) => {
     const { address } = z.object({ address: z.string().trim().min(1) }).parse(request.query);
     const result = await routingService.geocode(address);
     return { address: result.label, ...result };
   });
 
-  app.post("/geocode/resolve", async (request) => {
+  app.post("/geocode/resolve", { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request) => {
     const input = z.object({
       address: z.string().trim().min(1).max(2000),
       city: z.string().trim().max(300).nullable().optional()
@@ -622,7 +639,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     return reply.status(201).send(enrichTour(tour));
   });
 
-  app.post("/imports/tours/confirm", async (request, reply) => {
+  app.post("/imports/tours/confirm", { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request, reply) => {
     const { importAttemptId, importFingerprint, ...input } = confirmImportedTourSchema.parse(request.body);
     const result = await tourService.createImportedTour(input, { importAttemptId, importFingerprint });
     return reply.status(result.created ? 201 : 200).send({

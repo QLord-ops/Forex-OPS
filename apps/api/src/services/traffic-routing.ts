@@ -84,8 +84,8 @@ type ApiQuotaRecord = {
 
 type ApiQuotaDelegate = {
   findUnique(args: { where: { id: string } }): Promise<ApiQuotaRecord | null>;
-  create(args: { data: { id: string; used: number } }): Promise<ApiQuotaRecord>;
-  update(args: { where: { id: string }; data: { used: { increment: number } } }): Promise<ApiQuotaRecord>;
+  upsert(args: { where: { id: string }; create: { id: string; used: number }; update: Record<string, never> }): Promise<ApiQuotaRecord>;
+  updateMany(args: { where: { id: string; used: { lt: number } }; data: { used: { increment: number } } }): Promise<{ count: number }>;
 };
 
 type PrismaLikeQuotaClient = {
@@ -102,15 +102,14 @@ export class PrismaTrafficQuotaStore implements TrafficQuotaStore {
     const status = quotaSettings(this.options, source, now);
 
     return this.prisma.$transaction(async (tx) => {
-      const existing = await tx.apiQuota.findUnique({ where: { id: status.id } });
-      const used = existing?.used ?? 0;
-      if (used >= status.sourceLimit) {
-        throw new RoutingError("Бесплатная квота TomTom для этого типа запроса исчерпана.", 429);
-      }
-
-      const record = existing
-        ? await tx.apiQuota.update({ where: { id: status.id }, data: { used: { increment: 1 } } })
-        : await tx.apiQuota.create({ data: { id: status.id, used: 1 } });
+      await tx.apiQuota.upsert({ where: { id: status.id }, create: { id: status.id, used: 0 }, update: {} });
+      const reserved = await tx.apiQuota.updateMany({
+        where: { id: status.id, used: { lt: status.sourceLimit } },
+        data: { used: { increment: 1 } }
+      });
+      if (!reserved.count) throw new RoutingError("Бесплатная квота TomTom для этого типа запроса исчерпана.", 429);
+      const record = await tx.apiQuota.findUnique({ where: { id: status.id } });
+      if (!record) throw new RoutingError("Не удалось зафиксировать расход квоты TomTom.", 503);
 
       return {
         id: status.id,

@@ -95,6 +95,7 @@ export class OsrmRoutingProvider implements RoutingProvider {
   private readonly nominatimBaseUrl: string;
   private readonly osrmBaseUrl: string;
   private readonly geocodeCache = new Map<string, Promise<GeocodeResult>>();
+  private readonly geocodeCacheLimit = 1_000;
   private geocodeQueue: Promise<void> = Promise.resolve();
   private lastGeocodeAt = 0;
 
@@ -132,6 +133,10 @@ export class OsrmRoutingProvider implements RoutingProvider {
       this.geocodeCache.delete(cacheKey);
       throw error;
     });
+    if (this.geocodeCache.size >= this.geocodeCacheLimit) {
+      const oldest = this.geocodeCache.keys().next().value as string | undefined;
+      if (oldest) this.geocodeCache.delete(oldest);
+    }
     this.geocodeCache.set(cacheKey, request);
     return request;
   }
