@@ -3,6 +3,8 @@ import { isValidLocalDateTime } from "./excel-order-import.js";
 
 const DEFAULT_TIMEOUT_MS = 45_000;
 const MAX_OPENAI_OUTPUT_CHARS = 100_000;
+const TOUR_REMARKS_ROUTE_RULE =
+  "Interpret Tourbemerkung as German route syntax: every location before the first word 'für' is a LOAD in written order, and every location after 'für' is an UNLOAD in written order. A '+' separates additional stops of the same type on that side. Example: 'Hydro Crimmitschau + Voestalpine Schmölln für VW Braunschweig' means exactly 1) LOAD Hydro Crimmitschau, 2) LOAD Voestalpine Schmölln, 3) UNLOAD VW Braunschweig. Tourbemerkung determines stop type and order; table rows and address blocks only provide the matching full postal address and stop details.";
 export const supportedImageMimeTypes = ["image/png", "image/jpeg", "image/webp"] as const;
 
 const stopSchema = z.object({
@@ -137,7 +139,7 @@ export async function importPdfPreview(
         detail: "high"
       },
     instruction:
-      "Read every PDF page. FIRST locate and read Tourbemerkung: it is the primary source for which location is loading, which is unloading, and their operational order. Record its exact relevant text in tourRemarks and page in tourRemarksSourcePage. SECOND find those same locations in tables or address blocks elsewhere in the PDF and copy the complete printed postal address, including street, house number, postcode and city when visible. Match by place/company/reference; never replace a printed street with city-only geocoding and never infer an unprinted street. If Tourbemerkung is absent, use the stop table as a fallback and warn. For each stop extract references from its row, nearby text, right-hand unloading notes, or Tourbemerkung only when attribution is supported; otherwise retain ambiguous text in tourRemarks and warn. Extract loadingMeters specifically from the LM column (German Lademeter), NOT adjacent RM or LMJ columns; use an explicitly labeled LDM value only when no LM column value is available and warn if values conflict. Read LKW and Trailer/Kennzeichen above Abteilung: vehicleNumber is the printed internal LKW identifier if present, vehiclePlate the truck registration, trailerPlate the trailer registration. Never treat Fahrer/SZM MEGA as a driver's identity. appointmentLocal is an exact printed FIX time as YYYY-MM-DDTHH:mm; a time range belongs in appointmentWindowStartLocal and appointmentWindowEndLocal, not appointmentLocal. Include a brief sourceExcerpt and sourcePage for each stop. Return city separately when visible or unambiguous. Missing fields must be null; add Russian warnings for uncertain or conflicting data. Never invent facts.",
+      `Read every PDF page. FIRST locate and read Tourbemerkung: it is the primary source for which location is loading, which is unloading, and their operational order. ${TOUR_REMARKS_ROUTE_RULE} Record its exact relevant text in tourRemarks and page in tourRemarksSourcePage. SECOND find those same locations in tables or address blocks elsewhere in the PDF and copy the complete printed postal address, including street, house number, postcode and city when visible. Match by place/company/reference; never replace a printed street with city-only geocoding and never infer an unprinted street. If Tourbemerkung is absent, use the stop table as a fallback and warn. For each stop extract references from its row, nearby text, right-hand unloading notes, or Tourbemerkung only when attribution is supported; otherwise retain ambiguous text in tourRemarks and warn. Extract loadingMeters specifically from the LM column (German Lademeter), NOT adjacent RM or LMJ columns; use an explicitly labeled LDM value only when no LM column value is available and warn if values conflict. Read LKW and Trailer/Kennzeichen above Abteilung: vehicleNumber is the printed internal LKW identifier if present, vehiclePlate the truck registration, trailerPlate the trailer registration. Never treat Fahrer/SZM MEGA as a driver's identity. appointmentLocal is an exact printed FIX time as YYYY-MM-DDTHH:mm; a time range belongs in appointmentWindowStartLocal and appointmentWindowEndLocal, not appointmentLocal. Include a brief sourceExcerpt and sourcePage for each stop. Return city separately when visible or unambiguous. Missing fields must be null; add Russian warnings for uncertain or conflicting data. Never invent facts.`,
     options
   }) as Promise<PdfImportPreview>;
 }
@@ -162,7 +164,7 @@ export async function importImagePreview(
       detail: "high"
     },
     instruction:
-      "Read this screenshot. It may be an Auftrag, a photographed order, or an Excel/table screenshot. If Tourbemerkung is visible, use it FIRST to identify load/unload places and order, then match their full printed street addresses in the table; otherwise use the visible stop table. Extract complete visible address, city, exact FIX appointment or separate time-window start/end, LM-column loading meters (not RM/LMJ), references and operational notes. Read truck and trailer plates when visible. Never invent an unprinted street. Put a short supporting text in sourceExcerpt; set sourcePage and tourRemarksSourcePage to null. Missing optional metadata is null and unclear fields receive Russian warnings.",
+      `Read this screenshot. It may be an Auftrag, a photographed order, or an Excel/table screenshot. If Tourbemerkung is visible, use it FIRST to identify load/unload places and order. ${TOUR_REMARKS_ROUTE_RULE} Then match every named stop to its full printed street address in the table; otherwise use the visible stop table. Extract complete visible address, city, exact FIX appointment or separate time-window start/end, LM-column loading meters (not RM/LMJ), references and operational notes. Read truck and trailer plates when visible. Never invent an unprinted street. Put a short supporting text in sourceExcerpt; set sourcePage and tourRemarksSourcePage to null. Missing optional metadata is null and unclear fields receive Russian warnings.`,
     options
   }) as Promise<ImageImportPreview>;
 }
@@ -238,25 +240,37 @@ async function importVisualOrderPreview(input: {
     return {
       source: "OPENAI",
       detectedLayout: layout,
-      drafts: parsed.drafts.map((draft) => ({
-        orderNumber: draft.orderNumber,
-        vehicleNumber: draft.vehicleNumber,
-        vehiclePlate: draft.vehiclePlate,
-        trailerPlate: draft.trailerPlate,
-        tourRemarks: draft.tourRemarks,
-        tourRemarksSourcePage: draft.tourRemarksSourcePage,
-        stops: draft.stops.map((stop) => ({
+      drafts: parsed.drafts.map((draft) => {
+        const routeTypes = parseTourRemarksRouteTypes(draft.tourRemarks);
+        const routeMatchesStopCount = routeTypes !== null && routeTypes.length === draft.stops.length;
+        const orderedStops = [...draft.stops].sort((left, right) => left.sequence - right.sequence);
+        const stops = orderedStops.map((stop, index) => ({
           ...stop,
+          sequence: index + 1,
+          type: routeMatchesStopCount ? routeTypes[index] : stop.type,
           city: cleanCity(stop.city) ?? inferCityFromAddress(stop.address)
-        })),
-        warnings: [
-          ...draft.warnings.map(compactWarning),
-          ...(layout === "PDF" && !draft.tourRemarks ? [{ code: "TOUR_REMARKS_MISSING", message: "Tourbemerkung не найдено; порядок точек определён по таблице." }] : []),
-          ...draft.stops.flatMap((stop) => isCityOnlyAddress(stop.address, stop.city)
-            ? [{ code: "ADDRESS_INCOMPLETE", message: `Для точки ${stop.sequence} найден только город; улицу нужно проверить вручную.`, ...(stop.sourcePage ? { page: stop.sourcePage } : {}) }]
-            : [])
-        ]
-      })),
+        }));
+        return {
+          orderNumber: draft.orderNumber,
+          vehicleNumber: draft.vehicleNumber,
+          vehiclePlate: draft.vehiclePlate,
+          trailerPlate: draft.trailerPlate,
+          tourRemarks: draft.tourRemarks,
+          tourRemarksSourcePage: draft.tourRemarksSourcePage,
+          stops,
+          warnings: [
+            ...draft.warnings.map(compactWarning),
+            ...(layout === "PDF" && !draft.tourRemarks ? [{ code: "TOUR_REMARKS_MISSING", message: "Tourbemerkung не найдено; порядок точек определён по таблице." }] : []),
+            ...(routeTypes && !routeMatchesStopCount ? [{
+              code: "TOUR_REMARKS_ROUTE_MISMATCH",
+              message: `Tourbemerkung задаёт ${routeTypes.length} точки, но в Auftrag распознано ${draft.stops.length}; маршрут нужно проверить.`
+            }] : []),
+            ...draft.stops.flatMap((stop) => isCityOnlyAddress(stop.address, stop.city)
+              ? [{ code: "ADDRESS_INCOMPLETE", message: `Для точки ${stop.sequence} найден только город; улицу нужно проверить вручную.`, ...(stop.sourcePage ? { page: stop.sourcePage } : {}) }]
+              : [])
+          ]
+        };
+      }),
       warnings: parsed.warnings.map(compactWarning),
       aiAvailable: true,
       usedAi: true
@@ -264,6 +278,23 @@ async function importVisualOrderPreview(input: {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function parseTourRemarksRouteTypes(tourRemarks: string | null): Array<"LOAD" | "UNLOAD"> | null {
+  if (!tourRemarks) return null;
+  const parts = tourRemarks.split(/\s+für\s+/i);
+  if (parts.length !== 2) return null;
+  const loads = splitTourRemarkStops(parts[0]);
+  const unloads = splitTourRemarkStops(parts[1]);
+  if (!loads.length || !unloads.length) return null;
+  return [...loads.map(() => "LOAD" as const), ...unloads.map(() => "UNLOAD" as const)];
+}
+
+function splitTourRemarkStops(value: string): string[] {
+  return value
+    .split(/\s*\+\s*/)
+    .map((part) => part.replace(/\s*\/\/.*$/, "").trim())
+    .filter(Boolean);
 }
 
 function responseJsonSchema(): Record<string, unknown> {

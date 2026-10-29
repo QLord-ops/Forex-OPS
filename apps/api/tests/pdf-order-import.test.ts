@@ -109,6 +109,8 @@ describe("PDF Auftrag import", () => {
     const instruction = (userMessage?.content as Array<{ type: string; text?: string }>).find((item) => item.type === "input_text")?.text;
     expect(instruction).toContain("FIRST locate and read Tourbemerkung");
     expect(instruction).toContain("SECOND find those same locations");
+    expect(instruction).toContain("every location before the first word 'für' is a LOAD");
+    expect(instruction).toContain("Hydro Crimmitschau + Voestalpine Schmölln für VW Braunschweig");
     expect(instruction).toContain("NOT adjacent RM or LMJ");
     expect(instruction).toContain("above Abteilung");
     expect(body.text.format).toMatchObject({
@@ -129,6 +131,49 @@ describe("PDF Auftrag import", () => {
         }
       }
     });
+  });
+
+  it("treats plus before für as additional loading stops and the destination after für as unloading", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ output_text: JSON.stringify({
+      drafts: [{
+        orderNumber: "20564735", vehicleNumber: null, vehiclePlate: "GÖ-FX321", trailerPlate: "Z-S3280",
+        tourRemarks: "Hydro Crimmitschau + Voestalpine Schmölln für VW Braunschweig", tourRemarksSourcePage: 1,
+        stops: [
+          { sequence: 1, type: "LOAD", company: "Hydro", address: "Gewerbering 26a, 08451 Crimmitschau", city: "Crimmitschau", appointmentLocal: null, sourcePage: 1, confidence: 0.9 },
+          { sequence: 2, type: "UNLOAD", company: "Voestalpine", address: "Zum Wasserturm 79/2, 04626 Schmölln", city: "Schmölln", appointmentLocal: null, sourcePage: 2, confidence: 0.8 },
+          { sequence: 3, type: "UNLOAD", company: "VW", address: "Gifhorner Straße 180, 38112 Braunschweig", city: "Braunschweig", appointmentLocal: null, sourcePage: 4, confidence: 0.9 }
+        ], warnings: []
+      }], warnings: []
+    }) }), { status: 200 })) as unknown as typeof fetch;
+
+    const result = await importPdfPreview(Buffer.from("%PDF-1.7"), "auftrag.pdf", { apiKey: "test-key", fetchImpl });
+
+    expect(result.drafts[0].stops).toMatchObject([
+      { sequence: 1, type: "LOAD", city: "Crimmitschau" },
+      { sequence: 2, type: "LOAD", city: "Schmölln" },
+      { sequence: 3, type: "UNLOAD", city: "Braunschweig" }
+    ]);
+    expect(result.drafts[0].warnings).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "TOUR_REMARKS_ROUTE_MISMATCH" })
+    ]));
+  });
+
+  it("warns when plus and für describe more stops than were extracted", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ output_text: JSON.stringify({
+      drafts: [{
+        orderNumber: "20564735", vehicleNumber: null, vehiclePlate: "GÖ-FX321", trailerPlate: null,
+        tourRemarks: "Hydro Crimmitschau + Voestalpine Schmölln für VW Braunschweig", tourRemarksSourcePage: 1,
+        stops: [
+          { sequence: 1, type: "LOAD", company: "Hydro", address: "Gewerbering 26a, 08451 Crimmitschau", city: "Crimmitschau", appointmentLocal: null, sourcePage: 1, confidence: 0.9 },
+          { sequence: 2, type: "UNLOAD", company: "VW", address: "Gifhorner Straße 180, 38112 Braunschweig", city: "Braunschweig", appointmentLocal: null, sourcePage: 4, confidence: 0.9 }
+        ], warnings: []
+      }], warnings: []
+    }) }), { status: 200 })) as unknown as typeof fetch;
+
+    const result = await importPdfPreview(Buffer.from("%PDF-1.7"), "auftrag.pdf", { apiKey: "test-key", fetchImpl });
+    expect(result.drafts[0].warnings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "TOUR_REMARKS_ROUTE_MISMATCH" })
+    ]));
   });
 
   it("marks a city-only address and missing Tourbemerkung as requiring review", async () => {
