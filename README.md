@@ -22,7 +22,7 @@ Lokale Dispositionsanwendung für berechnete LKW-Bewegungen, ETA, Verspätungsri
 3. Öffne Terminal und wechsle in das Projekt:
 
    ```bash
-   cd "/Users/rader1410gmail.com/Documents/OPS Disponent"
+   cd ops-disponent
    ```
 
 ## Erste Installation
