@@ -804,3 +804,9 @@ button:disabled {
     transition-duration: 0.01ms !important;
   }
 }
+/* Keeps the dashboard stable while the map bundle is fetched on demand. */
+.map-panel-loading {
+  min-height: 100%;
+  width: 100%;
+  background: linear-gradient(135deg, #e7edf3, #f7f9fb 55%, #dce7ef);
+}

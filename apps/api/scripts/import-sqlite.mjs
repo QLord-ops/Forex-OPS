@@ -52,6 +52,7 @@ const modelOrder = [
   "assistantProposal",
   "assistantUsage",
   "vehicleIssue",
+  "auditLog",
 ];
 
 async function readAll(client) {

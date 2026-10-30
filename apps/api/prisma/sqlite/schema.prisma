@@ -332,3 +332,21 @@ model VehicleIssue {
   vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
   @@index([vehicleId, resolvedAt])
 }
+
+model AuditLog {
+  id String @id @default(cuid())
+  actorRole String
+  actorSessionId String
+  action String
+  entityType String
+  entityId String
+  vehicleId String?
+  tourId String?
+  stopId String?
+  metadataJson String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([entityType, entityId, createdAt])
+  @@index([actorSessionId, createdAt])
+}

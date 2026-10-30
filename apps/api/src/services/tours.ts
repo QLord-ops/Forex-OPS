@@ -26,6 +26,7 @@ import {
   serializeGeometry,
   splitGeometryAtProgress
 } from "./simulation.js";
+import { writeAuditLog, type AuditActor } from "./audit-log.js";
 
 export type TourAggregate = Prisma.TourGetPayload<{
   include: {
@@ -82,13 +83,14 @@ export class TourService {
     private readonly routingProvider: RoutingProvider
   ) {}
 
-  async createTour(input: CreateTourInput): Promise<TourAggregate> {
-    return this.createTourInternal(input);
+  async createTour(input: CreateTourInput, actor?: AuditActor): Promise<TourAggregate> {
+    return this.createTourInternal(input, undefined, actor);
   }
 
   async createImportedTour(
     input: CreateTourInput,
-    metadata: ImportTourMetadata
+    metadata: ImportTourMetadata,
+    actor?: AuditActor,
   ): Promise<{ tour: TourAggregate; created: boolean }> {
     if (!metadata.importAttemptId.trim() || !metadata.importFingerprint.trim()) {
       throw Object.assign(new Error("Для импорта отсутствует идентификатор повторной попытки."), { statusCode: 400 });
@@ -98,7 +100,7 @@ export class TourService {
     if (existing) return { tour: assertImportedTourVehicle(existing, input.vehicleId), created: false };
 
     try {
-      return { tour: await this.createTourInternal(input, metadata), created: true };
+      return { tour: await this.createTourInternal(input, metadata, actor), created: true };
     } catch (error) {
       // A concurrent retry may win the unique key race after route calculation.
       const concurrent = await this.findImportedTour(metadata);
@@ -119,7 +121,7 @@ export class TourService {
     });
   }
 
-  private async createTourInternal(input: CreateTourInput, metadata?: ImportTourMetadata): Promise<TourAggregate> {
+  private async createTourInternal(input: CreateTourInput, metadata?: ImportTourMetadata, actor?: AuditActor): Promise<TourAggregate> {
     validateTourInput(input);
     const context = await readPlanningContext(this.db, input);
     const orderedStops = [...input.stops].sort((a, b) => a.sequence - b.sequence);
@@ -149,6 +151,8 @@ export class TourService {
       if (status === "ACTIVE" && input.trailerPlate?.trim()) {
         await updateCurrentTrailer(tx, context.vehicle.id, tour.id, input.trailerPlate.trim());
       }
+      await writeAuditLog(tx, actor, { action: metadata ? "TOUR_IMPORTED" : "TOUR_CREATED", entityType: "Tour", entityId: tour.id,
+        vehicleId: context.vehicle.id, tourId: tour.id, metadata: { orderNumber: input.orderNumber } });
 
       return tx.tour.findUniqueOrThrow({
         where: { id: tour.id },
@@ -160,7 +164,7 @@ export class TourService {
   async createTourForNewVehicle(input: {
     vehicle: { vehicleNumber: string; licensePlate?: string | null };
     tour: Omit<CreateTourInput, "vehicleId">;
-  }) {
+  }, actor?: AuditActor) {
     validateTourInput({ ...input.tour, vehicleId: "pending" });
     const orderedStops = [...input.tour.stops].sort((a, b) => a.sequence - b.sequence);
     const plan = await prepareTourPlan(this.routingProvider, orderedStops, undefined, 85);
@@ -187,11 +191,13 @@ export class TourService {
           payloadJson: JSON.stringify({ previous: null, current: input.tour.trailerPlate.trim() })
         } });
       }
+      await writeAuditLog(tx, actor, { action: "TOUR_CREATED", entityType: "Tour", entityId: tour.id,
+        vehicleId: vehicle.id, tourId: tour.id, metadata: { orderNumber: input.tour.orderNumber, vehicleCreated: true } });
       return { vehicle, tour: await tx.tour.findUniqueOrThrow({ where: { id: tour.id }, include: tourInclude }) };
     });
   }
 
-  async updateFutureTour(tourId: string, input: UpdateFutureTourInput): Promise<TourAggregate> {
+  async updateFutureTour(tourId: string, input: UpdateFutureTourInput, actor?: AuditActor): Promise<TourAggregate> {
     validateTourInput(input);
     const context = await readPlanningContext(this.db, input, tourId);
     const orderedStops = [...input.stops].sort((a, b) => a.sequence - b.sequence);
@@ -218,12 +224,14 @@ export class TourService {
         }
       });
       await persistTourPlan(tx, tourId, plan);
+      await writeAuditLog(tx, actor, { action: "TOUR_UPDATED", entityType: "Tour", entityId: tourId,
+        vehicleId: input.vehicleId, tourId, metadata: { orderNumber: input.orderNumber } });
 
       return tx.tour.findUniqueOrThrow({ where: { id: tourId }, include: tourInclude });
     });
   }
 
-  async cancelFutureTour(tourId: string, now = new Date()): Promise<TourAggregate> {
+  async cancelFutureTour(tourId: string, now = new Date(), actor?: AuditActor): Promise<TourAggregate> {
     return this.db.$transaction(async (tx) => {
       const current = await tx.tour.findUniqueOrThrow({
         where: { id: tourId },
@@ -240,16 +248,18 @@ export class TourService {
         where: { id: tourId },
         data: { status: "CANCELLED", completedAt: now }
       });
+      await writeAuditLog(tx, actor, { action: "TOUR_CANCELLED", entityType: "Tour", entityId: tourId,
+        vehicleId: current.vehicleId, tourId, createdAt: now });
       return tx.tour.findUniqueOrThrow({ where: { id: tourId }, include: tourInclude });
     });
   }
 
-  async recordLoaded(stopId: string, now = new Date(), note?: string): Promise<TourAggregate> {
-    return this.recordStopEvent(stopId, "LOADED", now, note);
+  async recordLoaded(stopId: string, now = new Date(), note?: string, actor?: AuditActor): Promise<TourAggregate> {
+    return this.recordStopEvent(stopId, "LOADED", now, note, actor);
   }
 
-  async recordUnloaded(stopId: string, now = new Date(), note?: string): Promise<TourAggregate> {
-    return this.recordStopEvent(stopId, "UNLOADED", now, note);
+  async recordUnloaded(stopId: string, now = new Date(), note?: string, actor?: AuditActor): Promise<TourAggregate> {
+    return this.recordStopEvent(stopId, "UNLOADED", now, note, actor);
   }
 
   async getCurrentPosition(vehicleId: string, now = new Date()): Promise<CurrentPosition> {
@@ -318,7 +328,8 @@ export class TourService {
     stopId: string,
     eventType: "LOADED" | "UNLOADED",
     now: Date,
-    note?: string
+    note?: string,
+    actor?: AuditActor,
   ): Promise<TourAggregate> {
     const context = await readDepartureContext(this.db, stopId);
     assertStopActionAllowed(context.stop.completedAt, context.stop.tour.status, context.stop.arrivedAt);
@@ -379,6 +390,8 @@ export class TourService {
           note
         }
       });
+      await writeAuditLog(tx, actor, { action: eventType, entityType: "Stop", entityId: stop.id,
+        vehicleId: stop.tour.vehicleId, tourId: stop.tourId, stopId: stop.id, metadata: note ? { note } : undefined, createdAt: now });
 
       if (eventType === "LOADED" && !stop.tour.actualStartAt) {
         await tx.tour.update({ where: { id: stop.tourId }, data: { actualStartAt: now } });

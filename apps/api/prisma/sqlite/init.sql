@@ -233,3 +233,19 @@ CREATE INDEX "AssistantProposal_conversationId_createdAt_idx" ON "AssistantPropo
 CREATE TABLE "AssistantUsage" ("id" TEXT NOT NULL PRIMARY KEY, "count" INTEGER NOT NULL DEFAULT 0, "expiresAt" DATETIME NOT NULL);
 CREATE TABLE "VehicleIssue" ("id" TEXT NOT NULL PRIMARY KEY, "vehicleId" TEXT NOT NULL REFERENCES "Vehicle"("id") ON DELETE CASCADE, "kind" TEXT NOT NULL, "description" TEXT NOT NULL, "expectedResolvedAt" DATETIME, "resolvedAt" DATETIME, "createdAt" DATETIME NOT NULL DEFAULT CURRENT_DATETIME);
 CREATE INDEX "VehicleIssue_vehicleId_resolvedAt_idx" ON "VehicleIssue"("vehicleId", "resolvedAt");
+CREATE TABLE "AuditLog" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "actorRole" TEXT NOT NULL,
+    "actorSessionId" TEXT NOT NULL,
+    "action" TEXT NOT NULL,
+    "entityType" TEXT NOT NULL,
+    "entityId" TEXT NOT NULL,
+    "vehicleId" TEXT,
+    "tourId" TEXT,
+    "stopId" TEXT,
+    "metadataJson" TEXT,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX "AuditLog_createdAt_idx" ON "AuditLog"("createdAt");
+CREATE INDEX "AuditLog_entityType_entityId_createdAt_idx" ON "AuditLog"("entityType", "entityId", "createdAt");
+CREATE INDEX "AuditLog_actorSessionId_createdAt_idx" ON "AuditLog"("actorSessionId", "createdAt");

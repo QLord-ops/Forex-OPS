@@ -2,7 +2,7 @@ import { Check, PackageCheck, RefreshCw } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
 
-import { MapPanel } from '../components/MapPanel'
+import { LazyMapPanel } from '../components/LazyMapPanel'
 import { AppointmentPlanner } from '../components/AppointmentPlanner'
 import { VehicleOperationsPanel } from '../components/VehicleOperationsPanel'
 import { RouteEditor } from '../components/RouteEditor'
@@ -96,7 +96,7 @@ export function VehicleDetailPage() {
 
       <div className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,440px)]">
         <div className="min-w-0 space-y-4">
-          <MapPanel tour={activeTour} position={position.data} />
+          <LazyMapPanel tour={activeTour} position={position.data} />
           <MetricsPanel tour={activeTour} position={position.data} />
         </div>
         <div className="min-w-0 space-y-4">

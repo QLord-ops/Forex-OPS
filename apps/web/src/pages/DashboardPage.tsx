@@ -2,7 +2,7 @@ import { ArrowUpRight, CheckCircle2, ChevronDown, CircleDot, Clock3, Loader2, Ma
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 
-import { MapPanel } from '../components/MapPanel'
+import { LazyMapPanel } from '../components/LazyMapPanel'
 import { QuickOrderPanel } from '../components/QuickOrderPanel'
 import { EmptyState, ErrorState, LoadingState } from '../components/States'
 import { usePolling } from '../hooks/usePolling'
@@ -149,7 +149,7 @@ export function DashboardPage() {
         </div>
       </aside>
       <section className="dashboard-stage" aria-label="Карта выбранного грузовика">
-        <MapPanel tour={selected?.tour} position={position.data} vehicleNumber={selected?.vehicle.vehicleNumber} focusCoordinate={mapFocus} previewRoute={draftRoute?.geometry} height="100%" fill />
+        <LazyMapPanel tour={selected?.tour} position={position.data} vehicleNumber={selected?.vehicle.vehicleNumber} focusCoordinate={mapFocus} previewRoute={draftRoute?.geometry} height="100%" fill />
         {draftRoute ? <div className="map-draft-banner"><span>{draftRoute.label} · черновик</span><button type="button" aria-label="Убрать черновой маршрут с карты" onClick={() => setRoutePreview(null)}><X size={16} /></button></div> : null}
         {selected ? <><VehicleMapHud row={selected} open={hudOpen} onToggle={() => setHudOpen((value) => !value)} /><RouteStopsDrawer row={selected} open={drawerOpen} onToggle={() => setDrawerOpen((value) => !value)} /></> : null}
         <QuickOrderPanel row={selected} vehicles={vehicles.map((item) => item.vehicle)} onAddressFound={setMapFocus} onRoutePreview={(geometry) => setRoutePreview(geometry.length ? { geometry, label: 'Предпросмотр маршрута' } : null)} onCreated={async (vehicleId) => { selectVehicle(vehicleId); await refetch() }} />

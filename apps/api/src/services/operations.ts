@@ -5,6 +5,7 @@ import {
   createInitialClockState, getBerlinIsoWeekKey, reserveCycleExtension, releaseCycleExtension,
   forecastDrive, applyStopTime, resetReducedRestCounter, type ClockState
 } from './vehicle-clock.js';
+import { writeAuditLog, type AuditActor } from './audit-log.js';
 
 export type ExceptionKind = 'EXTENDED_DRIVING' | 'REDUCED_REST' | 'BOTH';
 
@@ -164,7 +165,7 @@ export class OperationsService {
     });
   }
 
-  async confirmArrival(stopId: string, arrivedAt: Date, now = new Date()) {
+  async confirmArrival(stopId: string, arrivedAt: Date, now = new Date(), actor?: AuditActor) {
     if (arrivedAt > now) throw new TourPlanConflictError('Время прибытия не может быть в будущем.');
     await this.db.$transaction(async tx => {
       const stop = await tx.stop.findUniqueOrThrow({ where: { id: stopId }, include: { tour: { include: { vehicle: true, stops: { orderBy: { sequence: 'asc' } }, legs: true } } } });
@@ -179,6 +180,8 @@ export class OperationsService {
       await tx.tour.update({ where: { id: stop.tourId }, data: { planVersion: { increment: 1 } } });
       await tx.notification.updateMany({ where: { stopId, type: 'PREDICTED_ARRIVAL', acknowledgedAt: null }, data: { acknowledgedAt: now } });
       await tx.operationEvent.create({ data: { vehicleId: stop.tour.vehicleId, tourId: stop.tourId, stopId, type: 'ARRIVAL_CONFIRMED', payloadJson: JSON.stringify({ arrivedAt }), createdAt: now } });
+      await writeAuditLog(tx, actor, { action: 'ARRIVAL_CONFIRMED', entityType: 'Stop', entityId: stopId,
+        vehicleId: stop.tour.vehicleId, tourId: stop.tourId, stopId, metadata: { arrivedAt: arrivedAt.toISOString() }, createdAt: now });
     });
     return { ok: true };
   }

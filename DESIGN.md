@@ -1,100 +1,83 @@
-# Design
+# Дизайн OPS Disponent
 
-## Source of truth
-- Status: Active
-- Last refreshed: 2026-10-14 (dashboard quick Auftrag intake and cargo metadata)
-- Primary product surfaces: Dispatcher dashboard, vehicle detail/map, tours, new order form, alerts, vehicle history.
-- Evidence reviewed: User-provided product specification in the Codex attachment; repository contained no prior UI or brand assets.
+## Источник требований
 
-## Brand
-- Personality: Operational, exact, calm, trustworthy, German logistics control room.
-- Trust signals: Explicit timestamps, route provenance, visible calculation state, persistent warnings, clear separation of calculated data from GPS data.
-- Avoid: Decorative marketing cards, glossy gradients, playful illustration, ambiguous status colors, the terms "Live Position" and "Echtzeitposition".
+- Статус: действует.
+- Основные поверхности: панель диспетчера, карта и карточка машины, туры, новый заказ, предупреждения и история.
+- Основной пользователь: диспетчер, который длительно работает с парком на настольном компьютере.
 
-## Product goals
-- Goals: Let one dispatcher understand every truck's current calculated movement, ETA, delay risk, and queued work within seconds.
-- Non-goals: Driver workflow, mobile app, accounting, CRM, bidirectional Webfleet job dispatch, multi-user administration.
-- Success signals: A dispatcher can create an order from a file with one confirmation, monitor fresh Webfleet GPS when configured, confirm loading/unloading from the fleet rail, and identify endangered appointments or excessive dwell without leaving the dashboard.
+## Характер продукта
 
-## Personas and jobs
-- Primary personas: One desktop dispatcher managing a small fleet.
-- User jobs: Create and sequence tours; confirm operational events; detect late appointments; inspect current and future schedules; review immutable event history.
-- Key contexts of use: Long desktop sessions on a MacBook, frequent scanning, periodic updates, operational urgency.
+Интерфейс должен быть операционным, точным, спокойным и вызывающим доверие. Время, источник позиции, возраст данных, расчётный статус и предупреждения показываются явно. Декоративные маркетинговые карточки и двусмысленные цветовые статусы не используются.
 
-## Information architecture
-- Primary navigation: Dashboard, Fahrzeuge, Touren, Neuer Auftrag, Warnungen, Historie.
-- Core routes/screens: `/`, `/vehicles`, `/vehicles/:id`, `/tours`, `/tours/:id/edit`, `/orders/new`, `/alerts`, `/history`.
-- Content hierarchy: Urgency-sorted vehicle rail first; fullscreen selected-vehicle map second; vehicle metrics and route stops appear as overlays on the map; editing/creation flows follow operational monitoring.
+## Цели
 
-## Design principles
-- Principle 1: Dense but legible — tables and timelines carry the information, with minimal chrome.
-- Principle 2: Every position and estimate states its origin; fresh Webfleet GPS, stale GPS and calculated positions are visually distinct.
-- Principle 3: Color reinforces explicit text and never carries meaning alone.
-- Principle 4: Operational monitoring uses the full viewport; scrolling is confined to the fleet rail and expandable overlays instead of the dashboard document.
-- Tradeoffs: Desktop-first density over small-screen optimization; operational clarity over visual novelty.
+- за несколько секунд понять состояние каждой машины, ETA, риск опоздания и будущую работу;
+- создать Auftrag из файла с одним явным подтверждением;
+- контролировать свежую или устаревшую телеметрию Webfleet и отличать её от расчётной позиции;
+- подтверждать прибытие, BELADEN и ENTLADEN без перехода между лишними экранами;
+- сохранять неизменяемую историю операций.
 
-## Visual language
-- Color: Light control-center workspace with compact navy navigation, white work surfaces, blue selection/accent, and semantic red/orange/yellow/blue/green/grey attention states. Color always has a text label and icon/context.
-- Authentication exception: The secure OPS FOREX entry surface uses a cinematic static fleet photograph with a deep-navy panel, electric-blue primary action and restrained light motion. It is isolated from the light operational workspace and never changes dispatcher-page styling.
-- Typography: System sans-serif with tabular numerals for times, distances, and vehicle numbers.
-- Spacing/layout rhythm: Compact 4/8 px rhythm; no global desktop header; 80 px desktop navigation rail below 1536 px; 340–380 px vehicle rail; fullscreen map workspace; 44–52 px table rows.
-- Shape/radius/elevation: 6–10 px radii, restrained borders, almost no shadows.
-- Motion: Short state transitions only; truck marker may move smoothly between calculated positions; map HUD and route drawer reveal in 180–240 ms and honor reduced motion.
-- Imagery/iconography: Functional line icons; MapLibre is the rendering surface with traffic and satellite modes. Provider attribution remains visible.
+Не входят в текущий объём: приложение водителя, бухгалтерия, CRM и полноценное многопользовательское администрирование.
 
-## Components
-- Existing components to reuse: App shell, status badges, data table, map panel, timeline, order import preview, appointment planner and operational states.
-- New/changed components: Urgency-sorted vehicle rail with fixed-height contextual actions, fullscreen free-camera map, traffic/satellite switcher, one-shot camera controls, floating vehicle HUD, expandable route-stop drawer, collapsible right-side Tour/Auftrag panel, import review modal, filter chips, shared local page headers, work surfaces, icon buttons and overflow-safe text treatments.
-- Variants and states: dwell-critical VIOLET (highest priority), deadline RED, action ORANGE, watch YELLOW, moving BLUE, on-plan GREEN, idle GREY; waiting is visible from minute one; Webfleet fresh/stale/calculated source states; DONE/CURRENT/NEXT/QUEUED; loading/arrived/waiting/cancelled.
-- Token/component ownership: CSS custom properties and Tailwind theme in the web app; shared primitives under `apps/web/src/components`.
+## Информационная архитектура
 
-## Accessibility
-- Target standard: WCAG 2.1 AA for core dispatcher flows.
-- Keyboard/focus behavior: All navigation, forms, rows, and actions keyboard reachable with visible focus.
-- Contrast/readability: Status text always accompanies color; body text and table values meet AA contrast.
-- Screen-reader semantics: Semantic tables, headings, labels, live status text, and button names include the stop action.
-- Reduced motion and sensory considerations: Honor `prefers-reduced-motion`; do not use blinking alerts.
+Основная навигация: панель управления, грузовики, маршруты, новый заказ, предупреждения и история. Главная страница сначала показывает отсортированный по срочности список машин, затем карту выбранной машины и её показатели. Создание и редактирование отделены от мониторинга.
 
-## Responsive behavior
-- Supported breakpoints/devices: Primary 1280–1728 px MacBook desktop; usable down to 1024 px; narrow screens scroll dense tables horizontally.
-- Authentication: Desktop uses an approximately 65/35 image-to-form split. On mobile the same static fleet photograph becomes a full-viewport background beneath a high-contrast translucent form surface.
-- Layout adaptations: From 1100 px the dashboard uses vehicle rail + map; below it the vehicle cards become a horizontal rail above the map. Side navigation becomes a compact top strip below 1024 px.
-- Touch/hover differences: Desktop map HUD expands on hover and focus; touch uses an explicit tap toggle. Card actions use a fixed action rail and portal popover so cards never resize. No action is hover-only; primary buttons maintain at least 40 px height.
+## Принципы
 
-## Interaction states
-- Loading: Inline skeleton/quiet progress label without hiding existing data.
-- Empty: Explain the next operational action, such as creating a vehicle or order.
-- Error: Persistent German error message with retry where safe.
-- Success: Immediate data refresh and concise confirmation.
-- Disabled: Explain sequencing constraints (for example, unload before load).
-- Offline/slow network: Keep the last visible state and show refresh age; stale Webfleet GPS is never silently replaced by a calculated position; routing fallback is clearly identified.
+1. Плотно, но читаемо: данные важнее декоративных элементов.
+2. Каждая позиция и оценка показывают источник: свежий Webfleet, устаревший Webfleet или расчёт.
+3. Цвет всегда сопровождается текстом и не является единственным носителем смысла.
+4. Мониторинг использует весь экран; прокрутка ограничена отдельными панелями.
+5. Действия, меняющие данные, требуют явного нажатия и дают понятный результат.
 
-## Auftrag import flow
-- Default entry: PDF, Excel or screenshot import from the dashboard or dedicated page with automatic vehicle matching, city, appointment and coordinate resolution.
-- Dashboard pattern: A collapsible right overlay keeps the map as the primary surface. It has only Tour and New Auftrag tabs; importing opens a focused modal and never navigates away from fleet monitoring.
-- Review actions: Exactly two primary actions after recognition — Edit and Confirm. Confirm creates the Auftrag; there is no separate coordinate-check or save step.
-- Editing: Each loading/unloading card opens inline; unresolved addresses automatically open the affected card and block confirmation.
-- Cargo metadata: LDM/loading meters, stop-specific references and operational notes are optional, editable and visible on route stop cards. Their absence never blocks confirmation.
-- Privacy: Uploaded source files are processed in memory and are not retained by the application.
-- Stop defaults: Manual creation starts with Load then Unload. Normal dwell is 60 minutes and critical dwell is 120 minutes; these defaults are shown as compact metadata rather than editable table columns.
+## Визуальный язык
 
-## Content voice
-- Tone: Concise operational German.
-- Terminology: Auftrag, Tour, LKW, Ladestelle, Entladestelle, Termin, ETA, Verspätung, Berechnete Position.
-- Microcopy rules: Always show units; use exact timestamps; mandatory map disclaimer is “Berechnete Position – keine GPS-Daten”.
+- светлая рабочая область, компактная тёмно-синяя навигация, белые поверхности и синий акцент;
+- системный шрифт, табличные цифры для времени, расстояний и номеров машин;
+- сетка 4/8 px, скромные радиусы и границы, минимум теней;
+- короткие переходы 180–240 мс с поддержкой `prefers-reduced-motion`;
+- функциональные линейные иконки;
+- MapLibre с обязательной атрибуцией источника карты.
 
-## Implementation constraints
-- Framework/styling system: React, TypeScript, Vite, Tailwind CSS, MapLibre GL JS.
-- Design-token constraints: CSS custom properties plus existing Tailwind utilities; no second component framework. Shared controls must use the common button/input/surface/status classes.
-- Performance constraints: Dashboard state refresh every 10 seconds; map updates never reset a dispatcher-controlled camera. Webfleet sync is globally leased and quota-aware; routing/traffic recalculation remains separate from telemetry refresh.
-- Compatibility constraints: Local macOS launch via `npm install` and `npm run dev`; desktop Safari/Chrome current versions.
-- Test/screenshot expectations: Business calculations have unit tests; core pages receive build/type checks and manual smoke verification.
+Страница входа — отдельное исключение: статичная фотография автопарка, глубокая тёмно-синяя панель, яркая синяя кнопка и сдержанная световая анимация. Она не меняет стиль рабочих экранов.
 
-## Webfleet and map contract
-- Webfleet is read-only in v1 and supplies actual vehicle telemetry; driver data is neither requested nor stored.
-- Automatic arrival requires two fresh points inside 1 km with speed at or below 20 km/h. Loading and unloading remain dispatcher-confirmed.
-- The map opens near the selected truck at building-level zoom. Polling updates data layers only; camera changes occur only on vehicle selection or explicit controls.
-- Traffic mode is the default. Satellite and traffic layers use a browser-restricted TomTom map key and degrade to attributed OSM when unavailable.
+## Состояния
 
-## Open questions
-- [ ] Whether appointment timestamps should be displayed in a fixed depot timezone when used outside Europe/Berlin / owner / future deployment concern.
+Приоритеты: критическая стоянка, сорванный срок, требуемое действие, наблюдение, движение, норма, простой. Для Webfleet отдельно показываются свежие, устаревшие и расчётные данные. Для маршрута используются состояния завершено, текущее, следующее и в очереди.
+
+Загрузка не скрывает уже показанные данные. Пустое состояние объясняет следующее действие. Ошибка остаётся видимой и предлагает безопасный повтор. Устаревшая телеметрия никогда молча не заменяется расчётной.
+
+## Доступность
+
+- цель: WCAG 2.1 AA для основных сценариев;
+- все действия доступны с клавиатуры и имеют видимый фокус;
+- текст сопровождает цвет;
+- используются семантические заголовки, таблицы, подписи и `aria`-имена;
+- мигающие предупреждения запрещены;
+- анимация уменьшается по системной настройке.
+
+## Адаптивность
+
+Основной диапазон — 1280–1920 px, рабочий минимум — 1024 px. На узких экранах список машин переходит над картой, боковая навигация становится верхней, а плотные таблицы прокручиваются горизонтально. На мобильном страница входа использует фотографию как фон и затемнённую форму поверх неё.
+
+## Импорт Auftrag
+
+- PDF, Excel и скриншоты добавляются с панели или страницы нового заказа;
+- распознанная машина предлагается, но остаётся изменяемой;
+- после анализа доступны ровно два основных действия: редактировать и подтвердить;
+- неразрешённый адрес открывает нужную точку и блокирует подтверждение;
+- LM, референсы и примечания сохраняются у конкретной точки;
+- исходные файлы обрабатываются в памяти и не сохраняются;
+- ручной маршрут начинается с загрузки и выгрузки; стандартная стоянка 60 минут, контрольная — 120 минут.
+
+## Технические ограничения
+
+React, TypeScript, Vite, Tailwind и MapLibre. Новая UI-библиотека не добавляется. Карта загружается лениво. Обновление данных не сбрасывает вручную выбранную камеру. Webfleet в первой версии работает только на чтение; данные водителя не запрашиваются и не сохраняются.
+
+Автоматическое предложение прибытия требует двух свежих точек в радиусе 1 км со скоростью не выше 20 км/ч. Фактическое прибытие, загрузка и выгрузка всегда подтверждаются диспетчером.
+
+## Открытый вопрос
+
+- Нужно ли фиксировать часовой пояс депо для отображения терминов при работе вне Europe/Berlin.

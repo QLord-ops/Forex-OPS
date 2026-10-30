@@ -5,6 +5,7 @@ import type { RoutingProvider } from './routing.js';
 import { calculateSimulatedDuration } from './simulation.js';
 import { TourService, snapshotVehicleClock, rebaseActiveLeg } from './tours.js';
 import { forecastDrive, applyStopTime, type ClockState } from './vehicle-clock.js';
+import { writeAuditLog, type AuditActor } from './audit-log.js';
 
 export type ReplanStop = { id?: string; type: 'LOAD' | 'UNLOAD'; address: string; company?: string | null; city?: string | null; appointmentAt?: string | null; serviceMinMinutes?: number; serviceMaxMinutes?: number; latitude?: number; longitude?: number };
 export type ReplanInput = { version: number; futureStops: ReplanStop[]; origin?: Coordinate };
@@ -116,7 +117,7 @@ export class ReplanningService {
       after: { geometry: legs.flatMap(l => l.route.geometry.map(p => [p.longitude, p.latitude])), distanceMeters: legs.reduce((n, l) => n + l.route.distanceMeters, 0), durationSeconds: legs.reduce((n, l) => n + l.duration, 0), roads: [...new Set(legs.flatMap(l => roads(l.route)))], etaWindows } };
   }
 
-  async apply(tourId: string, input: { previewId: string; version: number }, now = new Date()) {
+  async apply(tourId: string, input: { previewId: string; version: number }, now = new Date(), actor?: AuditActor) {
     return this.db.$transaction(async tx => {
       const preview = await tx.routePreview.findUniqueOrThrow({ where: { id: input.previewId } });
       if (preview.tourId !== tourId || preview.version !== input.version || preview.appliedAt || preview.expiresAt <= now) throw new ReplanConflict('Предварительный расчёт истёк или уже применён.');
@@ -154,6 +155,8 @@ export class ReplanningService {
       else await tx.vehicle.update({ where: { id: context.vehicle.id }, data: { operationVersion: { increment: 1 } } });
       await tx.routePreview.update({ where: { id: preview.id }, data: { appliedAt: now } });
       await tx.operationEvent.create({ data: { vehicleId: context.vehicle.id, tourId, type: 'ROUTE_REPLANNED', payloadJson: JSON.stringify({ previewId: preview.id, affectedTourIds: plan.affectedTourIds, origin: plan.origin }) } });
+      await writeAuditLog(tx, actor, { action: 'ROUTE_REPLANNED', entityType: 'Tour', entityId: tourId,
+        vehicleId: context.vehicle.id, tourId, metadata: { previewId: preview.id, affectedTourIds: plan.affectedTourIds }, createdAt: now });
       return tx.tour.findUniqueOrThrow({ where: { id: tourId }, include });
     });
   }

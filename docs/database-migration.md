@@ -1,36 +1,31 @@
-# Production database migration
+# Перенос production-базы данных
 
-OPS Disponent uses PostgreSQL through Prisma. The provider can be changed without
-changing the application schema.
+OPS Disponent использует PostgreSQL через Prisma. Провайдера PostgreSQL можно заменить без изменения прикладной модели данных.
 
-## Target configuration
+## Целевая конфигурация
 
-- Managed PostgreSQL in Frankfurt.
-- `DATABASE_URL`: pooled PgBouncer connection used by the Vercel API.
-- `DATABASE_URL_UNPOOLED`: direct primary connection used only by Prisma migrations.
-- TLS must be required for both connections.
-- Automated backups and point-in-time recovery must be enabled before cutover.
+- управляемый PostgreSQL в регионе Frankfurt;
+- `DATABASE_URL`: pooled-подключение приложения;
+- `DATABASE_URL_UNPOOLED`: прямое подключение только для Prisma migrations;
+- TLS обязателен для обоих подключений;
+- до переключения должны быть включены автоматические backup и point-in-time recovery.
 
-Never commit connection strings. Store them in the provider and Vercel secret
-settings only.
+Строки подключения нельзя коммитить. Они хранятся только в секретах провайдера API и базы данных.
 
-## Safe cutover
+## Безопасное переключение
 
-1. Keep the existing Neon project and backup branch unchanged.
-2. Create the destination database and a least-privilege application user.
-3. Put the direct destination connection in `DATABASE_URL_UNPOOLED` locally.
-4. Validate connectivity with `npm run db:check --workspace @ops/api`.
-5. Apply the immutable Prisma migrations with `npm run db:deploy --workspace @ops/api`.
-6. Export the Neon production database with `pg_dump` when Neon access is restored.
-7. Import the dump into the destination using `pg_restore`.
-8. Compare table counts and sample vehicle, tour, stop, event and alert records.
-9. Configure the pooled and direct destination URLs in the Vercel API project.
-10. Redeploy the API, then verify `/health`, `/dashboard`, order creation, history,
-    timers and Webfleet telemetry.
-11. Keep Neon read-only until the new database has passed the observation period.
+1. Не изменять текущий Neon-проект и его backup branch.
+2. Создать целевую базу и пользователя приложения с минимальными правами.
+3. Локально указать прямое подключение назначения в `DATABASE_URL_UNPOOLED`.
+4. Проверить соединение командой `npm run db:check --workspace @ops/api`.
+5. Применить неизменяемые Prisma migrations командой `npm run db:deploy --workspace @ops/api`.
+6. После восстановления доступа экспортировать production-базу через `pg_dump`.
+7. Импортировать дамп через `pg_restore`.
+8. Сравнить количество строк и выборочно проверить машины, туры, точки, события и предупреждения.
+9. Указать pooled и direct URL в секретах production API.
+10. Перезапустить API и проверить `/health`, `/dashboard`, создание заказа, историю, таймеры и Webfleet.
+11. Оставить прежнюю базу в режиме чтения до окончания периода наблюдения.
 
-## Rollback
+## Откат
 
-If verification fails, restore the previous Vercel environment variables and
-redeploy the API. Do not delete either database until the destination has been
-verified and a fresh independent backup exists.
+Если проверка не прошла, восстановить прежние переменные окружения и повторно развернуть API. Ни одну базу нельзя удалять, пока новая база не проверена и не создан независимый свежий backup.

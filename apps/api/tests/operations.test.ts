@@ -63,17 +63,22 @@ it('persists and deduplicates predicted arrival without recording an actual arri
   expect(rows[0].message).toContain('Hamburg');
   expect((await db.stop.findUniqueOrThrow({ where: { id: f.stop.id } })).arrivedAt).toBeNull();
   await expect(f.tours.recordUnloaded(f.stop.id, at(125))).rejects.toThrow('подтвердить прибытие');
-  await f.service.confirmArrival(f.stop.id, at(122), at(125));
-  await f.service.confirmArrival(f.stop.id, at(122), at(125));
+  const actor = { role: 'dispatcher' as const, sessionId: 'session-audit-test' };
+  await f.service.confirmArrival(f.stop.id, at(122), at(125), actor);
+  await f.service.confirmArrival(f.stop.id, at(122), at(125), actor);
   expect(await db.operationEvent.count({ where: { stopId: f.stop.id, type: 'ARRIVAL_CONFIRMED' } })).toBe(1);
   expect((await db.notification.findUniqueOrThrow({ where: { id: rows[0].id } })).acknowledgedAt).not.toBeNull();
   expect((await f.service.get(f.vehicle.id, at(132))).dwellMinutes).toBe(10);
   await f.notices.refresh(at(250));
   await f.notices.refresh(at(260));
   expect(await db.notification.count({ where: { stopId: f.stop.id, type: 'LONG_DWELL' } })).toBe(1);
-  await f.tours.recordUnloaded(f.stop.id, at(270));
+  await f.tours.recordUnloaded(f.stop.id, at(270), undefined, actor);
   const completed = await db.stop.findUniqueOrThrow({ where: { id: f.stop.id } });
   expect((completed.completedAt!.getTime() - completed.arrivedAt!.getTime()) / 60000).toBe(148);
+  expect(await db.auditLog.findMany({ where: { stopId: f.stop.id }, orderBy: { createdAt: 'asc' }, select: { action: true, actorRole: true, actorSessionId: true } })).toEqual([
+    { action: 'ARRIVAL_CONFIRMED', actorRole: 'dispatcher', actorSessionId: 'session-audit-test' },
+    { action: 'UNLOADED', actorRole: 'dispatcher', actorSessionId: 'session-audit-test' },
+  ]);
 });
 
 it('classifies confirmed dwell at the exact 60/61/120/121 minute boundaries', () => {

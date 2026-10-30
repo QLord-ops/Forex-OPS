@@ -1,13 +1,14 @@
-# Vehicle operations implementation
+# План реализации операций машины
 
-Approved scope: vehicle-only calculated duty/rest state, optional appointments and cities, confirmed arrivals and dwell timers, active route revisions, free-tier traffic monitoring and global notifications. No GPS, drivers, paid requests, or database reset.
+Утверждённый объём: расчёт рабочего времени и отдыха по машине, необязательные термины и города, подтверждённые прибытия и стоянки, версии маршрутов, экономный контроль трафика и общие уведомления. Источник фактической позиции подключается через Webfleet; данные водителей и платные запросы без явной настройки не используются.
 
-Delivery lanes:
-1. Pure vehicle clock engine + deterministic tests.
-2. TomTom routing and persistent quota + mocked provider tests.
-3. Nullable appointments, city, history query-key fix, duration UI.
-4. Active-route preview/apply preserving completed history and downstream transfers.
-5. Operational UI with clock setup, arrival/stop controls, notifications and proposals.
-6. Root: safe schema migration/backup, runtime integration, ETA, worker/SSE, verification.
+Этапы поставки:
 
-Verification: focused tests first, isolated SQLite integration, typecheck/lint/build, browser smoke without test writes to the live DB, security/correctness review. Existing legacy records retain unknown clock/arrival metadata. No commits requested.
+1. Детерминированный расчёт часов машины и unit-тесты.
+2. TomTom routing, постоянная квота и тесты провайдера.
+3. Необязательные термины, города, история и длительности.
+4. Предпросмотр и применение маршрута с сохранением выполненной истории.
+5. Рабочий интерфейс прибытия, остановки, уведомлений и предложений.
+6. Безопасные миграции, интеграция runtime, ETA и проверка.
+
+Проверка: целевые тесты, изолированная SQLite, typecheck, lint, build и browser smoke без записи в рабочую базу. Старые записи без часов и прибытия остаются явно неизвестными.

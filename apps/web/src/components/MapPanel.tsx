@@ -1,3 +1,4 @@
+import 'maplibre-gl/dist/maplibre-gl.css'
 import { GeoJSONSource, Map, Marker, NavigationControl, setWorkerUrl, type StyleSpecification } from 'maplibre-gl'
 import mapLibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
 import { LocateFixed, Route, Satellite, TrafficCone } from 'lucide-react'
@@ -38,6 +39,16 @@ const fallbackSatelliteStyle: StyleSpecification = {
 const CAMERA_STORAGE_KEY = 'ops-dashboard-map-camera'
 type MapMode = 'traffic' | 'satellite'
 
+export type MapPanelProps = {
+  tour?: Tour | null
+  position?: CurrentPosition | null
+  vehicleNumber?: string | null
+  focusCoordinate?: Coordinate | null
+  previewRoute?: Coordinate[]
+  height?: number | string
+  fill?: boolean
+}
+
 export function MapPanel({
   tour,
   position,
@@ -46,15 +57,7 @@ export function MapPanel({
   previewRoute,
   height = 520,
   fill = false
-}: {
-  tour?: Tour | null
-  position?: CurrentPosition | null
-  vehicleNumber?: string | null
-  focusCoordinate?: Coordinate | null
-  previewRoute?: Coordinate[]
-  height?: number | string
-  fill?: boolean
-}) {
+}: MapPanelProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<Map | null>(null)
   const markerRef = useRef<Marker | null>(null)

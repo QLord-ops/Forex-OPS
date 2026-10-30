@@ -1,183 +1,129 @@
 # OPS Disponent
 
-Lokale Dispositionsanwendung für berechnete LKW-Bewegungen, ETA, Verspätungsrisiken und verkettete Touren.
+## О проекте
 
-> **Berechnete Position – keine GPS-Daten.** Die Anwendung nutzt weder Webfleet noch GPS- oder Fahrerdaten. Fahrzeugpositionen werden ausschließlich aus bestätigten Lade-/Entladeereignissen, gespeicherten Straßengeometrien und der simulierten Fahrtdauer berechnet.
+OPS Disponent — диспетчерская платформа для грузового автопарка. Она объединяет создание и анализ транспортных заказов, назначение машин, планирование цепочки загрузок и выгрузок, расчёт ETA, контроль прибытия, BELADEN/ENTLADEN, пробки, рабочее время и историю действий диспетчеров.
 
-## Voraussetzungen (macOS)
+Проект создаётся как единое рабочее место диспетчера: меньше ручного переноса данных из Auftrag, понятная карта всех машин, безопасное подтверждение действий и подготовка к получению телеметрии Webfleet.
 
-1. Installiere Node.js 22.12 oder neuer (aktuelle LTS). Mit Homebrew:
+**Описание репозитория:** защищённая диспетчерская система для управления грузовыми турами, ETA, Auftrag и телематикой Webfleet.
 
-   ```bash
-   brew install node@22
-   ```
+**Рекомендуемые GitHub topics:** `logistics`, `fleet-management`, `dispatch`, `trucking`, `route-planning`, `fastify`, `react`, `prisma`, `maplibre`, `webfleet`.
 
-2. Prüfe die Versionen:
+> Позиция машины может быть расчётной. Пока Webfleet не подключён, она строится по подтверждённым событиям, геометрии маршрута и времени движения и не должна восприниматься как GPS-навигация.
 
-   ```bash
-   node --version
-   npm --version
-   ```
+## Технологии
 
-3. Öffne Terminal und wechsle in das Projekt:
+- `apps/api`: Fastify, Prisma, PostgreSQL для production и SQLite для локальной совместимости;
+- `apps/web`: React, Vite и MapLibre;
+- npm workspaces, Vitest и Playwright;
+- OpenAI — только для серверного анализа документов и адресов;
+- TomTom, Nominatim и OSRM — для маршрутов и адресов;
+- подготовленный адаптер Webfleet для телеметрии машин.
 
-   ```bash
-   cd ops-disponent
-   ```
+## Быстрый старт
 
-## Erste Installation
+Нужен Node.js 22.
 
 ```bash
+cd ops-disponent
 npm install
 npm run db:setup
 npm run dev
 ```
 
-Danach öffnen:
+После запуска:
 
-- Web-App: [http://localhost:5173](http://localhost:5173)
-- Backend-Healthcheck: [http://localhost:3001/health](http://localhost:3001/health)
+- веб-интерфейс: [http://localhost:5173](http://localhost:5173);
+- проверка API: [http://localhost:3001/health](http://localhost:3001/health).
 
-`npm run db:setup` erzeugt den Prisma Client, führt die versionierten SQL-Migrationen aus und lädt die Demo-Daten. Die Migrationen liegen unter `apps/api/prisma/migrations/`. Die Demo enthält die Fahrzeuge 936, 728, 414 und 563 sowie eine aktive und eine nachfolgende Tour für LKW 936.
+Локально состояние хранится в SQLite. Рабочая production-схема Prisma использует PostgreSQL. Подробная схема развёртывания описана в [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
-## Normaler Start
+## Основной рабочий процесс
 
-```bash
-npm run dev
-```
+### Создание Auftrag
 
-Der Befehl startet Backend und Frontend gemeinsam. Mit `Ctrl+C` werden beide Prozesse beendet. Der Zustand bleibt in SQLite erhalten.
+1. Откройте «Новый заказ».
+2. Загрузите PDF до 20 МБ, XLSX до 5 МБ или PNG/JPG/WebP до 10 МБ.
+3. Проверьте распознанные машину, прицеп, Tourbemerkung, адреса, LM, референсы и термины.
+4. Подтвердите выбранную машину и точки маршрута.
+5. Только явное подтверждение создаёт тур; повторный запрос импорта не создаёт дубликат.
 
-## Bedienung
+Оригинал файла не сохраняется в базе или на диске. Документ считается недоверенным вводом. Если точный адрес не найден, проверка последовательно переходит к улице, индексу с городом и городу, при этом точность результата остаётся видимой пользователю.
 
-### Fahrzeug anlegen
+### Прибытие и BELADEN/ENTLADEN
 
-1. Navigation **Fahrzeuge** öffnen.
-2. LKW-Nummer, optional Kennzeichen und Höchstgeschwindigkeit im Formular eingeben.
-3. **Fahrzeug anlegen** wählen. Ohne Angabe gilt 85 km/h.
+1. Откройте карточку машины.
+2. Подтвердите фактическое прибытие на текущую точку.
+3. После прибытия нажмите «ЗАГРУЖЕНО» для загрузки или «ВЫГРУЖЕНО» для выгрузки.
+4. Следующий участок запускается только после завершения текущей точки.
 
-Alternativ per API:
+Кто и когда подтвердил прибытие, загрузку, выгрузку, изменение тура или применение нового маршрута, сохраняется в отдельном журнале аудита по роли и обезличенному идентификатору сессии.
 
-```bash
-curl -X POST http://localhost:3001/vehicles \
-  -H 'Content-Type: application/json' \
-  -d '{"vehicleNumber":"999","licensePlate":"GÖ-OP 999","maxSpeedKmh":85}'
-```
+### Изменение будущего тура
 
-### Auftrag anlegen
+Редактировать можно только будущий тур без подтверждённых событий. Завершённые точки и история операций не удаляются. Перед применением изменённого маршрута создаётся предварительный расчёт, а версия плана проверяется повторно.
 
-1. Navigation **Neuer Auftrag** öffnen.
-2. Einen PDF-Auftrag bis 20 MB, eine Excel-Datei `.xlsx` bis 5 MB oder einen Screenshot als PNG/JPG/WebP bis 10 MB auswählen oder in die Dropzone ziehen. Der Agent extrahiert Auftragsnummer, einen eventuell angegebenen LKW, Lade-/Entladestellen und vorhandene Termine.
-3. Die Vorschau kontrollieren und den konkreten LKW auswählen. Ein im Dokument erkannter LKW wird vorgeschlagen, bleibt aber vor der Bestätigung änderbar.
-4. Die Adressprüfung versucht nacheinander vollständige Adresse, Straße ohne Hausnummer, Postleitzahl mit Ort und zuletzt den Ort. Ein ungenaues Ergebnis wird sichtbar als vorläufig markiert.
-5. Fehlende oder unsichere Daten korrigieren. Termine dürfen leer bleiben; LM, Referenzen und Hinweise bleiben im jeweiligen Stopp erhalten.
-6. **Bestätigen** wählen. Dieser eine ausdrückliche Schritt legt den Auftrag direkt am ausgewählten LKW an. Eine Wiederholung derselben Anfrage liefert den bereits erzeugten Auftrag zurück und erzeugt kein Duplikat. Ist bereits eine Tour aktiv, wird der neue Auftrag als `QUEUED` angehängt.
+## Настройка окружения
 
-Verarbeitet werden PDF-Aufträge, Excel-Dateien `.xlsx` und Screenshots von Aufträgen oder Excel-Tabellen. Die Originaldatei wird weder auf der Festplatte noch in der Datenbank gespeichert. Excel wird zuerst lokal gelesen; unbekannte Layouts können optional mit OpenAI ausgewertet werden. PDF- und Bildimporte werden mit `store: false`, hoher Detailstufe und Strict Structured Output an die OpenAI Responses API gesendet. Dokumentinhalt gilt als nicht vertrauenswürdig und kann die Extraktionsanweisungen nicht überschreiben. Das Ergebnis ist immer nur eine Vorschau und erzeugt niemals automatisch eine Tour.
+Шаблоны переменных находятся в:
 
-Für die spätere Aktivierung in der bestehenden `apps/api/.env` ergänzen (andere Werte nicht überschreiben):
+- `apps/api/.env.example`;
+- `apps/web/.env.example`.
 
-```dotenv
-OPENAI_API_KEY="Ihr-Schlüssel"
-OPENAI_IMPORT_MODEL="gpt-5.4-mini"
-OPENAI_ADDRESS_RESEARCH_ENABLED="true"
-OPENAI_ADDRESS_RESEARCH_MODEL="gpt-5.4-mini"
-OPENAI_ADDRESS_RESEARCH_MONTHLY_LIMIT="100"
-```
+Секреты хранятся только в серверном окружении. API-ключи, пароли, строки базы данных и сессионный секрет нельзя помещать в `VITE_*`, исходный код или git.
 
-Danach das Backend neu starten. Der Schlüssel bleibt ausschließlich auf dem Server; niemals in `VITE_*` eintragen. Die OpenAI-Nutzung des PDF- und Screenshot-Imports sowie die optionale Web-Adresssuche sind kostenpflichtig und ohne Schlüssel nicht verfügbar, unabhängig von den kostenlosen Karten. Die Adresssuche wird erst verwendet, wenn die kostenlose Prüfung keine Straße oder genaue Adresse liefert, und ist standardmäßig auf 100 Aufrufe pro Monat begrenzt. `OPENAI_ADDRESS_RESEARCH_ENABLED="false"` schaltet sie vollständig ab. Für den Produktionsstart sollte ein repräsentativer echter Auftrag getestet werden. Fehlende Zeiten, Auftragsnummern und LKW müssen vor dem Speichern ergänzt werden. Zeitangaben ohne Zone werden als lokale Zeit des Browsers behandelt. Mehrere erkannte Aufträge können einzeln ausgewählt werden; es gibt keinen automatischen Massenimport.
+Для production нужны как минимум:
 
-Beim Screenshot-Import extrahiert das KI-Schema den Ort zusätzlich zur vollständigen Adresse. Fehlt der Ort oder ist er unsicher, übernimmt die Adressprüfung anschließend den strukturierten Ort aus Nominatim. Vor dem Speichern bleibt der erkannte Ort sichtbar und korrigierbar.
+- `DATABASE_URL` — pooled-подключение PostgreSQL;
+- `DATABASE_URL_UNPOOLED` — прямое подключение для миграций;
+- `DISPATCHER_PASSWORD_HASH` и `ADMIN_PASSWORD_HASH`;
+- `SESSION_SECRET`;
+- `ALLOWED_ORIGINS`.
 
-### Später eingegangenen Termin anhängen
+Дополнительные возможности включаются серверными переменными OpenAI, TomTom и Webfleet из `.env.example`.
 
-1. Den betroffenen LKW öffnen. Bei einer aktiven oder wartenden Tour **Termin hinzufügen oder ändern** wählen.
-2. Die noch nicht abgeschlossene Lade- oder Entladestelle und den neu eingegangenen Termin auswählen.
-3. **ETA und Abfahrtszeit berechnen** wählen. Die Vorschau zeigt das ETA-Fenster, den Zeitpuffer, das Verspätungsrisiko und – solange der LKW noch nicht unterwegs ist – die späteste empfohlene Abfahrt.
-4. Erst **Termin bestätigen und anhängen** speichert den Termin. Dabei wird die Planversion atomar geprüft, die Historie ergänzt und die Warnungsberechnung aktualisiert.
+## База данных и развёртывание
 
-Ohne GPS oder bekannte Ausgangszeiten des LKW bleibt der Hinweis ausdrücklich vorläufig. Für die erste Stelle einer Tour kann ohne bekannte aktuelle Position keine verlässliche Abfahrtszeit berechnet werden; laufende und geplante Anfahrtsstrecken werden dagegen berücksichtigt.
+- frontend разворачивается на Vercel;
+- Fastify API должен работать как отдельный долгоживущий сервис, поскольку в нём есть SSE, фоновые проверки и соединение с PostgreSQL;
+- production-данные должны храниться в PostgreSQL, например Neon;
+- SQLite на Vercel не является постоянным хранилищем;
+- перенос данных выполняется только после backup/branch, dry-run и явного подтверждения.
 
-### BELADEN und ENTLADEN
-
-1. Auf dem Dashboard den LKW öffnen.
-2. Eine rechnerische Ankunft zuerst über **Ankunft bestätigen** als tatsächliche Ankunft erfassen. Dadurch startet der gemeinsame Aufenthaltstimer.
-3. Beim aktuellen `LOAD`-Stop **BELADEN** beziehungsweise beim `UNLOAD`-Stop **ENTLADEN** anklicken. Erst der Abschlusszeitpunkt beendet den Aufenthalt und gibt den nächsten Abschnitt beziehungsweise die nächste Wartetour frei.
-
-Ein rechnerisch angekommener LKW bleibt am Ziel mit **ANGEKOMMEN – wartet auf Bestätigung** stehen. Ein Folgeabschnitt startet niemals allein wegen abgelaufener Fahrzeit.
-
-### Zukünftige Tour bearbeiten oder stornieren
-
-1. Navigation **Touren** öffnen.
-2. Bei einer `QUEUED`-Tour **Bearbeiten** wählen, um LKW, Auftragsnummer, Termine, Adressen oder die Stoppliste anzupassen.
-3. Geänderte Adressen erneut über **Prüfen** bestätigen und speichern.
-4. Über **Stornieren** kann die letzte zukünftige Tour einer Warteschlange abgebrochen werden.
-
-Bereits bestätigte `BELADEN`-/`ENTLADEN`-Events werden niemals durch eine Planänderung gelöscht. Deshalb sind laufende oder historisierte Touren bewusst nicht über diesen Planeditor änderbar.
-Bearbeitbar ist nur die letzte Tour der Warteschlange: Sonst könnten gespeicherte Transferstrecken nachfolgender Touren ungültig werden.
-
-### Berechnete Bewegung ansehen
-
-Im Dashboard auf einen LKW klicken. Die Fahrzeugseite zeigt:
-
-- vollständige Straßengeometrie und alle Stops;
-- bereits gefahrene und verbleibende Route;
-- simulierten Marker direkt auf der Route;
-- Start, Termin, ETA-Bereich, Strecke, Fortschritt und Verspätung;
-- den berechneten Fahrzeug-Zeitstand, Pausen, Ruhezeiten und verbleibende Ausnahmen;
-- den Stand der Verkehrsdaten, die kostenlose Monatsquote und freizugebende Umleitungsvorschläge;
-- Tour- und Stop-Timeline einschließlich nachfolgender Touren.
-
-Die Backend-Daten werden alle 30 Sekunden aktualisiert. Die Markerposition wird alle 5 Sekunden dynamisch vom Backend berechnet und abgefragt, ohne die Datenbank zu beschreiben.
-
-## Datenbank
-
-Lokal kann SQLite als Entwicklungsquelle verwendet werden:
-
-```text
-apps/api/prisma/dev.db
-```
-
-Das productionfähige Prisma-Schema unter `apps/api/prisma/schema.prisma` verwendet PostgreSQL; das lokale Kompatibilitätsschema liegt unter `apps/api/prisma/sqlite/schema.prisma`. Migrationen und Seed liegen unter `apps/api/prisma/`. Der vorbereitete, aber nicht automatisch ausgeführte Wechsel zu Neon/Postgres ist in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) beschrieben.
-
-Zum vollständigen Neuaufbau der Demo-Daten:
+Команды базы:
 
 ```bash
+npm run db:setup
 npm run db:reset
+npm run db:check --workspace @ops/api
+npm run db:deploy --workspace @ops/api
 ```
 
-Dieser Befehl ersetzt den Inhalt der lokalen Entwicklungsdatenbank durch frische, relativ zur aktuellen Uhrzeit erzeugte Demo-Daten. Er ist deshalb nur für Demo-/Entwicklungsdaten gedacht.
+`db:reset` предназначен только для локальной демо-базы.
 
-## Kostenlose Karte, Routing und ETA
+## Карта, маршруты и внешние сервисы
 
-`RoutingProvider` trennt Routing vollständig von Simulation, ETA und Tourlogik.
+MapLibre загружается лениво только на страницах с картой. Без TomTom приложение использует OSRM и явно сообщает, что актуальные пробки и ограничения грузовиков не проверены. Nominatim-запросы имеют серверный кэш, лимит и корректный User-Agent.
 
-- Die Oberfläche verwendet MapLibre GL JS mit Rasterkarten von OpenStreetMap; ein Google-Maps-Schlüssel ist nicht erforderlich.
-- `OsrmRoutingProvider` nutzt Nominatim zur Adresssuche und OSRM für reale Straßengeometrie, Distanz und Dauer.
-- Die ETA berücksichtigt den gespeicherten Zeitstand der Maschine, automatische 45-Minuten-Pausen, Tagesruhe und die geplanten Aufenthaltsbereiche der Stopps. Fahrer- oder GPS-Daten werden nicht geführt.
-- Ohne TomTom-Key verwendet der öffentliche OSRM-Dienst ein PKW-Profil: LKW-Höhe, Gewicht, Gefahrgut, Fahrverbote und Live-Verkehr werden dann nicht berücksichtigt. Die App kennzeichnet diesen Fallback sichtbar. Die ETA bleibt eine Planungsschätzung, keine garantierte Ankunftszeit oder LKW-Navigation.
-- Wenn Nominatim nicht erreichbar ist, wird eine Kundenadresse nicht mit erfundenen Koordinaten bestätigt. Der Mock-Fallback ist ausschließlich über `ROUTING_ALLOW_MOCK=true` für Demo-Entwicklung aktivierbar.
-- Bereits gespeicherte Touren benötigen beim Anzeigen keine erneute Routing-Anfrage.
-- Bereits gespeicherte Demo-Routen werden nicht automatisch ersetzt; echte Straßenrouten gelten für neu angelegte oder neu berechnete Touren.
+Квоты OpenAI и TomTom считаются на сервере. Клиент не может самостоятельно повысить лимит или получить секретный ключ.
 
-Die öffentlichen Nominatim-/OSRM-Endpunkte sind für lokale Entwicklung und geringe Last gedacht. Ihre Basis-URLs sind über `NOMINATIM_BASE_URL` und `OSRM_BASE_URL` konfigurierbar; für produktive Nutzung sollte ein eigener oder vertraglich betriebener Dienst verwendet werden. Gleiche Geocode-Anfragen werden im Prozess gecacht und Nominatim-Aufrufe werden serialisiert.
+## Безопасность
 
-### Optional: TomTom Live Traffic
+- все API-маршруты, кроме `/health`, требуют серверную сессию;
+- роли: `admin` и `dispatcher`;
+- мутации защищены CSRF-проверкой источника и токена;
+- CORS ограничен `ALLOWED_ORIGINS`;
+- используются Helmet и rate limiting;
+- загрузки проверяются по сигнатуре файла и размеру, XLSX — также на zip-бомбы;
+- ошибки API не возвращают stack trace;
+- журнал аудита не хранит пароль или исходный токен сессии.
 
-Für echte Verkehrs-ETA und LKW-Parameter kann serverseitig `TomTomRoutingProvider` aktiviert werden. Benötigt werden ein TomTom-Key und die bewusste Bestätigung der Free-Tier-Bedingungen:
+В GitHub рекомендуется включить Secret Scanning, Push Protection и защиту `main`: запрет прямых push, обязательный pull request, успешный CI и запрет переписывания истории.
 
-```dotenv
-TOMTOM_API_KEY="Ihr-TomTom-Key"
-TOMTOM_FREE_TIER_CONFIRMED="true"
-TOMTOM_ROUTING_MONTHLY_CAP="18000"
-TOMTOM_MANUAL_RESERVE_RATIO="0.2"
-```
+## Проверки
 
-Der interne Default bleibt unter der aktuell dokumentierten kostenlosen Routing-API-Grenze von 20.000 Requests pro Monat. Hintergrundabfragen verbrauchen nur den nicht reservierten Anteil; der Rest bleibt für manuelle Dispatcher-Aktionen wie Route ändern oder aktualisieren frei. Ohne Key oder bei ausgeschöpfter Quote fällt die App auf OSRM zurück und markiert die Route ausdrücklich mit **Ohne aktuelle Staus und Prüfung von LKW-Einschränkungen**.
-
-TomTom-Antworten werden nur als Planungsvorschlag übernommen: aktive Routen werden nicht automatisch ersetzt. Alternativen werden bis maximal zwei Vorschläge geliefert, wenn sie mindestens 10 Minuten sparen oder eine Sperrung umgehen. Hintergrundprüfungen laufen nur für berechnet fahrende Maschinen und werden bei knapper Quote automatisch seltener.
-
-## Qualitätssicherung
+После каждой фазы изменений выполняются:
 
 ```bash
 npm run lint
@@ -186,50 +132,36 @@ npm test
 npm run build
 ```
 
-Die Unit-Tests decken unter anderem Speed-Cap, Fortschritt, Distanz, ETA, Verspätung, Tour-Queue, Folgeaktivierung, Alerts und Positionsinterpolation auf der Polyline ab.
+Браузерные сценарии:
 
-### GitHub-Sicherheit
+```bash
+npm run test:e2e
+```
 
-Für das GitHub-Repository sollten **Secret Scanning** und **Push Protection** aktiviert werden. Die Branch-Protection-Regel für `main` sollte direkte Pushes verhindern, Pull Requests und erfolgreiche CI-Prüfungen verlangen sowie das Überschreiben der Historie sperren. Dependabot prüft die npm-Abhängigkeiten wöchentlich; die CI führt bei jedem Push und Pull Request Lint, Typecheck, Tests, Build und `npm audit --audit-level=high` aus.
+Playwright проверяет импорт заказа, подтверждение прибытия, BELADEN и редактирование будущего тура. CI отдельно запускает линтер, типы, unit/integration-тесты, build, e2e и `npm audit --audit-level=high`.
 
-## Projektstruktur
+## Структура
 
 ```text
 .
 ├── apps/
-│   ├── api/       # Fastify, Prisma, SQLite, Services und Tests
-│   └── web/       # React, Vite, Tailwind, MapLibre
-├── DESIGN.md      # UI-/UX-Vertrag
-├── PROJECT_STATUS.md
-└── package.json   # npm workspaces und gemeinsame Befehle
+│   ├── api/       # Fastify, Prisma, сервисы и тесты
+│   └── web/       # React, Vite и MapLibre
+├── docs/          # Развёртывание и интеграции
+├── e2e/           # Playwright-сценарии
+├── DESIGN.md      # Правила интерфейса
+└── package.json   # Общие команды workspaces
 ```
 
-## Wichtige API-Endpunkte
+## Основные API-маршруты
 
-- `GET/POST /vehicles`
-- `GET /vehicles/:id`
-- `GET /vehicles/:id/tours`
-- `GET /vehicles/:id/current-position`
-- `GET /vehicles/:id/timeline`
-- `GET /vehicles/:id/operations`
-- `PUT /vehicles/:id/operations/clock`
-- `POST /vehicles/:id/operations/manual-stop`
-- `POST /vehicles/:id/operations/resume`
-- `GET /vehicles/:id/traffic`
-- `POST /vehicles/:id/traffic/refresh`
-- `POST /vehicles/:id/replan/preview`
-- `POST /vehicles/:id/replan/apply`
-- `POST /tours`
-- `GET/PATCH /tours/:id`
-- `POST /stops/:id/arrival`
-- `POST /stops/:id/not-arrived`
-- `POST /stops/:id/loaded`
-- `POST /stops/:id/unloaded`
-- `GET /notifications`
-- `GET /notifications/stream`
-- `GET /alerts`
-- `GET /dashboard`
-- `GET /history`
-- `GET /geocode`
-- `POST /imports/excel/preview`
-- `POST /imports/pdf/preview`
+- `/auth/*`, `/health`;
+- `/vehicles`, `/vehicles/:id/*`;
+- `/tours`, `/tours/:id`, `/tours/:id/replan/*`;
+- `/stops/:id/arrival`, `/stops/:id/loaded`, `/stops/:id/unloaded`;
+- `/imports/excel/preview`, `/imports/pdf/preview`, `/imports/image/preview`;
+- `/geocode`, `/notifications`, `/dashboard`, `/history`;
+- `/integrations/webfleet/*`;
+- `/assistant/*`.
+
+Подробности миграции и production-развёртывания находятся в [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md), а подключение Webfleet — в [docs/webfleet-integration.md](docs/webfleet-integration.md).

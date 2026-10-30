@@ -2,7 +2,7 @@ import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
 import multipart from "@fastify/multipart";
 import rateLimit from "@fastify/rate-limit";
-import Fastify from "fastify";
+import Fastify, { type FastifyRequest } from "fastify";
 import { z } from "zod";
 import { CALCULATED_POSITION_DISCLAIMER, type CurrentPosition, withoutPositionGeometry } from "./domain.js";
 import { prisma } from "./lib/prisma.js";
@@ -39,6 +39,13 @@ import { registerRouteScenarioRoutes } from './routes/route-scenario.js';
 import { DispatcherAssistantService } from './services/dispatcher-assistant.js';
 import { assistantSessionKey, registerDispatcherAssistantRoutes } from './routes/dispatcher-assistant.js';
 import { createDispatcherDependencies } from './services/dispatcher-adapters.js';
+import type { AuditActor } from './services/audit-log.js';
+
+function auditActor(request: FastifyRequest): AuditActor | undefined {
+  return request.dispatcherSession
+    ? { role: request.dispatcherSession.role, sessionId: request.dispatcherSession.sessionId }
+    : undefined;
+}
 
 const trafficQuota = new PrismaTrafficQuotaStore(prisma);
 const trafficProvider = new TomTomRoutingProvider(trafficQuota, new OsrmRoutingProvider());
@@ -321,7 +328,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   app.delete('/vehicles/:id/exceptions', async request => operationsService.cancelExceptions(idParams.parse(request.params).id, versionInput.parse(request.body).version));
   app.post('/stops/:id/arrival', async request => {
     const input = z.object({ arrivedAt: z.string().datetime().optional() }).parse(request.body ?? {});
-    return operationsService.confirmArrival(idParams.parse(request.params).id, input.arrivedAt ? new Date(input.arrivedAt) : new Date());
+    return operationsService.confirmArrival(idParams.parse(request.params).id, input.arrivedAt ? new Date(input.arrivedAt) : new Date(), new Date(), auditActor(request));
   });
   app.post('/stops/:id/not-arrived', async request => {
     const input = z.object({ latitude: z.number().min(-90).max(90), longitude: z.number().min(-180).max(180) }).parse(request.body);
@@ -329,7 +336,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     if (stop.arrivedAt || stop.completedAt || stop.tour.stops.find(item => !item.completedAt)?.id !== stop.id) throw Object.assign(new Error('Требуется текущая неподтверждённая точка.'), { statusCode: 409 });
     const preview = await replanningService.preview(stop.tourId, { version: stop.tour.planVersion, origin: input,
       futureStops: stop.tour.stops.filter(item => !item.completedAt).map(item => ({ ...item, type: item.type as 'LOAD' | 'UNLOAD', appointmentAt: item.appointmentAt?.toISOString() ?? null })) });
-    await replanningService.apply(stop.tourId, { previewId: preview.id, version: preview.version });
+    await replanningService.apply(stop.tourId, { previewId: preview.id, version: preview.version }, new Date(), auditActor(request));
     await prisma.notification.updateMany({ where: { stopId: stop.id, type: 'PREDICTED_ARRIVAL', acknowledgedAt: null }, data: { acknowledgedAt: new Date() } });
     return { ok: true };
   });
@@ -359,7 +366,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   });
   app.post('/tours/:id/replan/apply', { config: { rateLimit: { max: 15, timeWindow: '1 minute' } } }, async request => {
     const input = versionInput.extend({ previewId: z.string().min(1) }).parse(request.body);
-    return replanningService.apply(idParams.parse(request.params).id, input);
+    return replanningService.apply(idParams.parse(request.params).id, input, new Date(), auditActor(request));
   });
 
   app.post("/imports/excel/preview", { config: { rateLimit: { max: 5, timeWindow: '1 minute' } } }, async (request, reply) => {
@@ -635,13 +642,13 @@ export async function buildApp(options: BuildAppOptions = {}) {
 
   app.post("/tours", async (request, reply) => {
     const input = createTourSchema.parse(request.body);
-    const tour = await tourService.createTour(input);
+    const tour = await tourService.createTour(input, auditActor(request));
     return reply.status(201).send(enrichTour(tour));
   });
 
   app.post("/imports/tours/confirm", { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request, reply) => {
     const { importAttemptId, importFingerprint, ...input } = confirmImportedTourSchema.parse(request.body);
-    const result = await tourService.createImportedTour(input, { importAttemptId, importFingerprint });
+    const result = await tourService.createImportedTour(input, { importAttemptId, importFingerprint }, auditActor(request));
     return reply.status(result.created ? 201 : 200).send({
       tour: enrichTour(result.tour),
       created: result.created,
@@ -654,7 +661,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
       vehicle: z.object({ vehicleNumber: z.string().trim().min(1).max(100), licensePlate: z.string().trim().max(100).optional() }),
       tour: createTourSchema.omit({ vehicleId: true })
     }).parse(request.body);
-    const result = await tourService.createTourForNewVehicle(input);
+    const result = await tourService.createTourForNewVehicle(input, auditActor(request));
     return reply.status(201).send({ vehicle: toIsoObject(result.vehicle), tour: enrichTour(result.tour) });
   });
 
@@ -704,8 +711,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const { id } = z.object({ id: z.string() }).parse(request.params);
     const body = patchTourSchema.parse(request.body);
     const tour = "status" in body
-      ? await tourService.cancelFutureTour(id)
-      : await tourService.updateFutureTour(id, body);
+      ? await tourService.cancelFutureTour(id, new Date(), auditActor(request))
+      : await tourService.updateFutureTour(id, body, auditActor(request));
     await refreshAlertsForVehicle(tour.vehicleId);
     return enrichTour(tour);
   });
@@ -713,7 +720,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   app.post("/stops/:id/loaded", async (request) => {
     const { id } = z.object({ id: z.string() }).parse(request.params);
     const body = z.object({ timestamp: z.string().datetime().optional(), note: z.string().optional() }).parse(request.body ?? {});
-    const tour = await tourService.recordLoaded(id, body.timestamp ? new Date(body.timestamp) : new Date(), body.note);
+    const tour = await tourService.recordLoaded(id, body.timestamp ? new Date(body.timestamp) : new Date(), body.note, auditActor(request));
     await refreshAlertsForVehicle(tour.vehicleId);
     return enrichTour(tour);
   });
@@ -721,7 +728,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   app.post("/stops/:id/unloaded", async (request) => {
     const { id } = z.object({ id: z.string() }).parse(request.params);
     const body = z.object({ timestamp: z.string().datetime().optional(), note: z.string().optional() }).parse(request.body ?? {});
-    const tour = await tourService.recordUnloaded(id, body.timestamp ? new Date(body.timestamp) : new Date(), body.note);
+    const tour = await tourService.recordUnloaded(id, body.timestamp ? new Date(body.timestamp) : new Date(), body.note, auditActor(request));
     await refreshAlertsForVehicle(tour.vehicleId);
     return enrichTour(tour);
   });
