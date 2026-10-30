@@ -2,7 +2,7 @@ import "./env.js";
 import { buildApp } from "./app.js";
 import { prisma } from "./lib/prisma.js";
 
-const port = Number(process.env.API_PORT ?? 3001);
+const port = Number(process.env.PORT ?? process.env.API_PORT ?? 3001);
 const host = process.env.API_HOST ?? "127.0.0.1";
 const app = await buildApp();
 

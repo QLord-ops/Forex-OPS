@@ -19,14 +19,17 @@ if (!existsSync(sourcePath)) {
   throw new Error(`SQLite source does not exist: ${sourcePath}`);
 }
 
-if (!process.env.DATABASE_URL) {
-  throw new Error("DATABASE_URL is required for the PostgreSQL destination");
+const destinationUrl = process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL;
+if (!destinationUrl) {
+  throw new Error("DATABASE_URL_UNPOOLED or DATABASE_URL is required for the PostgreSQL destination");
 }
 
 const sqlite = new SqliteClient({
   datasources: { db: { url: `file:${sourcePath}` } },
 });
-const postgres = new PostgresClient();
+const postgres = new PostgresClient({
+  datasources: { db: { url: destinationUrl } },
+});
 
 const modelOrder = [
   "vehicle",
@@ -40,6 +43,15 @@ const modelOrder = [
   "notification",
   "routeRevision",
   "routePreview",
+  "vehicleIntegration",
+  "vehicleTelemetry",
+  "integrationSyncState",
+  "integrationReceipt",
+  "assistantConversation",
+  "assistantMessage",
+  "assistantProposal",
+  "assistantUsage",
+  "vehicleIssue",
 ];
 
 async function readAll(client) {
@@ -57,6 +69,7 @@ function assertRelations(data) {
   const vehicleIds = ids("vehicle");
   const tourIds = ids("tour");
   const stopIds = ids("stop");
+  const conversationIds = ids("assistantConversation");
   const problems = [];
   const requireId = (condition, message) => {
     if (!condition) problems.push(message);
@@ -81,6 +94,19 @@ function assertRelations(data) {
       requireId(vehicleIds.has(row.vehicleId), `${model} ${row.id} has missing vehicle ${row.vehicleId}`);
       requireId(tourIds.has(row.tourId), `${model} ${row.id} has missing tour ${row.tourId}`);
       requireId(stopIds.has(row.stopId), `${model} ${row.id} has missing stop ${row.stopId}`);
+    }
+  }
+  for (const model of ["vehicleIntegration", "vehicleTelemetry", "vehicleIssue"]) {
+    for (const row of data[model]) {
+      requireId(vehicleIds.has(row.vehicleId), `${model} ${row.id} has missing vehicle ${row.vehicleId}`);
+    }
+  }
+  for (const model of ["assistantMessage", "assistantProposal"]) {
+    for (const row of data[model]) {
+      requireId(
+        conversationIds.has(row.conversationId),
+        `${model} ${row.id} has missing conversation ${row.conversationId}`,
+      );
     }
   }
 

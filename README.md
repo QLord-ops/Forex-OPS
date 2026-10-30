@@ -132,13 +132,13 @@ Die Backend-Daten werden alle 30 Sekunden aktualisiert. Die Markerposition wird 
 
 ## Datenbank
 
-SQLite ist die dauerhafte Source of Truth:
+Lokal kann SQLite als Entwicklungsquelle verwendet werden:
 
 ```text
 apps/api/prisma/dev.db
 ```
 
-Migrationen und Seed liegen unter `apps/api/prisma/`.
+Das productionfähige Prisma-Schema unter `apps/api/prisma/schema.prisma` verwendet PostgreSQL; das lokale Kompatibilitätsschema liegt unter `apps/api/prisma/sqlite/schema.prisma`. Migrationen und Seed liegen unter `apps/api/prisma/`. Der vorbereitete, aber nicht automatisch ausgeführte Wechsel zu Neon/Postgres ist in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) beschrieben.
 
 Zum vollständigen Neuaufbau der Demo-Daten:
 
