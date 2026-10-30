@@ -188,6 +188,10 @@ npm run build
 
 Die Unit-Tests decken unter anderem Speed-Cap, Fortschritt, Distanz, ETA, Verspätung, Tour-Queue, Folgeaktivierung, Alerts und Positionsinterpolation auf der Polyline ab.
 
+### GitHub-Sicherheit
+
+Für das GitHub-Repository sollten **Secret Scanning** und **Push Protection** aktiviert werden. Die Branch-Protection-Regel für `main` sollte direkte Pushes verhindern, Pull Requests und erfolgreiche CI-Prüfungen verlangen sowie das Überschreiben der Historie sperren. Dependabot prüft die npm-Abhängigkeiten wöchentlich; die CI führt bei jedem Push und Pull Request Lint, Typecheck, Tests, Build und `npm audit --audit-level=high` aus.
+
 ## Projektstruktur
 
 ```text
