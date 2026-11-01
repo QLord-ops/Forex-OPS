@@ -20,7 +20,8 @@ export function useVehiclePosition(vehicleId: string, intervalMs = 10_000) {
 
   const data = useMemo(() => {
     if (!summary.data) return null
-    if (!geometry || geometry.vehicleId !== vehicleId || geometry.data.geometryVersion !== summary.data.geometryVersion) return summary.data
+    // While a newer geometry loads, keep drawing the previous line of the same leg instead of an empty map.
+    if (!geometry || geometry.vehicleId !== vehicleId || !summary.data.geometryVersion || geometry.data.legId !== summary.data.legId) return summary.data
     const routeGeometry = geometryToCoordinates(geometry.data.routeGeometry)
     const split = splitRouteAtCoordinate(routeGeometry, summary.data.coordinate)
     return { ...summary.data, routeGeometry, ...split }

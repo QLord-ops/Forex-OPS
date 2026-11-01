@@ -241,7 +241,7 @@ export function MapPanel({
   }, [position?.coordinate, position?.positionSource, vehicleNumber])
 
   return (
-    <section className={fill ? 'map-panel-fill' : 'work-surface min-w-0 overflow-hidden'}>
+    <section className={fill ? 'map-panel-fill' : 'map-panel-card work-surface relative min-w-0 overflow-hidden'}>
       <div ref={containerRef} style={{ height }} className={fill ? 'h-full w-full' : 'rounded-lg'} />
       <div className="map-controls" aria-label="Управление картой">
         <button type="button" className="map-mode-switch" onClick={() => setMode((current) => current === 'traffic' ? 'satellite' : 'traffic')} aria-label={mode === 'traffic' ? 'Переключить на спутник' : 'Переключить на карту пробок'} title={mode === 'traffic' ? 'Показать спутник' : 'Показать пробки'}>{mode === 'traffic' ? <Satellite className="h-4 w-4" /> : <TrafficCone className="h-4 w-4" />}<span>{mode === 'traffic' ? 'Спутник' : 'Пробки'}</span></button>

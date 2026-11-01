@@ -842,3 +842,53 @@ button:disabled {
 .route-builder-eta time { margin-left: auto; flex: 0 0 auto; color: #334155; font-weight: 800; font-variant-numeric: tabular-nums; }
 .preview-stop-marker { border-color: #d97706; background: #fffbeb; color: #92400e; }
 @media (prefers-reduced-motion: reduce) { .route-point { transition: none !important; } }
+
+
+/* ---- Visual fixes: overlaps and wrapping (2026-11-01) ---- */
+
+/* Tables: no mid-word breaks ("Актив/е"), dates and numbers on one line; the wrapper scrolls instead. */
+.data-table td { overflow-wrap: normal; word-break: normal; }
+.data-table td.tabular-nums, .data-table td:first-child, .data-table td:nth-child(2), .data-table td:nth-child(3) { white-space: nowrap; }
+
+/* Logout: icon in the narrow rail, label on wide screens and in the phone menu. */
+.dispatcher-logout { display: flex; align-items: center; justify-content: center; gap: .75rem; border-radius: .375rem; color: #cbd5e1; font-size: .875rem; font-weight: 500; }
+.dispatcher-logout:hover { background: #0f172a; color: white; }
+.dispatcher-logout:focus-visible { outline: 2px solid #38bdf8; outline-offset: 2px; }
+aside > .dispatcher-logout { position: absolute; right: .5rem; bottom: 1rem; left: .5rem; min-height: 3rem; }
+aside > .dispatcher-logout span { display: none; }
+aside > .dispatcher-logout-error { position: absolute; bottom: 4.25rem; left: .5rem; right: .5rem; color: #fecaca; font-size: .7rem; }
+@media (min-width: 1536px) {
+  aside > .dispatcher-logout { justify-content: flex-start; padding-inline: .75rem; right: .75rem; left: .75rem; }
+  aside > .dispatcher-logout span { display: inline; }
+}
+.dispatcher-logout-mobile { flex: 0 0 auto; min-height: 2.5rem; margin-left: auto; padding: .5rem .75rem; color: #334155; }
+.dispatcher-logout-mobile:hover { background: #f1f5f9; color: #0f172a; }
+/* Room for the assistant button at the end of the phone menu. */
+.mobile-nav { padding-right: 3.75rem; }
+
+/* Vehicle page map card: controls sit inside the map above the attribution. */
+.map-panel-card .map-controls { bottom: 2.25rem; }
+.map-panel-card .map-provider-note { bottom: 4.85rem; }
+
+/* Truck label above the marker, so it never hides the stop number at the same spot. */
+.truck-marker { z-index: 3; }
+.stop-marker { z-index: 2; }
+.truck-marker-label { top: auto; bottom: calc(100% + .35rem); left: 50%; transform: translateX(-50%); }
+
+/* Notification toast: bottom-left, clear of the route window and map controls. */
+@media (min-width: 1024px) { .operations-toast { left: 6rem; } }
+@media (min-width: 1536px) { .operations-toast { left: 17rem; } }
+
+/* Dashboard map: the truck card, the route window and the draft label never overlap. */
+.dashboard-stage { container-type: inline-size; container-name: stage; }
+.vehicle-map-hud-open { z-index: 9; }
+.dashboard-stage:has(.route-stops-drawer-open) .map-draft-banner { bottom: calc(min(44%, 25rem) + .75rem); }
+@container stage (min-width: 56rem) {
+  .vehicle-map-hud { left: 3.5rem; right: calc(min(25rem, 100cqw - 4.5rem) + 1.25rem); width: auto; max-width: 760px; margin-inline: auto; transform: none; }
+  .map-action-dock { top: .75rem; }
+}
+@media (max-width: 640px) {
+  .map-draft-banner { bottom: 8.25rem; max-width: calc(100% - 1rem); }
+  .dashboard-stage:has(.route-stops-drawer-open) .map-draft-banner { bottom: calc(58% + .75rem); }
+}
+@media (min-width: 1024px) { .operations-toast { max-width: 22rem; } }
