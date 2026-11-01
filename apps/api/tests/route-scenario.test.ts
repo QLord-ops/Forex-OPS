@@ -168,3 +168,16 @@ describe('route builder scenarios', () => {
     expect(result.warnings).toContain('Квота TomTom исчерпана. Без актуальных пробок и проверки ограничений для грузовиков.');
   });
 });
+
+describe('traffic on the planned route', () => {
+  it('shifts each leg\'s congested stretches onto the joined line', async () => {
+    const { service, route } = fixture();
+    const a = { latitude: 51, longitude: 10 }, b = { latitude: 50, longitude: 9 };
+    route.mockImplementation(async (origin, destination) => ({ geometry: [origin, { latitude: (origin.latitude + destination.latitude) / 2, longitude: origin.longitude }, destination],
+      distanceMeters: 1000, durationSeconds: 3600, provider: 'tomtom', providerStatus: 'live-traffic',
+      trafficSections: destination.latitude === a.latitude ? [{ start: 0, end: 2, level: 'JAM', delaySeconds: 300, speedKmh: 20 }] : [{ start: 1, end: 2, level: 'SLOW', delaySeconds: 60, speedKmh: 40 }] }));
+    const result = await service.calculate({ originAddress: 'Start', stops: [{ address: 'A', coords: a }, { address: 'B', coords: b }] }, now);
+    expect(result.geometry).toHaveLength(5);
+    expect(result.trafficSegments).toEqual([{ from: 0, to: 2, level: 'JAM' }, { from: 3, to: 4, level: 'SLOW' }]);
+  });
+});

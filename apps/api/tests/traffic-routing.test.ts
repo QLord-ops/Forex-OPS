@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Coordinate, RouteResult } from "../src/domain.js";
 import { RoutingError, type RoutingProvider } from "../src/services/routing.js";
-import {
+import { extractTrafficSections,
   PrismaTrafficQuotaStore,
   TomTomRoutingProvider,
   TrafficRoutingService,
@@ -330,3 +330,23 @@ function quotaDelegate(initial: Record<string, { used: number; updatedAt: Date }
     }
   };
 }
+
+describe("traffic sections for route colouring", () => {
+  it("maps TomTom TRAFFIC sections to congestion levels and drops unusable ones", () => {
+    const sections = extractTrafficSections({ sections: [
+      { sectionType: "TRAFFIC", startPointIndex: 10, endPointIndex: 20, magnitudeOfDelay: 2, delayInSeconds: 300, effectiveSpeedInKmh: 18.4 },
+      { sectionType: "TRAFFIC", startPointIndex: 2, endPointIndex: 5, magnitudeOfDelay: 1, delayInSeconds: 40 },
+      { sectionType: "TRAFFIC", startPointIndex: 30, endPointIndex: 99, magnitudeOfDelay: 3, delayInSeconds: 900 },
+      { sectionType: "TRAFFIC", startPointIndex: 40, endPointIndex: 45, simpleCategory: "ROAD_CLOSURE", magnitudeOfDelay: 4 },
+      { sectionType: "TRAFFIC", startPointIndex: 6, endPointIndex: 8, magnitudeOfDelay: 0, delayInSeconds: 0 },
+      { sectionType: "MOTORWAY", startPointIndex: 0, endPointIndex: 9 },
+      { sectionType: "TRAFFIC", startPointIndex: 8, endPointIndex: 8, magnitudeOfDelay: 2 }
+    ] }, 50);
+    expect(sections).toEqual([
+      { start: 2, end: 5, level: "SLOW", delaySeconds: 40, speedKmh: null },
+      { start: 10, end: 20, level: "JAM", delaySeconds: 300, speedKmh: 18 },
+      { start: 30, end: 49, level: "STANDSTILL", delaySeconds: 900, speedKmh: null },
+      { start: 40, end: 45, level: "CLOSED", delaySeconds: 0, speedKmh: null }
+    ]);
+  });
+});

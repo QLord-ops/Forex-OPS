@@ -285,3 +285,24 @@ test('уведомление об автоприбытии по GPS позвол
   await expect.poll(() => reverted).toMatchObject({ reason: 'Отменено из уведомления об автоприбытии' })
   await expect(page.getByRole('dialog')).toHaveCount(0)
 })
+
+test('показывает пробки на маршруте выбранной машины', async ({ page }) => {
+  const line = Array.from({ length: 20 }, (_, i) => [9.95 + i * 0.05, 51.5 - i * 0.04])
+  await authenticated(page, async (route, path) => {
+    if (path === '/dashboard') { await json(route, { vehicles: [{ vehicle, tour: tour(), statusText: 'MOVING', operationVersion: 1 }] }); return true }
+    if (path === '/vehicles') { await json(route, [vehicle]); return true }
+    if (path.endsWith('/current-position')) {
+      await json(route, { state: 'UNTERWEGS', status: 'MOVING', positionSource: 'CALCULATED', coordinate: line[5], position: { latitude: line[5][1], longitude: line[5][0] },
+        tourId: 'tour-1', legId: 'leg-1', geometryVersion: 'leg-1:a', routeGeometry: line, travelledGeometry: line.slice(0, 6), remainingGeometry: line.slice(5),
+        trafficSegments: [{ from: 8, to: 12, level: 'JAM' }, { from: 14, to: 16, level: 'SLOW' }], trafficCheckedAt: new Date().toISOString() }); return true
+    }
+    if (path.startsWith('/vehicles/veh-1')) { await json(route, []); return true }
+    return false
+  })
+  await page.route('https://api.tomtom.com/**', route => route.abort())
+  await page.goto('/?vehicleId=veh-1')
+  const legend = page.getByRole('note', { name: 'Пробки на маршруте' })
+  await expect(legend).toContainText('пробка')
+  await expect(legend).toContainText('медленно')
+  await expect(legend).not.toContainText('стоит')
+})

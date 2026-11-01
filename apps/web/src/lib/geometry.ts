@@ -90,3 +90,14 @@ function isCoordinate(value: unknown): value is Coordinate {
     Number.isFinite(value[1])
   )
 }
+
+/** Slices a route into coloured stretches; free-flowing parts are drawn by the base line underneath. */
+export function trafficFeatures(route: Coordinate[], segments: Array<{ from: number; to: number; level: string }> | undefined) {
+  const features = (segments ?? []).flatMap((segment) => {
+    const from = Math.max(0, Math.floor(segment.from))
+    const to = Math.min(route.length - 1, Math.floor(segment.to))
+    if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) return []
+    return [{ type: 'Feature' as const, properties: { level: segment.level }, geometry: { type: 'LineString' as const, coordinates: route.slice(from, to + 1) } }]
+  })
+  return { type: 'FeatureCollection' as const, features }
+}

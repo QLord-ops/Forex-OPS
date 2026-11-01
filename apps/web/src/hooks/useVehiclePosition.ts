@@ -24,7 +24,7 @@ export function useVehiclePosition(vehicleId: string, intervalMs = 10_000) {
     if (!geometry || geometry.vehicleId !== vehicleId || !summary.data.geometryVersion || geometry.data.legId !== summary.data.legId) return summary.data
     const routeGeometry = geometryToCoordinates(geometry.data.routeGeometry)
     const split = splitRouteAtCoordinate(routeGeometry, summary.data.coordinate)
-    return { ...summary.data, routeGeometry, ...split }
+    return { ...summary.data, routeGeometry, ...split, trafficSegments: geometry.data.trafficSegments ?? [], trafficCheckedAt: geometry.data.trafficCheckedAt ?? null }
   }, [geometry, summary.data, vehicleId])
 
   return { ...summary, data }

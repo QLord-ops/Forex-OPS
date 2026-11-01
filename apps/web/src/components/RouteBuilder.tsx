@@ -90,6 +90,7 @@ export function RouteBuilder({ vehicles, selectedVehicleNumber, onPreview }: {
       const labels = filled.slice(1)
       onPreviewRef.current(scenario.geometry.length >= 2 ? {
         geometry: scenario.geometry,
+        trafficSegments: scenario.trafficSegments ?? [],
         label: start?.vehicle ? `Маршрут LKW ${start.vehicle.vehicleNumber}` : 'Предпросмотр маршрута',
         stops: scenario.stops.map((stop, index) => ({ coordinate: [stop.coords.longitude, stop.coords.latitude], label: String(index + 2), title: labels[index] ?? stop.address }))
       } : null)
