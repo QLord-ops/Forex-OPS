@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { boundsFor, geometryToCoordinates, stopCoordinates, toLineString } from '../lib/geometry'
 import { calculatedPositionLabel } from '../lib/format'
+import type { MapRouteStop } from '../lib/route-preview'
 import type { Coordinate, CurrentPosition, Tour } from '../types/domain'
 
 setWorkerUrl(mapLibreWorkerUrl)
@@ -37,6 +38,10 @@ const fallbackSatelliteStyle: StyleSpecification = {
 }
 
 const CAMERA_STORAGE_KEY = 'ops-dashboard-map-camera'
+// Raster tiles look empty at street level; automatic fits never zoom closer than this.
+const FIT_MAX_ZOOM = 13
+const MIN_RESTORED_ZOOM = 4
+const MAX_RESTORED_ZOOM = 12
 type MapMode = 'traffic' | 'satellite'
 
 export type MapPanelProps = {
@@ -45,6 +50,7 @@ export type MapPanelProps = {
   vehicleNumber?: string | null
   focusCoordinate?: Coordinate | null
   previewRoute?: Coordinate[]
+  previewStops?: MapRouteStop[]
   height?: number | string
   fill?: boolean
 }
@@ -55,6 +61,7 @@ export function MapPanel({
   vehicleNumber,
   focusCoordinate,
   previewRoute,
+  previewStops,
   height = 520,
   fill = false
 }: MapPanelProps) {
@@ -62,6 +69,10 @@ export function MapPanel({
   const mapRef = useRef<Map | null>(null)
   const markerRef = useRef<Marker | null>(null)
   const stopMarkersRef = useRef<Marker[]>([])
+  const previewMarkersRef = useRef<Marker[]>([])
+  // isStyleLoaded() is false while tiles load, so track the style lifecycle ourselves.
+  const styleReadyRef = useRef(false)
+  const [styleVersion, setStyleVersion] = useState(0)
   const fittedTourRef = useRef<string | null>(null)
   const [mode, setMode] = useState<MapMode>(() => readMapMode())
   const [cameraRequest, setCameraRequest] = useState<'vehicle' | 'route' | null>(null)
@@ -86,6 +97,10 @@ export function MapPanel({
       zoom: readCamera()?.zoom ?? 5.2
     })
     mapRef.current.addControl(new NavigationControl({ visualizePitch: false }), 'top-left')
+    mapRef.current.on('style.load', () => {
+      styleReadyRef.current = true
+      setStyleVersion((value) => value + 1)
+    })
     mapRef.current.on('moveend', () => {
       const map = mapRef.current
       if (!map) return
@@ -99,10 +114,12 @@ export function MapPanel({
     return () => {
       markerRef.current?.remove()
       stopMarkersRef.current.forEach((marker) => marker.remove())
+      previewMarkersRef.current.forEach((marker) => marker.remove())
       mapRef.current?.remove()
       mapRef.current = null
       markerRef.current = null
       stopMarkersRef.current = []
+      previewMarkersRef.current = []
     }
   }, [])
 
@@ -116,12 +133,12 @@ export function MapPanel({
     if (!map) return
     const center = map.getCenter()
     const camera = { center: [center.lng, center.lat] as Coordinate, zoom: map.getZoom(), bearing: map.getBearing(), pitch: map.getPitch() }
-    const restoreAndRender = () => {
-      map.jumpTo(camera)
-    }
-    map.once('style.load', restoreAndRender)
-    map.setStyle(styleFor(mode))
-    return () => { map.off('style.load', restoreAndRender) }
+    const restore = () => map.jumpTo(camera)
+    styleReadyRef.current = false
+    map.once('style.load', restore)
+    // A full reload, not a diff: a diff silently drops our runtime route layers.
+    map.setStyle(styleFor(mode), { diff: false })
+    return () => { map.off('style.load', restore) }
   }, [mode])
 
   useEffect(() => {
@@ -137,6 +154,7 @@ export function MapPanel({
     const map = mapRef.current
     if (!map) return
 
+    if (!styleReadyRef.current) return
     const render = () => {
       renderMapContent(map, fullRoute, position, previewRoute)
       stopMarkersRef.current.forEach((marker) => marker.remove())
@@ -149,39 +167,50 @@ export function MapPanel({
       })
 
       const fitKey = tour?.id ?? (stops.length ? `stops:${stops.map((stop) => stop.id).join(':')}` : null)
-      if (fitKey && fittedTourRef.current !== fitKey) {
+      // Only remember the fit when it actually happened, so closing a draft still fits the selected tour.
+      if (fitKey && fittedTourRef.current !== fitKey && !previewRoute?.length) {
         fittedTourRef.current = fitKey
-        if (!previewRoute?.length) {
-          if (position?.coordinate) map.jumpTo({ center: position.coordinate, zoom: 15.5 })
-          else fitRoute(map, [...fullRoute, ...stopCoordinates(stops)], 15.5, 0)
-        }
+        const points = [...(position?.coordinate ? [position.coordinate] : []), ...fullRoute, ...stopCoordinates(stops)]
+        if (points.length) fitRoute(map, points, FIT_MAX_ZOOM - 1, 0)
       }
     }
-
-    if (map.isStyleLoaded()) render()
-    else map.once('style.load', render)
-    return () => { map.off('style.load', render) }
-  }, [fullRoute, mode, position, previewRoute, stops, tour?.id])
+    render()
+  }, [fullRoute, position, previewRoute, stops, styleVersion, tour?.id])
 
   useEffect(() => {
     const map = mapRef.current
-    if (map && focusCoordinate) map.easeTo({ center: focusCoordinate, zoom: Math.max(map.getZoom(), 15), duration: 350 })
+    previewMarkersRef.current.forEach((marker) => marker.remove())
+    previewMarkersRef.current = []
+    if (!map || !previewStops?.length) return
+    previewMarkersRef.current = previewStops.map((stop) => {
+      const element = document.createElement('div')
+      element.className = 'stop-marker preview-stop-marker'
+      element.textContent = stop.label
+      element.title = stop.title
+      element.setAttribute('aria-label', `Точка ${stop.label}: ${stop.title}`)
+      return new Marker({ element }).setLngLat(stop.coordinate).addTo(map)
+    })
+  }, [previewStops])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (map && focusCoordinate) map.easeTo({ center: focusCoordinate, zoom: Math.max(map.getZoom(), 14), duration: 350 })
   }, [focusCoordinate])
 
   useEffect(() => {
     const map = mapRef.current
-    if (map && previewRoute?.length) fitRoute(map, previewRoute, 14, 350)
-  }, [previewRoute])
+    if (map && previewRoute?.length) fitRoute(map, [...previewRoute, ...(previewStops ?? []).map((stop) => stop.coordinate)], FIT_MAX_ZOOM, 350)
+  }, [previewRoute, previewStops])
 
   useEffect(() => {
     const map = mapRef.current
     if (!map || !cameraRequest) return
     if (cameraRequest === 'vehicle' && position?.coordinate) {
-      map.easeTo({ center: position.coordinate, zoom: Math.max(map.getZoom(), 15.5), duration: 260 })
+      map.easeTo({ center: position.coordinate, zoom: Math.max(map.getZoom(), 14), duration: 260 })
       setCameraRequest(null)
       return
     }
-    fitRoute(map, previewRoute?.length ? previewRoute : [...fullRoute, ...stopCoordinates(stops)], 15.5, 260)
+    fitRoute(map, previewRoute?.length ? previewRoute : [...fullRoute, ...stopCoordinates(stops)], FIT_MAX_ZOOM, 260)
     setCameraRequest(null)
   }, [cameraRequest, fullRoute, position?.coordinate, previewRoute, stops])
 
@@ -207,7 +236,7 @@ export function MapPanel({
     element.innerHTML = ''
     const label = document.createElement('span')
     label.className = 'truck-marker-label'
-    label.textContent = `${vehicleNumber ? `LKW ${vehicleNumber}` : 'LKW'} · ${position?.positionSource === 'WEBFLEET' ? 'GPS' : 'Расчёт'}`
+    label.textContent = `${vehicleNumber ? `LKW ${vehicleNumber}` : 'LKW'} · ${position?.positionSource === 'WEBFLEET' ? 'GPS' : position?.positionSource === 'MANUAL' ? 'Вручную' : 'Расчёт'}`
     element.append(label)
   }, [position?.coordinate, position?.positionSource, vehicleNumber])
 
@@ -217,7 +246,7 @@ export function MapPanel({
       <div className="map-controls" aria-label="Управление картой">
         <button type="button" className="map-mode-switch" onClick={() => setMode((current) => current === 'traffic' ? 'satellite' : 'traffic')} aria-label={mode === 'traffic' ? 'Переключить на спутник' : 'Переключить на карту пробок'} title={mode === 'traffic' ? 'Показать спутник' : 'Показать пробки'}>{mode === 'traffic' ? <Satellite className="h-4 w-4" /> : <TrafficCone className="h-4 w-4" />}<span>{mode === 'traffic' ? 'Спутник' : 'Пробки'}</span></button>
         <button type="button" onClick={() => setCameraRequest('vehicle')} disabled={!position?.coordinate} title="Показать выбранную машину"><LocateFixed className="h-4 w-4" /><span>К машине</span></button>
-        <button type="button" onClick={() => setCameraRequest('route')} disabled={!fullRoute.length && !stops.length} title="Показать весь маршрут"><Route className="h-4 w-4" /><span>Маршрут</span></button>
+        <button type="button" onClick={() => setCameraRequest('route')} disabled={!fullRoute.length && !stops.length && !previewRoute?.length} title="Показать весь маршрут"><Route className="h-4 w-4" /><span>Маршрут</span></button>
       </div>
       {!tomTomMapKey() && mode === 'traffic' ? <div className="map-provider-note">OSM · без live-пробок</div> : null}
     </section>
@@ -225,7 +254,6 @@ export function MapPanel({
 }
 
 function renderMapContent(map: Map, fullRoute: Coordinate[], position?: CurrentPosition | null, previewRoute?: Coordinate[]) {
-  if (!map.isStyleLoaded()) return
   upsertLine(map, 'route-full', fullRoute, '#64748b', 4, 0.45)
   upsertLine(map, 'route-travelled', geometryToCoordinates(position?.travelledGeometry), '#059669', 5, 0.95)
   upsertLine(map, 'route-remaining', geometryToCoordinates(position?.remainingGeometry), '#2563eb', 5, 0.9)
@@ -269,7 +297,9 @@ function readCamera(): { center: Coordinate; zoom: number } | null {
   try {
     const parsed = JSON.parse(window.localStorage.getItem(CAMERA_STORAGE_KEY) ?? 'null') as { center?: unknown; zoom?: unknown } | null
     if (!parsed || !Array.isArray(parsed.center) || parsed.center.length !== 2 || typeof parsed.zoom !== 'number') return null
-    return { center: [Number(parsed.center[0]), Number(parsed.center[1])], zoom: parsed.zoom }
+    const center: Coordinate = [Number(parsed.center[0]), Number(parsed.center[1])]
+    if (!center.every(Number.isFinite) || Math.abs(center[0]) > 180 || Math.abs(center[1]) > 90 || !Number.isFinite(parsed.zoom)) return null
+    return { center, zoom: Math.min(MAX_RESTORED_ZOOM, Math.max(MIN_RESTORED_ZOOM, parsed.zoom)) }
   } catch {
     return null
   }
@@ -280,7 +310,7 @@ function readMapMode(): MapMode {
 }
 
 function markerDescription(vehicleNumber?: string | null, source?: CurrentPosition['positionSource']): string {
-  return `${vehicleNumber ? `LKW ${vehicleNumber}` : 'Грузовик'} · ${source === 'WEBFLEET' ? 'фактическая позиция Webfleet GPS' : calculatedPositionLabel}`
+  return `${vehicleNumber ? `LKW ${vehicleNumber}` : 'Грузовик'} · ${source === 'WEBFLEET' ? 'фактическая позиция Webfleet GPS' : source === 'MANUAL' ? 'позиция, указанная диспетчером вручную' : calculatedPositionLabel}`
 }
 
 function upsertLine(

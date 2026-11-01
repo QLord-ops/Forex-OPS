@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyStopTime,
+  clockWarnings,
   createInitialClockState,
   createUnknownClockState,
   evaluateClockPlan,
@@ -301,15 +302,104 @@ describe("vehicle clock planner", () => {
     expect(reserveCycleExtension(monday, { type: "REDUCED_REST", reservationId: "monday-rest", requestedAt: monday.updatedAt }).accepted).toBe(false);
   });
 
-  it("keeps hours across separate routes and warns on long stops without granting rest", () => {
+  it("keeps hours across separate routes and counts an 11 hour stop as daily rest", () => {
     const initial = createInitialClockState({ effectiveAt: "2026-10-10T06:00:00Z" });
     const first = forecastDrive(initial, 3 * hour, t(initial.updatedAt));
     const stopped = applyStopTime(first.state, 12 * hour, first.endAt);
-    expect(stopped.state.currentCycle.drivingSeconds).toBe(3 * hour);
-    expect(stopped.state.currentCycle.dutySeconds).toBe(15 * hour);
-    expect(stopped.warnings).toContain("DUTY_WINDOW_EXCEEDED_BY_STOP");
+    expect(stopped.state.currentCycle.drivingSeconds).toBe(0);
+    expect(stopped.state.currentCycle.dutySeconds).toBe(0);
+    expect(stopped.state.currentCycle.startedAt).toBe(stopped.state.updatedAt);
+    expect(stopped.segment?.type).toBe("DAILY_REST");
+    expect(stopped.warnings).toEqual([]);
+    expect(stopped.state.warnings).toEqual([]);
+    expect(stopped.state.reducedRestsSinceWeeklyRest).toBe(0);
     const second = forecastDrive(stopped.state, hour, t(stopped.state.updatedAt));
-    expect(second.segments[0].type).toBe("DAILY_REST");
-    expect(second.segments[0].durationSeconds).toBe(11 * hour);
+    expect(second.segments.map((s) => s.type)).toEqual(["DRIVE"]);
+    expect(second.warnings).toEqual([]);
+  });
+
+  it("clears a pending daily rest when the stop covers it", () => {
+    const initial = createInitialClockState({ effectiveAt: "2026-10-10T06:00:00Z", drivingSeconds: 9 * hour, dutySeconds: 11 * hour });
+    const plan = forecastDrive(initial, hour, t(initial.updatedAt)).plan;
+    const resting = evaluateClockPlan(plan, t("2026-10-10T10:00:00Z")).state;
+    expect(resting.pendingRest?.type).toBe("DAILY_REST");
+    const parked = applyStopTime(resting, 12 * hour, resting.updatedAt).state;
+    expect(parked.pendingRest).toBeUndefined();
+    expect(parked.currentCycle.dutySeconds).toBe(0);
+  });
+
+  it("counts a 9-11 hour stop as reduced daily rest only while reduced rests remain", () => {
+    const tired = (reduced: number) => createInitialClockState({ effectiveAt: "2026-10-10T06:00:00Z", drivingSeconds: 8 * hour, dutySeconds: 12 * hour, reducedRestsSinceWeeklyRest: reduced });
+
+    const reduced = applyStopTime(tired(2), 10 * hour, "2026-10-10T06:00:00Z");
+    expect(reduced.segment?.type).toBe("DAILY_REST");
+    expect(reduced.state.reducedRestsSinceWeeklyRest).toBe(3);
+    expect(reduced.state.currentCycle).toMatchObject({ drivingSeconds: 0, dutySeconds: 0, startedAt: "2026-10-10T16:00:00.000Z" });
+
+    const exhausted = applyStopTime(tired(3), 10 * hour, "2026-10-10T06:00:00Z");
+    expect(exhausted.segment?.type).toBe("WAIT");
+    expect(exhausted.state.reducedRestsSinceWeeklyRest).toBe(3);
+    expect(exhausted.state.currentCycle.drivingSeconds).toBe(8 * hour);
+    expect(exhausted.state.currentCycle.dutySeconds).toBe(22 * hour);
+    expect(exhausted.warnings).toEqual(["DUTY_WINDOW_EXCEEDED_BY_STOP"]);
+    expect(exhausted.state.warnings).toEqual([]);
+
+    expect(applyStopTime(tired(0), 9 * hour - 1, "2026-10-10T06:00:00Z").state.reducedRestsSinceWeeklyRest).toBe(0);
+  });
+
+  it("does not spend a second reduced rest when one is already reserved, and refunds it for a full rest", () => {
+    const reserved = reserveCycleExtension(createInitialClockState({ effectiveAt: "2026-10-10T06:00:00Z", drivingSeconds: 8 * hour, dutySeconds: 12 * hour, reducedRestsSinceWeeklyRest: 1 }), { type: "REDUCED_REST", reservationId: "r", requestedAt: "2026-10-10T06:00:00Z" }).state;
+    expect(reserved.reducedRestsSinceWeeklyRest).toBe(2);
+    expect(applyStopTime(reserved, 9 * hour, reserved.updatedAt).state.reducedRestsSinceWeeklyRest).toBe(2);
+    expect(applyStopTime(reserved, 11 * hour, reserved.updatedAt).state.reducedRestsSinceWeeklyRest).toBe(1);
+  });
+
+  it("treats a stop of 45 minutes or more as a break but keeps counting the duty window", () => {
+    const driven = createInitialClockState({ effectiveAt: "2026-10-10T10:00:00Z", drivingSeconds: 4 * hour, dutySeconds: 4 * hour, continuousDrivingSeconds: 4 * hour });
+    const short = applyStopTime(driven, 44 * minute, driven.updatedAt).state;
+    expect(short.currentCycle.continuousDrivingSeconds).toBe(4 * hour);
+    const stopped = applyStopTime(driven, 45 * minute, driven.updatedAt).state;
+    expect(stopped.currentCycle.continuousDrivingSeconds).toBe(0);
+    expect(stopped.currentCycle.dutySeconds).toBe(4 * hour + 45 * minute);
+    expect(stopped.currentCycle.drivingSeconds).toBe(4 * hour);
+    const next = forecastDrive(stopped, hour, t(stopped.updatedAt));
+    expect(next.segments.map((s) => s.type)).toEqual(["DRIVE"]);
+  });
+
+  it("joins a stop split across calls into one rest, but not across driving", () => {
+    const driven = createInitialClockState({ effectiveAt: "2026-10-10T18:00:00Z", drivingSeconds: 8 * hour, dutySeconds: 11 * hour, continuousDrivingSeconds: 2 * hour });
+    const evening = applyStopTime(driven, 5 * hour, driven.updatedAt).state;
+    expect(evening.currentCycle.dutySeconds).toBe(16 * hour);
+    const morning = applyStopTime(evening, 7 * hour, evening.updatedAt).state;
+    expect(morning.currentCycle).toMatchObject({ drivingSeconds: 0, dutySeconds: 0, startedAt: "2026-10-11T06:00:00.000Z" });
+
+    const split = applyStopTime(createInitialClockState({ effectiveAt: "2026-10-10T06:00:00Z" }), 30 * minute, "2026-10-10T06:00:00Z").state;
+    const moved = forecastDrive(split, hour, t(split.updatedAt)).state;
+    const again = applyStopTime(moved, 30 * minute, moved.updatedAt).state;
+    expect(again.idleSince).toBe(moved.updatedAt);
+    const longDrive = createInitialClockState({ effectiveAt: "2026-10-10T10:00:00Z", drivingSeconds: 4 * hour, dutySeconds: 4 * hour, continuousDrivingSeconds: 4 * hour });
+    const firstPart = applyStopTime(longDrive, 30 * minute, longDrive.updatedAt).state;
+    expect(firstPart.currentCycle.continuousDrivingSeconds).toBe(4 * hour);
+    expect(applyStopTime(firstPart, 15 * minute, firstPart.updatedAt).state.currentCycle.continuousDrivingSeconds).toBe(0);
+  });
+
+  it("returns stop and unknown-clock warnings per call instead of persisting them", () => {
+    const unknown = createUnknownClockState("2026-10-10T06:00:00Z");
+    expect(unknown.warnings).toEqual([]);
+    const forecast = forecastDrive(unknown, hour, t(unknown.updatedAt));
+    expect(forecast.warnings).toEqual(["CLOCK_STATE_UNKNOWN"]);
+    expect(forecast.state.warnings).toEqual([]);
+
+    const legacy = { ...createInitialClockState({ effectiveAt: "2026-10-10T06:00:00Z" }), warnings: ["DUTY_WINDOW_EXCEEDED_BY_STOP", "CLOCK_STATE_UNKNOWN"] };
+    const known = forecastDrive(legacy, hour, t(legacy.updatedAt));
+    expect(known.warnings).toEqual([]);
+    expect(known.state.warnings).toEqual([]);
+    expect(applyStopTime(legacy, minute, legacy.updatedAt).warnings).toEqual([]);
+
+    const overrun = applyStopTime(createInitialClockState({ effectiveAt: "2026-10-10T16:00:00Z", drivingSeconds: 6 * hour, dutySeconds: 10 * hour }), 4 * hour, "2026-10-10T16:00:00Z");
+    expect(overrun.warnings).toEqual(["DUTY_WINDOW_EXCEEDED_BY_STOP"]);
+    expect(overrun.state.warnings).toEqual([]);
+    expect(clockWarnings(overrun.state)).toEqual(["DUTY_WINDOW_EXCEEDED_BY_STOP"]);
+    expect(clockWarnings(unknown)).toEqual(["CLOCK_STATE_UNKNOWN"]);
   });
 });

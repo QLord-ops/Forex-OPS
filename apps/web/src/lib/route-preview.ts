@@ -1,6 +1,7 @@
 import type { Coordinate } from '../types/domain.js'
 
-export type MapRoutePreview = { geometry: Coordinate[]; label: string }
+export type MapRouteStop = { coordinate: Coordinate; label: string; title: string }
+export type MapRoutePreview = { geometry: Coordinate[]; label: string; stops?: MapRouteStop[] }
 let current: MapRoutePreview | null = null
 const listeners = new Set<() => void>()
 export const getRoutePreview = () => current

@@ -99,7 +99,7 @@ export type CurrentPosition = {
     | "COMPLETED";
   status: "IDLE" | "WAITING" | "MOVING" | "ARRIVED";
   disclaimer: string;
-  positionSource?: "WEBFLEET" | "CALCULATED";
+  positionSource?: "WEBFLEET" | "CALCULATED" | "MANUAL";
   telemetryRecordedAt?: string | null;
   telemetryAgeSeconds?: number | null;
   telemetryStale?: boolean;
@@ -121,6 +121,10 @@ export type CurrentPosition = {
 
 export const CALCULATED_POSITION_DISCLAIMER =
   "Berechnete Position – keine GPS-Daten" as const;
+
+export const MANUAL_POSITION_DISCLAIMER = "Позиция указана диспетчером – не GPS" as const;
+
+export const LAST_STOP_POSITION_DISCLAIMER = "Последняя завершённая точка – не GPS" as const;
 
 export function withoutPositionGeometry(position: CurrentPosition) {
   const { routeGeometry: _route, travelledGeometry: _travelled, remainingGeometry: _remaining, ...summary } = position;

@@ -5,6 +5,7 @@ import type { CurrentPosition } from '../src/domain.js';
 import { registerRouteScenarioRoutes } from '../src/routes/route-scenario.js';
 import { RouteScenarioService, berlinDayEnd } from '../src/services/route-scenario.js';
 import { createInitialClockState } from '../src/services/vehicle-clock.js';
+import { RoutingError } from '../src/services/routing.js';
 
 const now = new Date('2026-10-16T08:00:00Z');
 const coords = { latitude: 52, longitude: 13 };
@@ -114,5 +115,56 @@ describe('draft route scenario', () => {
     expect(response.statusCode).toBe(400);
     expect(calculate).not.toHaveBeenCalled();
     await app.close();
+  });
+});
+
+describe('route builder scenarios', () => {
+  it('routes up to ten free points in order and joins legs without duplicate points', async () => {
+    const { service, routing, route } = fixture();
+    const places = Array.from({ length: 9 }, (_, index) => ({ address: `P${index + 1}`, coords: { latitude: 50 + index, longitude: 10 } }));
+    const result = await service.calculate({ originAddress: 'Start', stops: places }, now);
+    expect(routing.geocode.mock.calls).toEqual([['Start']]);
+    expect(route).toHaveBeenCalledTimes(9);
+    expect(route.mock.calls[1][0]).toEqual(places[0].coords);
+    expect(route.mock.calls[1][2]).toMatchObject({ includeInstructions: false });
+    expect(result.stops.map(item => item.address)).toEqual(places.map(item => item.address));
+    expect(result.geometry).toHaveLength(10);
+  });
+
+  it('names the address that was not found and spends no routing request', async () => {
+    const { service, routing, route } = fixture();
+    routing.geocode.mockImplementation(async (address: string) => {
+      if (address === 'Nirgendwo 1') throw new RoutingError('Адрес не найден.', 404);
+      return { ...coords, label: address, provider: 'test' };
+    });
+    await expect(service.calculate({ originAddress: 'Berlin', stops: [{ address: 'Hamburg' }, { address: 'Nirgendwo 1' }] }, now))
+      .rejects.toMatchObject({ statusCode: 404, message: expect.stringContaining('«Nirgendwo 1»') });
+    expect(route).not.toHaveBeenCalled();
+  });
+
+  it('skips the queued-tour projection for the quick preview', async () => {
+    const queued = { id: 'q1', status: 'QUEUED', planVersion: 1, plannedStartAt: null, stops: [stop('s1', 1), stop('s2', 2)], legs: [] };
+    const { service, route } = fixture({ tours: [queued] });
+    const quick = await service.calculate({ vehicleId: 'v1', includeQueueImpact: false, stops: [visit] }, now);
+    expect(route).toHaveBeenCalledTimes(1);
+    expect(quick.downstreamQueueImpact).toEqual([]);
+    route.mockClear();
+    const full = await service.calculate({ vehicleId: 'v1', stops: [visit] }, now);
+    expect(route.mock.calls.length).toBeGreaterThan(1);
+    expect(full.downstreamQueueImpact).toHaveLength(2);
+  });
+
+  it('never returns raw clock codes to the dispatcher', async () => {
+    const result = await fixture({ clock: null }).service.calculate({ vehicleId: 'v1', stops: [visit] }, now);
+    expect(result.warnings.some(text => /^[A-Z0-9_]+$/.test(text))).toBe(false);
+    expect(result.warnings).toContain('Не заполнены исходные часы машины. Прогноз предварительный.');
+  });
+
+  it('shows the provider warning when live traffic is unavailable', async () => {
+    const { service, route } = fixture();
+    route.mockImplementation(async (origin, destination) => ({ geometry: [origin, destination], distanceMeters: 1000, durationSeconds: 3600,
+      provider: 'osrm', providerStatus: 'quota-exhausted', warning: 'Квота TomTom исчерпана. Без актуальных пробок и проверки ограничений для грузовиков.' }));
+    const result = await service.calculate({ originAddress: 'Berlin', stops: [visit] }, now);
+    expect(result.warnings).toContain('Квота TomTom исчерпана. Без актуальных пробок и проверки ограничений для грузовиков.');
   });
 });

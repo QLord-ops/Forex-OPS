@@ -257,6 +257,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   });
 
   app.setErrorHandler((error, _request, reply) => {
+    if (isPrismaRecordNotFound(error)) return reply.status(404).send({ error: "Запись не найдена." });
     const statusCode = error instanceof z.ZodError ? 400 : hasStatusCode(error) ? error.statusCode : 500;
     const message = error instanceof z.ZodError
       ? error.issues.map((issue) => `${issue.path.join(".") || "Eingabe"}: ${issue.message}`).join("; ")
@@ -685,7 +686,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     let origin = vehicle?.manualPositionLatitude != null && vehicle.manualPositionLongitude != null
       ? { latitude: vehicle.manualPositionLatitude, longitude: vehicle.manualPositionLongitude } : null;
     if (vehicle) {
-      const current = await tourService.getCurrentPosition(vehicle.id);
+      const current = await currentPosition(vehicle.id);
       if (current.position) origin = current.position;
     }
     const points = origin ? [origin, ...coordinates] : coordinates;
@@ -987,6 +988,13 @@ async function refreshAlertsForVehicle(vehicleId: string) {
   await alertService.refreshVehicleAlerts(vehicle.id, etaService.calculateVehicleSchedule(vehicle.tours));
 }
 
+function isPrismaRecordNotFound(error: unknown): boolean {
+  // Duck-typed: the SQLite and PostgreSQL generated clients have distinct error classes.
+  return typeof error === "object" && error !== null
+    && (error as { name?: unknown }).name === "PrismaClientKnownRequestError"
+    && (error as { code?: unknown }).code === "P2025";
+}
+
 function hasStatusCode(error: unknown): error is { statusCode: number } {
   return typeof error === "object" && error !== null && "statusCode" in error && typeof error.statusCode === "number";
 }
@@ -1133,7 +1141,7 @@ function withWebfleetPosition(
   calculated: CurrentPosition,
   telemetry: Awaited<ReturnType<WebfleetTelemetryService['latest']>>
 ): CurrentPosition {
-  if (!telemetry || !telemetry.usable) return { ...calculated, positionSource: 'CALCULATED' };
+  if (!telemetry || !telemetry.usable) return { ...calculated, positionSource: calculated.positionSource ?? 'CALCULATED' };
   return {
     ...calculated,
     position: { latitude: telemetry.latitude, longitude: telemetry.longitude },

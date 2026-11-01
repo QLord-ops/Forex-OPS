@@ -810,3 +810,35 @@ button:disabled {
   width: 100%;
   background: linear-gradient(135deg, #e7edf3, #f7f9fb 55%, #dce7ef);
 }
+
+/* Route builder: up to ten points, press-and-hold handle to reorder. */
+.route-builder-hint { margin-top: 0; }
+.route-points { display: grid; gap: .4rem; margin-top: .65rem; }
+.route-point { display: flex; align-items: flex-start; gap: .35rem; border: 1px solid #dbe4ef; border-radius: .6rem; background: white; padding: .35rem .35rem .35rem .2rem; touch-action: manipulation; }
+.route-point.dragging { position: relative; z-index: 2; border-color: #2563eb; box-shadow: 0 12px 28px rgb(15 23 42 / .22); }
+.route-point .field-input { padding-top: .45rem; padding-bottom: .45rem; font-size: .8rem; }
+.route-point-handle { display: grid; width: 1.6rem; height: 2.1rem; flex: 0 0 1.6rem; place-items: center; border-radius: .4rem; color: #64748b; cursor: grab; touch-action: none; }
+.route-point-handle:hover { background: #f1f5f9; color: #0f172a; }
+.route-point-handle:active { cursor: grabbing; }
+.route-point-handle:focus-visible { outline: 2px solid #2563eb; outline-offset: 1px; }
+.route-point-number { display: grid; width: 1.45rem; height: 1.45rem; flex: 0 0 1.45rem; margin-top: .3rem; place-items: center; border-radius: 50%; background: #0f172a; color: white; font-size: .68rem; font-weight: 900; font-variant-numeric: tabular-nums; }
+.route-point:first-child .route-point-number { background: #059669; }
+.route-point-note { display: block; margin-top: .2rem; color: #475569; font-size: .68rem; font-weight: 700; }
+.route-point-note-error { color: #be123c; }
+.route-point .icon-button-compact { margin-top: .2rem; }
+.route-point .icon-button-compact:disabled { opacity: .35; }
+.route-add-point { display: inline-flex; align-items: center; gap: .35rem; margin-top: .5rem; border: 1px dashed #94a3b8; border-radius: .55rem; padding: .4rem .65rem; color: #1d4ed8; font-size: .75rem; font-weight: 850; }
+.route-add-point:hover:not(:disabled) { border-color: #2563eb; background: #eff6ff; }
+.route-add-point:disabled { color: #64748b; cursor: not-allowed; }
+.route-add-point:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
+.route-builder-result { margin-top: .75rem; border: 1px solid #dbe4ef; border-radius: .65rem; background: white; padding: .65rem; }
+.route-builder-total { display: flex; flex-wrap: wrap; align-items: baseline; gap: .5rem; }
+.route-builder-total strong { color: #0f172a; font-size: 1.05rem; font-variant-numeric: tabular-nums; }
+.route-builder-total span { color: #334155; font-size: .78rem; font-weight: 750; }
+.route-builder-source { margin-top: .15rem; color: #64748b; font-size: .7rem; font-weight: 700; }
+.route-builder-eta { display: grid; gap: .3rem; margin-top: .55rem; }
+.route-builder-eta li { display: flex; align-items: center; gap: .45rem; color: #0f172a; font-size: .75rem; }
+.route-builder-eta .route-point-number { margin-top: 0; width: 1.25rem; height: 1.25rem; flex-basis: 1.25rem; background: #d97706; }
+.route-builder-eta time { margin-left: auto; flex: 0 0 auto; color: #334155; font-weight: 800; font-variant-numeric: tabular-nums; }
+.preview-stop-marker { border-color: #d97706; background: #fffbeb; color: #92400e; }
+@media (prefers-reduced-motion: reduce) { .route-point { transition: none !important; } }

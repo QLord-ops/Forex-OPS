@@ -149,10 +149,10 @@ export function DashboardPage() {
         </div>
       </aside>
       <section className="dashboard-stage" aria-label="Карта выбранного грузовика">
-        <LazyMapPanel tour={selected?.tour} position={position.data} vehicleNumber={selected?.vehicle.vehicleNumber} focusCoordinate={mapFocus} previewRoute={draftRoute?.geometry} height="100%" fill />
+        <LazyMapPanel tour={selected?.tour} position={position.data} vehicleNumber={selected?.vehicle.vehicleNumber} focusCoordinate={mapFocus} previewRoute={draftRoute?.geometry} previewStops={draftRoute?.stops} height="100%" fill />
         {draftRoute ? <div className="map-draft-banner"><span>{draftRoute.label} · черновик</span><button type="button" aria-label="Убрать черновой маршрут с карты" onClick={() => setRoutePreview(null)}><X size={16} /></button></div> : null}
         {selected ? <><VehicleMapHud row={selected} open={hudOpen} onToggle={() => setHudOpen((value) => !value)} /><RouteStopsDrawer row={selected} open={drawerOpen} onToggle={() => setDrawerOpen((value) => !value)} /></> : null}
-        <QuickOrderPanel row={selected} vehicles={vehicles.map((item) => item.vehicle)} onAddressFound={setMapFocus} onRoutePreview={(geometry) => setRoutePreview(geometry.length ? { geometry, label: 'Предпросмотр маршрута' } : null)} onCreated={async (vehicleId) => { selectVehicle(vehicleId); await refetch() }} />
+        <QuickOrderPanel row={selected} vehicles={vehicles.map((item) => item.vehicle)} onAddressFound={setMapFocus} onRoutePreview={setRoutePreview} onCreated={async (vehicleId) => { selectVehicle(vehicleId); await refetch() }} />
         {position.error ? <button type="button" className="map-error" onClick={() => void position.refetch()}>Позиция временно недоступна · повторить</button> : null}
         {error ? <div className="dashboard-sync-warning">Данные автопарка не обновлены. Повторим автоматически.</div> : null}
       </section>

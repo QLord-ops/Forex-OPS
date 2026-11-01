@@ -48,8 +48,11 @@ export interface ClockState {
   currentCycle: VehicleClockCycle;
   weeklyExtendedDrive: WeeklyExtendedDriveUsage;
   reducedRestsSinceWeeklyRest: number;
+  /** Always empty in new states; kept so persisted states stay readable. Warnings are returned per call. */
   warnings: string[];
   pendingRest?: { type: "BREAK" | "DAILY_REST"; endAt: string };
+  /** Start of the current uninterrupted stop, so a stop split across several calls still counts as one rest. */
+  idleSince?: string;
 }
 
 export interface CreateInitialClockInput {
@@ -231,8 +234,10 @@ function cloneState(state: ClockState): ClockState {
     currentCycle: { ...state.currentCycle },
     weeklyExtendedDrive: { ...state.weeklyExtendedDrive },
     reducedRestsSinceWeeklyRest: state.reducedRestsSinceWeeklyRest,
-    warnings: [...state.warnings],
-    pendingRest: state.pendingRest ? { ...state.pendingRest } : undefined
+    // Legacy states may still carry sticky warnings; they describe a past moment, not the clock.
+    warnings: [],
+    pendingRest: state.pendingRest ? { ...state.pendingRest } : undefined,
+    idleSince: state.idleSince
   };
 }
 
@@ -280,7 +285,7 @@ export function createUnknownClockState(effectiveAt: string | Date): ClockState 
     currentCycle: newCycle(asDate(effectiveAt)),
     weeklyExtendedDrive: { weekKey: getBerlinIsoWeekKey(effectiveAt), used: 0 },
     reducedRestsSinceWeeklyRest: 0,
-    warnings: ["CLOCK_STATE_UNKNOWN"]
+    warnings: []
   };
 }
 
@@ -428,22 +433,66 @@ export function resetReducedRestCounter(state: ClockState, effectiveAt: string |
   return next;
 }
 
+function startDailyRestCycle(state: ClockState, end: Date) {
+  state.currentCycle = newCycle(end);
+  state.pendingRest = undefined;
+  state.idleSince = end.toISOString();
+}
+
+export function clockWarnings(state: ClockState): string[] {
+  const warnings: string[] = [];
+  if (state.kind === "UNKNOWN") warnings.push("CLOCK_STATE_UNKNOWN");
+  if (state.currentCycle.dutySeconds > dutyWindowLimit(state.currentCycle)) warnings.push("DUTY_WINDOW_EXCEEDED_BY_STOP");
+  return warnings;
+}
+
 export function applyStopTime(state: ClockState, stopSeconds: number, startedAt: string | Date): ApplyStopTimeResult {
   const next = cloneState(state);
   const durationSeconds = normalizeSeconds(stopSeconds);
   const start = asDate(startedAt);
 
   if (durationSeconds <= 0) {
-    return { state: next, segment: null, warnings: [...next.warnings] };
+    return { state: next, segment: null, warnings: [] };
   }
 
-  next.currentCycle.dutySeconds += durationSeconds;
-  next.updatedAt = addSeconds(start, durationSeconds).toISOString();
-  const warnings = [...next.warnings];
-  if (next.currentCycle.dutySeconds > dutyWindowLimit(next.currentCycle)) {
-    if (!warnings.includes("DUTY_WINDOW_EXCEEDED_BY_STOP")) warnings.push("DUTY_WINDOW_EXCEEDED_BY_STOP");
+  const end = addSeconds(start, durationSeconds);
+  const continuesStop = next.idleSince !== undefined && start.getTime() <= asDate(next.updatedAt).getTime();
+  const idleStart = continuesStop ? asDate(next.idleSince!) : start;
+  const idleSeconds = secondsBetween(idleStart, end);
+  const cycle = next.currentCycle;
+  next.updatedAt = end.toISOString();
+
+  let dailyRest = false;
+  if (next.pendingRest?.type === "DAILY_REST" && end >= asDate(next.pendingRest.endAt)) {
+    dailyRest = true;
+  } else if (idleSeconds >= VEHICLE_CLOCK_LIMITS.normalDailyRestSeconds) {
+    // A reserved reduced rest that turned into a regular one was never used.
+    if (cycle.reducedRestReservationId) next.reducedRestsSinceWeeklyRest = Math.max(0, next.reducedRestsSinceWeeklyRest - 1);
+    dailyRest = true;
+  } else if (idleSeconds >= VEHICLE_CLOCK_LIMITS.reducedDailyRestSeconds) {
+    if (cycle.reducedRestReservationId) {
+      dailyRest = true;
+    } else if (next.reducedRestsSinceWeeklyRest < VEHICLE_CLOCK_LIMITS.reducedRestsBetweenWeeklyRestsLimit) {
+      next.reducedRestsSinceWeeklyRest += 1;
+      dailyRest = true;
+    }
   }
-  next.warnings = warnings;
+
+  if (dailyRest) {
+    startDailyRestCycle(next, end);
+    return { state: next, segment: segment("DAILY_REST", start, durationSeconds), warnings: [] };
+  }
+
+  cycle.dutySeconds += durationSeconds;
+  if (idleSeconds >= VEHICLE_CLOCK_LIMITS.breakDurationSeconds) cycle.continuousDrivingSeconds = 0;
+  if (next.pendingRest?.type === "BREAK" && end >= asDate(next.pendingRest.endAt)) {
+    cycle.continuousDrivingSeconds = 0;
+    next.pendingRest = undefined;
+  }
+  next.idleSince = idleStart.toISOString();
+
+  const warnings: string[] = [];
+  if (cycle.dutySeconds > dutyWindowLimit(cycle)) warnings.push("DUTY_WINDOW_EXCEEDED_BY_STOP");
 
   return {
     state: next,
@@ -457,13 +506,13 @@ export function forecastDrive(state: ClockState, drivingSeconds: number, now: Da
   const next = cloneState(state);
   const segments: VehicleClockSegment[] = [];
   const steps: VehicleClockPlanStep[] = [];
-  const warnings = [...next.warnings];
+  const warnings: string[] = [];
   const isPreliminary = next.kind === "UNKNOWN";
   const initialState = cloneState(next);
   let cursor = new Date(now.getTime());
   let remainingDrivingSeconds = normalizeSeconds(drivingSeconds);
 
-  if (isPreliminary && !warnings.includes("CLOCK_STATE_UNKNOWN")) warnings.push("CLOCK_STATE_UNKNOWN");
+  if (isPreliminary) warnings.push("CLOCK_STATE_UNKNOWN");
 
   const pushStep = (nextSegment: VehicleClockSegment, stateBefore: ClockState, stateAfter: ClockState) => {
     segments.push(nextSegment);
@@ -551,12 +600,12 @@ export function forecastDrive(state: ClockState, drivingSeconds: number, now: Da
     cycle.drivingSeconds += chunk;
     cycle.dutySeconds += chunk;
     cycle.continuousDrivingSeconds += chunk;
+    next.idleSince = undefined;
     remainingDrivingSeconds -= chunk;
     next.updatedAt = cursor.toISOString();
     pushStep(drive, before, next);
   }
 
-  next.warnings = warnings;
   const plan: VehicleClockPlan = {
     startedAt: now.toISOString(),
     endAt: cursor.toISOString(),

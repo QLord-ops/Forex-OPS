@@ -1,7 +1,7 @@
 import type { PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import type { Coordinate, CurrentPosition } from '../domain.js';
-import type { RoutingProvider } from './routing.js';
+import { RoutingError, type RoutingProvider } from './routing.js';
 import type { TrafficRouteResult, TruckRouteProfile } from './traffic-routing.js';
 import { snapshotVehicleClock } from './tours.js';
 import { applyStopTime, forecastDrive, type ClockState, type VehicleClockSegment } from './vehicle-clock.js';
@@ -13,6 +13,8 @@ export const routeScenarioInputSchema = z.object({
   originAddress: z.string().trim().min(1).max(1000).optional(),
   startMode: z.enum(['AFTER_CURRENT_TOUR', 'NOW', 'AFTER_QUEUE']).default('NOW'),
   startAt: date.optional(),
+  // The quick map preview skips re-projecting the vehicle's queued tours (saves routing quota).
+  includeQueueImpact: z.boolean().default(true),
   stops: z.array(z.object({
     address: z.string().trim().min(1).max(1000), type: z.enum(['LOAD', 'UNLOAD', 'VISIT']).default('VISIT'),
     coords: z.object({ latitude: z.number().min(-90).max(90), longitude: z.number().min(-180).max(180) }).optional(),
@@ -77,6 +79,7 @@ export class RouteScenarioService {
       warnings.add('Есть незакрытая поломка. Прогноз зависит от окончания ремонта.');
       for (const issue of breakdowns) if (issue.expectedResolvedAt && issue.expectedResolvedAt > availableAt) availableAt = issue.expectedResolvedAt;
     }
+    const stopCoords = await geocodeStops(this.routing, input.stops);
     const truck: TruckRouteProfile = { maxSpeedKmh: vehicle.maxSpeedKmh };
     if (vehicle.truckProfile) { try { Object.assign(truck, JSON.parse(vehicle.truckProfile)); } catch { warnings.add('Параметры грузовика недоступны.'); } }
     let early: Cursor = { at: availableAt, clock: snapshot.clockState };
@@ -91,17 +94,19 @@ export class RouteScenarioService {
     const downstream = tours.filter(t => !prefix.includes(t));
     const sources = new Set<string>();
     let requiresDailyRest = false;
+    let collect = warnings;
 
     const advance = async (stop: PlannedStop, options: { seconds?: number; showGeometry?: boolean } = {}): Promise<ScenarioStopResult> => {
       let seconds = options.seconds;
       let earlySegments: VehicleClockSegment[] = [], lateSegments: VehicleClockSegment[] = [];
       if (!stop.arrivedAt) {
         if (seconds === undefined && origin) {
-          const route = await this.routing.calculateRoute(origin, stop.coords, { departureTime: early.at, traffic: true, source: 'manual', truck, includeInstructions: true });
+          const route = await this.routing.calculateRoute(origin, stop.coords, { departureTime: early.at, traffic: true, source: 'manual', truck, includeInstructions: false });
           seconds = calculateSimulatedDuration(route.distanceMeters, route.durationSeconds, vehicle.maxSpeedKmh);
           sources.add(route.provider);
-          if ((route as Partial<TrafficRouteResult>).providerStatus !== 'live-traffic') warnings.add('Без актуальных пробок и проверки грузовых ограничений на части маршрута.');
-          if (options.showGeometry) { geometry.push(...route.geometry); distanceMeters += route.distanceMeters; }
+          const routeNote = routeWarning(route);
+          if (routeNote) collect.add(routeNote);
+          if (options.showGeometry) { appendGeometry(geometry, route.geometry); distanceMeters += route.distanceMeters; }
         }
         if (seconds === undefined) hadMissingRoute = true;
         else {
@@ -109,7 +114,7 @@ export class RouteScenarioService {
           early = { at: new Date(a.endAt), clock: a.state }; late = { at: new Date(b.endAt), clock: b.state };
           earlySegments = a.segments; lateSegments = b.segments;
           requiresDailyRest ||= [...a.segments, ...b.segments].some(segment => segment.type === 'DAILY_REST');
-          [...a.warnings, ...b.warnings].forEach(w => warnings.add(w));
+          [...a.warnings, ...b.warnings].forEach(code => { const text = clockWarningText(code); if (text) collect.add(text); });
         }
       }
       const arrivalEarly = stop.arrivedAt ?? early.at, arrivalLate = stop.arrivedAt ?? late.at;
@@ -136,7 +141,7 @@ export class RouteScenarioService {
       for (const stop of tour.stops.filter(s => !s.completedAt)) {
       const leg = tour.legs.find(l => l.toStopId === stop.id && l.status !== 'COMPLETED');
       const seconds = leg ? Math.max(0, leg.simulatedDurationSeconds - (leg.id === activeLeg?.id ? snapshot.driveElapsedSeconds : 0)) : undefined;
-      if (leg) warnings.add('Оставшийся текущий маршрут рассчитан по сохранённым данным; трафик на нём может устареть.');
+      if (leg) collect.add('Оставшийся текущий маршрут рассчитан по сохранённым данным; трафик на нём может устареть.');
       await advance({ ...stop, coords: { latitude: stop.latitude, longitude: stop.longitude } }, { seconds });
       }
     }
@@ -148,8 +153,8 @@ export class RouteScenarioService {
     const startRange = { earliest: early.at.toISOString(), latest: late.at.toISOString() };
     const baselineEarly = structuredClone(early), baselineLate = structuredClone(late), baselineOrigin = origin;
     const stops: ScenarioStopResult[] = [];
-    for (const stop of input.stops) {
-      const coords = stop.coords ?? await this.routing.geocode(stop.address);
+    for (const [index, stop] of input.stops.entries()) {
+      const coords = stopCoords[index];
       stops.push(await advance({ ...stop, coords,
         appointmentAt: stop.appointmentAt ? new Date(stop.appointmentAt) : null,
         appointmentWindowStartAt: stop.appointmentWindowStartAt ? new Date(stop.appointmentWindowStartAt) : null,
@@ -177,9 +182,12 @@ export class RouteScenarioService {
       }
       return rows;
     };
-    const changed = await projectQueue();
+    // Each pass starts from the same draft state; queue warnings belong to other tours, not to this draft.
+    const draftHadMissingRoute = hadMissingRoute;
+    const runPass = async () => { collect = new Set<string>(); hadMissingRoute = draftHadMissingRoute; try { return await projectQueue(); } finally { collect = warnings; } };
+    const changed = input.includeQueueImpact && downstream.length ? await runPass() : [];
     early = baselineEarly; late = baselineLate; origin = baselineOrigin;
-    const baseline = await projectQueue();
+    const baseline = changed.length ? await runPass() : [];
     return { vehicleId: vehicle.id, vehicleNumber: vehicle.vehicleNumber, operationVersion: vehicle.operationVersion,
       tourVersions: tours.map(t => ({ id: t.id, version: t.planVersion })), startMode: input.startMode,
       generatedAt: now.toISOString(), startRange, completion, dayEndsAt: dayEnd.toISOString(), finishToday,
@@ -192,21 +200,23 @@ export class RouteScenarioService {
 
   /** Explicit A → B preview ignores the selected vehicle, its hours and its operational queue. */
   private async calculateFree(input: z.output<typeof routeScenarioInputSchema>, now: Date) {
-    let origin: Coordinate = await this.routing.geocode(input.originAddress!);
+    let origin: Coordinate = await geocodeAddress(this.routing, input.originAddress!, 'Адрес старта не найден');
+    const stopCoords = await geocodeStops(this.routing, input.stops);
     let early = new Date(Math.max(now.getTime(), input.startAt ? Date.parse(input.startAt) : 0));
     let late = new Date(early);
     const startRange = { earliest: early.toISOString(), latest: late.toISOString() };
-    const geometry: [number, number][] = [];
+    const geometry: Coordinate[] = [];
     const stops: ScenarioStopResult[] = [];
     const warnings = new Set(['Свободный маршрут: часы, паузы и ограничения конкретной машины не учитываются.']);
     const sources = new Set<string>();
     let distanceMeters = 0;
-    for (const stop of input.stops) {
-      const coords = stop.coords ?? await this.routing.geocode(stop.address);
-      const route = await this.routing.calculateRoute(origin, coords, { departureTime: early, traffic: true, source: 'manual', includeInstructions: true });
+    for (const [index, stop] of input.stops.entries()) {
+      const coords = stopCoords[index];
+      const route = await this.routing.calculateRoute(origin, coords, { departureTime: early, traffic: true, source: 'manual', includeInstructions: false });
       sources.add(route.provider);
-      if ((route as Partial<TrafficRouteResult>).providerStatus !== 'live-traffic') warnings.add('Без актуальных пробок и проверки грузовых ограничений на части маршрута.');
-      geometry.push(...route.geometry.map(point => [point.longitude, point.latitude] as [number, number]));
+      const routeNote = routeWarning(route);
+      if (routeNote) warnings.add(routeNote);
+      appendGeometry(geometry, route.geometry);
       distanceMeters += route.distanceMeters;
       const arrivalEarly = new Date(early.getTime() + route.durationSeconds * 1000);
       const arrivalLate = new Date(late.getTime() + route.durationSeconds * 1000);
@@ -228,8 +238,8 @@ export class RouteScenarioService {
     return { vehicleId: null, vehicleNumber: null, originAddress: input.originAddress, startMode: 'NOW',
       generatedAt: now.toISOString(), startRange, completion: { earliest: early.toISOString(), latest: late.toISOString() },
       dayEndsAt: berlinDayEnd(now).toISOString(), finishToday: 'UNKNOWN' as Risk, preliminary: true,
-      stops, geometry, distanceMeters, warnings: [...warnings], routingProviders: [...sources],
-      requiresDailyRest: false, downstreamQueueImpact: [] };
+      stops, geometry: geometry.map(point => [point.longitude, point.latitude] as [number, number]), distanceMeters,
+      warnings: [...warnings], routingProviders: [...sources], requiresDailyRest: false, downstreamQueueImpact: [] };
   }
 }
 
@@ -245,4 +255,41 @@ export function berlinDayEnd(now: Date): Date {
   const format = (stamp: number) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit' }).format(stamp);
   while (high - low > 1) { const mid = Math.floor((low + high) / 2); if (format(mid) === day) low = mid; else high = mid; }
   return new Date(high - 1);
+}
+
+const CLOCK_WARNING_TEXT: Record<string, string | null> = {
+  // Already explained by the Russian "Не заполнены исходные часы машины…" line.
+  CLOCK_STATE_UNKNOWN: null,
+  DUTY_WINDOW_EXCEEDED_BY_STOP: 'Стоянка выходит за рабочее окно смены: может понадобиться ежедневный отдых раньше плана.'
+};
+/** Clock codes never reach the dispatcher as raw identifiers. */
+export function clockWarningText(code: string): string | null {
+  if (code in CLOCK_WARNING_TEXT) return CLOCK_WARNING_TEXT[code];
+  return /^[A-Z0-9_]+$/.test(code) ? 'Прогноз режима труда и отдыха требует проверки часов машины.' : code;
+}
+function routeWarning(route: object): string | null {
+  const { providerStatus, warning } = route as Partial<TrafficRouteResult>;
+  if (providerStatus === 'live-traffic') return null;
+  return warning ?? 'Без актуальных пробок и проверки грузовых ограничений на части маршрута.';
+}
+/** Joins leg geometries without repeating the shared point between two legs. */
+function appendGeometry(target: Coordinate[], points: Coordinate[]) {
+  const last = target[target.length - 1];
+  const first = points[0];
+  const start = last && first && last.latitude === first.latitude && last.longitude === first.longitude ? 1 : 0;
+  for (let index = start; index < points.length; index += 1) target.push(points[index]);
+}
+async function geocodeAddress(routing: RoutingProvider, address: string, notFound: string): Promise<Coordinate> {
+  try {
+    const result = await routing.geocode(address);
+    return { latitude: result.latitude, longitude: result.longitude };
+  } catch (error) {
+    if (error instanceof RoutingError && error.statusCode < 500) throw new RoutingError(`${notFound}: «${address}». Проверьте адрес.`, 404);
+    throw error;
+  }
+}
+async function geocodeStops(routing: RoutingProvider, stops: Array<{ address: string; coords?: Coordinate }>): Promise<Coordinate[]> {
+  const result: Coordinate[] = [];
+  for (const stop of stops) result.push(stop.coords ?? await geocodeAddress(routing, stop.address, 'Адрес точки не найден'));
+  return result;
 }
