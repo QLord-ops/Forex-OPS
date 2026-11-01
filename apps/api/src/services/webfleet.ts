@@ -25,7 +25,7 @@ export type WebfleetPosition = WebfleetObject & {
   raw?: unknown;
 };
 
-type WebfleetConfig = {
+export type WebfleetConfig = {
   baseUrl: string;
   account: string;
   apiKey: string;
@@ -151,7 +151,11 @@ export class WebfleetSyncService {
   private readonly telemetry: WebfleetTelemetryService;
   private nextCheckAt = 0;
 
-  constructor(private readonly db: PrismaClient, private readonly config: WebfleetConfig | null = readWebfleetConfig()) {
+  constructor(
+    private readonly db: PrismaClient,
+    private readonly config: WebfleetConfig | null = readWebfleetConfig(),
+    private readonly fetchReport: (config: WebfleetConfig) => Promise<WebfleetPosition[]> = fetchObjectReport
+  ) {
     this.telemetry = new WebfleetTelemetryService(db);
   }
 
@@ -185,7 +189,7 @@ export class WebfleetSyncService {
     if (!locked.count) { this.nextCheckAt = now.getTime() + 15_000; return { configured: true, refreshed: false, reason: 'LEASED' as const, lastSnapshotAt: state?.lastSnapshotAt ?? null }; }
 
     try {
-      const positions = await fetchObjectReport(this.config);
+      const positions = await this.fetchReport(this.config);
       let matched = 0;
       let rejected = 0;
       const unmatched: Array<WebfleetObject & { ambiguous: boolean }> = [];
@@ -201,19 +205,120 @@ export class WebfleetSyncService {
       });
       this.nextCheckAt = now.getTime() + SNAPSHOT_INTERVAL_MS;
       return { configured: true, refreshed: true, received: positions.length, matched, lastSnapshotAt: now };
-    } catch {
-      const retryAfter = new Date(now.getTime() + 5 * SNAPSHOT_INTERVAL_MS);
+    } catch (error) {
+      const failure = error instanceof WebfleetError ? error : new WebfleetError('UNKNOWN');
+      // Wrong credentials are retried slowly so repeated logins do not lock the Webfleet user.
+      const retryAfter = new Date(now.getTime() + RETRY_DELAY_MS[failure.category]);
       this.nextCheckAt = retryAfter.getTime();
-      await this.db.integrationSyncState.update({ where: { id: stateId }, data: { lockedUntil: null, cursor: JSON.stringify({ ...(isRecord(summary) ? summary : {}), lastError: 'SYNC_FAILED', retryAfter: retryAfter.toISOString() }) } });
-      return { configured: true, refreshed: false, reason: 'SYNC_FAILED' as const, lastSnapshotAt: state?.lastSnapshotAt ?? null };
+      await this.db.integrationSyncState.update({ where: { id: stateId }, data: { lockedUntil: null, cursor: JSON.stringify({
+        ...(isRecord(summary) ? summary : {}),
+        lastError: 'SYNC_FAILED',
+        errorCategory: failure.category,
+        providerErrorCode: failure.providerCode,
+        failedAt: now.toISOString(),
+        retryAfter: retryAfter.toISOString()
+      }) } });
+      return { configured: true, refreshed: false, reason: 'SYNC_FAILED' as const, errorCategory: failure.category, lastSnapshotAt: state?.lastSnapshotAt ?? null };
     }
   }
 
   async status() {
     const state = await this.db.integrationSyncState.findUnique({ where: { id: 'WEBFLEET:SNAPSHOT' } });
     const summary = state?.cursor ? safeJson(state.cursor) : null;
-    return { configured: this.configured, mode: 'READ_ONLY' as const, pollingIntervalSeconds: SNAPSHOT_INTERVAL_MS / 1000, lastSnapshotAt: state?.lastSnapshotAt ?? null, summary, lastError: isRecord(summary) ? summary.lastError ?? null : null, retryAfter: isRecord(summary) ? summary.retryAfter ?? null : null };
+    const record = isRecord(summary) ? summary : null;
+    return {
+      configured: this.configured,
+      mode: 'READ_ONLY' as const,
+      pollingIntervalSeconds: SNAPSHOT_INTERVAL_MS / 1000,
+      lastSnapshotAt: state?.lastSnapshotAt ?? null,
+      summary,
+      lastError: record?.lastError ?? null,
+      errorCategory: record?.lastError && typeof record.errorCategory === 'string' ? record.errorCategory : null,
+      providerErrorCode: record?.lastError && typeof record.providerErrorCode === 'number' ? record.providerErrorCode : null,
+      retryAfter: record?.retryAfter ?? null
+    };
   }
+
+  /** Removes a freshly bound object from the stored "needs matching" list so the UI updates before the next snapshot. */
+  async forgetUnmatched(objectUid: string) {
+    const state = await this.db.integrationSyncState.findUnique({ where: { id: 'WEBFLEET:SNAPSHOT' } });
+    const summary = state?.cursor ? safeJson(state.cursor) : null;
+    if (!state || !isRecord(summary) || !Array.isArray(summary.unmatched)) return;
+    const unmatched = summary.unmatched.filter((item) => !isRecord(item) || item.objectUid !== objectUid);
+    await this.db.integrationSyncState.update({ where: { id: state.id }, data: { cursor: JSON.stringify({ ...summary, unmatched }) } });
+  }
+}
+
+export type WebfleetErrorCategory = 'AUTH' | 'PERMISSION' | 'RATE_LIMIT' | 'NETWORK' | 'INVALID_RESPONSE' | 'CONFIG' | 'UNKNOWN';
+
+const RETRY_DELAY_MS: Record<WebfleetErrorCategory, number> = {
+  AUTH: 30 * 60_000,
+  PERMISSION: 30 * 60_000,
+  CONFIG: 30 * 60_000,
+  RATE_LIMIT: 5 * 60_000,
+  NETWORK: 5 * 60_000,
+  INVALID_RESPONSE: 5 * 60_000,
+  UNKNOWN: 5 * 60_000
+};
+
+/** Provider failure without account details: only a category and Webfleet's numeric code are kept. */
+export class WebfleetError extends Error {
+  constructor(readonly category: WebfleetErrorCategory, readonly providerCode: number | null = null) {
+    super(`Webfleet: ${category}${providerCode === null ? '' : ` (${providerCode})`}`);
+    this.name = 'WebfleetError';
+  }
+}
+
+/** Maps a Webfleet error code/message to a category. The message is used for classification only and never stored. */
+export function classifyWebfleetError(code: number | null, message: string | null, httpStatus?: number): WebfleetErrorCategory {
+  const text = (message ?? '').toLowerCase();
+  if (httpStatus === 429 || code === 8011 || /quota|limit|too many/.test(text)) return 'RATE_LIMIT';
+  if (httpStatus === 401 || /auth|credential|password|login|apikey|api key|invalid user|account/.test(text)) return 'AUTH';
+  if (httpStatus === 403 || /permission|not allowed|access denied|not authori[sz]ed|forbidden|right/.test(text)) return 'PERMISSION';
+  if (httpStatus !== undefined && httpStatus >= 500) return 'NETWORK';
+  return code === null && !text ? 'INVALID_RESPONSE' : 'UNKNOWN';
+}
+
+export async function bindWebfleetObject(db: PrismaClient, input: { objectUid: string; vehicleId: string; objectNo?: string | null; licensePlate?: string | null }) {
+  const objectUid = input.objectUid.trim();
+  if (!objectUid) throw Object.assign(new Error('Не указан объект Webfleet.'), { statusCode: 400 });
+  const vehicle = await db.vehicle.findUnique({ where: { id: input.vehicleId } });
+  if (!vehicle) throw Object.assign(new Error('Грузовик не найден.'), { statusCode: 404 });
+  const byObject = await db.vehicleIntegration.findUnique({ where: { provider_externalId: { provider: PROVIDER, externalId: objectUid } } });
+  if (byObject && byObject.vehicleId !== vehicle.id) throw Object.assign(new Error('Этот объект Webfleet уже привязан к другому грузовику. Сначала отвяжите его.'), { statusCode: 409 });
+  const byVehicle = await db.vehicleIntegration.findUnique({ where: { provider_vehicleId: { provider: PROVIDER, vehicleId: vehicle.id } } });
+  if (byVehicle && byVehicle.externalId !== objectUid) throw Object.assign(new Error('Грузовик уже привязан к другому объекту Webfleet. Сначала отвяжите его.'), { statusCode: 409 });
+  return db.vehicleIntegration.upsert({
+    where: { provider_externalId: { provider: PROVIDER, externalId: objectUid } },
+    create: { vehicleId: vehicle.id, provider: PROVIDER, externalId: objectUid, externalNumber: input.objectNo?.trim() || null, externalPlate: normalizePlate(input.licensePlate) || null, status: 'ACTIVE' },
+    update: { status: 'ACTIVE', externalNumber: input.objectNo?.trim() || undefined, externalPlate: normalizePlate(input.licensePlate) || undefined }
+  });
+}
+
+/** Deletes only the binding. Stored telemetry stays as history. */
+export async function unbindWebfleetVehicle(db: PrismaClient, vehicleId: string) {
+  const binding = await db.vehicleIntegration.findUnique({ where: { provider_vehicleId: { provider: PROVIDER, vehicleId } } });
+  if (!binding) throw Object.assign(new Error('Привязка Webfleet не найдена.'), { statusCode: 404 });
+  await db.vehicleIntegration.delete({ where: { id: binding.id } });
+  return binding;
+}
+
+export async function listWebfleetBindings(db: PrismaClient) {
+  const rows = await db.vehicleIntegration.findMany({
+    where: { provider: PROVIDER },
+    include: { vehicle: { select: { id: true, vehicleNumber: true, licensePlate: true } } },
+    orderBy: { createdAt: 'asc' }
+  });
+  return rows.map((row) => ({
+    vehicleId: row.vehicleId,
+    vehicleNumber: row.vehicle.vehicleNumber,
+    licensePlate: row.vehicle.licensePlate,
+    objectUid: row.externalId,
+    objectNo: row.externalNumber,
+    externalPlate: row.externalPlate,
+    status: row.status,
+    boundAt: row.createdAt
+  }));
 }
 
 export function readWebfleetConfig(env = process.env): WebfleetConfig | null {
@@ -231,9 +336,9 @@ export function readWebfleetConfig(env = process.env): WebfleetConfig | null {
   };
 }
 
-async function fetchObjectReport(config: WebfleetConfig): Promise<WebfleetPosition[]> {
+export async function fetchObjectReport(config: WebfleetConfig, fetchImpl: typeof fetch = fetch): Promise<WebfleetPosition[]> {
   const url = new URL(config.baseUrl);
-  if (url.protocol !== 'https:' || url.hostname !== 'csv.webfleet.com' || url.pathname !== '/extern' || url.username || url.password) throw new Error('Недопустимый адрес Webfleet.');
+  if (url.protocol !== 'https:' || url.hostname !== 'csv.webfleet.com' || url.pathname !== '/extern' || url.username || url.password) throw new WebfleetError('CONFIG');
   url.searchParams.set('account', config.account);
   url.searchParams.set('apikey', config.apiKey);
   url.searchParams.set('action', 'showObjectReportExtern');
@@ -241,12 +346,31 @@ async function fetchObjectReport(config: WebfleetConfig): Promise<WebfleetPositi
   url.searchParams.set('useUTF8', 'true');
   url.searchParams.set('useISO8601', 'true');
   const authorization = Buffer.from(`${config.username}:${config.password}`).toString('base64');
-  const response = await fetch(url, { redirect: 'error', headers: { Authorization: `Basic ${authorization}`, Accept: 'application/json' }, signal: AbortSignal.timeout(12_000) });
-  if (!response.ok || response.headers.has('X-Webfleet-Errorcode')) throw new Error('Ошибка Webfleet.');
-  const payload = await response.json() as unknown;
-  if (!Array.isArray(payload)) throw new Error('Неизвестный формат Webfleet.');
-  const rows = payload;
-  return rows.map(parseWebfleetObjectRow).filter((row): row is WebfleetPosition => row !== null);
+  let response: Response;
+  try {
+    response = await fetchImpl(url, { redirect: 'error', headers: { Authorization: `Basic ${authorization}`, Accept: 'application/json' }, signal: AbortSignal.timeout(12_000) });
+  } catch {
+    throw new WebfleetError('NETWORK');
+  }
+  const headerCode = parseErrorCode(response.headers.get('X-Webfleet-Errorcode'));
+  if (!response.ok || headerCode !== null) {
+    throw new WebfleetError(classifyWebfleetError(headerCode, response.headers.get('X-Webfleet-Errormessage'), response.ok ? undefined : response.status), headerCode);
+  }
+  let payload: unknown;
+  try { payload = await response.json(); } catch { throw new WebfleetError('INVALID_RESPONSE'); }
+  // With outputformat=json Webfleet reports errors as an object { errorCode, errorMsg } and HTTP 200.
+  if (isRecord(payload) && !Array.isArray(payload)) {
+    const code = parseErrorCode(payload.errorCode ?? payload.errorcode);
+    const message = typeof payload.errorMsg === 'string' ? payload.errorMsg : typeof payload.errormsg === 'string' ? payload.errormsg : null;
+    throw new WebfleetError(code === null && message === null ? 'INVALID_RESPONSE' : classifyWebfleetError(code, message), code);
+  }
+  if (!Array.isArray(payload)) throw new WebfleetError('INVALID_RESPONSE');
+  return payload.map(parseWebfleetObjectRow).filter((row): row is WebfleetPosition => row !== null);
+}
+
+function parseErrorCode(value: unknown) {
+  const parsed = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value) : NaN;
+  return Number.isInteger(parsed) ? parsed : null;
 }
 
 export function parseWebfleetObjectRow(value: unknown): WebfleetPosition | null {

@@ -20,7 +20,8 @@
     "db:deploy": "node scripts/migrate.mjs",
     "db:import-sqlite": "node scripts/import-sqlite.mjs",
     "db:reset": "npm run db:deploy && npm run db:seed",
-    "db:seed": "tsx prisma/seed.ts"
+    "db:seed": "tsx prisma/seed.ts",
+    "webfleet:check": "tsx src/cli/webfleet-check.ts"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",

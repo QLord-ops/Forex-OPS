@@ -1,4 +1,7 @@
 let csrfToken = ''
+let sessionRole: DispatcherSession['role'] | null = null
+/** Role of the current session, for showing admin-only controls. The server still enforces every permission. */
+export const currentDispatcherRole = () => sessionRole
 export const authHeaders = (): Record<string, string> => csrfToken ? { 'X-CSRF-Token': csrfToken } : {}
 export const notifySessionExpired = () => window.dispatchEvent(new Event('ops:session-expired'))
 export interface DispatcherSession { authenticated: boolean; role?: 'admin' | 'dispatcher'; expiresAt?: string | null; csrfToken?: string }
@@ -30,6 +33,7 @@ async function call(path: string, password?: string): Promise<DispatcherSession>
     )
   }
   csrfToken = result.csrfToken ?? ''
+  sessionRole = result.authenticated ? result.role ?? null : null
   return result
 }
 export const dispatcherAuth = { session: () => call('session'), login: (password: string) => call('login', password), logout: () => call('logout') }
