@@ -29,8 +29,9 @@ services:
     github:
       repo: QLord-ops/Forex-OPS
       branch: main
-      # Deploys are started by hand after a backup check, never on every push.
-      deploy_on_push: false
+      # Every merge into main deploys automatically (owner decision 2026-11-01).
+      # The PRE_DEPLOY migration runs first; DigitalOcean keeps 7 days of point-in-time backups.
+      deploy_on_push: true
     dockerfile_path: apps/api/Dockerfile
     source_dir: /
     http_port: 3001
@@ -93,7 +94,7 @@ jobs:
     github:
       repo: QLord-ops/Forex-OPS
       branch: main
-      deploy_on_push: false
+      deploy_on_push: true
     dockerfile_path: apps/api/Dockerfile
     source_dir: /
     instance_size_slug: apps-s-1vcpu-0.5gb
