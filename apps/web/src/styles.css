@@ -892,3 +892,18 @@ aside > .dispatcher-logout-error { position: absolute; bottom: 4.25rem; left: .5
   .dashboard-stage:has(.route-stops-drawer-open) .map-draft-banner { bottom: calc(58% + .75rem); }
 }
 @media (min-width: 1024px) { .operations-toast { max-width: 22rem; } }
+
+/* Route traffic legend (Google-style route colouring). */
+.map-traffic-legend { position: absolute; z-index: 7; left: .75rem; bottom: 5rem; display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .65rem; max-width: calc(100% - 1.5rem); border: 1px solid rgb(15 23 42 / .12); border-radius: .55rem; background: rgb(255 255 255 / .94); padding: .35rem .6rem; color: #0f172a; font-size: .7rem; font-weight: 750; box-shadow: 0 8px 24px rgb(15 23 42 / .14); }
+.map-traffic-legend strong { font-weight: 850; }
+.map-traffic-legend span { display: inline-flex; align-items: center; gap: .3rem; }
+.map-traffic-legend i { display: inline-block; width: .9rem; height: .3rem; border-radius: 999px; }
+.map-traffic-legend small { color: #475569; font-weight: 700; }
+.map-traffic-legend-stale { color: #b45309 !important; }
+.map-panel-card .map-traffic-legend { bottom: 2.25rem; max-width: calc(100% - 22rem); }
+.dashboard-stage:has(.map-draft-banner) .map-traffic-legend { bottom: 8.4rem; }
+@media (max-width: 640px) {
+  .map-traffic-legend { bottom: 9.75rem; }
+  .dashboard-stage:has(.map-draft-banner) .map-traffic-legend { bottom: 11.75rem; }
+  .map-panel-card .map-traffic-legend { bottom: 5.25rem; max-width: calc(100% - 1.5rem); }
+}

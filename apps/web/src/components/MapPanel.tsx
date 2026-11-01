@@ -4,10 +4,10 @@ import mapLibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&ur
 import { LocateFixed, Route, Satellite, TrafficCone } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { boundsFor, geometryToCoordinates, stopCoordinates, toLineString } from '../lib/geometry'
+import { boundsFor, geometryToCoordinates, stopCoordinates, toLineString, trafficFeatures } from '../lib/geometry'
 import { calculatedPositionLabel } from '../lib/format'
 import type { MapRouteStop } from '../lib/route-preview'
-import type { Coordinate, CurrentPosition, Tour } from '../types/domain'
+import type { Coordinate, CurrentPosition, TrafficSegment, Tour } from '../types/domain'
 
 setWorkerUrl(mapLibreWorkerUrl)
 
@@ -51,6 +51,7 @@ export type MapPanelProps = {
   focusCoordinate?: Coordinate | null
   previewRoute?: Coordinate[]
   previewStops?: MapRouteStop[]
+  previewTraffic?: TrafficSegment[]
   height?: number | string
   fill?: boolean
 }
@@ -62,6 +63,7 @@ export function MapPanel({
   focusCoordinate,
   previewRoute,
   previewStops,
+  previewTraffic,
   height = 520,
   fill = false
 }: MapPanelProps) {
@@ -156,7 +158,7 @@ export function MapPanel({
 
     if (!styleReadyRef.current) return
     const render = () => {
-      renderMapContent(map, fullRoute, position, previewRoute)
+      renderMapContent(map, fullRoute, position, previewRoute, previewTraffic)
       stopMarkersRef.current.forEach((marker) => marker.remove())
       stopMarkersRef.current = stops.map((stop) => {
         const element = document.createElement('div')
@@ -175,7 +177,7 @@ export function MapPanel({
       }
     }
     render()
-  }, [fullRoute, position, previewRoute, stops, styleVersion, tour?.id])
+  }, [fullRoute, position, previewRoute, previewTraffic, stops, styleVersion, tour?.id])
 
   useEffect(() => {
     const map = mapRef.current
@@ -249,15 +251,49 @@ export function MapPanel({
         <button type="button" onClick={() => setCameraRequest('route')} disabled={!fullRoute.length && !stops.length && !previewRoute?.length} title="Показать весь маршрут"><Route className="h-4 w-4" /><span>Маршрут</span></button>
       </div>
       {!tomTomMapKey() && mode === 'traffic' ? <div className="map-provider-note">OSM · без live-пробок</div> : null}
+      <TrafficLegend segments={previewRoute?.length ? previewTraffic : position?.trafficSegments} checkedAt={previewRoute?.length ? null : position?.trafficCheckedAt} />
     </section>
   )
 }
 
-function renderMapContent(map: Map, fullRoute: Coordinate[], position?: CurrentPosition | null, previewRoute?: Coordinate[]) {
-  upsertLine(map, 'route-full', fullRoute, '#64748b', 4, 0.45)
-  upsertLine(map, 'route-travelled', geometryToCoordinates(position?.travelledGeometry), '#059669', 5, 0.95)
-  upsertLine(map, 'route-remaining', geometryToCoordinates(position?.remainingGeometry), '#2563eb', 5, 0.9)
-  upsertLine(map, 'route-preview', previewRoute ?? [], '#d97706', 5, 0.85)
+// Google-style route: white casing, blue line, congestion on top, travelled part grey.
+const ROUTE_BLUE = '#1a73e8'
+const PREVIEW_BLUE = '#174ea6'
+const TRAFFIC_COLORS = { SLOW: '#f29900', JAM: '#d93025', STANDSTILL: '#8b0000', CLOSED: '#202124' } as const
+const TRAFFIC_LABELS = { SLOW: 'медленно', JAM: 'пробка', STANDSTILL: 'стоит', CLOSED: 'перекрыто' } as const
+const LINE_WIDTH = ['interpolate', ['linear'], ['zoom'], 5, 3.5, 10, 6.5, 14, 10] as unknown as number
+const CASING_WIDTH = ['interpolate', ['linear'], ['zoom'], 5, 6.5, 10, 10.5, 14, 14] as unknown as number
+const TRAFFIC_COLOR = ['match', ['get', 'level'], 'SLOW', TRAFFIC_COLORS.SLOW, 'JAM', TRAFFIC_COLORS.JAM, 'STANDSTILL', TRAFFIC_COLORS.STANDSTILL, 'CLOSED', TRAFFIC_COLORS.CLOSED, ROUTE_BLUE] as unknown as string
+const TRAFFIC_FLOW_OPACITY = 0.72
+const TRAFFIC_FLOW_OPACITY_WITH_ROUTE = 0.4
+
+function renderMapContent(map: Map, fullRoute: Coordinate[], position?: CurrentPosition | null, previewRoute?: Coordinate[], previewTraffic?: TrafficSegment[]) {
+  const travelled = geometryToCoordinates(position?.travelledGeometry)
+  upsertRouteLayer(map, 'route-casing', toLineString(fullRoute), { 'line-color': '#ffffff', 'line-width': CASING_WIDTH, 'line-opacity': 0.95 })
+  upsertRouteLayer(map, 'route-main', toLineString(fullRoute), { 'line-color': ROUTE_BLUE, 'line-width': LINE_WIDTH })
+  upsertRouteLayer(map, 'route-traffic', trafficFeatures(fullRoute, position?.trafficSegments), { 'line-color': TRAFFIC_COLOR, 'line-width': LINE_WIDTH })
+  upsertRouteLayer(map, 'route-travelled', toLineString(travelled), { 'line-color': '#9aa0a6', 'line-width': LINE_WIDTH })
+  const preview = previewRoute ?? []
+  upsertRouteLayer(map, 'preview-casing', toLineString(preview), { 'line-color': '#ffffff', 'line-width': CASING_WIDTH, 'line-opacity': 0.95 })
+  upsertRouteLayer(map, 'preview-main', toLineString(preview), { 'line-color': PREVIEW_BLUE, 'line-width': LINE_WIDTH })
+  upsertRouteLayer(map, 'preview-traffic', trafficFeatures(preview, previewTraffic), { 'line-color': TRAFFIC_COLOR, 'line-width': LINE_WIDTH })
+  // The route must stand out: dim the city-wide traffic layer while a route is shown.
+  if (map.getLayer('traffic-flow')) {
+    map.setPaintProperty('traffic-flow', 'raster-opacity', fullRoute.length > 1 || preview.length > 1 ? TRAFFIC_FLOW_OPACITY_WITH_ROUTE : TRAFFIC_FLOW_OPACITY)
+  }
+}
+
+function TrafficLegend({ segments, checkedAt }: { segments?: TrafficSegment[] | null; checkedAt?: string | null }) {
+  if (!segments?.length) return null
+  const levels = (Object.keys(TRAFFIC_COLORS) as Array<keyof typeof TRAFFIC_COLORS>).filter((level) => segments.some((segment) => segment.level === level))
+  const checked = checkedAt ? new Date(checkedAt) : null
+  const valid = checked && Number.isFinite(checked.getTime()) ? checked : null
+  const stale = valid ? Date.now() - valid.getTime() > 30 * 60_000 : false
+  return <div className="map-traffic-legend" role="note" aria-label="Пробки на маршруте">
+    <strong>Пробки на маршруте</strong>
+    {levels.map((level) => <span key={level}><i style={{ background: TRAFFIC_COLORS[level] }} aria-hidden="true" />{TRAFFIC_LABELS[level]}</span>)}
+    {valid ? <small className={stale ? 'map-traffic-legend-stale' : undefined}>{stale ? 'данные устарели · ' : 'данные '}{valid.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</small> : null}
+  </div>
 }
 
 function styleFor(mode: MapMode): StyleSpecification {
@@ -313,31 +349,13 @@ function markerDescription(vehicleNumber?: string | null, source?: CurrentPositi
   return `${vehicleNumber ? `LKW ${vehicleNumber}` : 'Грузовик'} · ${source === 'WEBFLEET' ? 'фактическая позиция Webfleet GPS' : source === 'MANUAL' ? 'позиция, указанная диспетчером вручную' : calculatedPositionLabel}`
 }
 
-function upsertLine(
-  map: Map,
-  id: string,
-  coordinates: Coordinate[],
-  color: string,
-  width: number,
-  opacity: number
-) {
+function upsertRouteLayer(map: Map, id: string, data: GeoJSON.Feature | GeoJSON.FeatureCollection, paint: Record<string, unknown>) {
   const sourceId = `${id}-source`
-  const data = toLineString(coordinates)
   const source = map.getSource(sourceId) as GeoJSONSource | undefined
-
   if (source) {
     source.setData(data)
-  } else {
-    map.addSource(sourceId, { type: 'geojson', data })
-    map.addLayer({
-      id,
-      type: 'line',
-      source: sourceId,
-      paint: {
-        'line-color': color,
-        'line-width': width,
-        'line-opacity': opacity
-      }
-    })
+    return
   }
+  map.addSource(sourceId, { type: 'geojson', data })
+  map.addLayer({ id, type: 'line', source: sourceId, layout: { 'line-cap': 'round', 'line-join': 'round' }, paint } as Parameters<Map['addLayer']>[0])
 }

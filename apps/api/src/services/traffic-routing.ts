@@ -39,6 +39,10 @@ export type TrafficProviderStatus =
   | "quota-unavailable"
   | "fallback-no-traffic";
 
+export type TrafficLevel = "SLOW" | "JAM" | "STANDSTILL" | "CLOSED";
+/** Congested stretch of `geometry` (point indices, inclusive). Free-flowing parts are not listed. */
+export type TrafficSection = { start: number; end: number; level: TrafficLevel; delaySeconds: number; speedKmh: number | null };
+
 export type TrafficRouteResult = RouteResult & {
   checkedAt: string;
   trafficDelaySeconds: number;
@@ -49,6 +53,7 @@ export type TrafficRouteResult = RouteResult & {
   instructions: RouteInstruction[];
   alternatives: TrafficRouteResult[];
   hasRoadClosure: boolean;
+  trafficSections?: TrafficSection[];
   providerStatus: TrafficProviderStatus;
   warning?: string;
 };
@@ -375,6 +380,8 @@ type TomTomRoute = {
   }>;
   sections?: Array<{
     startPointIndex?: number;
+    endPointIndex?: number;
+    effectiveSpeedInKmh?: number;
     sectionType?: string;
     simpleCategory?: string;
     delayInSeconds?: number;
@@ -431,9 +438,31 @@ function toTrafficRouteResult(
     instructions: extractInstructions(route),
     alternatives: alternatives.map((alternative) => toTrafficRouteResult(alternative, providerStatus, warning, [], options)),
     hasRoadClosure: hasRoadClosure(route),
+    trafficSections: extractTrafficSections(route, geometry.length),
     providerStatus,
     warning
   };
+}
+
+/** TomTom TRAFFIC sections -> congestion stretches for colouring the route (no extra request). */
+export function extractTrafficSections(route: Pick<TomTomRoute, "sections">, pointCount: number): TrafficSection[] {
+  const result: TrafficSection[] = [];
+  for (const section of route.sections ?? []) {
+    if ((section.sectionType ?? "").toUpperCase() !== "TRAFFIC") continue;
+    const start = section.startPointIndex;
+    const end = section.endPointIndex;
+    if (!Number.isInteger(start) || !Number.isInteger(end) || start! < 0 || end! <= start! || start! >= pointCount - 1) continue;
+    const category = (section.simpleCategory ?? "").toUpperCase();
+    const delaySeconds = Math.max(0, Math.round(section.delayInSeconds ?? 0));
+    const magnitude = section.magnitudeOfDelay ?? 0;
+    const level: TrafficLevel | null = category === "ROAD_CLOSURE" || category === "CLOSURE" ? "CLOSED"
+      : magnitude === 1 ? "SLOW" : magnitude === 2 ? "JAM" : magnitude === 3 ? "STANDSTILL"
+      : delaySeconds > 0 ? "SLOW" : null;
+    if (!level) continue;
+    const speed = section.effectiveSpeedInKmh;
+    result.push({ start: start!, end: Math.min(end!, pointCount - 1), level, delaySeconds, speedKmh: typeof speed === "number" && Number.isFinite(speed) ? Math.round(speed) : null });
+  }
+  return result.sort((a, b) => a.start - b.start);
 }
 
 function fromFallbackRoute(route: RouteResult, status: TrafficProviderStatus, warning?: string): TrafficRouteResult {
@@ -445,6 +474,7 @@ function fromFallbackRoute(route: RouteResult, status: TrafficProviderStatus, wa
     instructions: [],
     alternatives: [],
     hasRoadClosure: false,
+    trafficSections: [],
     providerStatus: status,
     warning: `${warning ? `${warning} ` : ""}Без актуальных пробок и проверки ограничений для грузовиков.`
   };

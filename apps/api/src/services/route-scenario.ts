@@ -2,7 +2,7 @@ import type { PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import type { Coordinate, CurrentPosition } from '../domain.js';
 import { RoutingError, type RoutingProvider } from './routing.js';
-import type { TrafficRouteResult, TruckRouteProfile } from './traffic-routing.js';
+import type { TrafficRouteResult, TrafficSection, TruckRouteProfile } from './traffic-routing.js';
 import { snapshotVehicleClock } from './tours.js';
 import { applyStopTime, forecastDrive, type ClockState, type VehicleClockSegment } from './vehicle-clock.js';
 import { calculateSimulatedDuration } from './simulation.js';
@@ -87,6 +87,7 @@ export class RouteScenarioService {
     let late = structuredClone(early);
     let origin = position.position;
     const geometry: Coordinate[] = [];
+    const trafficSegments: ScenarioTrafficSegment[] = [];
     let distanceMeters = 0;
     let hadMissingRoute = !origin || breakdowns.some(issue => !issue.expectedResolvedAt);
     if (breakdowns.some(issue => !issue.expectedResolvedAt)) warnings.add('Неизвестно время окончания ремонта: ETA точек не определена.');
@@ -106,7 +107,7 @@ export class RouteScenarioService {
           sources.add(route.provider);
           const routeNote = routeWarning(route);
           if (routeNote) collect.add(routeNote);
-          if (options.showGeometry) { appendGeometry(geometry, route.geometry); distanceMeters += route.distanceMeters; }
+          if (options.showGeometry) { appendTraffic(trafficSegments, route, appendGeometry(geometry, route.geometry)); distanceMeters += route.distanceMeters; }
         }
         if (seconds === undefined) hadMissingRoute = true;
         else {
@@ -191,7 +192,7 @@ export class RouteScenarioService {
     return { vehicleId: vehicle.id, vehicleNumber: vehicle.vehicleNumber, operationVersion: vehicle.operationVersion,
       tourVersions: tours.map(t => ({ id: t.id, version: t.planVersion })), startMode: input.startMode,
       generatedAt: now.toISOString(), startRange, completion, dayEndsAt: dayEnd.toISOString(), finishToday,
-      preliminary, stops, geometry: geometry.map(point => [point.longitude, point.latitude] as [number, number]), distanceMeters, warnings: [...warnings], routingProviders: [...sources],
+      preliminary, stops, geometry: geometry.map(point => [point.longitude, point.latitude] as [number, number]), trafficSegments, distanceMeters, warnings: [...warnings], routingProviders: [...sources],
       requiresDailyRest: draftRequiresDailyRest,
       downstreamQueueImpact: changed.map((row, index) => ({ ...row, previousEarliestArrival: baseline[index]?.earliestArrival ?? null,
         previousLatestArrival: baseline[index]?.latestArrival ?? null,
@@ -206,6 +207,7 @@ export class RouteScenarioService {
     let late = new Date(early);
     const startRange = { earliest: early.toISOString(), latest: late.toISOString() };
     const geometry: Coordinate[] = [];
+    const trafficSegments: ScenarioTrafficSegment[] = [];
     const stops: ScenarioStopResult[] = [];
     const warnings = new Set(['Свободный маршрут: часы, паузы и ограничения конкретной машины не учитываются.']);
     const sources = new Set<string>();
@@ -216,7 +218,7 @@ export class RouteScenarioService {
       sources.add(route.provider);
       const routeNote = routeWarning(route);
       if (routeNote) warnings.add(routeNote);
-      appendGeometry(geometry, route.geometry);
+      appendTraffic(trafficSegments, route, appendGeometry(geometry, route.geometry));
       distanceMeters += route.distanceMeters;
       const arrivalEarly = new Date(early.getTime() + route.durationSeconds * 1000);
       const arrivalLate = new Date(late.getTime() + route.durationSeconds * 1000);
@@ -238,7 +240,7 @@ export class RouteScenarioService {
     return { vehicleId: null, vehicleNumber: null, originAddress: input.originAddress, startMode: 'NOW',
       generatedAt: now.toISOString(), startRange, completion: { earliest: early.toISOString(), latest: late.toISOString() },
       dayEndsAt: berlinDayEnd(now).toISOString(), finishToday: 'UNKNOWN' as Risk, preliminary: true,
-      stops, geometry: geometry.map(point => [point.longitude, point.latitude] as [number, number]), distanceMeters,
+      stops, geometry: geometry.map(point => [point.longitude, point.latitude] as [number, number]), trafficSegments, distanceMeters,
       warnings: [...warnings], routingProviders: [...sources], requiresDailyRest: false, downstreamQueueImpact: [] };
   }
 }
@@ -272,12 +274,19 @@ function routeWarning(route: object): string | null {
   if (providerStatus === 'live-traffic') return null;
   return warning ?? 'Без актуальных пробок и проверки грузовых ограничений на части маршрута.';
 }
-/** Joins leg geometries without repeating the shared point between two legs. */
-function appendGeometry(target: Coordinate[], points: Coordinate[]) {
+/** Joins leg geometries without repeating the shared point; returns where point 0 of `points` landed. */
+function appendGeometry(target: Coordinate[], points: Coordinate[]): number {
   const last = target[target.length - 1];
   const first = points[0];
   const start = last && first && last.latitude === first.latitude && last.longitude === first.longitude ? 1 : 0;
+  const offset = target.length - start;
   for (let index = start; index < points.length; index += 1) target.push(points[index]);
+  return offset;
+}
+type ScenarioTrafficSegment = { from: number; to: number; level: TrafficSection['level'] };
+function appendTraffic(target: ScenarioTrafficSegment[], route: object, offset: number) {
+  const sections = (route as Partial<TrafficRouteResult>).trafficSections ?? [];
+  for (const section of sections) target.push({ from: offset + section.start, to: offset + section.end, level: section.level });
 }
 async function geocodeAddress(routing: RoutingProvider, address: string, notFound: string): Promise<Coordinate> {
   try {

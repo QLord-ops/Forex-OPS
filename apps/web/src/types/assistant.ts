@@ -12,7 +12,8 @@ export interface RouteScenario {
   vehicleId: string | null; vehicleNumber: string | null; originAddress?: string; generatedAt: string
   completion: { earliest: string | null; latest: string | null }; startRange: { earliest: string; latest: string }
   finishToday: 'ON_TIME' | 'RISK' | 'LATE' | 'UNKNOWN'; preliminary: boolean; requiresDailyRest: boolean
-  geometry: Array<[number, number]>; distanceMeters: number; warnings: string[]; routingProviders?: string[]
+  geometry: Array<[number, number]>; trafficSegments?: Array<{ from: number; to: number; level: 'SLOW' | 'JAM' | 'STANDSTILL' | 'CLOSED' }>
+  distanceMeters: number; warnings: string[]; routingProviders?: string[]
   stops: RouteScenarioStop[]
   downstreamQueueImpact: Array<{ tourId: string; stopId: string; delayMinutes: number | null; risk: string }>
 }

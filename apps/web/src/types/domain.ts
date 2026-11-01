@@ -255,6 +255,8 @@ export interface CurrentPosition {
   startedAt?: string | null
   disclaimer?: string
   positionSource?: 'WEBFLEET' | 'CALCULATED' | 'MANUAL'
+  trafficSegments?: TrafficSegment[]
+  trafficCheckedAt?: string | null
   telemetryRecordedAt?: string | null
   telemetryAgeSeconds?: number | null
   telemetryStale?: boolean
@@ -389,3 +391,7 @@ export interface OrderImportPreview {
 }
 
 export type ExcelImportPreview = OrderImportPreview
+
+export type TrafficLevel = 'SLOW' | 'JAM' | 'STANDSTILL' | 'CLOSED'
+/** Congested stretch of a route line, as point indices (inclusive). */
+export interface TrafficSegment { from: number; to: number; level: TrafficLevel }
