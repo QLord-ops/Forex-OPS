@@ -144,6 +144,7 @@ it('sends credentials only via Basic auth header and apikey parameter to csv.web
   expect(rows).toHaveLength(1);
   expect(seen!.url.hostname).toBe('csv.webfleet.com');
   expect(seen!.url.searchParams.get('action')).toBe('showObjectReportExtern');
+  expect(seen!.url.searchParams.get('lang')).toBe('de');
   expect(seen!.url.searchParams.has('password')).toBe(false);
   expect((seen!.init?.headers as Record<string, string>).Authorization).toBe(`Basic ${Buffer.from('user:secret').toString('base64')}`);
 });

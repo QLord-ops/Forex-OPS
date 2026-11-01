@@ -342,6 +342,8 @@ export async function fetchObjectReport(config: WebfleetConfig, fetchImpl: typeo
   url.searchParams.set('account', config.account);
   url.searchParams.set('apikey', config.apiKey);
   url.searchParams.set('action', 'showObjectReportExtern');
+  // Required by WEBFLEET.connect; without it every request fails with 8105.
+  url.searchParams.set('lang', 'de');
   url.searchParams.set('outputformat', 'json');
   url.searchParams.set('useUTF8', 'true');
   url.searchParams.set('useISO8601', 'true');
