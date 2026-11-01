@@ -66,6 +66,13 @@ services:
       - key: TOMTOM_API_KEY
         scope: RUN_TIME
         type: SECRET
+      # Routing with live traffic stays off until the free tier is confirmed.
+      - key: TOMTOM_FREE_TIER_CONFIRMED
+        value: "true"
+      - key: TOMTOM_ROUTING_MONTHLY_CAP
+        value: "18000"
+      - key: TOMTOM_MANUAL_RESERVE_RATIO
+        value: "0.2"
       - key: WEBFLEET_ACCOUNT
         scope: RUN_TIME
         type: SECRET
