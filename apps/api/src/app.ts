@@ -29,7 +29,7 @@ import { ReplanningService } from "./services/replanning.js";
 import { PrismaTrafficQuotaStore, TomTomRoutingProvider, TrafficRoutingService } from './services/traffic-routing.js';
 import { TrafficOperationsService } from './services/traffic-operations.js';
 import { VEHICLE_CLOCK_LIMITS } from './services/vehicle-clock.js';
-import { WebfleetSyncService, WebfleetTelemetryService } from './services/webfleet.js';
+import { bindWebfleetObject, listWebfleetBindings, unbindWebfleetVehicle, WebfleetSyncService, WebfleetTelemetryService } from './services/webfleet.js';
 import { calculateRiskColor, calculateSimulatedDuration } from './services/simulation.js';
 import { forecastDrive } from './services/vehicle-clock.js';
 import { parseClockState } from './services/tours.js';
@@ -39,7 +39,7 @@ import { registerRouteScenarioRoutes } from './routes/route-scenario.js';
 import { DispatcherAssistantService } from './services/dispatcher-assistant.js';
 import { assistantSessionKey, registerDispatcherAssistantRoutes } from './routes/dispatcher-assistant.js';
 import { createDispatcherDependencies } from './services/dispatcher-adapters.js';
-import type { AuditActor } from './services/audit-log.js';
+import { writeAuditLog, type AuditActor } from './services/audit-log.js';
 
 function auditActor(request: FastifyRequest): AuditActor | undefined {
   return request.dispatcherSession
@@ -745,6 +745,31 @@ export async function buildApp(options: BuildAppOptions = {}) {
   app.post('/integrations/webfleet/sync', { preHandler: requireDispatcherRoles('admin') }, async () => {
     await webfleetSync.refreshIfDue();
     return webfleetSync.status();
+  });
+  app.get('/integrations/webfleet/bindings', async () => listWebfleetBindings(prisma));
+  app.post('/integrations/webfleet/bindings', { preHandler: requireDispatcherRoles('admin') }, async (request) => {
+    const body = z.object({
+      objectUid: z.string().trim().min(1).max(128),
+      vehicleId: z.string().trim().min(1).max(64),
+      objectNo: z.string().trim().max(64).optional(),
+      licensePlate: z.string().trim().max(32).optional()
+    }).parse(request.body);
+    const binding = await bindWebfleetObject(prisma, body);
+    await webfleetSync.forgetUnmatched(binding.externalId);
+    await writeAuditLog(prisma, auditActor(request), {
+      action: 'WEBFLEET_BOUND', entityType: 'VehicleIntegration', entityId: binding.id, vehicleId: binding.vehicleId,
+      metadata: { objectUid: binding.externalId, objectNo: binding.externalNumber }
+    });
+    return listWebfleetBindings(prisma);
+  });
+  app.delete('/integrations/webfleet/bindings/:vehicleId', { preHandler: requireDispatcherRoles('admin') }, async (request) => {
+    const { vehicleId } = z.object({ vehicleId: z.string().trim().min(1).max(64) }).parse(request.params);
+    const binding = await unbindWebfleetVehicle(prisma, vehicleId);
+    await writeAuditLog(prisma, auditActor(request), {
+      action: 'WEBFLEET_UNBOUND', entityType: 'VehicleIntegration', entityId: binding.id, vehicleId,
+      metadata: { objectUid: binding.externalId }
+    });
+    return listWebfleetBindings(prisma);
   });
 
   app.get("/vehicles/:id/timeline", async (request) => {

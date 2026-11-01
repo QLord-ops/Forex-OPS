@@ -6,7 +6,7 @@ import { afterAll, beforeAll, expect, it } from 'vitest';
 import { PrismaClient } from '../src/generated/sqlite-client/index.js';
 import { MockRoutingProvider } from '../src/services/routing.js';
 import { TourService } from '../src/services/tours.js';
-import { distanceMeters, matchWebfleetObject, parseWebfleetObjectRow, WebfleetTelemetryService } from '../src/services/webfleet.js';
+import { bindWebfleetObject, distanceMeters, fetchObjectReport, listWebfleetBindings, matchWebfleetObject, parseWebfleetObjectRow, unbindWebfleetVehicle, WebfleetError, WebfleetSyncService, WebfleetTelemetryService } from '../src/services/webfleet.js';
 import { asAppDatabase, migrateTestDatabase } from './test-database.js';
 
 let db: PrismaClient;
@@ -117,4 +117,71 @@ it('parses the official report fields and rejects non-current position statuses'
   expect(parseWebfleetObjectRow({
     objectuid: 'obj-1', status: 'A', latitude_mdeg: '52520000', longitude_mdeg: '13405000'
   })).toBeNull();
+});
+
+const config = { baseUrl: 'https://csv.webfleet.com/extern', account: 'acc', apiKey: 'key', username: 'user', password: 'secret' };
+const jsonResponse = (body: unknown, init: ResponseInit = {}) => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' }, ...init });
+
+it('classifies Webfleet JSON errors without keeping the provider message', async () => {
+  const quota = fetchObjectReport(config, async () => jsonResponse({ errorCode: 8011, errorMsg: 'request quota reached' }));
+  await expect(quota).rejects.toMatchObject({ category: 'RATE_LIMIT', providerCode: 8011 });
+  const auth = fetchObjectReport(config, async () => jsonResponse({ errorCode: 1101, errorMsg: 'Authentication failed for user' }));
+  await expect(auth).rejects.toMatchObject({ category: 'AUTH', providerCode: 1101 });
+  await expect(fetchObjectReport(config, async () => new Response('nope', { status: 403 }))).rejects.toMatchObject({ category: 'PERMISSION' });
+  await expect(fetchObjectReport(config, async () => { throw new TypeError('fetch failed'); })).rejects.toMatchObject({ category: 'NETWORK' });
+  await expect(fetchObjectReport({ ...config, baseUrl: 'https://evil.example/extern' }, async () => jsonResponse([]))).rejects.toMatchObject({ category: 'CONFIG' });
+  const error = await fetchObjectReport(config, async () => jsonResponse({ errorCode: 1101, errorMsg: 'Authentication failed for user acc' })).catch((cause: unknown) => cause);
+  expect(error).toBeInstanceOf(WebfleetError);
+  expect(String((error as Error).message)).not.toContain('acc');
+});
+
+it('sends credentials only via Basic auth header and apikey parameter to csv.webfleet.com', async () => {
+  let seen: { url: URL; init?: RequestInit } | null = null;
+  const rows = await fetchObjectReport(config, async (input, init) => {
+    seen = { url: new URL(String(input)), init };
+    return jsonResponse([{ objectuid: 'o-1', objectno: '125', status: 'A', latitude_mdeg: 51600000, longitude_mdeg: 9950000, pos_time: '2026-10-13T10:00:00Z' }]);
+  });
+  expect(rows).toHaveLength(1);
+  expect(seen!.url.hostname).toBe('csv.webfleet.com');
+  expect(seen!.url.searchParams.get('action')).toBe('showObjectReportExtern');
+  expect(seen!.url.searchParams.has('password')).toBe(false);
+  expect((seen!.init?.headers as Record<string, string>).Authorization).toBe(`Basic ${Buffer.from('user:secret').toString('base64')}`);
+});
+
+it('backs off for 30 minutes after an authentication failure and exposes only the category', async () => {
+  const sync = new WebfleetSyncService(db as unknown as PostgresPrismaClient, config, async () => { throw new WebfleetError('AUTH', 1101); });
+  const now = at(30);
+  const result = await sync.refreshIfDue(now);
+  expect(result).toMatchObject({ refreshed: false, reason: 'SYNC_FAILED', errorCategory: 'AUTH' });
+  const status = await sync.status();
+  expect(status).toMatchObject({ lastError: 'SYNC_FAILED', errorCategory: 'AUTH', providerErrorCode: 1101 });
+  expect(new Date(String(status.retryAfter)).getTime() - now.getTime()).toBe(30 * 60_000);
+  expect(JSON.stringify(status)).not.toContain('secret');
+});
+
+it('binds an unmatched object manually, then matches it on the next snapshot', async () => {
+  await db.integrationSyncState.deleteMany({ where: { id: 'WEBFLEET:SNAPSHOT' } });
+  const vehicle = await db.vehicle.create({ data: { vehicleNumber: 'LKW 77', licensePlate: 'GÖ-OP 77' } });
+  const freshAt = new Date(Date.now() - 60_000);
+  const report = async () => [{ objectUid: 'wf-manual', objectNo: 'Truck seventy-seven', licensePlate: null, latitude: 51.6, longitude: 9.95, standstill: false, recordedAt: freshAt }];
+  const sync = new WebfleetSyncService(db as unknown as PostgresPrismaClient, config, report);
+  await sync.refreshIfDue();
+  expect((await sync.status()).summary).toMatchObject({ matched: 0, unmatched: [{ objectUid: 'wf-manual' }] });
+
+  const dbClient = db as unknown as PostgresPrismaClient;
+  await bindWebfleetObject(dbClient, { objectUid: 'wf-manual', vehicleId: vehicle.id, objectNo: 'Truck seventy-seven' });
+  await sync.forgetUnmatched('wf-manual');
+  expect((await sync.status()).summary).toMatchObject({ unmatched: [] });
+  expect(await listWebfleetBindings(dbClient)).toEqual(expect.arrayContaining([expect.objectContaining({ vehicleId: vehicle.id, objectUid: 'wf-manual' })]));
+
+  const other = await db.vehicle.create({ data: { vehicleNumber: 'LKW 78' } });
+  await expect(bindWebfleetObject(dbClient, { objectUid: 'wf-manual', vehicleId: other.id })).rejects.toMatchObject({ statusCode: 409 });
+  await expect(bindWebfleetObject(dbClient, { objectUid: 'wf-other', vehicleId: vehicle.id })).rejects.toMatchObject({ statusCode: 409 });
+
+  const matched = await matchWebfleetObject(dbClient, { objectUid: 'wf-manual' });
+  expect(matched).toMatchObject({ vehicleId: vehicle.id, matchedBy: 'integration' });
+
+  await unbindWebfleetVehicle(dbClient, vehicle.id);
+  expect(await matchWebfleetObject(dbClient, { objectUid: 'wf-manual', objectNo: 'Truck seventy-seven' })).toMatchObject({ vehicleId: null });
+  expect(await db.vehicleTelemetry.count({ where: { externalId: 'wf-manual' } })).toBe(0);
 });

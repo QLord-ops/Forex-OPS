@@ -10,7 +10,7 @@
   "scripts": {
     "postinstall": "prisma generate",
     "dev": "tsx watch src/server.ts",
-    "start": "node dist/server.js",
+    "start": "node dist/src/server.js",
     "build": "node scripts/migrate-on-deploy.mjs && npm run prisma:generate && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "tsc -p tsconfig.json --noEmit",
@@ -20,7 +20,9 @@
     "db:deploy": "node scripts/migrate.mjs",
     "db:import-sqlite": "node scripts/import-sqlite.mjs",
     "db:reset": "npm run db:deploy && npm run db:seed",
-    "db:seed": "tsx prisma/seed.ts"
+    "db:seed": "tsx prisma/seed.ts",
+    "auth:secrets": "tsx src/cli/auth-secrets.ts",
+    "webfleet:check": "tsx src/cli/webfleet-check.ts"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",

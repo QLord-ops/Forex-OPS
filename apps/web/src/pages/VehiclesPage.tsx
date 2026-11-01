@@ -56,7 +56,7 @@ export function VehiclesPage() {
         </button>
       </div>
 
-      <WebfleetConnectionPanel />
+      <WebfleetConnectionPanel vehicles={vehicles} />
 
       <form className="work-surface p-4" onSubmit={handleCreateVehicle}>
         <div className="grid items-end gap-3 md:grid-cols-[180px_220px_160px_auto]">

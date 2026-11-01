@@ -117,3 +117,36 @@ test('редактирует будущий тур', async ({ page }) => {
   await expect.poll(() => updatedPayload).not.toBeNull()
   expect(updatedPayload).toMatchObject({ vehicleId: 'veh-1', orderNumber: 'A-301' })
 })
+
+test('показывает причину ошибки Webfleet и привязывает объект к грузовику', async ({ page }) => {
+  let bound: Record<string, unknown> | null = null
+  const status = (unmatched: unknown[]) => ({
+    configured: true, mode: 'READ_ONLY', pollingIntervalSeconds: 60, lastSnapshotAt: new Date().toISOString(),
+    summary: { received: 1, matched: 0, rejected: 0, unmatched, lastError: 'SYNC_FAILED', errorCategory: 'AUTH', providerErrorCode: 1101 },
+    lastError: 'SYNC_FAILED', errorCategory: 'AUTH', providerErrorCode: 1101, retryAfter: new Date(Date.now() + 30 * 60_000).toISOString(),
+  })
+  const binding = { vehicleId: vehicle.id, vehicleNumber: vehicle.vehicleNumber, licensePlate: vehicle.licensePlate, objectUid: 'wf-125', objectNo: 'LKW 125', externalPlate: null, status: 'ACTIVE', boundAt: new Date().toISOString() }
+  await authenticated(page, async (route, path) => {
+    if (path === '/vehicles' && route.request().method() === 'GET') { await json(route, [vehicle]); return true }
+    if (path === '/integrations/webfleet/status') { await json(route, status(bound ? [] : [{ objectUid: 'wf-125', objectNo: 'LKW 125', licensePlate: '', ambiguous: false }])); return true }
+    if (path === '/integrations/webfleet/bindings' && route.request().method() === 'GET') { await json(route, bound ? [binding] : []); return true }
+    if (path === '/integrations/webfleet/bindings' && route.request().method() === 'POST') {
+      bound = route.request().postDataJSON() as Record<string, unknown>
+      await json(route, [binding]); return true
+    }
+    return false
+  })
+
+  await page.goto('/vehicles')
+  const panel = page.getByRole('region', { name: 'Подключение Webfleet' })
+  await expect(panel.getByText('Webfleet отклонил вход')).toBeVisible()
+  await expect(panel.getByText('Код Webfleet: 1101.')).toBeVisible()
+
+  await panel.getByText('Требуют сопоставления: 1').click()
+  await panel.getByRole('combobox', { name: 'Грузовик OPS для LKW 125' }).selectOption(vehicle.id)
+  await panel.getByRole('button', { name: 'Привязать' }).click()
+
+  await expect.poll(() => bound).toMatchObject({ objectUid: 'wf-125', vehicleId: vehicle.id, objectNo: 'LKW 125' })
+  await expect(panel.getByText('Привязанные машины: 1')).toBeVisible()
+  await expect(panel.getByText('Требуют сопоставления')).toHaveCount(0)
+})
