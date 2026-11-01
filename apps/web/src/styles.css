@@ -907,3 +907,46 @@ aside > .dispatcher-logout-error { position: absolute; bottom: 4.25rem; left: .5
   .dashboard-stage:has(.map-draft-banner) .map-traffic-legend { bottom: 11.75rem; }
   .map-panel-card .map-traffic-legend { bottom: 5.25rem; max-width: calc(100% - 1.5rem); }
 }
+
+/* Route stages: where the truck is in its tour. */
+.route-stage-summary { display: block; overflow: hidden; color: #334155; font-size: .75rem; font-weight: 750; text-overflow: ellipsis; white-space: nowrap; }
+.route-stage-summary-at_stop { color: #1d4ed8; }
+.route-stage-summary-arriving { color: #b45309; }
+.route-stage-bar { display: block; height: .3rem; margin-top: .35rem; overflow: hidden; border-radius: 999px; background: #e2e8f0; }
+.route-stage-bar > span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #16a34a, #1a73e8); transition: width 400ms ease; }
+.route-stage-track { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(230px, 1fr); gap: 0; overflow-x: auto; padding-bottom: .35rem; scroll-snap-type: x proximity; }
+.route-stage { min-width: 0; padding-right: .75rem; scroll-snap-align: start; }
+.route-stage-rail { position: relative; display: flex; align-items: center; height: 1.9rem; }
+.route-stage-dot { position: relative; z-index: 1; display: grid; width: 1.75rem; height: 1.75rem; flex: 0 0 1.75rem; place-items: center; border: 2px solid #cbd5e1; border-radius: 50%; background: #fff; color: #64748b; font-size: .72rem; font-weight: 900; font-variant-numeric: tabular-nums; }
+.route-stage-line { position: relative; flex: 1; height: .3rem; margin: 0 -.75rem 0 .2rem; border-radius: 999px; background: #e2e8f0; }
+.route-stage-line-fill { position: absolute; inset: 0 auto 0 0; border-radius: inherit; background: #16a34a; transition: width 400ms ease; }
+.route-stage-truck { position: absolute; top: 50%; display: grid; width: 1.6rem; height: 1.6rem; place-items: center; border: 2px solid #fff; border-radius: 50%; background: #1a73e8; color: #fff; box-shadow: 0 2px 8px rgb(15 23 42 / .3); transform: translate(-50%, -50%); }
+.route-stage-state { margin: .3rem 0 .45rem; color: #475569; font-size: .72rem; font-weight: 800; }
+.route-stage-done .route-stage-dot { border-color: #16a34a; background: #16a34a; color: #fff; }
+.route-stage-done .route-stage-state { color: #15803d; }
+.route-stage-heading .route-stage-dot { border-color: #1a73e8; color: #1a73e8; }
+.route-stage-heading .route-stage-state { color: #1d4ed8; }
+.route-stage-at_stop .route-stage-dot { border-color: #1a73e8; background: #1a73e8; color: #fff; box-shadow: 0 0 0 0 rgb(26 115 232 / .45); animation: route-stage-pulse 1.8s ease-out infinite; }
+.route-stage-at_stop .route-stage-state { color: #1d4ed8; }
+.route-stage-next .route-stage-state { color: #334155; }
+.route-stage-upcoming .route-stage-dot { border-style: dashed; }
+@keyframes route-stage-pulse { 0% { box-shadow: 0 0 0 0 rgb(26 115 232 / .45); } 70% { box-shadow: 0 0 0 .55rem rgb(26 115 232 / 0); } 100% { box-shadow: 0 0 0 0 rgb(26 115 232 / 0); } }
+@media (prefers-reduced-motion: reduce) { .route-stage-at_stop .route-stage-dot { animation: none; } }
+
+/* Stop markers on the map follow the same stages. */
+.stop-marker-done { border-color: #16a34a; background: #16a34a; color: #fff; }
+.stop-marker-current { width: 28px; height: 28px; border-color: #1a73e8; background: #1a73e8; color: #fff; box-shadow: 0 0 0 4px rgb(26 115 232 / .25), 0 6px 14px rgb(15 23 42 / .22); }
+
+/* Stage line on the vehicle page. */
+.vehicle-stage { margin-top: .75rem; border-radius: .6rem; background: #f8fafc; padding: .55rem .7rem; }
+.vehicle-stage .route-stage-summary { white-space: normal; }
+
+/* Open route drawer: map buttons, provider note and traffic legend move above it. */
+.dashboard-stage:has(.route-stops-drawer-open) .map-controls { bottom: calc(min(44%, 25rem) + .75rem); }
+.dashboard-stage:has(.route-stops-drawer-open) .map-provider-note,
+.dashboard-stage:has(.route-stops-drawer-open) .map-traffic-legend { bottom: calc(min(44%, 25rem) + 4.4rem); }
+@media (max-width: 640px) {
+  .dashboard-stage:has(.route-stops-drawer-open) .map-controls { bottom: calc(58% + .75rem); }
+  .dashboard-stage:has(.route-stops-drawer-open) .map-provider-note,
+  .dashboard-stage:has(.route-stops-drawer-open) .map-traffic-legend { bottom: calc(58% + 4.4rem); }
+}

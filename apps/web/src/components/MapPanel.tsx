@@ -160,11 +160,14 @@ export function MapPanel({
     const render = () => {
       renderMapContent(map, fullRoute, position, previewRoute, previewTraffic)
       stopMarkersRef.current.forEach((marker) => marker.remove())
+      // Same stages as the route drawer: finished stops green, the current one blue and larger.
+      const currentId = stops.slice().sort((a, b) => a.sequence - b.sequence).find((stop) => !stop.completedAt)?.id
       stopMarkersRef.current = stops.map((stop) => {
         const element = document.createElement('div')
-        element.className = 'stop-marker'
-        element.textContent = `${stop.sequence}`
-        element.setAttribute('aria-label', `Точка ${stop.sequence}`)
+        const state = stop.completedAt ? 'done' : stop.id === currentId ? 'current' : 'upcoming'
+        element.className = `stop-marker stop-marker-${state}`
+        element.textContent = state === 'done' ? '✓' : `${stop.sequence}`
+        element.setAttribute('aria-label', `Точка ${stop.sequence}${state === 'done' ? ', пройдена' : state === 'current' ? ', текущая' : ''}`)
         return new Marker({ element }).setLngLat([stop.longitude, stop.latitude]).addTo(map)
       })
 
