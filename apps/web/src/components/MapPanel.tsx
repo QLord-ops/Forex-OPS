@@ -236,7 +236,7 @@ export function MapPanel({
     element.innerHTML = ''
     const label = document.createElement('span')
     label.className = 'truck-marker-label'
-    label.textContent = `${vehicleNumber ? `LKW ${vehicleNumber}` : 'LKW'} · ${position?.positionSource === 'WEBFLEET' ? 'GPS' : 'Расчёт'}`
+    label.textContent = `${vehicleNumber ? `LKW ${vehicleNumber}` : 'LKW'} · ${position?.positionSource === 'WEBFLEET' ? 'GPS' : position?.positionSource === 'MANUAL' ? 'Вручную' : 'Расчёт'}`
     element.append(label)
   }, [position?.coordinate, position?.positionSource, vehicleNumber])
 
@@ -310,7 +310,7 @@ function readMapMode(): MapMode {
 }
 
 function markerDescription(vehicleNumber?: string | null, source?: CurrentPosition['positionSource']): string {
-  return `${vehicleNumber ? `LKW ${vehicleNumber}` : 'Грузовик'} · ${source === 'WEBFLEET' ? 'фактическая позиция Webfleet GPS' : calculatedPositionLabel}`
+  return `${vehicleNumber ? `LKW ${vehicleNumber}` : 'Грузовик'} · ${source === 'WEBFLEET' ? 'фактическая позиция Webfleet GPS' : source === 'MANUAL' ? 'позиция, указанная диспетчером вручную' : calculatedPositionLabel}`
 }
 
 function upsertLine(

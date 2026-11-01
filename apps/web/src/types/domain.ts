@@ -254,7 +254,7 @@ export interface CurrentPosition {
   delayMinutes?: number | null
   startedAt?: string | null
   disclaimer?: string
-  positionSource?: 'WEBFLEET' | 'CALCULATED'
+  positionSource?: 'WEBFLEET' | 'CALCULATED' | 'MANUAL'
   telemetryRecordedAt?: string | null
   telemetryAgeSeconds?: number | null
   telemetryStale?: boolean
