@@ -1,6 +1,12 @@
 FROM node:22-bookworm-slim
 
 WORKDIR /app
+
+# Prisma's query and schema engines need OpenSSL, which the slim image lacks.
+RUN apt-get update -y \
+  && apt-get install -y --no-install-recommends openssl ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
 ENV NODE_ENV=production
 ENV API_HOST=0.0.0.0
 
