@@ -165,3 +165,5 @@ Playwright проверяет импорт заказа, подтвержден�
 - `/assistant/*`.
 
 Подробности миграции и production-развёртывания находятся в [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md), а подключение Webfleet — в [docs/webfleet-integration.md](docs/webfleet-integration.md).
+
+Актуальный список действий перед следующим production-деплоем находится в [docs/REMAINING_WORK.md](docs/REMAINING_WORK.md).
