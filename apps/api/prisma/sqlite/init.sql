@@ -59,6 +59,7 @@ CREATE TABLE "Stop" (
     "referenceNumbersJson" TEXT,
     "instructions" TEXT,
     "arrivedAt" DATETIME,
+    "arrivalRadiusMeters" INTEGER,
     "serviceMinMinutes" INTEGER NOT NULL DEFAULT 60,
     "serviceMaxMinutes" INTEGER NOT NULL DEFAULT 120,
     "completedAt" DATETIME,

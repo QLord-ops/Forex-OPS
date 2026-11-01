@@ -87,6 +87,7 @@ model Stop {
   referenceNumbersJson String?
   instructions     String?
   arrivedAt         DateTime?
+  arrivalRadiusMeters Int?
   serviceMinMinutes Int       @default(60)
   serviceMaxMinutes Int       @default(120)
   completedAt       DateTime?

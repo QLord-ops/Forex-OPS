@@ -261,3 +261,27 @@ test.describe('окно «Маршрут»', () => {
     expect(requests).toHaveLength(0)
   })
 })
+
+test('уведомление об автоприбытии по GPS позволяет отменить прибытие', async ({ page }) => {
+  let reverted: Record<string, unknown> | null = null
+  let notifications = [{ id: 'n-auto', vehicleId: vehicle.id, stopId: 'stop-load', type: 'AUTO_ARRIVAL',
+    message: 'Webfleet: LKW 125 прибыла на загрузку, Berlin, в 14:32 (автоматически по GPS). Если это ошибка, отмените прибытие.', createdAt: '2026-11-02T13:32:00Z' }]
+  await page.route('**/api/**', async route => {
+    const path = new URL(route.request().url()).pathname.replace(/^\/api/, '')
+    if (path === '/auth/session') return json(route, { authenticated: true, role: 'dispatcher', csrfToken: 'e2e' })
+    if (path === '/notifications') return json(route, { notifications })
+    if (path === '/stops/stop-load/arrival/revert') { reverted = route.request().postDataJSON() as Record<string, unknown>; notifications = []; return json(route, { ok: true }) }
+    if (path === '/vehicles' || path === '/dashboard') return json(route, path === '/dashboard' ? { vehicles: [] } : [vehicle])
+    return json(route, [])
+  })
+  await page.route('https://tile.openstreetmap.org/**', route => route.abort())
+  page.on('dialog', dialog => void dialog.accept())
+
+  await page.goto('/vehicles')
+  const toast = page.getByRole('dialog')
+  await expect(toast).toContainText('автоматически по GPS')
+  await expect(toast.getByRole('button', { name: 'Подтвердить прибытие' })).toHaveCount(0)
+  await toast.getByRole('button', { name: 'Отменить прибытие' }).click()
+  await expect.poll(() => reverted).toMatchObject({ reason: 'Отменено из уведомления об автоприбытии' })
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+})

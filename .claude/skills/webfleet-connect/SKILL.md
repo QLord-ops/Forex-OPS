@@ -15,7 +15,7 @@ description: Working with the Webfleet (WEBFLEET.connect) telematics integration
 - Паузы после ошибки: AUTH/PERMISSION/CONFIG — 30 мин (чтобы Webfleet не заблокировал пользователя за неудачные входы), остальное — 5 мин.
 - Сопоставление: сначала сохранённая привязка (`VehicleIntegration`), затем точный `objectno` = `vehicleNumber` или нормализованный госномер. Неоднозначность → не привязывать. Ручная привязка: `POST /integrations/webfleet/bindings` (admin, аудит), отвязка — `DELETE /integrations/webfleet/bindings/:vehicleId` (телеметрия остаётся как история).
 - Свежесть: ≤ 2 мин — свежая, ≤ 30 мин — устаревшая, но пригодная для расчёта, старше — не используется.
-- GPS только *предлагает* прибытие (две свежие стоящие позиции в радиусе 1 км). Подтверждает диспетчер.
+- Автоприбытие (`detectArrival` в `webfleet.ts`): свежая позиция в зоне точки (`Stop.arrivalRadiusMeters ?? 500`), `standstill` ≥ 3 мин по истории `VehicleTelemetry`; время = въезд в зону, не раньше старта участка. Ставится через `OperationsService.confirmArrival(..., SYSTEM_WEBFLEET_ACTOR, { source: 'WEBFLEET_AUTO' })`, уведомление `AUTO_ARRIVAL`, отмена `POST /stops/:id/arrival/revert` (событие `ARRIVAL_REVERTED`). После отмены — только после выезда из зоны. `AUTO_ARRIVAL_ENABLED=false` возвращает подсказку. BELADEN/ENTLADEN — никогда автоматически.
 
 ## Подключение ключа (порядок)
 

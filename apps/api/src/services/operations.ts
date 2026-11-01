@@ -6,8 +6,12 @@ import {
   forecastDrive, applyStopTime, resetReducedRestCounter, clockWarnings, type ClockState
 } from './vehicle-clock.js';
 import { writeAuditLog, type AuditActor } from './audit-log.js';
+import { DEFAULT_ARRIVAL_RADIUS_METERS } from './webfleet.js';
 
 export type ExceptionKind = 'EXTENDED_DRIVING' | 'REDUCED_REST' | 'BOTH';
+export type ArrivalSource = 'DISPATCHER' | 'WEBFLEET_AUTO' | 'ASSISTANT';
+export type ArrivalOptions = { source?: ArrivalSource; meta?: Record<string, unknown> };
+export const SYSTEM_WEBFLEET_ACTOR: AuditActor = { role: 'system', sessionId: 'webfleet-auto' };
 
 export class OperationsService {
   constructor(private readonly db: PrismaClient, private readonly tours: TourService) {}
@@ -36,6 +40,8 @@ export class OperationsService {
       preliminary: snapshot.clockState.kind !== 'KNOWN', manualStoppedAt: vehicle.manualStoppedAt,
       position: await this.tours.getCurrentPosition(vehicleId, now), currentStop,
       dwellMinutes: currentStop?.arrivedAt ? Math.max(0, Math.floor((now.getTime() - currentStop.arrivedAt.getTime()) / 60_000)) : null,
+      currentArrival: currentStop?.arrivedAt ? await this.arrivalInfo(currentStop.id) : null,
+      arrivalRadiusMeters: currentStop ? currentStop.arrivalRadiusMeters ?? DEFAULT_ARRIVAL_RADIUS_METERS : null,
       clockProposals: this.proposals(context, now),
       traffic: context.activeLeg?.routeDetails ? JSON.parse(context.activeLeg.routeDetails) : null
     };
@@ -167,8 +173,18 @@ export class OperationsService {
     });
   }
 
-  async confirmArrival(stopId: string, arrivedAt: Date, now = new Date(), actor?: AuditActor) {
+  /** Who set the current arrival and when (from the last confirmation event). */
+  async arrivalInfo(stopId: string) {
+    const event = await this.db.operationEvent.findFirst({ where: { stopId, type: 'ARRIVAL_CONFIRMED' }, orderBy: { createdAt: 'desc' } });
+    let source: ArrivalSource = 'DISPATCHER';
+    try { const payload = JSON.parse(event?.payloadJson ?? '{}') as { source?: ArrivalSource }; if (payload.source) source = payload.source; } catch { /* Legacy payload. */ }
+    return { source, confirmedAt: event?.createdAt ?? null };
+  }
+
+  async confirmArrival(stopId: string, arrivedAt: Date, now = new Date(), actor?: AuditActor, options: ArrivalOptions = {}) {
     if (arrivedAt > now) throw new TourPlanConflictError('Время прибытия не может быть в будущем.');
+    const source = options.source ?? 'DISPATCHER';
+    let applied = false;
     await this.db.$transaction(async tx => {
       const stop = await tx.stop.findUniqueOrThrow({ where: { id: stopId }, include: { tour: { include: { vehicle: true, stops: { orderBy: { sequence: 'asc' } }, legs: true } } } });
       if (stop.tour.status !== 'ACTIVE' || stop.completedAt || stop.tour.stops.find(item => !item.completedAt)?.id !== stopId) throw new TourPlanConflictError('Можно подтвердить только следующую активную точку.');
@@ -181,11 +197,56 @@ export class OperationsService {
       await tx.vehicle.update({ where: { id: stop.tour.vehicleId }, data: { clockState: JSON.stringify(clock), manualStoppedAt: null, operationVersion: { increment: 1 } } });
       await tx.tour.update({ where: { id: stop.tourId }, data: { planVersion: { increment: 1 } } });
       await tx.notification.updateMany({ where: { stopId, type: 'PREDICTED_ARRIVAL', acknowledgedAt: null }, data: { acknowledgedAt: now } });
-      await tx.operationEvent.create({ data: { vehicleId: stop.tour.vehicleId, tourId: stop.tourId, stopId, type: 'ARRIVAL_CONFIRMED', payloadJson: JSON.stringify({ arrivedAt }), createdAt: now } });
+      await tx.operationEvent.create({ data: { vehicleId: stop.tour.vehicleId, tourId: stop.tourId, stopId, type: 'ARRIVAL_CONFIRMED',
+        payloadJson: JSON.stringify({ arrivedAt, source, ...options.meta }), createdAt: now } });
       await writeAuditLog(tx, actor, { action: 'ARRIVAL_CONFIRMED', entityType: 'Stop', entityId: stopId,
-        vehicleId: stop.tour.vehicleId, tourId: stop.tourId, stopId, metadata: { arrivedAt: arrivedAt.toISOString() }, createdAt: now });
+        vehicleId: stop.tour.vehicleId, tourId: stop.tourId, stopId, metadata: { arrivedAt: arrivedAt.toISOString(), source, ...options.meta }, createdAt: now });
+      if (source === 'WEBFLEET_AUTO') {
+        await tx.notification.upsert({
+          where: { dedupKey: `auto-arrival:${stopId}` },
+          create: { dedupKey: `auto-arrival:${stopId}`, vehicleId: stop.tour.vehicleId, stopId, type: 'AUTO_ARRIVAL',
+            message: `Webfleet: LKW ${stop.tour.vehicle.vehicleNumber} прибыла ${stop.type === 'LOAD' ? 'на загрузку' : 'на выгрузку'}, ${stop.city || stop.address}, в ${berlinTime(arrivedAt)} (автоматически по GPS). Если это ошибка, отмените прибытие.`,
+            payloadJson: JSON.stringify({ source, arrivedAt, ...options.meta }) },
+          update: { acknowledgedAt: null, message: `Webfleet: LKW ${stop.tour.vehicle.vehicleNumber} прибыла ${stop.type === 'LOAD' ? 'на загрузку' : 'на выгрузку'}, ${stop.city || stop.address}, в ${berlinTime(arrivedAt)} (автоматически по GPS). Если это ошибка, отмените прибытие.` }
+        });
+      }
+      applied = true;
+    });
+    return { ok: true, applied };
+  }
+
+  /** Undo a confirmed arrival before loading/unloading. History stays: a compensating event is written. */
+  async revertArrival(stopId: string, now = new Date(), actor?: AuditActor, reason?: string) {
+    const previous = await this.arrivalInfo(stopId);
+    await this.db.$transaction(async tx => {
+      const stop = await tx.stop.findUniqueOrThrow({ where: { id: stopId }, include: { tour: { include: { stops: { orderBy: { sequence: 'asc' } }, legs: true } } } });
+      if (!stop.arrivedAt) throw new TourPlanConflictError('Прибытие на эту точку не подтверждено.');
+      if (stop.completedAt) throw new TourPlanConflictError('После BELADEN/ENTLADEN прибытие отменить нельзя.');
+      if (stop.tour.status !== 'ACTIVE' || stop.tour.stops.find(item => !item.completedAt)?.id !== stopId) throw new TourPlanConflictError('Отменить можно только прибытие на текущую точку.');
+      const leg = stop.tour.legs.find(item => item.toStopId === stop.id);
+      const changed = await tx.stop.updateMany({ where: { id: stopId, arrivedAt: stop.arrivedAt, completedAt: null }, data: { arrivedAt: null } });
+      if (!changed.count) throw new TourPlanConflictError('Точка изменилась. Обновите страницу.');
+      if (leg) await tx.leg.update({ where: { id: leg.id }, data: { status: 'ACTIVE' } });
+      await rebaseActiveLeg(tx, stop.tour.vehicleId, null, now);
+      await tx.vehicle.update({ where: { id: stop.tour.vehicleId }, data: { operationVersion: { increment: 1 } } });
+      await tx.tour.update({ where: { id: stop.tourId }, data: { planVersion: { increment: 1 } } });
+      await tx.notification.updateMany({ where: { stopId, type: 'AUTO_ARRIVAL', acknowledgedAt: null }, data: { acknowledgedAt: now } });
+      await tx.operationEvent.create({ data: { vehicleId: stop.tour.vehicleId, tourId: stop.tourId, stopId, type: 'ARRIVAL_REVERTED', reason: reason ?? null,
+        payloadJson: JSON.stringify({ previousArrivedAt: stop.arrivedAt, previousSource: previous.source }), createdAt: now } });
+      await writeAuditLog(tx, actor, { action: 'ARRIVAL_REVERTED', entityType: 'Stop', entityId: stopId, vehicleId: stop.tour.vehicleId, tourId: stop.tourId, stopId,
+        metadata: { previousArrivedAt: stop.arrivedAt.toISOString(), previousSource: previous.source, reason: reason ?? null }, createdAt: now });
     });
     return { ok: true };
+  }
+
+  /** Geofence size for automatic arrival; only for stops that are not yet reached. */
+  async setArrivalRadius(stopId: string, radiusMeters: number | null, now = new Date(), actor?: AuditActor) {
+    const stop = await this.db.stop.findUniqueOrThrow({ where: { id: stopId }, include: { tour: true } });
+    if (stop.arrivedAt || stop.completedAt || !['ACTIVE', 'QUEUED'].includes(stop.tour.status)) throw new TourPlanConflictError('Зону можно менять только у будущей точки.');
+    await this.db.stop.update({ where: { id: stopId }, data: { arrivalRadiusMeters: radiusMeters } });
+    await writeAuditLog(this.db, actor, { action: 'ARRIVAL_RADIUS_CHANGED', entityType: 'Stop', entityId: stopId, vehicleId: stop.tour.vehicleId, tourId: stop.tourId, stopId,
+      metadata: { from: stop.arrivalRadiusMeters ?? DEFAULT_ARRIVAL_RADIUS_METERS, to: radiusMeters ?? DEFAULT_ARRIVAL_RADIUS_METERS }, createdAt: now });
+    return { ok: true, arrivalRadiusMeters: radiusMeters ?? DEFAULT_ARRIVAL_RADIUS_METERS };
   }
 
   async manualStop(vehicleId: string, version: number, now = new Date()) {
@@ -215,4 +276,8 @@ export class OperationsService {
     });
     return this.get(vehicleId, now);
   }
+}
+
+function berlinTime(value: Date) {
+  return new Intl.DateTimeFormat('ru-RU', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit' }).format(value);
 }
