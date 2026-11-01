@@ -5,6 +5,7 @@ import type { PrismaClient as PostgresPrismaClient } from '@prisma/client';
 import { afterAll, beforeAll, expect, it } from 'vitest';
 import { PrismaClient } from '../src/generated/sqlite-client/index.js';
 import { MockRoutingProvider } from '../src/services/routing.js';
+import { OperationsService, SYSTEM_WEBFLEET_ACTOR } from '../src/services/operations.js';
 import { TourService } from '../src/services/tours.js';
 import { bindWebfleetObject, distanceMeters, fetchObjectReport, listWebfleetBindings, matchWebfleetObject, parseWebfleetObjectRow, unbindWebfleetVehicle, WebfleetError, WebfleetSyncService, WebfleetTelemetryService } from '../src/services/webfleet.js';
 import { asAppDatabase, migrateTestDatabase } from './test-database.js';
@@ -54,33 +55,113 @@ it('does not let a second Webfleet object take over an existing vehicle binding'
   expect(matched).toEqual({ vehicleId: null, matchedBy: 'integration', ambiguous: true });
 });
 
-it('suggests arrival without changing the stop after two fresh stopped positions inside the radius', async () => {
-  const vehicle = await db.vehicle.create({ data: { vehicleNumber: 'AUTO-ARRIVAL', licensePlate: 'B-AA 1' } });
-  const tours = new TourService(asAppDatabase(db), new MockRoutingProvider());
-  const tour = await tours.createTour({
-    vehicleId: vehicle.id,
-    orderNumber: 'WF-ARRIVAL',
-    stops: [
-      { sequence: 1, type: 'LOAD', address: 'Berlin', city: 'Berlin', latitude: 52.52, longitude: 13.405 },
-      { sequence: 2, type: 'UNLOAD', address: 'Hamburg', city: 'Hamburg', latitude: 53.55, longitude: 9.99 }
-    ]
-  });
-  const stop = tour.stops[0];
-  const first = await service.applyPosition({
-    objectUid: 'wf-arrival', objectNo: 'AUTO-ARRIVAL', latitude: 52.5205, longitude: 13.4055,
-    standstill: true, recordedAt: at(0)
-  }, at(1));
-  expect(first.arrivalConfirmed).toBe(false);
-  expect((await db.stop.findUniqueOrThrow({ where: { id: stop.id } })).arrivedAt).toBeNull();
+const BERLIN = { latitude: 52.52, longitude: 13.405 };
+const HAMBURG = { latitude: 53.55, longitude: 9.99 };
+// ~111 m per 0.001 degree of latitude.
+const north = (meters: number) => ({ latitude: BERLIN.latitude + meters / 111_000, longitude: BERLIN.longitude });
 
-  const second = await service.applyPosition({
-    objectUid: 'wf-arrival', objectNo: 'AUTO-ARRIVAL', latitude: 52.5202, longitude: 13.4052,
-    standstill: true, recordedAt: at(1)
-  }, at(2));
-  expect(second).toMatchObject({ arrivalConfirmed: false, arrivalSuggested: true });
-  expect((await db.stop.findUniqueOrThrow({ where: { id: stop.id } })).arrivedAt).toBeNull();
-  expect(await db.operationEvent.count({ where: { stopId: stop.id, type: 'ARRIVAL_CONFIRMED' } })).toBe(0);
-  expect(await db.notification.count({ where: { stopId: stop.id, type: 'PREDICTED_ARRIVAL' } })).toBe(1);
+async function arrivalScenario(name: string, options: { radius?: number } = {}) {
+  const vehicle = await db.vehicle.create({ data: { vehicleNumber: name, licensePlate: `B-${name}` } });
+  const tours = new TourService(asAppDatabase(db), new MockRoutingProvider());
+  const tour = await tours.createTour({ vehicleId: vehicle.id, orderNumber: `ORD-${name}`, stops: [
+    { sequence: 1, type: 'LOAD', address: 'Berlin', city: 'Berlin', ...BERLIN },
+    { sequence: 2, type: 'UNLOAD', address: 'Hamburg', city: 'Hamburg', ...HAMBURG }
+  ] });
+  if (options.radius) await db.stop.update({ where: { id: tour.stops[0].id }, data: { arrivalRadiusMeters: options.radius } });
+  const operations = new OperationsService(asAppDatabase(db), tours);
+  const auto = new WebfleetTelemetryService(db as unknown as PostgresPrismaClient, (input) =>
+    operations.confirmArrival(input.stopId, input.arrivedAt, input.now, SYSTEM_WEBFLEET_ACTOR, { source: 'WEBFLEET_AUTO', meta: input.meta }));
+  const feed = async (minute: number, point: { latitude: number; longitude: number }, standstill: boolean, receivedLagSeconds = 30) =>
+    auto.applyPosition({ objectUid: `wf-${name}`, objectNo: name, ...point, standstill, recordedAt: at(minute) }, new Date(at(minute).getTime() + receivedLagSeconds * 1000));
+  return { vehicle, tour, stopId: tour.stops[0].id, operations, tours, feed };
+}
+
+it('sets the arrival automatically after three minutes standing inside the 500 m zone, timed at zone entry', async () => {
+  const { stopId, feed } = await arrivalScenario('AUTO-OK');
+  await feed(0, north(2000), false);
+  await feed(1, north(300), false);
+  for (const minute of [2, 3, 4]) expect((await feed(minute, north(120), true)).arrivalConfirmed).toBe(false);
+  const result = await feed(5, north(100), true);
+  expect(result).toMatchObject({ arrivalConfirmed: true, arrivalSuggested: false });
+  expect((await db.stop.findUniqueOrThrow({ where: { id: stopId } })).arrivedAt).toEqual(at(1));
+  const events = await db.operationEvent.findMany({ where: { stopId, type: 'ARRIVAL_CONFIRMED' } });
+  expect(events).toHaveLength(1);
+  expect(JSON.parse(events[0].payloadJson)).toMatchObject({ source: 'WEBFLEET_AUTO', radiusMeters: 500 });
+  expect(await db.notification.count({ where: { stopId, type: 'AUTO_ARRIVAL', acknowledgedAt: null } })).toBe(1);
+  expect(await db.auditLog.findFirst({ where: { stopId, action: 'ARRIVAL_CONFIRMED' } })).toMatchObject({ actorRole: 'system', actorSessionId: 'webfleet-auto' });
+  // Further positions do not create a second arrival.
+  await feed(6, north(100), true);
+  expect(await db.operationEvent.count({ where: { stopId, type: 'ARRIVAL_CONFIRMED' } })).toBe(1);
+});
+
+it('waits while the truck has stood in the zone for less than three minutes', async () => {
+  const { stopId, feed } = await arrivalScenario('AUTO-SHORT');
+  for (const minute of [0, 1, 2]) await feed(minute, north(100), true);
+  expect((await db.stop.findUniqueOrThrow({ where: { id: stopId } })).arrivedAt).toBeNull();
+});
+
+it('ignores a truck passing through the zone without stopping', async () => {
+  const { stopId, feed } = await arrivalScenario('AUTO-PASS');
+  for (const minute of [0, 1, 2, 3, 4, 5]) await feed(minute, north(150), false);
+  expect((await db.stop.findUniqueOrThrow({ where: { id: stopId } })).arrivedAt).toBeNull();
+});
+
+it('uses 500 m by default and a larger zone when the stop has one', async () => {
+  const outside = await arrivalScenario('AUTO-800');
+  for (const minute of [0, 1, 2, 3, 4]) await outside.feed(minute, north(800), true);
+  expect((await db.stop.findUniqueOrThrow({ where: { id: outside.stopId } })).arrivedAt).toBeNull();
+
+  const wide = await arrivalScenario('AUTO-WIDE', { radius: 1000 });
+  for (const minute of [0, 1, 2, 3, 4]) await wide.feed(minute, north(800), true);
+  expect((await db.stop.findUniqueOrThrow({ where: { id: wide.stopId } })).arrivedAt).toEqual(at(0));
+});
+
+it('never sets an arrival from stale GPS', async () => {
+  const { stopId, feed } = await arrivalScenario('AUTO-STALE');
+  for (const minute of [0, 1, 2, 3, 4]) await feed(minute, north(100), true, 10 * 60);
+  expect((await db.stop.findUniqueOrThrow({ where: { id: stopId } })).arrivedAt).toBeNull();
+});
+
+it('after a revert waits until the truck has left the zone and come back', async () => {
+  const { stopId, feed, operations } = await arrivalScenario('AUTO-REVERT');
+  for (const minute of [0, 1, 2, 3]) await feed(minute, north(100), true);
+  expect((await db.stop.findUniqueOrThrow({ where: { id: stopId } })).arrivedAt).toEqual(at(0));
+
+  await operations.revertArrival(stopId, new Date(at(3).getTime() + 40_000), { role: 'dispatcher', sessionId: 's1' }, 'Стоял у соседнего склада');
+  const reverted = await db.stop.findUniqueOrThrow({ where: { id: stopId } });
+  expect(reverted.arrivedAt).toBeNull();
+  expect(await db.operationEvent.count({ where: { stopId, type: 'ARRIVAL_REVERTED' } })).toBe(1);
+  expect(await db.operationEvent.count({ where: { stopId, type: 'ARRIVAL_CONFIRMED' } })).toBe(1);
+
+  for (const minute of [4, 5, 6, 7, 8]) await feed(minute, north(100), true);
+  expect((await db.stop.findUniqueOrThrow({ where: { id: stopId } })).arrivedAt).toBeNull();
+
+  await feed(9, north(3000), false);
+  for (const minute of [10, 11, 12, 13]) await feed(minute, north(80), true);
+  expect((await db.stop.findUniqueOrThrow({ where: { id: stopId } })).arrivedAt).toEqual(at(10));
+});
+
+it('only suggests the arrival when automatic arrival is switched off', async () => {
+  const vehicle = await db.vehicle.create({ data: { vehicleNumber: 'AUTO-OFF', licensePlate: 'B-AUTO-OFF' } });
+  const tours = new TourService(asAppDatabase(db), new MockRoutingProvider());
+  const tour = await tours.createTour({ vehicleId: vehicle.id, orderNumber: 'ORD-OFF', stops: [
+    { sequence: 1, type: 'LOAD', address: 'Berlin', city: 'Berlin', ...BERLIN },
+    { sequence: 2, type: 'UNLOAD', address: 'Hamburg', city: 'Hamburg', ...HAMBURG }
+  ] });
+  for (const minute of [0, 1, 2, 3]) {
+    await service.applyPosition({ objectUid: 'wf-off', objectNo: 'AUTO-OFF', ...north(100), standstill: true, recordedAt: at(minute) }, new Date(at(minute).getTime() + 30_000));
+  }
+  expect((await db.stop.findUniqueOrThrow({ where: { id: tour.stops[0].id } })).arrivedAt).toBeNull();
+  expect(await db.notification.count({ where: { stopId: tour.stops[0].id, type: 'PREDICTED_ARRIVAL' } })).toBe(1);
+});
+
+it('does not date the arrival before the leg started', async () => {
+  const { tour, feed, operations, tours } = await arrivalScenario('AUTO-LEG');
+  await operations.confirmArrival(tour.stops[0].id, at(0), at(0), { role: 'dispatcher', sessionId: 's1' });
+  await tours.recordLoaded(tour.stops[0].id, at(20));
+  const hamburg = (meters: number) => ({ latitude: HAMBURG.latitude + meters / 111_000, longitude: HAMBURG.longitude });
+  for (const minute of [18, 19, 20, 21, 22, 23]) await feed(minute, hamburg(100), true);
+  expect((await db.stop.findUniqueOrThrow({ where: { id: tour.stops[1].id } })).arrivedAt).toEqual(at(20));
 });
 
 it('keeps the arrival pending when either point is faster than 20 km/h', async () => {

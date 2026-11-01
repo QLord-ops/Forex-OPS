@@ -1,8 +1,11 @@
 import type { PrismaClient } from '@prisma/client';
 
 const PROVIDER = 'WEBFLEET';
-const ARRIVAL_RADIUS_METERS = 1000;
-const ARRIVAL_SPEED_KMH = 20;
+export const DEFAULT_ARRIVAL_RADIUS_METERS = 500;
+// The truck must stand inside the zone this long; Webfleet snapshots arrive once a minute.
+export const ARRIVAL_MIN_STANDSTILL_SECONDS = 180;
+const ARRIVAL_HISTORY_SECONDS = 30 * 60;
+const STOPPED_SPEED_KMH = 5;
 const FRESH_SECONDS = 120;
 const FALLBACK_SECONDS = 30 * 60;
 const SNAPSHOT_INTERVAL_MS = 60_000;
@@ -53,8 +56,18 @@ export async function matchWebfleetObject(db: PrismaClient, object: WebfleetObje
   return { vehicleId: matches[0].id, matchedBy: byNumber.length ? 'objectNo' as const : 'plate' as const, ambiguous: false };
 }
 
+export type AutoArrivalInput = {
+  stopId: string;
+  arrivedAt: Date;
+  now: Date;
+  meta: { distanceMeters: number; radiusMeters: number; enteredAt: string; stoppedSince: string };
+};
+export type AutoArrivalHandler = (input: AutoArrivalInput) => Promise<{ applied?: boolean } | unknown>;
+type ArrivalDecision = { suggested: boolean; confirmed: boolean };
+
 export class WebfleetTelemetryService {
-  constructor(private readonly db: PrismaClient) {}
+  /** Without a handler a fulfilled geofence only creates a suggestion for the dispatcher. */
+  constructor(private readonly db: PrismaClient, private readonly onAutoArrival?: AutoArrivalHandler) {}
 
   async applyPosition(input: WebfleetPosition, receivedAt = new Date()) {
     if (!validCoordinates(input.latitude, input.longitude) || !Number.isFinite(input.recordedAt.getTime()) || input.recordedAt > receivedAt || !input.objectUid.trim()) throw new Error('Некорректная позиция Webfleet.');
@@ -76,10 +89,6 @@ export class WebfleetTelemetryService {
       update: { vehicleId: match.vehicleId, externalNumber: input.objectNo, externalPlate: normalizePlate(input.licensePlate) || null, status: 'ACTIVE' }
     });
 
-    const previous = await this.db.vehicleTelemetry.findFirst({
-      where: { vehicleId: match.vehicleId, provider: PROVIDER, recordedAt: { lt: input.recordedAt } },
-      orderBy: { recordedAt: 'desc' }
-    });
     await this.db.vehicleTelemetry.upsert({
       where: { provider_externalId_recordedAt: { provider: PROVIDER, externalId: input.objectUid, recordedAt: input.recordedAt } },
       create: {
@@ -91,14 +100,14 @@ export class WebfleetTelemetryService {
       update: { receivedAt, speedKmh: input.speedKmh ?? null, rawJson: JSON.stringify(toSafeTelemetryPayload(input)) }
     });
 
-    const arrivalSuggested = await this.suggestArrivalIfStable(match.vehicleId, input, previous, receivedAt);
+    const arrival = await this.detectArrival(match.vehicleId, input, receivedAt);
     if (messageId) {
       await this.db.integrationReceipt.create({ data: {
         provider: PROVIDER, messageId, externalId: input.objectUid, acknowledgedAt: receivedAt,
-        payloadJson: JSON.stringify({ matchedBy: match.matchedBy, vehicleId: match.vehicleId, arrivalSuggested })
+        payloadJson: JSON.stringify({ matchedBy: match.matchedBy, vehicleId: match.vehicleId, arrivalSuggested: arrival.suggested, arrivalConfirmed: arrival.confirmed })
       } });
     }
-    return { duplicate: false, matched: true, vehicleId: match.vehicleId, arrivalConfirmed: false, arrivalSuggested };
+    return { duplicate: false, matched: true, vehicleId: match.vehicleId, arrivalConfirmed: arrival.confirmed, arrivalSuggested: arrival.suggested };
   }
 
   async latest(vehicleId: string, now = new Date()) {
@@ -115,35 +124,70 @@ export class WebfleetTelemetryService {
     };
   }
 
-  private async suggestArrivalIfStable(vehicleId: string, current: WebfleetPosition, previous: { latitude: number; longitude: number; speedKmh: number | null; recordedAt: Date; rawJson: string | null } | null, now: Date) {
-    const currentStopped = current.standstill === true || (typeof current.speedKmh === 'number' && current.speedKmh <= ARRIVAL_SPEED_KMH);
-    const previousPayload = previous?.rawJson ? safeJson(previous.rawJson) : null;
-    const previousStandstill = isRecord(previousPayload) && previousPayload.standstill === true;
-    const previousStopped = previousStandstill || (typeof previous?.speedKmh === 'number' && previous.speedKmh <= ARRIVAL_SPEED_KMH);
-    if (freshAgeSeconds(current.recordedAt, now) > FRESH_SECONDS || !currentStopped || !previous) return false;
-    if (!previousStopped || previous.recordedAt >= current.recordedAt) return false;
-    if (freshAgeSeconds(previous.recordedAt, now) > FRESH_SECONDS) return false;
+  /**
+   * Geofence arrival from real GPS only: fresh position inside the stop zone and standing still
+   * for ARRIVAL_MIN_STANDSTILL_SECONDS. The arrival time is when the truck entered the zone.
+   */
+  private async detectArrival(vehicleId: string, current: WebfleetPosition, now: Date): Promise<ArrivalDecision> {
+    const none: ArrivalDecision = { suggested: false, confirmed: false };
+    if (freshAgeSeconds(current.recordedAt, now) > FRESH_SECONDS || !isStopped(current.standstill, current.speedKmh)) return none;
     const tour = await this.db.tour.findFirst({
       where: { vehicleId, status: 'ACTIVE' },
       include: { stops: { orderBy: { sequence: 'asc' } }, legs: true },
-      orderBy: { createdAt: 'asc' }
+      orderBy: [{ queueIndex: 'asc' }, { createdAt: 'asc' }]
     });
     const stop = tour?.stops.find((item) => !item.completedAt);
-    if (!tour || !stop || stop.arrivedAt) return false;
-    const currentDistance = distanceMeters(current.latitude, current.longitude, stop.latitude, stop.longitude);
-    const previousDistance = distanceMeters(previous.latitude, previous.longitude, stop.latitude, stop.longitude);
-    if (currentDistance > ARRIVAL_RADIUS_METERS || previousDistance > ARRIVAL_RADIUS_METERS) return false;
+    if (!tour || !stop || stop.arrivedAt) return none;
+    const radiusMeters = stop.arrivalRadiusMeters ?? DEFAULT_ARRIVAL_RADIUS_METERS;
+    const distance = distanceMeters(current.latitude, current.longitude, stop.latitude, stop.longitude);
+    if (distance > radiusMeters) return none;
 
+    const history = await this.db.vehicleTelemetry.findMany({
+      where: { vehicleId, provider: PROVIDER, recordedAt: { gte: new Date(current.recordedAt.getTime() - ARRIVAL_HISTORY_SECONDS * 1000), lte: current.recordedAt } },
+      orderBy: { recordedAt: 'desc' }
+    });
+    let enteredAt: Date | null = null;
+    let stoppedSince: Date | null = null;
+    let stoppedRun = true;
+    let leftZoneAt: Date | null = null;
+    for (const row of history) {
+      if (distanceMeters(row.latitude, row.longitude, stop.latitude, stop.longitude) > radiusMeters) { leftZoneAt = row.recordedAt; break; }
+      enteredAt = row.recordedAt;
+      const payload = row.rawJson ? safeJson(row.rawJson) : null;
+      const standstill = isRecord(payload) && typeof payload.standstill === 'boolean' ? payload.standstill : null;
+      if (stoppedRun && isStopped(standstill, row.speedKmh)) stoppedSince = row.recordedAt;
+      else stoppedRun = false;
+    }
+    if (!enteredAt || !stoppedSince) return none;
+    if ((current.recordedAt.getTime() - stoppedSince.getTime()) / 1000 < ARRIVAL_MIN_STANDSTILL_SECONDS) return none;
+
+    // After a dispatcher reverted an arrival here, wait until the truck has left the zone and come back.
+    const reverted = await this.db.operationEvent.findFirst({ where: { stopId: stop.id, type: 'ARRIVAL_REVERTED' }, orderBy: { createdAt: 'desc' } });
+    if (reverted && (!leftZoneAt || leftZoneAt <= reverted.createdAt)) return none;
+
+    const leg = tour.legs.find((item) => item.toStopId === stop.id);
+    const arrivedAt = leg?.startedAt && leg.startedAt > enteredAt ? leg.startedAt : enteredAt;
+    const meta = { distanceMeters: Math.round(distance), radiusMeters, enteredAt: enteredAt.toISOString(), stoppedSince: stoppedSince.toISOString() };
+
+    if (this.onAutoArrival) {
+      try {
+        const result = await this.onAutoArrival({ stopId: stop.id, arrivedAt, now, meta });
+        const applied = !isRecord(result) || result.applied !== false;
+        return { suggested: false, confirmed: applied };
+      } catch {
+        // A conflicting change (e.g. the dispatcher just confirmed it) falls back to a suggestion.
+      }
+    }
     await this.db.notification.upsert({
       where: { dedupKey: `webfleet-arrival:${stop.id}` },
       create: {
         dedupKey: `webfleet-arrival:${stop.id}`, vehicleId, stopId: stop.id, type: 'PREDICTED_ARRIVAL',
-        message: `Webfleet: машина предположительно прибыла ${stop.type === 'LOAD' ? 'на загрузку' : 'на выгрузку'}, ${stop.city || stop.address}. Подтвердите прибытие.`,
-        payloadJson: JSON.stringify({ source: 'WEBFLEET_GEOFENCE', stopId: stop.id, recordedAt: current.recordedAt })
+        message: `Webfleet: машина стоит ${stop.type === 'LOAD' ? 'на загрузке' : 'на выгрузке'}, ${stop.city || stop.address}. Подтвердите прибытие.`,
+        payloadJson: JSON.stringify({ source: 'WEBFLEET_GEOFENCE', stopId: stop.id, recordedAt: current.recordedAt, ...meta })
       },
       update: {}
     });
-    return true;
+    return { suggested: true, confirmed: false };
   }
 }
 
@@ -154,9 +198,10 @@ export class WebfleetSyncService {
   constructor(
     private readonly db: PrismaClient,
     private readonly config: WebfleetConfig | null = readWebfleetConfig(),
-    private readonly fetchReport: (config: WebfleetConfig) => Promise<WebfleetPosition[]> = fetchObjectReport
+    private readonly fetchReport: (config: WebfleetConfig) => Promise<WebfleetPosition[]> = fetchObjectReport,
+    onAutoArrival?: AutoArrivalHandler
   ) {
-    this.telemetry = new WebfleetTelemetryService(db);
+    this.telemetry = new WebfleetTelemetryService(db, onAutoArrival);
   }
 
   get configured() {
@@ -466,4 +511,10 @@ export function distanceMeters(aLat: number, aLon: number, bLat: number, bLon: n
 
 function toRadians(value: number) {
   return value * Math.PI / 180;
+}
+
+function isStopped(standstill: boolean | null | undefined, speedKmh: number | null | undefined) {
+  if (standstill === true) return true;
+  if (standstill === false) return false;
+  return typeof speedKmh === 'number' && speedKmh <= STOPPED_SPEED_KMH;
 }

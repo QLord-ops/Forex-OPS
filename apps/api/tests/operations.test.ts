@@ -209,3 +209,30 @@ it('accepts explicitly accounted current-cycle exceptions and rejects unaccounte
   expect(result.clock.reducedRestsSinceWeeklyRest).toBe(1);
   await expect(f.service.setClock(f.vehicle.id, { ...input, version: result.version, extendedDrivingUsed: 0 }, start)).rejects.toThrow();
 });
+
+it('reverts an arrival before ENTLADEN without deleting history, and refuses it afterwards', async () => {
+  const f = await fixture('REVERT');
+  const dispatcher = { role: 'dispatcher' as const, sessionId: 'revert-session' };
+  await f.service.confirmArrival(f.stop.id, at(90), at(95), dispatcher);
+  expect((await f.service.get(f.vehicle.id, at(96))).currentArrival).toMatchObject({ source: 'DISPATCHER' });
+
+  await f.service.revertArrival(f.stop.id, at(100), dispatcher, 'Ошибка');
+  expect((await db.stop.findUniqueOrThrow({ where: { id: f.stop.id } })).arrivedAt).toBeNull();
+  expect((await db.leg.findUniqueOrThrow({ where: { id: f.leg.id } })).status).toBe('ACTIVE');
+  expect(await db.operationEvent.count({ where: { stopId: f.stop.id, type: 'ARRIVAL_CONFIRMED' } })).toBe(1);
+  expect(await db.operationEvent.count({ where: { stopId: f.stop.id, type: 'ARRIVAL_REVERTED' } })).toBe(1);
+  expect(await db.auditLog.findFirst({ where: { stopId: f.stop.id, action: 'ARRIVAL_REVERTED' } })).toMatchObject({ actorRole: 'dispatcher' });
+  await expect(f.service.revertArrival(f.stop.id, at(101), dispatcher)).rejects.toThrow('не подтверждено');
+
+  await f.service.confirmArrival(f.stop.id, at(110), at(110), dispatcher);
+  await f.tours.recordUnloaded(f.stop.id, at(140));
+  await expect(f.service.revertArrival(f.stop.id, at(141), dispatcher)).rejects.toThrow('BELADEN/ENTLADEN');
+});
+
+it('changes the arrival zone only for stops that are not reached yet', async () => {
+  const f = await fixture('RADIUS');
+  expect((await f.service.get(f.vehicle.id, at(10))).arrivalRadiusMeters).toBe(500);
+  await f.service.setArrivalRadius(f.stop.id, 1500, at(10), { role: 'admin', sessionId: 'a' });
+  expect((await f.service.get(f.vehicle.id, at(10))).arrivalRadiusMeters).toBe(1500);
+  await expect(f.service.setArrivalRadius(f.tour.stops[0].id, 800, at(10))).rejects.toThrow('будущей точки');
+});

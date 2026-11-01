@@ -1,7 +1,8 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 
 export type AuditActor = {
-  role: "admin" | "dispatcher";
+  // "system" marks automatic actions such as a GPS arrival from Webfleet.
+  role: "admin" | "dispatcher" | "system";
   sessionId: string;
 };
 

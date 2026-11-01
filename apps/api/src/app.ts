@@ -24,12 +24,12 @@ import { validateXlsxArchive } from "./services/xlsx-validation.js";
 import { enrichTour, snapshotVehicleClock, type TourAggregate, toDashboardTourSummary, toIsoObject, tourInclude, TourService } from "./services/tours.js";
 import { VehicleService } from "./services/vehicles.js";
 import { calculateDwellState, NotificationService } from "./services/notifications.js";
-import { OperationsService } from "./services/operations.js";
+import { OperationsService, SYSTEM_WEBFLEET_ACTOR } from "./services/operations.js";
 import { ReplanningService } from "./services/replanning.js";
 import { PrismaTrafficQuotaStore, TomTomRoutingProvider, TrafficRoutingService } from './services/traffic-routing.js';
 import { TrafficOperationsService } from './services/traffic-operations.js';
 import { VEHICLE_CLOCK_LIMITS } from './services/vehicle-clock.js';
-import { bindWebfleetObject, listWebfleetBindings, unbindWebfleetVehicle, WebfleetSyncService, WebfleetTelemetryService } from './services/webfleet.js';
+import { bindWebfleetObject, listWebfleetBindings, unbindWebfleetVehicle, WebfleetSyncService, WebfleetTelemetryService, type AutoArrivalHandler } from './services/webfleet.js';
 import { calculateRiskColor, calculateSimulatedDuration } from './services/simulation.js';
 import { forecastDrive } from './services/vehicle-clock.js';
 import { parseClockState } from './services/tours.js';
@@ -57,8 +57,11 @@ const alertService = new AlertService(prisma);
 const vehicleService = new VehicleService(prisma);
 const notificationService = new NotificationService(prisma, tourService);
 const operationsService = new OperationsService(prisma, tourService);
-const webfleetSync = new WebfleetSyncService(prisma);
-const webfleetTelemetry = new WebfleetTelemetryService(prisma);
+// Automatic arrival from fresh Webfleet GPS (zone + standstill); AUTO_ARRIVAL_ENABLED=false keeps it a suggestion.
+const autoArrival: AutoArrivalHandler | undefined = process.env.AUTO_ARRIVAL_ENABLED === 'false' ? undefined
+  : (input) => operationsService.confirmArrival(input.stopId, input.arrivedAt, input.now, SYSTEM_WEBFLEET_ACTOR, { source: 'WEBFLEET_AUTO', meta: input.meta });
+const webfleetSync = new WebfleetSyncService(prisma, undefined, undefined, autoArrival);
+const webfleetTelemetry = new WebfleetTelemetryService(prisma, autoArrival);
 const currentPosition = async (id: string, now = new Date()) => {
   return withWebfleetPosition(await tourService.getCurrentPosition(id, now), await webfleetTelemetry.latest(id, now));
 };
@@ -330,6 +333,18 @@ export async function buildApp(options: BuildAppOptions = {}) {
   app.post('/stops/:id/arrival', async request => {
     const input = z.object({ arrivedAt: z.string().datetime().optional() }).parse(request.body ?? {});
     return operationsService.confirmArrival(idParams.parse(request.params).id, input.arrivedAt ? new Date(input.arrivedAt) : new Date(), new Date(), auditActor(request));
+  });
+  app.post('/stops/:id/arrival/revert', { preHandler: requireDispatcherRoles('admin', 'dispatcher') }, async request => {
+    const input = z.object({ reason: z.string().trim().max(300).optional() }).parse(request.body ?? {});
+    const { id } = idParams.parse(request.params);
+    const result = await operationsService.revertArrival(id, new Date(), auditActor(request), input.reason || undefined);
+    const stop = await prisma.stop.findUniqueOrThrow({ where: { id }, select: { tour: { select: { vehicleId: true } } } });
+    await refreshAlertsForVehicle(stop.tour.vehicleId);
+    return result;
+  });
+  app.put('/stops/:id/arrival-radius', { preHandler: requireDispatcherRoles('admin', 'dispatcher') }, async request => {
+    const input = z.object({ radiusMeters: z.number().int().min(100).max(5000).nullable() }).parse(request.body ?? {});
+    return operationsService.setArrivalRadius(idParams.parse(request.params).id, input.radiusMeters, new Date(), auditActor(request));
   });
   app.post('/stops/:id/not-arrived', async request => {
     const input = z.object({ latitude: z.number().min(-90).max(90), longitude: z.number().min(-180).max(180) }).parse(request.body);
