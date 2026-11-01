@@ -3,7 +3,7 @@ import type { PrismaClient } from '@prisma/client';
 import { TourPlanConflictError, TourService, snapshotVehicleClock, rebaseActiveLeg } from './tours.js';
 import {
   createInitialClockState, getBerlinIsoWeekKey, reserveCycleExtension, releaseCycleExtension,
-  forecastDrive, applyStopTime, resetReducedRestCounter, type ClockState
+  forecastDrive, applyStopTime, resetReducedRestCounter, clockWarnings, type ClockState
 } from './vehicle-clock.js';
 import { writeAuditLog, type AuditActor } from './audit-log.js';
 
@@ -30,7 +30,9 @@ export class OperationsService {
     const context = await this.context(vehicleId, now);
     const { vehicle, currentStop, snapshot } = context;
     return {
-      vehicleId, version: vehicle.operationVersion, clock: snapshot.clockState,
+      vehicleId, version: vehicle.operationVersion,
+      // Unknown hours are already shown through `preliminary`; only the duty overrun is a clock warning here.
+      clock: { ...snapshot.clockState, warnings: clockWarnings(snapshot.clockState).filter(code => code !== 'CLOCK_STATE_UNKNOWN') },
       preliminary: snapshot.clockState.kind !== 'KNOWN', manualStoppedAt: vehicle.manualStoppedAt,
       position: await this.tours.getCurrentPosition(vehicleId, now), currentStop,
       dwellMinutes: currentStop?.arrivedAt ? Math.max(0, Math.floor((now.getTime() - currentStop.arrivedAt.getTime()) / 60_000)) : null,
