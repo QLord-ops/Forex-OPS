@@ -1,0 +1,89 @@
+# DigitalOcean App Platform spec for the long-running OPS Disponent API.
+# Create once:   doctl apps create --spec .do/app.yaml
+# Update later:  doctl apps update <app-id> --spec .do/app.yaml
+#
+# Secrets (type: SECRET) have no value here on purpose. Enter them in the
+# DigitalOcean control panel: App → Settings → api → Environment Variables.
+name: ops-disponent-api
+region: fra
+
+databases:
+  # Attaching the existing cluster adds the app to the database's Trusted Sources
+  # automatically, so no developer IP or 0.0.0.0/0 is needed.
+  # Check the exact cluster name in DigitalOcean → Databases before the first deploy.
+  - name: opsdb
+    engine: PG
+    production: true
+    cluster_name: forex-ops-yev
+
+services:
+  - name: api
+    github:
+      repo: QLord-ops/Forex-OPS
+      branch: main
+      # Deploys are started by hand after a backup check, never on every push.
+      deploy_on_push: false
+    dockerfile_path: apps/api/Dockerfile
+    source_dir: /
+    http_port: 3001
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-1gb
+    health_check:
+      http_path: /health
+      initial_delay_seconds: 20
+    envs:
+      - key: NODE_ENV
+        value: production
+      - key: API_HOST
+        value: 0.0.0.0
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        value: ${opsdb.DATABASE_URL}
+      - key: ALLOWED_ORIGINS
+        value: https://ops-disponent-web.vercel.app
+      - key: DISPATCHER_ALLOWED_ORIGINS
+        value: https://ops-disponent-web.vercel.app
+      - key: SESSION_SECRET
+        scope: RUN_TIME
+        type: SECRET
+      - key: ADMIN_PASSWORD_HASH
+        scope: RUN_TIME
+        type: SECRET
+      - key: DISPATCHER_PASSWORD_HASH
+        scope: RUN_TIME
+        type: SECRET
+      - key: OPENAI_API_KEY
+        scope: RUN_TIME
+        type: SECRET
+      - key: TOMTOM_API_KEY
+        scope: RUN_TIME
+        type: SECRET
+      - key: WEBFLEET_ACCOUNT
+        scope: RUN_TIME
+        type: SECRET
+      - key: WEBFLEET_API_KEY
+        scope: RUN_TIME
+        type: SECRET
+      - key: WEBFLEET_USERNAME
+        scope: RUN_TIME
+        type: SECRET
+      - key: WEBFLEET_PASSWORD
+        scope: RUN_TIME
+        type: SECRET
+
+jobs:
+  # Runs once before each deploy, never in parallel from several API instances.
+  - name: migrate
+    kind: PRE_DEPLOY
+    github:
+      repo: QLord-ops/Forex-OPS
+      branch: main
+      deploy_on_push: false
+    dockerfile_path: apps/api/Dockerfile
+    source_dir: /
+    instance_size_slug: apps-s-1vcpu-0.5gb
+    run_command: npm run db:deploy --workspace @ops/api
+    envs:
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        value: ${opsdb.DATABASE_URL}
