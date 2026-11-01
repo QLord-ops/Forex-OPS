@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Prisma, PrismaClient, Stop, Tour, Vehicle } from "@prisma/client";
 import {
   CALCULATED_POSITION_DISCLAIMER,
@@ -313,7 +314,8 @@ export class TourService {
       coordinate: position ? [position.longitude, position.latitude] : null,
       tourId: activeLeg.tourId,
       legId: activeLeg.id,
-      geometryVersion: activeLeg.updatedAt.toISOString(),
+      // Depends only on the drawn line: the leg row is touched on every background check.
+      geometryVersion: geometryFingerprint(activeLeg.id, activeLeg.routeGeometry, activeLeg.routeDetails),
       startedAt: activeLeg.startedAt?.toISOString() ?? null,
       delayMinutes,
       routeGeometry: [...travelledPrefix, ...geometry].map(toLonLat),
@@ -959,4 +961,10 @@ function emptyPosition(state: CurrentPosition["state"], tourId?: string): Curren
 
 function toLonLat(coordinate: Coordinate): [number, number] {
   return [coordinate.longitude, coordinate.latitude];
+}
+
+function geometryFingerprint(legId: string, routeGeometry: string | null, routeDetails: string | null): string {
+  let travelled = "";
+  try { travelled = JSON.stringify((JSON.parse(routeDetails ?? "{}") as { travelledGeometry?: unknown }).travelledGeometry ?? null); } catch { /* Legacy details. */ }
+  return `${legId}:${createHash("sha1").update(routeGeometry ?? "").update("|").update(travelled).digest("hex").slice(0, 16)}`;
 }

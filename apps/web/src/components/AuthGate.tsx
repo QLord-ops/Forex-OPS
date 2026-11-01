@@ -1,4 +1,4 @@
-import { ArrowRight, Cog, Eye, EyeOff, LockKeyhole } from 'lucide-react'
+import { LogOut, ArrowRight, Cog, Eye, EyeOff, LockKeyhole } from 'lucide-react'
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { DispatcherAuthError, dispatcherAuth } from '../lib/auth'
 import './auth-gate.css'
@@ -31,9 +31,9 @@ function isPasswordError(cause: unknown): boolean {
   return cause instanceof DispatcherAuthError && cause.status === 401
 }
 
-export function DispatcherLogout() {
+export function DispatcherLogout({ className = 'dispatcher-logout' }: { className?: string }) {
   const [error, setError] = useState('')
-  return <><button type="button" onClick={() => { void dispatcherAuth.logout().then(() => window.dispatchEvent(new Event('ops:session-expired'))).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Не удалось выйти')) }}>Выйти</button>{error && <span role="alert">{error}</span>}</>
+  return <><button type="button" className={className} title="Выйти из диспетчерской" onClick={() => { void dispatcherAuth.logout().then(() => window.dispatchEvent(new Event('ops:session-expired'))).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Не удалось выйти')) }}><LogOut className="h-5 w-5 shrink-0" aria-hidden="true" /><span>Выйти</span></button>{error && <span role="alert" className="dispatcher-logout-error">{error}</span>}</>
 }
 
 export function AuthGate({ children }: { children: ReactNode }) {

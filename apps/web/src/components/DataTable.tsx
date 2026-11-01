@@ -9,7 +9,7 @@ export function DataTable({
 }) {
   return (
     <div className="work-surface overflow-x-auto">
-      <table className="min-w-full divide-y divide-slate-200">
+      <table className="data-table min-w-full divide-y divide-slate-200">
         <thead className="bg-slate-50">
           <tr>
             {columns.map((column) => (

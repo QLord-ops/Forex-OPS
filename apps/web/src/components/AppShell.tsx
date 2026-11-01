@@ -60,8 +60,8 @@ export function AppShell() {
       </aside>
 
       <div className={isDashboard ? 'h-dvh lg:pl-20 2xl:pl-64' : 'lg:pl-20 2xl:pl-64'}>
-        <header className="border-b border-slate-200 bg-white lg:hidden">
-          <nav className="flex gap-1 overflow-x-auto px-3 py-2" aria-label="Мобильная навигация">
+        <header className="sticky top-0 z-40 border-b border-slate-200 bg-white lg:hidden">
+          <nav className="mobile-nav flex gap-1 overflow-x-auto px-3 py-2" aria-label="Мобильная навигация">
             {navItems.map((item) => (
               <NavLink
                 key={item.to}
@@ -78,6 +78,7 @@ export function AppShell() {
                 {item.label}
               </NavLink>
             ))}
+            <DispatcherLogout className="dispatcher-logout dispatcher-logout-mobile" />
           </nav>
         </header>
         <main className={isDashboard ? 'dashboard-main' : 'px-4 py-5 lg:px-6'}>
