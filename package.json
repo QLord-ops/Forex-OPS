@@ -18,7 +18,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.56.1",
-    "concurrently": "^9.2.5",
+    "concurrently": "^10.0.6",
     "fast-uri": "^3.1.9",
     "postcss-selector-parser": "^6.1.5",
     "source-map-js": "^1.2.2"
