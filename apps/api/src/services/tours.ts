@@ -1,6 +1,8 @@
-import type { Prisma, PrismaClient, Stop, Tour } from "@prisma/client";
+import type { Prisma, PrismaClient, Stop, Tour, Vehicle } from "@prisma/client";
 import {
   CALCULATED_POSITION_DISCLAIMER,
+  LAST_STOP_POSITION_DISCLAIMER,
+  MANUAL_POSITION_DISCLAIMER,
   buildSimpleDrivePlan,
   calculateClockAwareLegProgress,
   compareQueuedItems,
@@ -279,7 +281,7 @@ export class TourService {
     if (!activeLeg) {
       const stop = activeTour?.stops.find(item => item.arrivedAt && !item.completedAt);
       if (stop) return { ...emptyPosition("DWELL", activeTour?.id), state: "DWELL", status: "WAITING", position: toCoordinate(stop), coordinate: [stop.longitude, stop.latitude] };
-      return emptyPosition(activeTour ? "WAITING_FOR_START" : "NO_ACTIVE_ROUTE", activeTour?.id);
+      return this.idlePosition(vehicle, activeTour ? "WAITING_FOR_START" : "NO_ACTIVE_ROUTE", activeTour?.id);
     }
 
     const clock = snapshotVehicleClock(vehicle, activeLeg.toStop.arrivedAt ? null : activeLeg, now);
@@ -322,6 +324,29 @@ export class TourService {
       remainingDistanceMeters: calculateRemainingDistance(activeLeg.distanceMeters, progress),
       eta: eta?.toISOString() ?? null
     };
+  }
+
+  private async idlePosition(
+    vehicle: Pick<Vehicle, "id" | "manualPositionLatitude" | "manualPositionLongitude" | "manualPositionAt">,
+    state: CurrentPosition["state"],
+    tourId?: string
+  ): Promise<CurrentPosition> {
+    const lastStop = await this.db.stop.findFirst({
+      where: { tour: { vehicleId: vehicle.id }, completedAt: { not: null } },
+      orderBy: { completedAt: "desc" }
+    });
+    const hasManual = vehicle.manualPositionLatitude != null && vehicle.manualPositionLongitude != null;
+    const manualIsNewer = !lastStop?.completedAt || !vehicle.manualPositionAt || vehicle.manualPositionAt >= lastStop.completedAt;
+    if (hasManual && manualIsNewer) {
+      const position = { latitude: vehicle.manualPositionLatitude!, longitude: vehicle.manualPositionLongitude! };
+      return { ...emptyPosition(state, tourId), position, coordinate: [position.longitude, position.latitude],
+        positionSource: "MANUAL", disclaimer: MANUAL_POSITION_DISCLAIMER };
+    }
+    if (lastStop) {
+      return { ...emptyPosition(state, tourId), position: toCoordinate(lastStop), coordinate: [lastStop.longitude, lastStop.latitude],
+        positionSource: "CALCULATED", disclaimer: LAST_STOP_POSITION_DISCLAIMER };
+    }
+    return emptyPosition(state, tourId);
   }
 
   private async recordStopEvent(

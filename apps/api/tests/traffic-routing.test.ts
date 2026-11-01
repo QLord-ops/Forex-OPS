@@ -44,7 +44,7 @@ describe("TomTomRoutingProvider", () => {
       truck: { heightMeters: 4, widthMeters: 2.55, lengthMeters: 13.6, weightKg: 40_000 }
     });
 
-    expect(quota.consume).toHaveBeenCalledWith("background");
+    expect(quota.consume).toHaveBeenCalledWith("background", expect.any(Date));
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const requestedUrl = new URL(String(fetchMock.mock.calls[0][0]));
     expect(requestedUrl.pathname).toBe("/routing/1/calculateRoute/52.52,13.405:53.5511,9.9937/json");
@@ -101,6 +101,59 @@ describe("TomTomRoutingProvider", () => {
     const result = await provider.calculateRoute(origin, destination);
     expect(result.providerStatus).toBe("fallback-no-traffic");
     expect(result.warning).toContain("Без актуальных пробок");
+  });
+});
+
+describe("TomTomRoutingProvider quota refunds", () => {
+  const config = { apiKey: "test-key", freeTierConfirmed: true };
+  const refundingQuota = () => ({
+    consume: vi.fn(async (_source: string, _now?: Date) => ({ id: "t", used: 1, limit: 18_000, reservedForManual: 3_600, availableForSource: 17_999, updatedAt: new Date() })),
+    refund: vi.fn(async () => undefined)
+  });
+
+  it.each([
+    ["network error", () => Promise.reject(new TypeError("fetch failed"))],
+    ["timeout", () => Promise.reject(Object.assign(new Error("aborted"), { name: "AbortError" }))],
+    ["HTTP 400", () => Promise.resolve(new Response("", { status: 400 }))],
+    ["HTTP 401", () => Promise.resolve(new Response("", { status: 401 }))],
+    ["HTTP 403", () => Promise.resolve(new Response("", { status: 403 }))]
+  ])("refunds one quota unit after a %s", async (_label, fetchImpl) => {
+    const quota = refundingQuota();
+    const provider = new TomTomRoutingProvider(quota, fakeFallback(), vi.fn(fetchImpl), config);
+    const route = await provider.calculateMultiStopRoute([origin, destination], { source: "background" });
+    expect(route.providerStatus).toBe("fallback-no-traffic");
+    expect(quota.refund).toHaveBeenCalledTimes(1);
+    expect(quota.refund).toHaveBeenCalledWith("background", quota.consume.mock.calls[0][1]);
+  });
+
+  it.each([
+    ["HTTP 500", () => Promise.resolve(new Response("", { status: 500 }))],
+    ["HTTP 429", () => Promise.resolve(new Response("", { status: 429 }))],
+    ["malformed route", () => Promise.resolve(jsonResponse({ routes: [] }))]
+  ])("keeps the quota unit after a billed %s", async (_label, fetchImpl) => {
+    const quota = refundingQuota();
+    const provider = new TomTomRoutingProvider(quota, fakeFallback(), vi.fn(fetchImpl), config);
+    await provider.calculateRoute(origin, destination);
+    expect(quota.refund).not.toHaveBeenCalled();
+  });
+
+  it("still falls back when the refund itself fails", async () => {
+    const quota = { ...refundingQuota(), refund: vi.fn(async () => { throw new Error("db down"); }) };
+    const provider = new TomTomRoutingProvider(quota, fakeFallback(), vi.fn().mockRejectedValue(new TypeError("fetch failed")), config);
+    await expect(provider.calculateRoute(origin, destination)).resolves.toMatchObject({ provider: "osrm", providerStatus: "fallback-no-traffic" });
+  });
+
+  it("reports a quota store failure separately from a TomTom outage", async () => {
+    const quota = { consume: vi.fn(async () => { throw new Error("connection refused"); }), refund: vi.fn() };
+    const fetchMock = vi.fn();
+    const provider = new TomTomRoutingProvider(quota, fakeFallback(), fetchMock, config);
+    const route = await provider.calculateRoute(origin, destination);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(quota.refund).not.toHaveBeenCalled();
+    expect(route.providerStatus).toBe("quota-unavailable");
+    expect(route.warning).toContain("Не удалось проверить квоту TomTom.");
+    expect(route.warning).not.toContain("временно недоступен");
+    expect(route.warning).not.toContain("connection refused");
   });
 });
 
@@ -172,6 +225,16 @@ describe("PrismaTrafficQuotaStore", () => {
     expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
     expect(results.filter(result => result.status === "rejected")).toHaveLength(1);
     expect((await store.getStatus("manual", new Date("2026-10-10T12:00:00Z"))).used).toBe(18_000);
+  });
+  it("refunds one unit in the month it was consumed and never goes below zero", async () => {
+    const delegate = quotaDelegate({ "tomtom-routing:2026-10": { used: 1, updatedAt: new Date("2026-10-10T00:00:00Z") } });
+    const store = new PrismaTrafficQuotaStore({ $transaction: async (callback) => callback({ apiQuota: delegate }) }, { monthlyCap: 18_000 });
+    const at = new Date("2026-10-10T12:00:00Z");
+    await store.refund("manual", at);
+    await store.refund("manual", at);
+    expect((await store.getStatus("manual", at)).used).toBe(0);
+    await store.refund("manual", new Date("2026-11-10T12:00:00Z"));
+    expect((await store.getStatus("manual", new Date("2026-11-10T12:00:00Z"))).used).toBe(0);
   });
 });
 
@@ -253,10 +316,15 @@ function quotaDelegate(initial: Record<string, { used: number; updatedAt: Date }
       rows.set(create.id, row);
       return { id: create.id, ...row };
     },
-    async updateMany({ where, data }: { where: { id: string; used: { lt: number } }; data: { used: { increment: number } } }) {
+    async updateMany({ where, data }:
+      | { where: { id: string; used: { lt: number } }; data: { used: { increment: number } } }
+      | { where: { id: string; used: { gt: number } }; data: { used: { decrement: number } } }) {
       const current = rows.get(where.id);
-      if (!current || current.used >= where.used.lt) return { count: 0 };
-      const row = { used: current.used + data.used.increment, updatedAt: new Date("2026-10-10T12:00:00Z") };
+      if (!current) return { count: 0 };
+      if ("lt" in where.used && current.used >= where.used.lt) return { count: 0 };
+      if ("gt" in where.used && current.used <= where.used.gt) return { count: 0 };
+      const delta = "increment" in data.used ? data.used.increment : -data.used.decrement;
+      const row = { used: current.used + delta, updatedAt: new Date("2026-10-10T12:00:00Z") };
       rows.set(where.id, row);
       return { count: 1 };
     }

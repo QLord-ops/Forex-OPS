@@ -36,6 +36,7 @@ export type TrafficProviderStatus =
   | "live-traffic"
   | "quota-exhausted"
   | "not-configured"
+  | "quota-unavailable"
   | "fallback-no-traffic";
 
 export type TrafficRouteResult = RouteResult & {
@@ -73,6 +74,7 @@ export type TrafficQuotaSnapshot = {
 
 export interface TrafficQuotaStore {
   consume(source: TrafficRefreshSource, now?: Date): Promise<TrafficQuotaSnapshot>;
+  refund?(source: TrafficRefreshSource, now?: Date): Promise<void>;
   getStatus?(source?: TrafficRefreshSource, now?: Date): Promise<TrafficQuotaSnapshot>;
 }
 
@@ -85,7 +87,10 @@ type ApiQuotaRecord = {
 type ApiQuotaDelegate = {
   findUnique(args: { where: { id: string } }): Promise<ApiQuotaRecord | null>;
   upsert(args: { where: { id: string }; create: { id: string; used: number }; update: Record<string, never> }): Promise<ApiQuotaRecord>;
-  updateMany(args: { where: { id: string; used: { lt: number } }; data: { used: { increment: number } } }): Promise<{ count: number }>;
+  updateMany(args:
+    | { where: { id: string; used: { lt: number } }; data: { used: { increment: number } } }
+    | { where: { id: string; used: { gt: number } }; data: { used: { decrement: number } } }
+  ): Promise<{ count: number }>;
 };
 
 type PrismaLikeQuotaClient = {
@@ -119,6 +124,13 @@ export class PrismaTrafficQuotaStore implements TrafficQuotaStore {
         availableForSource: Math.max(0, status.sourceLimit - record.used),
         updatedAt: record.updatedAt
       };
+    });
+  }
+
+  async refund(source: TrafficRefreshSource, now = new Date()): Promise<void> {
+    const status = quotaSettings(this.options, source, now);
+    await this.prisma.$transaction(async (tx) => {
+      await tx.apiQuota.updateMany({ where: { id: status.id, used: { gt: 0 } }, data: { used: { decrement: 1 } } });
     });
   }
 
@@ -219,15 +231,8 @@ export class TomTomRoutingProvider implements RoutingProvider {
       return this.fallbackRoute(origin, destination, options, "not-configured");
     }
 
-    try {
-      await this.quotaStore.consume(options.source ?? "manual");
-      const data = await this.fetchTomTomRoute([origin, destination], options);
-      return this.mapRouteResponse(data, options);
-    } catch (error) {
-      if (error instanceof RoutingError && error.statusCode === 429) return this.fallbackRoute(origin, destination, options, "quota-exhausted");
-      if (error instanceof RoutingError) return this.fallbackRoute(origin, destination, options, "fallback-no-traffic", error.message);
-      return this.fallbackRoute(origin, destination, options, "fallback-no-traffic", "Сервис маршрутизации TomTom временно недоступен.");
-    }
+    const live = await this.requestLiveRoute([origin, destination], options);
+    return "route" in live ? live.route : this.fallbackRoute(origin, destination, options, live.status, live.warning);
   }
 
   async calculateMultiStopRoute(stops: Coordinate[], options: RouteRequestOptions = {}): Promise<TrafficRouteResult> {
@@ -239,15 +244,8 @@ export class TomTomRoutingProvider implements RoutingProvider {
       return this.fallbackMultiStop(stops, options, "not-configured");
     }
 
-    try {
-      await this.quotaStore.consume(options.source ?? "manual");
-      const data = await this.fetchTomTomRoute(stops, options);
-      return this.mapRouteResponse(data, options);
-    } catch (error) {
-      if (error instanceof RoutingError && error.statusCode === 429) return this.fallbackMultiStop(stops, options, "quota-exhausted");
-      if (error instanceof RoutingError) return this.fallbackMultiStop(stops, options, "fallback-no-traffic", error.message);
-      return this.fallbackMultiStop(stops, options, "fallback-no-traffic", "Сервис маршрутизации TomTom временно недоступен.");
-    }
+    const live = await this.requestLiveRoute(stops, options);
+    return "route" in live ? live.route : this.fallbackMultiStop(stops, options, live.status, live.warning);
   }
 
   async evaluateStoredRoute(
@@ -258,6 +256,29 @@ export class TomTomRoutingProvider implements RoutingProvider {
     const origin = supportingPoints[0];
     if (!origin || supportingPoints.length < 2) throw new RoutingError("Для проверки сохранённого маршрута нужны минимум две опорные точки.", 400);
     return this.calculateRoute(origin, destination, { ...options, supportingPoints });
+  }
+
+  private async requestLiveRoute(
+    stops: Coordinate[],
+    options: RouteRequestOptions
+  ): Promise<{ route: TrafficRouteResult } | { status: TrafficProviderStatus; warning?: string }> {
+    const source = options.source ?? "manual";
+    const consumedAt = new Date();
+    try {
+      await this.quotaStore.consume(source, consumedAt);
+    } catch (error) {
+      if (error instanceof RoutingError && error.statusCode === 429) return { status: "quota-exhausted" };
+      return { status: "quota-unavailable", warning: "Не удалось проверить квоту TomTom." };
+    }
+
+    try {
+      return { route: this.mapRouteResponse(await this.fetchTomTomRoute(stops, options), options) };
+    } catch (error) {
+      if (isUnbilledTomTomFailure(error)) await this.quotaStore.refund?.(source, consumedAt).catch(() => undefined);
+      if (error instanceof RoutingError && error.statusCode === 429) return { status: "quota-exhausted" };
+      if (error instanceof RoutingError) return { status: "fallback-no-traffic", warning: error.message };
+      return { status: "fallback-no-traffic", warning: "Сервис маршрутизации TomTom временно недоступен." };
+    }
   }
 
   private async fetchTomTomRoute(stops: Coordinate[], options: RouteRequestOptions): Promise<TomTomRouteResponse> {
@@ -298,7 +319,7 @@ export class TomTomRoutingProvider implements RoutingProvider {
         } : {})
       });
       if (!response.ok) {
-        throw new RoutingError(`Сервис маршрутизации TomTom вернул статус ${response.status}.`, response.status === 429 ? 429 : 502);
+        throw new TomTomHttpError(response.status);
       }
       return (await response.json()) as TomTomRouteResponse;
     } finally {
@@ -458,6 +479,19 @@ function buildAlternativeProposals(activeRoute: TrafficRouteResult): RouteAltern
     }))
     .filter((proposal) => proposal.reason === "road-closure" || proposal.timeSavingSeconds >= 600)
     .slice(0, 2);
+}
+
+class TomTomHttpError extends RoutingError {
+  constructor(readonly upstreamStatus: number) {
+    super(`Сервис маршрутизации TomTom вернул статус ${upstreamStatus}.`, upstreamStatus === 429 ? 429 : 502);
+  }
+}
+
+// Network errors, timeouts and rejected requests (400/401/403) are not counted against the TomTom free tier.
+function isUnbilledTomTomFailure(error: unknown): boolean {
+  if (error instanceof TomTomHttpError) return [400, 401, 403].includes(error.upstreamStatus);
+  if (error instanceof RoutingError) return false;
+  return error instanceof TypeError || (error instanceof Error && error.name === "AbortError");
 }
 
 function quotaSettings(
