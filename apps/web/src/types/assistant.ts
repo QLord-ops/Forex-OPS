@@ -3,11 +3,16 @@ export interface AssistantMessage { id: string; role: string; content: string; c
 export interface AssistantProposal { id: string; action: string; vehicleId?: string | null; status: string; summary: string; payload: Record<string, unknown>; preview: unknown; createdAt: string }
 export interface AssistantReply { message: AssistantMessage; proposals: AssistantProposal[]; scenario?: unknown }
 export interface AssistantThread { messages: AssistantMessage[]; proposals: AssistantProposal[] }
+export interface RouteScenarioStop {
+  address: string; type: string; coords: { latitude: number; longitude: number }
+  earliestArrival: string | null; latestArrival: string | null; earliestDeparture: string | null; latestDeparture: string | null
+  risk: string; serviceMinMinutes: number; serviceMaxMinutes: number
+}
 export interface RouteScenario {
-  vehicleId: string; vehicleNumber: string; generatedAt: string
-  completion: { earliest: string; latest: string }; startRange: { earliest: string; latest: string }
+  vehicleId: string | null; vehicleNumber: string | null; originAddress?: string; generatedAt: string
+  completion: { earliest: string | null; latest: string | null }; startRange: { earliest: string; latest: string }
   finishToday: 'ON_TIME' | 'RISK' | 'LATE' | 'UNKNOWN'; preliminary: boolean; requiresDailyRest: boolean
-  geometry: Array<[number, number]>; distanceMeters: number; warnings: string[]
-  stops: Array<{ address: string; type: string; earliestArrival: string; latestArrival: string; earliestDeparture: string; latestDeparture: string; risk: string; serviceMinMinutes: number; serviceMaxMinutes: number }>
-  downstreamQueueImpact: Array<{ tourId: string; stopId: string; delayMinutes: number; risk: string }>
+  geometry: Array<[number, number]>; distanceMeters: number; warnings: string[]; routingProviders?: string[]
+  stops: RouteScenarioStop[]
+  downstreamQueueImpact: Array<{ tourId: string; stopId: string; delayMinutes: number | null; risk: string }>
 }

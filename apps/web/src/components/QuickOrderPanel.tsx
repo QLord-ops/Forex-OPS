@@ -3,13 +3,14 @@ import type { ChangeEvent, DragEvent } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { api } from '../lib/api'
-import { previewRouteScenario } from '../lib/assistant-api'
 import { formatAppointment } from '../lib/format'
+import type { MapRoutePreview } from '../lib/route-preview'
+import { vehicleMatch } from '../lib/vehicle-match'
+import { RouteBuilder } from './RouteBuilder'
 import type { AddressResolution, Coordinate, CreateTourStopInput, DashboardVehicle, ImportedOrderDraft, ImportedStopDraft, Vehicle } from '../types/domain'
 
 type DockTab = 'search' | 'route' | 'order'
 type DraftStop = ImportedStopDraft & { city: string; company: string; address: string; appointmentLocal: string; loadingMetersText: string; referenceText: string; instructionsText: string; resolution?: AddressResolution | null }
-type RouteSummary = { distanceMeters: number; arrival: string | null; warnings: string[] }
 
 export function QuickOrderPanel({
   row,
@@ -26,7 +27,7 @@ export function QuickOrderPanel({
   vehicles: Vehicle[]
   onCreated: (vehicleId: string) => Promise<void> | void
   onAddressFound?: (coordinate: Coordinate) => void
-  onRoutePreview?: (coordinates: Coordinate[]) => void
+  onRoutePreview?: (preview: MapRoutePreview | null) => void
 }) {
   const cachedImport = useMemo(() => { if (!importOnly) return null; try { return JSON.parse(sessionStorage.getItem('ops-assistant-import-v1') ?? 'null') as { draft: ImportedOrderDraft | null; stops: DraftStop[]; vehicleId: string; orderNumber: string; fileName: string; pendingDrafts: Array<{ draft: ImportedOrderDraft; fileName: string }>; editing: boolean; createVehicle: boolean; newVehicleNumber: string; newLicensePlate: string; importAttemptId?: string } | null } catch { return null } }, [importOnly])
   const [tab, setTab] = useState<DockTab | null>(importOnly ? 'order' : null)
@@ -47,13 +48,7 @@ export function QuickOrderPanel({
   const [importAttemptId, setImportAttemptId] = useState(cachedImport?.importAttemptId ?? createImportAttemptId())
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResult, setSearchResult] = useState('')
-  const selectedVehicleId = row?.vehicle.id
   const selectedVehicleNumber = row?.vehicle.vehicleNumber
-  const [routeFrom, setRouteFrom] = useState(selectedVehicleNumber ? `LKW ${selectedVehicleNumber}` : '')
-  const [routeTo, setRouteTo] = useState('')
-  const [preview, setPreview] = useState<RouteSummary | null>(null)
-  const [routeBusy, setRouteBusy] = useState(false)
-  const routeRequest = useRef(0)
   const addressRequest = useRef(0)
   const matchState = useMemo(() => vehicleMatch(draft?.vehiclePlate || draft?.vehicleNumber, vehicles), [draft?.vehiclePlate, draft?.vehicleNumber, vehicles])
 
@@ -61,15 +56,6 @@ export function QuickOrderPanel({
     if (!importOnly) return
     try { sessionStorage.setItem('ops-assistant-import-v1', JSON.stringify({ draft, stops, vehicleId, orderNumber, fileName, pendingDrafts, editing, createVehicle, newVehicleNumber, newLicensePlate, importAttemptId })) } catch { /* Storage may be unavailable. */ }
   }, [importOnly, draft, stops, vehicleId, orderNumber, fileName, pendingDrafts, editing, createVehicle, newVehicleNumber, newLicensePlate, importAttemptId])
-
-  useEffect(() => {
-    routeRequest.current += 1
-    setRouteFrom(selectedVehicleNumber ? `LKW ${selectedVehicleNumber}` : '')
-    setPreview(null)
-    setRouteBusy(false)
-  }, [selectedVehicleId, selectedVehicleNumber])
-
-  useEffect(() => () => { routeRequest.current += 1 }, [])
 
   useEffect(() => {
     if (!draft || !stops.length) return
@@ -221,45 +207,6 @@ export function QuickOrderPanel({
     finally { setBusy(false) }
   }
 
-  function invalidateRoute() {
-    routeRequest.current += 1
-    setPreview(null)
-    setRouteBusy(false)
-    setError('')
-    onRoutePreview?.([])
-  }
-
-  async function previewManualTour() {
-    const from = routeFrom.trim()
-    const to = routeTo.trim()
-    if (!from || !to) { setError('Укажите откуда и куда построить маршрут.'); return }
-    const requestedVehicle = from.replace(/^LKW\s*/i, '')
-    const match = vehicleMatch(requestedVehicle, vehicles)
-    if (match.status === 'AMBIGUOUS') { setError('Номер найден у нескольких машин. Укажите уникальный госномер.'); return }
-    if (match.status !== 'MATCHED' && (/^LKW\b/i.test(from) || /^\d+$/.test(from))) {
-      setError('Машина не найдена. Укажите её номер, госномер или город отправления.'); return
-    }
-    const requestId = ++routeRequest.current
-    setRouteBusy(true); setError(''); setPreview(null); onRoutePreview?.([])
-    try {
-      if (match.id) {
-        const result = await previewRouteScenario({ vehicleId: match.id, startMode: 'NOW', stops: [{ address: to, type: 'VISIT', serviceMinMinutes: 0, serviceMaxMinutes: 0 }] })
-        if (requestId !== routeRequest.current) return
-        setPreview({ distanceMeters: result.distanceMeters, arrival: result.completion.latest, warnings: result.warnings })
-        onRoutePreview?.(result.geometry)
-      } else {
-        const result = await api.previewNewTour({ stops: [{ address: from }, { address: to }] })
-        if (requestId !== routeRequest.current) return
-        setPreview({ distanceMeters: result.distanceMeters, arrival: result.estimatedArrivalAt, warnings: result.preliminary ? ['Предварительный расчёт. Актуальные пробки и ограничения могут быть недоступны.'] : [] })
-        onRoutePreview?.(result.geometry)
-      }
-    } catch (cause) {
-      if (requestId === routeRequest.current) setError(cause instanceof Error ? cause.message : 'Не удалось рассчитать маршрут.')
-    } finally {
-      if (requestId === routeRequest.current) setRouteBusy(false)
-    }
-  }
-
   function updateStop(index: number, patch: Partial<DraftStop>) { setStops((current) => current.map((stop, stopIndex) => stopIndex === index ? { ...stop, ...patch, ...(('address' in patch || 'city' in patch) ? { resolution: undefined } : {}) } : stop)) }
   function toggleTab(next: DockTab) { setTab((current) => current === next ? null : next); setError('') }
   function onFileInput(event: ChangeEvent<HTMLInputElement>) { const files = Array.from(event.target.files ?? []); event.target.value = ''; queueFiles(files) }
@@ -275,16 +222,7 @@ export function QuickOrderPanel({
       {tab ? <div className="map-action-body">
         <div className="map-action-heading"><strong>{tab === 'search' ? 'Найти адрес' : tab === 'route' ? 'Новый маршрут' : 'Добавить Auftrag'}</strong><button type="button" className="icon-button icon-button-compact" onClick={() => setTab(null)} aria-label="Свернуть"><X className="h-4 w-4" /></button></div>
         {tab === 'search' ? <div className="map-action-content"><label className="field-label" htmlFor="map-search-address">Полный адрес или город</label><div className="flex gap-2"><input id="map-search-address" className="field-input min-w-0" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void findAddress() }} placeholder="Улица, дом, город" /><button type="button" className="primary-button" onClick={() => void findAddress()} disabled={busy}><Search className="h-4 w-4" /></button></div>{searchResult ? <p className="map-action-result"><MapPin className="h-4 w-4" />{searchResult}</p> : null}</div> : null}
-        {tab === 'route' ? <form className="map-action-content" onSubmit={(event) => { event.preventDefault(); void previewManualTour() }}>
-          <label className="field-label" htmlFor="route-from">Откуда</label>
-          <input id="route-from" className="field-input mt-1" value={routeFrom} list="route-vehicles" onChange={(event) => { invalidateRoute(); setRouteFrom(event.target.value) }} placeholder="Номер машины, город или адрес" autoComplete="off" />
-          <datalist id="route-vehicles">{vehicles.map((vehicle) => <option key={vehicle.id} value={`LKW ${vehicle.vehicleNumber}`}>{vehicle.licensePlate || vehicle.vehicleNumber}</option>)}</datalist>
-          <label className="field-label mt-3 block" htmlFor="route-to">Куда</label>
-          <input id="route-to" className="field-input mt-1" value={routeTo} onChange={(event) => { invalidateRoute(); setRouteTo(event.target.value) }} placeholder="Город или полный адрес" autoComplete="off" />
-          <p className="quick-order-hint">Номер машины — от её текущей позиции. Два адреса — свободный маршрут без изменения тура.</p>
-          <button type="submit" className="primary-button mt-3 w-full" disabled={routeBusy || !routeFrom.trim() || !routeTo.trim()}>{routeBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Route className="h-4 w-4" />}{routeBusy ? 'Строим маршрут…' : 'Проложить маршрут'}</button>
-          {preview ? <div className="manual-scenario-result" aria-live="polite"><strong>{Math.round(preview.distanceMeters / 1000)} км</strong>{preview.arrival ? <p>Прибытие: {formatAppointment(preview.arrival)}</p> : <p>Время прибытия пока неизвестно.</p>}{preview.warnings.map((warning, index) => <p key={index} className="quick-order-warning">{warning}</p>)}</div> : null}
-        </form> : null}
+        {tab === 'route' ? <RouteBuilder vehicles={vehicles} selectedVehicleNumber={selectedVehicleNumber} onPreview={(preview) => onRoutePreview?.(preview)} /> : null}
         {tab === 'order' ? <div className="map-action-content"><div className={'quick-order-drop ' + (dragging ? 'dragging' : '')} onDragEnter={(event) => { event.preventDefault(); setDragging(true) }} onDragOver={(event) => event.preventDefault()} onDragLeave={() => setDragging(false)} onDrop={onDrop}><FileUp className="h-7 w-7" /><strong>{busy ? 'Распознаём Auftrag…' : 'Перетащите Auftrag сюда'}</strong><span>PDF, Excel или скриншот</span><label className="secondary-button cursor-pointer">Выбрать файлы<input className="sr-only" type="file" multiple accept=".pdf,.xlsx,.png,.jpg,.jpeg,.webp" onChange={onFileInput} disabled={busy} /></label></div><p className="quick-order-hint">Каждый заказ проверяется отдельно. В очереди: {pendingDrafts.length + pendingFiles.length}. Исходный файл не сохраняется.</p></div> : null}
         {error && !draft ? <p className="quick-order-error"><AlertTriangle className="h-4 w-4" />{error}</p> : null}
       </div> : null}
@@ -297,12 +235,6 @@ function toDraftStop(stop: ImportedStopDraft): DraftStop { return { ...stop, cit
 function splitReferences(value: string) { return value.split(/[,;\n]+/).map((item) => item.trim()).filter(Boolean).slice(0, 20) }
 function normalizeVehicle(value: string) { return value.toLocaleUpperCase('de-DE').replace(/[^A-ZА-Я0-9]/g, '') }
 function looksLikePlate(value: string) { return /[A-ZА-Я]+[- ]?[A-ZА-Я0-9]+[- ]?[0-9]+/i.test(value) }
-function vehicleMatch(requested: string | null | undefined, vehicles: Vehicle[]): { status: 'MATCHED' | 'AMBIGUOUS' | 'NOT_FOUND'; id?: string } {
-  if (!requested) return { status: 'NOT_FOUND' }
-  const key = normalizeVehicle(requested)
-  const matches = vehicles.filter((vehicle) => [vehicle.vehicleNumber, vehicle.licensePlate ?? ''].some((value) => normalizeVehicle(value) === key))
-  return matches.length === 1 ? { status: 'MATCHED', id: matches[0].id } : matches.length > 1 ? { status: 'AMBIGUOUS' } : { status: 'NOT_FOUND' }
-}
 function classifyFile(file: File): 'PDF' | 'EXCEL' | 'IMAGE' | 'UNKNOWN' {
   const name = file.name.toLowerCase()
   if (name.endsWith('.pdf')) return 'PDF'

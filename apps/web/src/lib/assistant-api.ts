@@ -21,8 +21,17 @@ export const assistantApi = {
   cancel: (id: string) => request<AssistantProposal>(`/proposals/${encodeURIComponent(id)}/cancel`, {})
 }
 
-export async function previewRouteScenario(body: { vehicleId: string; startMode: 'AFTER_CURRENT_TOUR' | 'NOW' | 'AFTER_QUEUE'; startAt?: string; stops: Array<{ address: string; type: 'LOAD' | 'UNLOAD' | 'VISIT'; appointmentAt?: string | null; serviceMinMinutes?: number; serviceMaxMinutes?: number }> }): Promise<RouteScenario> {
-  const response = await fetch(`${API_BASE}/route-scenarios/preview`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify(body) })
+export type RouteScenarioRequest = {
+  vehicleId?: string
+  originAddress?: string
+  startMode?: 'AFTER_CURRENT_TOUR' | 'NOW' | 'AFTER_QUEUE'
+  startAt?: string
+  includeQueueImpact?: boolean
+  stops: Array<{ address: string; type?: 'LOAD' | 'UNLOAD' | 'VISIT'; appointmentAt?: string | null; serviceMinMinutes?: number; serviceMaxMinutes?: number }>
+}
+
+export async function previewRouteScenario(body: RouteScenarioRequest, signal?: AbortSignal): Promise<RouteScenario> {
+  const response = await fetch(`${API_BASE}/route-scenarios/preview`, { method: 'POST', credentials: 'same-origin', signal, headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify(body) })
   if (response.status === 401) notifySessionExpired()
   if (!response.ok) {
     const result = await response.json().catch(() => ({})) as { error?: string; message?: string }

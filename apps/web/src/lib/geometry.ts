@@ -41,12 +41,18 @@ export function stopCoordinates(stops?: Array<{ longitude: number; latitude: num
 export function boundsFor(coordinates: Coordinate[]) {
   if (!coordinates.length) return null
 
-  const lngs = coordinates.map(([lng]) => lng)
-  const lats = coordinates.map(([, lat]) => lat)
+  // One pass: spreading a long TomTom polyline into Math.min overflows the call stack.
+  let minLng = Infinity, minLat = Infinity, maxLng = -Infinity, maxLat = -Infinity
+  for (const [lng, lat] of coordinates) {
+    if (lng < minLng) minLng = lng
+    if (lng > maxLng) maxLng = lng
+    if (lat < minLat) minLat = lat
+    if (lat > maxLat) maxLat = lat
+  }
 
   return [
-    [Math.min(...lngs), Math.min(...lats)] as Coordinate,
-    [Math.max(...lngs), Math.max(...lats)] as Coordinate
+    [minLng, minLat] as Coordinate,
+    [maxLng, maxLat] as Coordinate
   ] as const
 }
 
