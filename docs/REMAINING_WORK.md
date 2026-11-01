@@ -4,7 +4,7 @@
 
 ## Решения владельца (приняты 2026-11-01)
 
-- **Хостинг API — DigitalOcean App Platform** (регион Frankfurt). База `Forex-ops-yev` уже в DigitalOcean: приложение подключается к ней как к прикреплённой базе и автоматически попадает в Trusted Sources, поэтому не нужно открывать базу для IP разработчика или `0.0.0.0/0`. Процесс работает постоянно, что нужно для SSE-уведомлений и фоновой синхронизации Webfleet. Конфигурация — `.do/app.yaml`.
+- **Хостинг API — DigitalOcean App Platform** (регион Frankfurt). База `ops-disponent-prod` уже в DigitalOcean: приложение подключается к ней как к прикреплённой базе и автоматически попадает в Trusted Sources, поэтому не нужно открывать базу для IP разработчика или `0.0.0.0/0`. Процесс работает постоянно, что нужно для SSE-уведомлений и фоновой синхронизации Webfleet. Конфигурация — `.do/app.yaml`.
 - **Frontend остаётся на Vercel**: он проксирует `/api/*` на API, поэтому cookie сессии остаются same-origin.
 - **Роль входа**: владелец входит как `admin`. Если с системой работает только он, задаётся один `ADMIN_PASSWORD_HASH`; для сотрудников позже создаётся отдельный `DISPATCHER_PASSWORD_HASH`.
 - **Миграции** запускаются отдельной задачей перед каждым деплоем (`PRE_DEPLOY` в `.do/app.yaml`). Автодеплой на каждый push выключен: деплой запускается вручную после проверки backup.
@@ -15,14 +15,14 @@
 
 Эти шаги требуют входа в аккаунты DigitalOcean и Vercel, поэтому их выполняет владелец. Пароли и ключи не отправляются в чат.
 
-1. **Backup.** DigitalOcean → Databases → `Forex-ops-yev` → Backups: убедиться, что есть вчерашний автоматический backup. Point-in-time recovery доступен 7 дней.
+1. **Backup.** DigitalOcean → Databases → `ops-disponent-prod` → Backups: убедиться, что есть вчерашний автоматический backup. Point-in-time recovery доступен 7 дней.
 2. **Пароль admin.** На своём компьютере выполнить команду ниже и придумать пароль не короче 12 символов. Команда покажет `ADMIN_PASSWORD_HASH` и `SESSION_SECRET`:
 
    ```bash
    npm run auth:secrets -w @ops/api
    ```
 
-3. **Создать приложение API.** DigitalOcean → Apps → Create App → GitHub `QLord-ops/Forex-OPS`, ветка `main` → в настройках выбрать «Edit app spec» и вставить содержимое `.do/app.yaml`. Если имя кластера отличается от `forex-ops-yev`, исправить `cluster_name`. Альтернатива: `doctl apps create --spec .do/app.yaml`.
+3. **Создать приложение API.** DigitalOcean → Apps → Create App → GitHub `QLord-ops/Forex-OPS`, ветка `main` → в настройках выбрать «Edit app spec» и вставить содержимое `.do/app.yaml`. Перед этим создать в базе пользователя `ops_runtime` (Databases → `ops-disponent-prod` → Users & Databases → Add new user): приложение работает под ним с правами только на данные, а миграции — под `doadmin`. Альтернатива: `doctl apps create --spec .do/app.yaml`.
 4. **Секреты.** App → Settings → api → Environment Variables: вставить `ADMIN_PASSWORD_HASH`, `SESSION_SECRET`, при наличии — `OPENAI_API_KEY`, `TOMTOM_API_KEY` и четыре `WEBFLEET_*`. Пустые необязательные ключи можно удалить.
 5. **Деплой.** Нажать Deploy. Сначала выполнится задача `migrate`, затем запустится API. Проверить `https://<адрес-приложения>/health`.
 6. **Переключить frontend.** В `apps/web/vercel.json` заменить `https://ops-disponent-api.vercel.app` на адрес приложения DigitalOcean и задеплоить web на Vercel. Если адрес интерфейса не `https://ops-disponent-web.vercel.app`, исправить `ALLOWED_ORIGINS` и `DISPATCHER_ALLOWED_ORIGINS` в `.do/app.yaml`.

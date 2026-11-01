@@ -4,7 +4,7 @@
 
 - `apps/web` — статический Vite-фронтенд на Vercel.
 - `apps/api` — отдельный постоянно работающий Node.js/Fastify-сервис из `apps/api/Dockerfile` на DigitalOcean App Platform (`.do/app.yaml`, пошагово — в `docs/REMAINING_WORK.md`).
-- База — PostgreSQL `Forex-ops-yev` в DigitalOcean. Neon остаётся запасным вариантом; `DATABASE_URL_UNPOOLED` нужен только при pooled-подключении.
+- База — PostgreSQL `ops-disponent-prod` в DigitalOcean. Neon остаётся запасным вариантом; `DATABASE_URL_UNPOOLED` нужен только при pooled-подключении.
 
 Fastify не следует считать обычной статической частью Vercel-фронтенда: API держит SSE-соединения, выполняет периодические проверки уведомлений и синхронизацию Webfleet. Отдельный сервис даёт предсказуемый жизненный цикл процесса. Vercel-конфигурация API пока сохранена для обратной совместимости, но не является рекомендуемой production-схемой.
 

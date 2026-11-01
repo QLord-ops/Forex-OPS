@@ -8,13 +8,21 @@ name: ops-disponent-api
 region: fra
 
 databases:
-  # Attaching the existing cluster adds the app to the database's Trusted Sources
-  # automatically, so no developer IP or 0.0.0.0/0 is needed.
-  # Check the exact cluster name in DigitalOcean → Databases before the first deploy.
+  # Attaching the cluster lets App Platform inject credentials, so no database
+  # password is copied by hand. The app runs as the limited role ops_runtime;
+  # only the pre-deploy migration uses doadmin.
   - name: opsdb
     engine: PG
     production: true
-    cluster_name: forex-ops-yev
+    cluster_name: ops-disponent-prod
+    db_name: defaultdb
+    db_user: ops_runtime
+  - name: opsadmin
+    engine: PG
+    production: true
+    cluster_name: ops-disponent-prod
+    db_name: defaultdb
+    db_user: doadmin
 
 services:
   - name: api
@@ -84,6 +92,9 @@ jobs:
     instance_size_slug: apps-s-1vcpu-0.5gb
     run_command: npm run db:deploy --workspace @ops/api
     envs:
+      - key: DATABASE_URL_UNPOOLED
+        scope: RUN_TIME
+        value: ${opsadmin.DATABASE_URL}
       - key: DATABASE_URL
         scope: RUN_TIME
         value: ${opsdb.DATABASE_URL}

@@ -20,29 +20,32 @@ const migrate = () => new Promise((resolve, reject) => {
 });
 
 const quoteIdentifier = value => `"${value.replaceAll('"', '""')}"`;
-const runtimeTables = [
-  "AssistantConversation",
-  "AssistantMessage",
-  "AssistantProposal",
-  "AssistantUsage",
-  "VehicleIssue"
-];
 
+// The runtime role gets data access to every application table, but never DDL
+// and never write access to Prisma's migration history.
 async function grantRuntimeAccess() {
   const adminUrl = process.env.DATABASE_URL_UNPOOLED;
   const runtimeUrl = process.env.DATABASE_URL;
   if (!adminUrl || !runtimeUrl) return;
 
   const runtimeRole = decodeURIComponent(new URL(runtimeUrl).username);
+  const adminRole = decodeURIComponent(new URL(adminUrl).username);
   if (!runtimeRole) throw new Error("DATABASE_URL must contain a PostgreSQL role.");
+  if (runtimeRole === adminRole) return;
 
   const admin = new PrismaClient({ datasources: { db: { url: adminUrl } } });
   try {
     const role = quoteIdentifier(runtimeRole);
     await admin.$executeRawUnsafe(`GRANT USAGE ON SCHEMA public TO ${role}`);
-    const tables = runtimeTables.map(quoteIdentifier).join(", ");
-    await admin.$executeRawUnsafe(`GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE ${tables} TO ${role}`);
-    console.log("Runtime database privileges verified.");
+    const tables = await admin.$queryRaw`
+      SELECT tablename FROM pg_tables
+      WHERE schemaname = 'public' AND tablename <> '_prisma_migrations'
+    `;
+    for (const { tablename } of tables) {
+      await admin.$executeRawUnsafe(`GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.${quoteIdentifier(tablename)} TO ${role}`);
+    }
+    await admin.$executeRawUnsafe(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${role}`);
+    console.log(`Runtime database privileges verified for ${tables.length} tables.`);
   } finally {
     await admin.$disconnect();
   }

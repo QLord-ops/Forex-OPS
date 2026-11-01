@@ -4,7 +4,7 @@
 
 ## Стек
 
-- `apps/api` — Fastify 5, Prisma 6, Zod, TypeScript (ESM, NodeNext). Production: PostgreSQL (DigitalOcean `Forex-ops-yev`), локально и в тестах — SQLite (`prisma/sqlite/`).
+- `apps/api` — Fastify 5, Prisma 6, Zod, TypeScript (ESM, NodeNext). Production: PostgreSQL (DigitalOcean `ops-disponent-prod`), локально и в тестах — SQLite (`prisma/sqlite/`).
 - `apps/web` — React 18, Vite, Tailwind, MapLibre (ленивая загрузка), lucide-react.
 - Тесты: Vitest (`apps/*/tests`), Playwright (`e2e/`). Node 22 (`.nvmrc`).
 
