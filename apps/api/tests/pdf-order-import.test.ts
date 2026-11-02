@@ -319,3 +319,32 @@ describe("PDF Auftrag import", () => {
     ]));
   });
 });
+
+describe("stop dates read from a PDF Auftrag", () => {
+  const stop = (sequence: number, type: "LOAD" | "UNLOAD", dates: Record<string, string | null>) => ({
+    sequence, type, company: type === "LOAD" ? "Werk Göttingen" : "Audi AG", address: type === "LOAD" ? "Otto-Brenner-Str. 20, 37079 Göttingen" : "Auto-Union-Str. 1, 85057 Ingolstadt",
+    city: null, appointmentLocal: null, appointmentWindowStartLocal: null, appointmentWindowEndLocal: null, appointmentDateLocal: null, ...dates,
+    loadingMeters: null, referenceNumbers: [], instructions: null, sourcePage: 1, sourceExcerpt: null, confidence: 0.9
+  });
+
+  it("gives the reader today's date and turns a date-only stop into the 06:00–18:00 window; an exact time wins over a window", async () => {
+    let instruction = "";
+    const fetchMock = vi.fn(async (_input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+      instruction = JSON.stringify(JSON.parse(String(init?.body)).input);
+      return new Response(JSON.stringify({ output_text: JSON.stringify({ drafts: [{
+        orderNumber: "PDF-DATES", vehicleNumber: null, vehiclePlate: null, trailerPlate: null, tourRemarks: null, tourRemarksSourcePage: null,
+        departmentCompany: null, departmentAddress: null, departmentCity: null, departmentSourcePage: null,
+        stops: [
+          stop(1, "LOAD", { appointmentDateLocal: "2026-11-05" }),
+          stop(2, "UNLOAD", { appointmentLocal: "2026-11-06T13:30", appointmentWindowStartLocal: "2026-11-06T08:00", appointmentWindowEndLocal: "2026-11-06T16:00" })
+        ], warnings: [] }], warnings: [] }) }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    const preview = await importPdfPreview(Buffer.from("%PDF-1.7"), "auftrag.pdf", { apiKey: "test", fetchImpl: fetchMock as typeof fetch, now: new Date("2026-11-02T10:00:00Z") });
+    expect(instruction).toContain("today is 2026-11-02");
+    expect(instruction).toContain("Ladedatum");
+    const [load, unload] = preview.drafts[0].stops;
+    expect(load).toMatchObject({ appointmentLocal: null, appointmentWindowStartLocal: "2026-11-05T06:00", appointmentWindowEndLocal: "2026-11-05T18:00" });
+    expect(unload).toMatchObject({ appointmentLocal: "2026-11-06T13:30", appointmentWindowStartLocal: null, appointmentWindowEndLocal: null });
+    expect(preview.drafts[0].warnings.map((warning) => warning.code)).toEqual(expect.arrayContaining(["DATE_ONLY", "APPOINTMENT_CONFLICT"]));
+  });
+});

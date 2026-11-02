@@ -133,11 +133,20 @@ export class TourService {
     const context = await readPlanningContext(this.db, input);
     const orderedStops = [...input.stops].sort((a, b) => a.sequence - b.sequence);
     const plan = await prepareTourPlan(this.routingProvider, orderedStops, context.previousTour?.stops[0], context.vehicle.maxSpeedKmh);
+    // A tour with an earlier load date goes before later ones; the tour after it gets a new transfer leg.
+    const next = context.insertBefore;
+    const nextTransfer = next?.firstStop
+      ? await prepareTransferLeg(this.routingProvider, plan.stops.at(-1)!, next.firstStop, context.vehicle.maxSpeedKmh)
+      : null;
 
     return this.db.$transaction(async (tx) => {
       assertPlanningContextUnchanged(context, await readPlanningContext(tx, input));
       const { previousTourId, status } = context;
-      const plannedStartAt = null;
+      const plannedStartAt = tourStartFromStops(orderedStops);
+      if (next) {
+        const later = context.openTours.filter((tour) => (tour.queueIndex ?? 0) >= next.queueIndex);
+        for (const tour of later) await tx.tour.update({ where: { id: tour.id }, data: { queueIndex: { increment: 1 } } });
+      }
 
       const tour = await tx.tour.create({
         data: {
@@ -155,11 +164,12 @@ export class TourService {
         }
       });
       await persistTourPlan(tx, tour.id, plan);
+      if (next && nextTransfer) await relinkFollowingTour(tx, tour.id, next, nextTransfer);
       if (status === "ACTIVE" && input.trailerPlate?.trim()) {
         await updateCurrentTrailer(tx, context.vehicle.id, tour.id, input.trailerPlate.trim());
       }
       await writeAuditLog(tx, actor, { action: metadata ? "TOUR_IMPORTED" : "TOUR_CREATED", entityType: "Tour", entityId: tour.id,
-        vehicleId: context.vehicle.id, tourId: tour.id, metadata: { orderNumber: input.orderNumber } });
+        vehicleId: context.vehicle.id, tourId: tour.id, metadata: { orderNumber: input.orderNumber, ...(next ? { insertedBefore: next.id } : {}) } });
 
       return tx.tour.findUniqueOrThrow({
         where: { id: tour.id },
@@ -188,7 +198,7 @@ export class TourService {
         tourRemarks: input.tour.tourRemarks?.trim() || null,
         status: "ACTIVE",
         queueIndex: 0,
-        plannedStartAt: null
+        plannedStartAt: tourStartFromStops(orderedStops)
       } });
       await persistTourPlan(tx, tour.id, plan);
       if (input.tour.trailerPlate?.trim()) {
@@ -236,7 +246,7 @@ export class TourService {
           queueIndex: context.queueIndex,
           status,
           previousTourId,
-          plannedStartAt: null
+          plannedStartAt: tourStartFromStops(orderedStops)
         }
       });
       await persistTourPlan(tx, tourId, plan);
@@ -566,17 +576,24 @@ async function readPlanningContext(db: Prisma.TransactionClient, input: CreateTo
     },
     orderBy: [{ queueIndex: "asc" }, { plannedStartAt: "asc" }, { createdAt: "asc" }, { id: "asc" }]
   });
+  const insertion = current ? null : await chooseQueueInsertion(db, openTours, tourStartFromStops(input.stops));
   const placement = current?.vehicleId === input.vehicleId
     ? { status: current.status, previousTourId: current.previousTourId, queueIndex: current.queueIndex }
-    : determineNewTourPlacement(openTours);
-  const previousTour = placement.previousTourId
+    : insertion
+      ? { status: insertion.index === 0 ? "ACTIVE" as const : "QUEUED" as const,
+          previousTourId: insertion.index === 0 ? insertion.next.previousTourId ?? undefined : openTours[insertion.index - 1].id,
+          queueIndex: insertion.next.queueIndex }
+      : determineNewTourPlacement(openTours);
+  // The first tour of a vehicle has no transfer leg; when a tour moves to the front it starts without one too.
+  const transferFromId = insertion?.index === 0 ? undefined : placement.previousTourId;
+  const previousTour = transferFromId
     ? await db.tour.findUnique({
-        where: { id: placement.previousTourId },
+        where: { id: transferFromId },
         include: { stops: { orderBy: { sequence: "desc" }, take: 1 } }
       })
     : null;
 
-  return { vehicle, openTours, current, previousTour, ...placement };
+  return { vehicle, openTours, current, previousTour, ...placement, insertBefore: insertion?.next ?? null };
 }
 
 function assertPlanningContextUnchanged(
@@ -691,6 +708,74 @@ function assertFutureTourEditable(tour: {
       "Изменять или отменять можно только будущие маршруты в очереди без подтверждённых событий."
     );
   }
+}
+
+/** When a tour starts: the first stop's exact appointment or the start of its window. */
+export function tourStartFromStops(stops: CreateTourInput["stops"]): Date | null {
+  const first = [...stops].sort((a, b) => a.sequence - b.sequence)[0];
+  const value = first?.appointmentAt ?? first?.appointmentWindowStartAt ?? null;
+  const date = value ? new Date(value) : null;
+  return date && Number.isFinite(date.getTime()) ? date : null;
+}
+
+type QueueNeighbour = {
+  id: string; status: string; queueIndex: number; previousTourId: string | null;
+  firstStop: Stop | null;
+};
+
+/**
+ * Where a new tour belongs in the vehicle's queue: before the first tour that loads later.
+ * A tour that already began (arrival, event or a leg under way) is never displaced; undated tours keep their place.
+ */
+export async function chooseQueueInsertion(
+  db: Prisma.TransactionClient,
+  openTours: Array<Pick<Tour, "id" | "status" | "plannedStartAt" | "previousTourId"> & Partial<Pick<Tour, "queueIndex">>>,
+  start: Date | null
+): Promise<{ index: number; next: QueueNeighbour } | null> {
+  if (!start) return null;
+  for (const [index, tour] of openTours.entries()) {
+    const details = await db.tour.findUnique({ where: { id: tour.id }, include: { stops: { orderBy: { sequence: "asc" } }, legs: true, events: { take: 1 } } });
+    if (!details) continue;
+    const stops = details.stops ?? [];
+    const began = (details.events ?? []).length > 0 || stops.some((stop) => stop.arrivedAt || stop.completedAt)
+      || (details.legs ?? []).some((leg) => leg.status === "ACTIVE" || leg.status === "ARRIVED" || leg.status === "COMPLETED");
+    if (tour.status === "ACTIVE" && began) continue;
+    const tourStart = tour.plannedStartAt ?? stops[0]?.appointmentAt ?? stops[0]?.appointmentWindowStartAt ?? null;
+    if (tourStart && tourStart.getTime() > start.getTime()) {
+      return { index, next: { id: tour.id, status: tour.status, queueIndex: tour.queueIndex ?? index, previousTourId: tour.previousTourId, firstStop: stops[0] ?? null } };
+    }
+  }
+  return null;
+}
+
+async function prepareTransferLeg(routingProvider: RoutingProvider, from: Coordinate, to: Stop, maxSpeedKmh: number) {
+  const route = await routingProvider.calculateRoute(toCoordinate(from), toCoordinate(to));
+  const simulatedDurationSeconds = calculateSimulatedDuration(route.distanceMeters, route.durationSeconds, maxSpeedKmh);
+  return {
+    distanceMeters: route.distanceMeters,
+    routeGeometry: serializeGeometry(route.geometry),
+    routingDurationSeconds: route.durationSeconds,
+    simulatedDurationSeconds,
+    drivePlan: JSON.stringify(buildSimpleDrivePlan(simulatedDurationSeconds)),
+    routeDetails: JSON.stringify(route)
+  };
+}
+
+/** The tour after an inserted one now starts from the inserted tour's last stop and waits in the queue. */
+async function relinkFollowingTour(
+  tx: Prisma.TransactionClient,
+  insertedTourId: string,
+  next: QueueNeighbour,
+  transfer: Awaited<ReturnType<typeof prepareTransferLeg>>
+) {
+  const lastStop = await tx.stop.findFirstOrThrow({ where: { tourId: insertedTourId }, orderBy: { sequence: "desc" } });
+  const nextStops = await tx.stop.findMany({ where: { tourId: next.id }, select: { id: true } });
+  const ownStopIds = nextStops.map((stop) => stop.id);
+  if (next.firstStop) {
+    await tx.leg.deleteMany({ where: { tourId: next.id, toStopId: next.firstStop.id, fromStopId: { notIn: ownStopIds }, status: { not: "COMPLETED" } } });
+    await tx.leg.create({ data: { ...transfer, tourId: next.id, fromStopId: lastStop.id, toStopId: next.firstStop.id } });
+  }
+  await tx.tour.update({ where: { id: next.id }, data: { status: "QUEUED", previousTourId: insertedTourId, planVersion: { increment: 1 } } });
 }
 
 export function determineNewTourPlacement(

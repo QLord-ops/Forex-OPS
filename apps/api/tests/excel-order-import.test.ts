@@ -205,17 +205,30 @@ describe("Excel order import", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it("keeps date-only and invalid calendar appointments empty with warnings", () => {
+  it("turns a date-only termin into the 06:00–18:00 window and keeps invalid dates empty with warnings", () => {
     const parsed = parseRowsWithRules([
       row(1, ["Auftragsnummer", "Ladeadresse", "Ladetermin", "Entladeadresse", "Entladetermin"]),
       row(2, ["DATE-1", "Berlin", "31.02.2026 25:00", "Hamburg", "2026-10-05"])
     ]);
 
     expect(parsed.drafts[0].stops.map((stop) => stop.appointmentLocal)).toEqual([null, null]);
+    expect(parsed.drafts[0].stops[1]).toMatchObject({ appointmentWindowStartLocal: "2026-10-05T06:00", appointmentWindowEndLocal: "2026-10-05T18:00" });
     expect(parsed.drafts[0].warnings).toEqual([
       expect.objectContaining({ code: "UNSUPPORTED_APPOINTMENT" }),
-      expect.objectContaining({ code: "MISSING_TIME" })
+      expect.objectContaining({ code: "DATE_ONLY" })
     ]);
+  });
+
+  it("reads German date labels, separate date and time columns, ranges and Excel date cells without a midnight appointment", () => {
+    const parsed = parseRowsWithRules([
+      row(1, ["Auftragsnummer", "Ladeadresse", "Ladedatum", "Ladezeit", "Entladeadresse", "Liefertermin"]),
+      row(2, ["DATE-2", "Göttingen", "05.11.2026", "08:00-12:00", "Ingolstadt", "06.11.2026 bis 14 Uhr"]),
+      row(3, ["DATE-3", "Einbeck", "2026-11-07", "", "Kassel", "FIX 07.11.2026 13:30"])
+    ]);
+    expect(parsed.drafts[0].stops[0]).toMatchObject({ appointmentLocal: null, appointmentWindowStartLocal: "2026-11-05T08:00", appointmentWindowEndLocal: "2026-11-05T12:00" });
+    expect(parsed.drafts[0].stops[1]).toMatchObject({ appointmentLocal: null, appointmentWindowStartLocal: "2026-11-06T06:00", appointmentWindowEndLocal: "2026-11-06T14:00" });
+    expect(parsed.drafts[1].stops[0]).toMatchObject({ appointmentLocal: null, appointmentWindowStartLocal: "2026-11-07T06:00" });
+    expect(parsed.drafts[1].stops[1]).toMatchObject({ appointmentLocal: "2026-11-07T13:30", appointmentWindowStartLocal: null });
   });
 
   it("groups anonymous adjacent row-per-stop rows and carries explicit order numbers across blanks", () => {

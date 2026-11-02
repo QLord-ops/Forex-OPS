@@ -9,6 +9,7 @@ import { api } from '../lib/api'
 import { statusLabel } from '../lib/format'
 import type { CreateTourStopInput, GeocodeResult, ImportedOrderDraft, OrderImportPreview, StopType } from '../types/domain'
 import { importFingerprint } from '../lib/import-fingerprint'
+import { berlinLocalToIso } from '../lib/berlin-time'
 
 interface StopDraft {
   id: string
@@ -265,7 +266,7 @@ export function NewOrderPage() {
     }
     const tourInput = {
       orderNumber: orderNumber.trim(), trailerPlate: trailerPlate.trim() || null, tourRemarks: tourRemarks.trim() || null,
-      stops: resolvedStops.map((stop, index): CreateTourStopInput => ({ sequence: index + 1, type: stop.type, company: stop.company.trim() || undefined, address: stop.address.trim(), city: stop.city.trim() || undefined, latitude: stop.geocode!.latitude, longitude: stop.geocode!.longitude, appointmentAt: stop.appointmentAt ? new Date(stop.appointmentAt).toISOString() : null, appointmentWindowStartAt: stop.appointmentWindowStartAt ? new Date(stop.appointmentWindowStartAt).toISOString() : null, appointmentWindowEndAt: stop.appointmentWindowEndAt ? new Date(stop.appointmentWindowEndAt).toISOString() : null, loadingMeters: stop.loadingMeters ? Number(stop.loadingMeters.replace(',', '.')) : null, referenceNumbers: stop.referenceNumbers.split(/[,;\n]+/).map((value) => value.trim()).filter(Boolean), instructions: stop.instructions.trim() || null, serviceMinMinutes: stop.serviceMinMinutes, serviceMaxMinutes: stop.serviceMaxMinutes }))
+      stops: resolvedStops.map((stop, index): CreateTourStopInput => ({ sequence: index + 1, type: stop.type, company: stop.company.trim() || undefined, address: stop.address.trim(), city: stop.city.trim() || undefined, latitude: stop.geocode!.latitude, longitude: stop.geocode!.longitude, appointmentAt: stop.appointmentAt ? berlinLocalToIso(stop.appointmentAt) : null, appointmentWindowStartAt: stop.appointmentWindowStartAt ? berlinLocalToIso(stop.appointmentWindowStartAt) : null, appointmentWindowEndAt: stop.appointmentWindowEndAt ? berlinLocalToIso(stop.appointmentWindowEndAt) : null, loadingMeters: stop.loadingMeters ? Number(stop.loadingMeters.replace(',', '.')) : null, referenceNumbers: stop.referenceNumbers.split(/[,;\n]+/).map((value) => value.trim()).filter(Boolean), instructions: stop.instructions.trim() || null, serviceMinMinutes: stop.serviceMinMinutes, serviceMaxMinutes: stop.serviceMaxMinutes }))
     }
     try {
       const importedFile = appliedImportSelection ? importItems.find((item) => item.id === appliedImportSelection.itemId) : undefined
@@ -278,7 +279,7 @@ export function NewOrderPage() {
               importFingerprint: await importFingerprint({
                 fileName: importedFile.fileName.trim().toLocaleLowerCase('de-DE'),
                 orderNumber: tourInput.orderNumber.toLocaleUpperCase('de-DE'),
-                stops: tourInput.stops.map((stop) => ({ type: stop.type, address: stop.address.toLocaleLowerCase('de-DE').replace(/\s+/g, ' '), appointment: stop.appointmentAt ?? null }))
+                stops: tourInput.stops.map((stop) => ({ type: stop.type, address: stop.address.toLocaleLowerCase('de-DE').replace(/\s+/g, ' '), appointment: stop.appointmentAt ?? stop.appointmentWindowStartAt ?? null }))
               }) })).tour
           : await api.createTour({ ...tourInput, vehicleId })
       if (appliedImportSelection) {

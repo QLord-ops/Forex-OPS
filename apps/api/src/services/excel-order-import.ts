@@ -1,4 +1,5 @@
 import ExcelJS, { type CellValue, type Row, type Worksheet } from "exceljs";
+import { DATE_ONLY_WINDOW, parseDateAndTime } from "./order-dates.js";
 
 const { Workbook } = ExcelJS;
 
@@ -25,6 +26,9 @@ export interface ImportedStopDraft {
   company: string | null;
   address: string | null;
   appointmentLocal: string | null;
+  /** Time window (Berlin wall clock); a date without a time becomes 06:00–18:00. */
+  appointmentWindowStartLocal: string | null;
+  appointmentWindowEndLocal: string | null;
   loadingMeters: number | null;
   referenceNumbers: string[];
   instructions: string | null;
@@ -71,15 +75,18 @@ type FieldKey =
   | "company"
   | "address"
   | "appointmentAt"
+  | "appointmentTime"
   | "loadingMeters"
   | "referenceNumbers"
   | "instructions"
   | "loadCompany"
   | "loadAddress"
   | "loadAppointmentAt"
+  | "loadAppointmentTime"
   | "unloadCompany"
   | "unloadAddress"
-  | "unloadAppointmentAt";
+  | "unloadAppointmentAt"
+  | "unloadAppointmentTime";
 
 interface NormalizedCell {
   value: string;
@@ -122,7 +129,8 @@ const aliases: Record<FieldKey, string[]> = {
   stopType: ["typ", "stopp typ", "stop type", "type", "art", "операция", "тип", "загрузка выгрузка"],
   company: ["firma", "kunde", "company", "customer", "client", "компания", "клиент", "фирма"],
   address: ["adresse", "anschrift", "address", "место", "адрес", "адрес места"],
-  appointmentAt: ["termin", "zeit", "datum", "appointment", "date", "time", "дата", "время", "дата время"],
+  appointmentAt: ["termin", "datum", "appointment", "date", "дата", "дата время", "liefertermin", "ladedatum", "fixtermin"],
+  appointmentTime: ["zeit", "uhrzeit", "time", "время", "zeitfenster", "time window", "окно"],
   loadingMeters: ["ldm", "lademeter", "loading meters", "load meters", "погрузочные метры", "метры загрузки"],
   referenceNumbers: ["referenz", "referenznummer", "reference", "reference number", "ref", "референс", "номер референса"],
   instructions: ["bemerkung", "hinweis", "notiz", "instructions", "notes", "comment", "примечание", "инструкция", "комментарий"],
@@ -149,7 +157,13 @@ const aliases: Record<FieldKey, string[]> = {
   ],
   loadAppointmentAt: [
     "ladetermin",
-    "ladezeit",
+    "ladedatum",
+    "beladedatum",
+    "beladetermin",
+    "abholdatum",
+    "abholtermin",
+    "abholung",
+    "ladetag",
     "loading date",
     "pickup date",
     "load appointment",
@@ -157,6 +171,7 @@ const aliases: Record<FieldKey, string[]> = {
     "время загрузки",
     "термин загрузки"
   ],
+  loadAppointmentTime: ["ladezeit", "beladezeit", "abholzeit", "ladezeitfenster", "loading time", "время загрузки окно"],
   unloadCompany: [
     "entladefirma",
     "entladestelle firma",
@@ -180,13 +195,20 @@ const aliases: Record<FieldKey, string[]> = {
   ],
   unloadAppointmentAt: [
     "entladetermin",
-    "entladezeit",
+    "entladedatum",
+    "liefertermin",
+    "lieferdatum",
+    "anlieferung",
+    "anliefertermin",
+    "zustelldatum",
+    "zustelltermin",
     "delivery date",
     "unload appointment",
     "дата выгрузки",
     "время выгрузки",
     "термин выгрузки"
-  ]
+  ],
+  unloadAppointmentTime: ["entladezeit", "lieferzeit", "anlieferzeit", "zustellzeit", "entladezeitfenster", "delivery time"]
 };
 
 export async function importExcelPreview(
@@ -233,7 +255,8 @@ export async function importExcelPreview(
       apiKey: options.openAiApiKey ?? process.env.OPENAI_API_KEY ?? "",
       model: options.openAiModel ?? process.env.OPENAI_IMPORT_MODEL ?? "gpt-5.4-mini",
       fetchImpl: options.fetchImpl,
-      timeoutMs: options.openAiTimeoutMs
+      timeoutMs: options.openAiTimeoutMs,
+      now: options.now
     });
 
     return {
@@ -464,7 +487,9 @@ function matchHeader(value: string): FieldKey | null {
 
   const orderedFields: FieldKey[] = [
     "loadAppointmentAt",
+    "loadAppointmentTime",
     "unloadAppointmentAt",
+    "unloadAppointmentTime",
     "loadAddress",
     "unloadAddress",
     "loadCompany",
@@ -475,6 +500,7 @@ function matchHeader(value: string): FieldKey | null {
     "referenceNumbers",
     "instructions",
     "appointmentAt",
+    "appointmentTime",
     "stopType",
     "address",
     "company"
@@ -519,13 +545,13 @@ function parseWideRows(rows: BoundedExcelRow[], header: HeaderMatch): ImportedOr
     const stops: ImportedStopDraft[] = [];
 
     if (loadAddress) {
-      const appointmentLocal = normalizeAppointment(getField(row, header.columns, "loadAppointmentAt"), warnings);
+      const schedule = readSchedule(getField(row, header.columns, "loadAppointmentAt"), getField(row, header.columns, "loadAppointmentTime"), warnings);
       stops.push({
         sequence: stops.length + 1,
         type: "LOAD",
         company: getField(row, header.columns, "loadCompany"),
         address: loadAddress,
-        appointmentLocal,
+        ...schedule,
         ...readCargoMetadata(row, header.columns),
         sourceRow: row.rowNumber,
         confidence: 0.92
@@ -535,13 +561,13 @@ function parseWideRows(rows: BoundedExcelRow[], header: HeaderMatch): ImportedOr
     }
 
     if (unloadAddress) {
-      const appointmentLocal = normalizeAppointment(getField(row, header.columns, "unloadAppointmentAt"), warnings);
+      const schedule = readSchedule(getField(row, header.columns, "unloadAppointmentAt"), getField(row, header.columns, "unloadAppointmentTime"), warnings);
       stops.push({
         sequence: stops.length + 1,
         type: "UNLOAD",
         company: getField(row, header.columns, "unloadCompany"),
         address: unloadAddress,
-        appointmentLocal,
+        ...schedule,
         ...emptyCargoMetadata(),
         sourceRow: row.rowNumber,
         confidence: 0.92
@@ -639,7 +665,7 @@ function parseRowPerStopRows(rows: BoundedExcelRow[], header: HeaderMatch): Impo
       continue;
     }
 
-    const appointmentLocal = normalizeAppointment(getField(row, header.columns, "appointmentAt"), draft.warnings);
+    const schedule = readSchedule(getField(row, header.columns, "appointmentAt"), getField(row, header.columns, "appointmentTime"), draft.warnings);
     if (!address) {
       draft.warnings.push(warning("MISSING_ADDRESS", `Строка ${row.rowNumber}: адрес отсутствует.`, row.sheetName, row.rowNumber));
       draft.stops.push({
@@ -647,7 +673,7 @@ function parseRowPerStopRows(rows: BoundedExcelRow[], header: HeaderMatch): Impo
         type,
         company: getField(row, header.columns, "company"),
         address: null,
-        appointmentLocal,
+        ...schedule,
         ...readCargoMetadata(row, header.columns),
         sourceRow: row.rowNumber,
         confidence: 0.45
@@ -661,7 +687,7 @@ function parseRowPerStopRows(rows: BoundedExcelRow[], header: HeaderMatch): Impo
       type,
       company: getField(row, header.columns, "company"),
       address,
-      appointmentLocal,
+      ...schedule,
       ...readCargoMetadata(row, header.columns),
       sourceRow: row.rowNumber,
       confidence: 0.88
@@ -717,35 +743,18 @@ function normalizeStopType(value: string | null): ImportedStopType | null {
   return null;
 }
 
-function normalizeAppointment(value: string | null, warnings: ImportWarning[]): string | null {
-  if (!value) {
-    return null;
-  }
-
-  const trimmed = value.trim();
-  const isoish = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::\d{2}(?:\.\d{1,3})?)?)?$/);
-  if (isoish) {
-    if (!isoish[4] || !isoish[5]) {
-      warnings.push(warning("MISSING_TIME", `В сроке «${trimmed}» указана дата, но отсутствует время.`));
-      return null;
-    }
-    const candidate = `${isoish[1]}-${isoish[2]}-${isoish[3]}T${isoish[4]}:${isoish[5]}`;
-    if (isValidLocalDateTime(candidate)) return candidate;
-  }
-
-  const german = trimmed.match(/^(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{2,4})(?:\s+(\d{1,2})[:.](\d{2}))?$/);
-  if (german) {
-    if (!german[4] || !german[5]) {
-      warnings.push(warning("MISSING_TIME", `В сроке «${trimmed}» указана дата, но отсутствует время.`));
-      return null;
-    }
-    const year = german[3].length === 2 ? `20${german[3]}` : german[3];
-    const candidate = `${year}-${german[2].padStart(2, "0")}-${german[1].padStart(2, "0")}T${german[4].padStart(2, "0")}:${german[5]}`;
-    if (isValidLocalDateTime(candidate)) return candidate;
-  }
-
-  warnings.push(warning("UNSUPPORTED_APPOINTMENT", `Неподдерживаемый формат срока «${trimmed}».`));
-  return null;
+/** Date and optional separate time column -> exact appointment or window, with a readable warning when unusable. */
+function readSchedule(dateText: string | null, timeText: string | null, warnings: ImportWarning[]) {
+  const shown = [dateText, timeText].filter(Boolean).join(" ");
+  const schedule = parseDateAndTime(dateText, timeText);
+  if (schedule.note === "DATE_ONLY") warnings.push(warning("DATE_ONLY", `В сроке «${shown}» только дата: принято окно ${DATE_ONLY_WINDOW.start}–${DATE_ONLY_WINDOW.end}.`));
+  if (schedule.note === "MISSING_DATE") warnings.push(warning("MISSING_DATE", `В сроке «${shown}» есть время, но нет даты.`));
+  if (schedule.note === "UNSUPPORTED") warnings.push(warning("UNSUPPORTED_APPOINTMENT", `Неподдерживаемый формат срока «${shown}».`));
+  return {
+    appointmentLocal: schedule.appointmentLocal,
+    appointmentWindowStartLocal: schedule.appointmentWindowStartLocal,
+    appointmentWindowEndLocal: schedule.appointmentWindowEndLocal
+  };
 }
 
 export function isValidLocalDateTime(value: string): boolean {
@@ -774,6 +783,10 @@ function toExcelWallDateTime(date: Date): string | null {
   if (Number.isNaN(date.getTime())) {
     return null;
   }
+  const time = `${String(date.getUTCHours()).padStart(2, "0")}:${String(date.getUTCMinutes()).padStart(2, "0")}`;
+  // A time-only cell is stored on Excel's day zero; a date-only cell at midnight. Neither is a midnight appointment.
+  if (date.getUTCFullYear() < 1901) return time;
+  if (time === "00:00") return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
 
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(
     2,
