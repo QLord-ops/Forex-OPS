@@ -1,6 +1,6 @@
 import type { PrismaClient } from '@prisma/client';
 import { z } from 'zod';
-import type { Coordinate, CurrentPosition } from '../domain.js';
+import type { Coordinate, CurrentPosition, RouteResult } from '../domain.js';
 import { RoutingError, type RoutingProvider } from './routing.js';
 import type { TrafficRouteResult, TrafficSection, TruckRouteProfile } from './traffic-routing.js';
 import { snapshotVehicleClock } from './tours.js';
@@ -28,8 +28,14 @@ export const routeScenarioInputSchema = z.object({
     if (stop.appointmentWindowStartAt && stop.appointmentWindowEndAt && new Date(stop.appointmentWindowStartAt) > new Date(stop.appointmentWindowEndAt)) {
       ctx.addIssue({ code: 'custom', message: 'Начало окна термина позже окончания.' });
     }
-  })).min(1).max(20)
-}).refine(input => Boolean(input.vehicleId || input.originAddress), { message: 'Укажите машину или начальный адрес.' });
+  })).min(1).max(20),
+  // A route variant the dispatcher picked, per draft stop: re-times the plan without asking the router again.
+  legChoices: z.array(z.object({
+    distanceMeters: z.number().min(0).max(5_000_000),
+    durationSeconds: z.number().min(0).max(14 * 86_400)
+  }).nullable()).max(20).optional()
+}).refine(input => Boolean(input.vehicleId || input.originAddress), { message: 'Укажите машину или начальный адрес.' })
+  .refine(input => !input.legChoices || input.legChoices.length === input.stops.length, { message: 'Выбор вариантов не совпадает с точками маршрута.' });
 export type RouteScenarioInput = z.input<typeof routeScenarioInputSchema>;
 type Risk = 'ON_TIME' | 'RISK' | 'LATE' | 'UNKNOWN';
 type Cursor = { at: Date; clock: ClockState };
@@ -38,6 +44,12 @@ type PlannedStop = {
   appointmentWindowStartAt?: Date | null; appointmentWindowEndAt?: Date | null;
   serviceMinMinutes: number; serviceMaxMinutes: number; arrivedAt?: Date | null;
 };
+export type ScenarioRouteOption = {
+  id: string; mainRoads: string[]; distanceMeters: number; durationSeconds: number; trafficDelaySeconds: number;
+  hasRoadClosure: boolean; geometry: Array<[number, number]>; trafficSegments: ScenarioTrafficSegment[];
+};
+/** Up to three ways to drive one leg; option 0 is the router's best and is the one the plan uses. */
+export type ScenarioLeg = { from: string; to: string; options: ScenarioRouteOption[] };
 export type ScenarioStopResult = {
   address: string; type: string; coords: Coordinate;
   earliestArrival: string | null; latestArrival: string | null;
@@ -96,14 +108,17 @@ export class RouteScenarioService {
     const sources = new Set<string>();
     let requiresDailyRest = false;
     let collect = warnings;
+    const legs: ScenarioLeg[] = [];
 
-    const advance = async (stop: PlannedStop, options: { seconds?: number; showGeometry?: boolean } = {}): Promise<ScenarioStopResult> => {
+    const advance = async (stop: PlannedStop, options: { seconds?: number; showGeometry?: boolean; leg?: { from: string; to: string } } = {}): Promise<ScenarioStopResult> => {
       let seconds = options.seconds;
       let earlySegments: VehicleClockSegment[] = [], lateSegments: VehicleClockSegment[] = [];
       if (!stop.arrivedAt) {
         if (seconds === undefined && origin) {
-          const route = await this.routing.calculateRoute(origin, stop.coords, { departureTime: early.at, traffic: true, source: 'manual', truck, includeInstructions: false });
+          const route = await this.routing.calculateRoute(origin, stop.coords, { departureTime: early.at, traffic: true, source: 'manual', truck, includeInstructions: false,
+            maxAlternatives: options.leg ? 2 : 0 });
           seconds = calculateSimulatedDuration(route.distanceMeters, route.durationSeconds, vehicle.maxSpeedKmh);
+          if (options.leg) legs.push({ ...options.leg, options: routeOptions(legs.length, route, option => calculateSimulatedDuration(option.distanceMeters, option.durationSeconds, vehicle.maxSpeedKmh)) });
           sources.add(route.provider);
           const routeNote = routeWarning(route);
           if (routeNote) collect.add(routeNote);
@@ -156,13 +171,15 @@ export class RouteScenarioService {
     const stops: ScenarioStopResult[] = [];
     for (const [index, stop] of input.stops.entries()) {
       const coords = stopCoords[index];
+      const choice = input.legChoices?.[index];
+      if (choice) distanceMeters += choice.distanceMeters;
       stops.push(await advance({ ...stop, coords,
         appointmentAt: stop.appointmentAt ? new Date(stop.appointmentAt) : null,
         appointmentWindowStartAt: stop.appointmentWindowStartAt ? new Date(stop.appointmentWindowStartAt) : null,
         appointmentWindowEndAt: stop.appointmentWindowEndAt ? new Date(stop.appointmentWindowEndAt) : null,
         serviceMinMinutes: stop.serviceMinMinutes ?? (stop.type === 'VISIT' ? 0 : 60),
         serviceMaxMinutes: stop.serviceMaxMinutes ?? (stop.type === 'VISIT' ? 0 : 120)
-      }, { showGeometry: true }));
+      }, { showGeometry: true, seconds: choice?.durationSeconds, leg: { from: index ? input.stops[index - 1].address : `LKW ${vehicle.vehicleNumber}`, to: stop.address } }));
     }
     preliminary ||= hadMissingRoute;
     const completion = { earliest: hadMissingRoute ? null : early.at.toISOString(), latest: hadMissingRoute ? null : late.at.toISOString() };
@@ -192,7 +209,7 @@ export class RouteScenarioService {
     return { vehicleId: vehicle.id, vehicleNumber: vehicle.vehicleNumber, operationVersion: vehicle.operationVersion,
       tourVersions: tours.map(t => ({ id: t.id, version: t.planVersion })), startMode: input.startMode,
       generatedAt: now.toISOString(), startRange, completion, dayEndsAt: dayEnd.toISOString(), finishToday,
-      preliminary, stops, geometry: geometry.map(point => [point.longitude, point.latitude] as [number, number]), trafficSegments, distanceMeters, warnings: [...warnings], routingProviders: [...sources],
+      preliminary, stops, legs, geometry: geometry.map(point => [point.longitude, point.latitude] as [number, number]), trafficSegments, distanceMeters, warnings: [...warnings], routingProviders: [...sources],
       requiresDailyRest: draftRequiresDailyRest,
       downstreamQueueImpact: changed.map((row, index) => ({ ...row, previousEarliestArrival: baseline[index]?.earliestArrival ?? null,
         previousLatestArrival: baseline[index]?.latestArrival ?? null,
@@ -212,16 +229,26 @@ export class RouteScenarioService {
     const warnings = new Set(['Свободный маршрут: часы, паузы и ограничения конкретной машины не учитываются.']);
     const sources = new Set<string>();
     let distanceMeters = 0;
+    const legs: ScenarioLeg[] = [];
     for (const [index, stop] of input.stops.entries()) {
       const coords = stopCoords[index];
-      const route = await this.routing.calculateRoute(origin, coords, { departureTime: early, traffic: true, source: 'manual', includeInstructions: false });
-      sources.add(route.provider);
-      const routeNote = routeWarning(route);
-      if (routeNote) warnings.add(routeNote);
-      appendTraffic(trafficSegments, route, appendGeometry(geometry, route.geometry));
-      distanceMeters += route.distanceMeters;
-      const arrivalEarly = new Date(early.getTime() + route.durationSeconds * 1000);
-      const arrivalLate = new Date(late.getTime() + route.durationSeconds * 1000);
+      const choice = input.legChoices?.[index];
+      let seconds: number;
+      if (choice) {
+        seconds = choice.durationSeconds;
+        distanceMeters += choice.distanceMeters;
+      } else {
+        const route = await this.routing.calculateRoute(origin, coords, { departureTime: early, traffic: true, source: 'manual', includeInstructions: false, maxAlternatives: 2 });
+        sources.add(route.provider);
+        const routeNote = routeWarning(route);
+        if (routeNote) warnings.add(routeNote);
+        appendTraffic(trafficSegments, route, appendGeometry(geometry, route.geometry));
+        distanceMeters += route.distanceMeters;
+        seconds = route.durationSeconds;
+        legs.push({ from: index ? input.stops[index - 1].address : input.originAddress!, to: stop.address, options: routeOptions(index, route, option => option.durationSeconds) });
+      }
+      const arrivalEarly = new Date(early.getTime() + seconds * 1000);
+      const arrivalLate = new Date(late.getTime() + seconds * 1000);
       const serviceAt = stop.appointmentAt ?? stop.appointmentWindowStartAt;
       const serviceEarly = new Date(Math.max(arrivalEarly.getTime(), serviceAt ? Date.parse(serviceAt) : 0));
       const serviceLate = new Date(Math.max(arrivalLate.getTime(), serviceAt ? Date.parse(serviceAt) : 0));
@@ -240,7 +267,7 @@ export class RouteScenarioService {
     return { vehicleId: null, vehicleNumber: null, originAddress: input.originAddress, startMode: 'NOW',
       generatedAt: now.toISOString(), startRange, completion: { earliest: early.toISOString(), latest: late.toISOString() },
       dayEndsAt: berlinDayEnd(now).toISOString(), finishToday: 'UNKNOWN' as Risk, preliminary: true,
-      stops, geometry: geometry.map(point => [point.longitude, point.latitude] as [number, number]), trafficSegments, distanceMeters,
+      stops, legs, geometry: geometry.map(point => [point.longitude, point.latitude] as [number, number]), trafficSegments, distanceMeters,
       warnings: [...warnings], routingProviders: [...sources], requiresDailyRest: false, downstreamQueueImpact: [] };
   }
 }
@@ -284,6 +311,23 @@ function appendGeometry(target: Coordinate[], points: Coordinate[]): number {
   return offset;
 }
 type ScenarioTrafficSegment = { from: number; to: number; level: TrafficSection['level'] };
+/** The best route plus up to two alternatives the router returned in the same request (no extra quota). */
+function routeOptions(legIndex: number, route: RouteResult, duration: (option: RouteResult) => number): ScenarioRouteOption[] {
+  const primary = route as RouteResult & Partial<TrafficRouteResult>;
+  const all: Array<RouteResult & Partial<TrafficRouteResult>> = [primary, ...(primary.alternatives ?? [])];
+  return all.slice(0, 3).map((option, index) => ({
+    id: `${legIndex}-${index}`,
+    mainRoads: option.mainRoads ?? [],
+    distanceMeters: Math.round(option.distanceMeters),
+    durationSeconds: Math.round(duration(option)),
+    trafficDelaySeconds: Math.max(0, Math.round(option.trafficDelaySeconds ?? 0)),
+    hasRoadClosure: Boolean(option.hasRoadClosure),
+    // Five decimals is ~1 m: keeps three long variants small enough for a phone.
+    geometry: option.geometry.map(point => [round5(point.longitude), round5(point.latitude)] as [number, number]),
+    trafficSegments: (option.trafficSections ?? []).map(section => ({ from: section.start, to: section.end, level: section.level }))
+  }));
+}
+function round5(value: number) { return Math.round(value * 1e5) / 1e5; }
 function appendTraffic(target: ScenarioTrafficSegment[], route: object, offset: number) {
   const sections = (route as Partial<TrafficRouteResult>).trafficSections ?? [];
   for (const section of sections) target.push({ from: offset + section.start, to: offset + section.end, level: section.level });

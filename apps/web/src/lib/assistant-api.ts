@@ -27,7 +27,9 @@ export type RouteScenarioRequest = {
   startMode?: 'AFTER_CURRENT_TOUR' | 'NOW' | 'AFTER_QUEUE'
   startAt?: string
   includeQueueImpact?: boolean
-  stops: Array<{ address: string; type?: 'LOAD' | 'UNLOAD' | 'VISIT'; appointmentAt?: string | null; serviceMinMinutes?: number; serviceMaxMinutes?: number }>
+  stops: Array<{ address: string; type?: 'LOAD' | 'UNLOAD' | 'VISIT'; coords?: { latitude: number; longitude: number }; appointmentAt?: string | null; serviceMinMinutes?: number; serviceMaxMinutes?: number }>
+  /** Picked variant per stop: re-times the plan without a new routing request. */
+  legChoices?: Array<{ distanceMeters: number; durationSeconds: number } | null>
 }
 
 export async function previewRouteScenario(body: RouteScenarioRequest, signal?: AbortSignal): Promise<RouteScenario> {

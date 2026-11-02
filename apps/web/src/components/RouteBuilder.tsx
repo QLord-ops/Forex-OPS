@@ -4,12 +4,14 @@ import { CSS } from '@dnd-kit/utilities'
 import { AlertTriangle, GripVertical, LoaderCircle, Plus, Route, Truck, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { previewRouteScenario } from '../lib/assistant-api'
+import { previewRouteScenario, type RouteScenarioRequest } from '../lib/assistant-api'
 import { formatAppointment } from '../lib/format'
 import type { MapRoutePreview } from '../lib/route-preview'
+import { chosenOption, composeRoute, formatDrive, formatRouteKm } from '../lib/route-variants'
 import { looksLikeVehicleReference, vehicleMatch, type VehicleMatch } from '../lib/vehicle-match'
-import type { RouteScenario } from '../types/assistant'
+import type { RouteLeg, RouteScenario } from '../types/assistant'
 import type { Vehicle } from '../types/domain'
+import { RouteVariants } from './RouteVariants'
 
 export const MAX_ROUTE_POINTS = 10
 type RoutePoint = { id: string; value: string }
@@ -26,9 +28,23 @@ export function RouteBuilder({ vehicles, selectedVehicleNumber, onPreview }: {
   const [result, setResult] = useState<RouteScenario | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [legs, setLegs] = useState<RouteLeg[]>([])
+  const [choice, setChoice] = useState<number[]>([])
+  const [activeLeg, setActiveLeg] = useState(0)
+  const [retiming, setRetiming] = useState(false)
   const controller = useRef<AbortController | null>(null)
+  const retimeController = useRef<AbortController | null>(null)
+  // The search the variants belong to: its request (with resolved coordinates) and its original forecast.
+  const base = useRef<{ request: RouteScenarioRequest; result: RouteScenario; label: string; stopsOnMap: MapRoutePreview['stops']; key: string } | null>(null)
+  const lastPreview = useRef<MapRoutePreview | null>(null)
+  const chooseRef = useRef<(legIndex: number, optionIndex: number) => void>(() => undefined)
   const onPreviewRef = useRef(onPreview)
   onPreviewRef.current = onPreview
+
+  function publish(preview: MapRoutePreview | null) {
+    lastPreview.current = preview
+    onPreviewRef.current(preview)
+  }
 
   const sensors = useSensors(
     // Press and hold the handle: a click into the field never starts a drag, and it works with a finger.
@@ -36,7 +52,13 @@ export function RouteBuilder({ vehicles, selectedVehicleNumber, onPreview }: {
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   )
 
-  useEffect(() => () => controller.current?.abort(), [])
+  useEffect(() => () => {
+    controller.current?.abort()
+    retimeController.current?.abort()
+    // With the window closed nobody can switch variants: keep the chosen route, drop the clickable grey ones.
+    const last = lastPreview.current
+    if (last?.alternatives?.length) onPreviewRef.current({ ...last, alternatives: undefined, onSelectAlternative: undefined })
+  }, [])
   useEffect(() => {
     setPoints((current) => {
       const first = current[0]
@@ -53,10 +75,68 @@ export function RouteBuilder({ vehicles, selectedVehicleNumber, onPreview }: {
   function invalidate() {
     controller.current?.abort()
     controller.current = null
+    retimeController.current?.abort()
+    retimeController.current = null
+    base.current = null
     setResult(null)
+    setLegs([]); setChoice([]); setActiveLeg(0); setRetiming(false)
     setBusy(false)
     setError('')
-    onPreviewRef.current(null)
+    publish(null)
+  }
+
+  function showOnMap(nextLegs: RouteLeg[], nextChoice: number[], leg: number, scenario: RouteScenario) {
+    const search = base.current
+    if (!search) return
+    const composed = nextLegs.length ? composeRoute(nextLegs, nextChoice) : { geometry: scenario.geometry, trafficSegments: scenario.trafficSegments ?? [] }
+    if (composed.geometry.length < 2) { publish(null); return }
+    const alternatives = (nextLegs[leg]?.options ?? [])
+      .map((option, index) => ({ option, index }))
+      .filter(({ index }) => index !== (nextChoice[leg] ?? 0))
+      .map(({ option, index }) => ({ id: `${leg}:${index}`, geometry: option.geometry, label: formatDrive(option.durationSeconds) }))
+    publish({ geometry: composed.geometry, trafficSegments: composed.trafficSegments, label: search.label, stops: search.stopsOnMap, key: search.key,
+      alternatives, onSelectAlternative: (id) => { const [legIndex, optionIndex] = id.split(':').map(Number); chooseRef.current(legIndex, optionIndex) } })
+  }
+
+  async function retime(nextChoice: number[]) {
+    const search = base.current
+    if (!search) return
+    retimeController.current?.abort()
+    retimeController.current = null
+    if (nextChoice.every((value) => !value)) { setResult(search.result); setRetiming(false); return }
+    const request = new AbortController()
+    retimeController.current = request
+    setRetiming(true); setError('')
+    try {
+      const legChoices = legs.map((leg, index) => {
+        const option = chosenOption(leg, nextChoice[index])
+        return option ? { distanceMeters: option.distanceMeters, durationSeconds: option.durationSeconds } : null
+      })
+      const retimed = await previewRouteScenario({ ...search.request, legChoices }, request.signal)
+      if (!request.signal.aborted) setResult(retimed)
+    } catch {
+      if (!request.signal.aborted) setError('Не удалось пересчитать ETA для выбранного варианта. Время ниже — для прежнего варианта.')
+    } finally {
+      if (retimeController.current === request) { retimeController.current = null; setRetiming(false) }
+    }
+  }
+
+  function choose(legIndex: number, optionIndex: number) {
+    const search = base.current
+    if (!search || !legs[legIndex]?.options[optionIndex]) return
+    const nextChoice = legs.map((_, index) => index === legIndex ? optionIndex : choice[index] ?? 0)
+    setActiveLeg(legIndex)
+    showOnMap(legs, nextChoice, legIndex, search.result)
+    if (optionIndex === (choice[legIndex] ?? 0)) return
+    setChoice(nextChoice)
+    void retime(nextChoice)
+  }
+  chooseRef.current = choose
+
+  function switchLeg(index: number) {
+    if (!base.current) return
+    setActiveLeg(index)
+    showOnMap(legs, choice, index, base.current.result)
   }
 
   function update(id: string, value: string) { invalidate(); setPoints((current) => current.map((point) => point.id === id ? { ...point, value } : point)) }
@@ -79,21 +159,30 @@ export function RouteBuilder({ vehicles, selectedVehicleNumber, onPreview }: {
     controller.current?.abort()
     const request = new AbortController()
     controller.current = request
-    setBusy(true); setError(''); setResult(null); onPreviewRef.current(null)
+    retimeController.current?.abort()
+    base.current = null
+    setBusy(true); setError(''); setResult(null); setLegs([]); setChoice([]); setActiveLeg(0); setRetiming(false); publish(null)
     try {
       const stops = filled.slice(1).map((address) => ({ address }))
-      const scenario = await previewRouteScenario(start?.status === 'MATCHED'
+      const body: RouteScenarioRequest = start?.status === 'MATCHED'
         ? { vehicleId: start.id, startMode: 'NOW', includeQueueImpact: false, stops }
-        : { originAddress: filled[0], stops }, request.signal)
+        : { originAddress: filled[0], stops }
+      const scenario = await previewRouteScenario(body, request.signal)
       if (request.signal.aborted) return
-      setResult(scenario)
       const labels = filled.slice(1)
-      onPreviewRef.current(scenario.geometry.length >= 2 ? {
-        geometry: scenario.geometry,
-        trafficSegments: scenario.trafficSegments ?? [],
+      // Variants only when every draft leg was routed; otherwise the plain line is shown.
+      const nextLegs = scenario.legs?.length === scenario.stops.length ? scenario.legs : []
+      const nextChoice = nextLegs.map(() => 0)
+      base.current = {
+        request: { ...body, stops: scenario.stops.map((stop, index) => ({ address: stops[index]?.address ?? stop.address, coords: stop.coords })) },
+        result: scenario,
         label: start?.vehicle ? `Маршрут LKW ${start.vehicle.vehicleNumber}` : 'Предпросмотр маршрута',
-        stops: scenario.stops.map((stop, index) => ({ coordinate: [stop.coords.longitude, stop.coords.latitude], label: String(index + 2), title: labels[index] ?? stop.address }))
-      } : null)
+        stopsOnMap: scenario.stops.map((stop, index) => ({ coordinate: [stop.coords.longitude, stop.coords.latitude], label: String(index + 2), title: labels[index] ?? stop.address })),
+        key: `route-${Date.now()}`
+      }
+      setResult(scenario)
+      setLegs(nextLegs); setChoice(nextChoice)
+      showOnMap(nextLegs, nextChoice, 0, scenario)
     } catch (cause) {
       if (request.signal.aborted) return
       setError(cause instanceof Error ? cause.message : 'Не удалось рассчитать маршрут.')
@@ -103,7 +192,8 @@ export function RouteBuilder({ vehicles, selectedVehicleNumber, onPreview }: {
   }
 
   const durationMinutes = result?.completion.latest ? Math.max(0, Math.round((Date.parse(result.completion.latest) - Date.parse(result.startRange.earliest)) / 60000)) : null
-  const live = result?.routingProviders?.some((provider) => provider.toLowerCase().includes('tomtom'))
+  const live = Boolean((base.current?.result ?? result)?.routingProviders?.some((provider) => provider.toLowerCase().includes('tomtom')))
+  const totalMeters = legs.length ? composeRoute(legs, choice).distanceMeters : result?.distanceMeters ?? 0
 
   return <form className="map-action-content route-builder" onSubmit={(event) => { event.preventDefault(); void calculate() }} aria-label="Построить маршрут">
     <p className="quick-order-hint route-builder-hint">Первая точка — номер машины (например <strong>125</strong>) или начальный адрес. Зажмите <GripVertical className="inline h-3.5 w-3.5" aria-hidden="true" />, чтобы поменять точки местами.</p>
@@ -123,10 +213,16 @@ export function RouteBuilder({ vehicles, selectedVehicleNumber, onPreview }: {
       {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Route className="h-4 w-4" />}{busy ? 'Строим маршрут…' : 'Проложить маршрут'}
     </button>
     {error ? <p className="quick-order-error" role="alert"><AlertTriangle className="h-4 w-4" />{error}</p> : null}
+    {result && legs.length ? <RouteVariants legs={legs} choice={choice} activeLeg={activeLeg} busy={retiming} live={live} onActiveLeg={switchLeg} onChoose={choose} /> : null}
     {result ? <div className="manual-scenario-result route-builder-result" aria-live="polite">
-      <div className="route-builder-total"><strong>{Math.round(result.distanceMeters / 1000)} км</strong>{durationMinutes !== null ? <span>{formatDuration(durationMinutes)} в пути{result.stops.length > 1 ? ' со всеми точками' : ''}</span> : null}</div>
+      <div className="route-builder-total"><strong>{formatRouteKm(totalMeters)}</strong>{durationMinutes !== null ? <span>{formatDuration(durationMinutes)} в пути{result.stops.length > 1 ? ' со всеми точками' : ''}</span> : null}</div>
       <p className="route-builder-source">{live ? 'TomTom · с учётом пробок' : 'Без актуальных пробок'}{result.vehicleNumber ? ` · старт LKW ${result.vehicleNumber}` : ''}</p>
-      <ol className="route-builder-eta">{result.stops.map((stop, index) => <li key={index}><span className="route-point-number">{index + 2}</span><span className="min-w-0 truncate">{stop.address}</span><time>{stop.latestArrival ? formatAppointment(stop.latestArrival) : '—'}</time></li>)}</ol>
+      <ol className="route-builder-eta">{result.stops.map((stop, index) => {
+        const leg = legs[index] ? chosenOption(legs[index], choice[index]) : undefined
+        return <li key={index}><span className="route-point-number">{index + 2}</span><span className="min-w-0 truncate">{stop.address}</span>
+          {leg ? <span className="route-builder-leg-km" title="Расстояние от предыдущей точки">{formatRouteKm(leg.distanceMeters)}</span> : null}
+          <time>{stop.latestArrival ? formatAppointment(stop.latestArrival) : '—'}</time></li>
+      })}</ol>
       {result.warnings.map((warning, index) => <p key={index} className="quick-order-warning">{warning}</p>)}
     </div> : null}
   </form>

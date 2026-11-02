@@ -1,7 +1,15 @@
 import type { Coordinate, TrafficSegment } from '../types/domain.js'
 
 export type MapRouteStop = { coordinate: Coordinate; label: string; title: string }
-export type MapRoutePreview = { geometry: Coordinate[]; label: string; stops?: MapRouteStop[]; trafficSegments?: TrafficSegment[] }
+export type MapRouteAlternative = { id: string; geometry: Coordinate[]; label: string }
+export type MapRoutePreview = {
+  geometry: Coordinate[]; label: string; stops?: MapRouteStop[]; trafficSegments?: TrafficSegment[]
+  /** The variants not chosen right now; they stay on the map, grey, and can be clicked. */
+  alternatives?: MapRouteAlternative[]
+  onSelectAlternative?: (id: string) => void
+  /** Same key = same route search: the map keeps its camera when only the chosen variant changes. */
+  key?: string
+}
 let current: MapRoutePreview | null = null
 const listeners = new Set<() => void>()
 export const getRoutePreview = () => current

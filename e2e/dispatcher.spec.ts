@@ -350,3 +350,93 @@ test.describe('этап машины в точках маршрута', () => {
     await expect(page.getByRole('list', { name: 'Этапы маршрута' }).getByRole('listitem').nth(1)).toHaveAttribute('aria-label', /Машина здесь/)
   })
 })
+
+test.describe('варианты маршрута', () => {
+  const line = (shift: number) => Array.from({ length: 6 }, (_, i) => [12.9 - i * 0.6, 50.6 + i * 0.25 + shift]) as Array<[number, number]>
+  const option = (leg: number, index: number, roads: string[], km: number, minutes: number, delay = 0) => ({
+    id: `${leg}-${index}`, mainRoads: roads, distanceMeters: km * 1000, durationSeconds: minutes * 60, trafficDelaySeconds: delay * 60, hasRoadClosure: false,
+    geometry: line(index * 0.15 + leg), trafficSegments: [] })
+  const legsFor = (count: number) => Array.from({ length: count }, (_, leg) => ({
+    from: leg ? `Ziel ${leg}` : 'VOLLMANN Elterlein', to: leg ? `Ziel ${leg + 1}, Kassel` : 'VW Hannover, Hansa Str. 51',
+    options: [option(leg, 0, ['A14', 'A2'], 383, 313, 12), option(leg, 1, ['A72', 'A38'], 399, 324), option(leg, 2, ['A36', 'A2'], 420, 369)] }))
+
+  async function openWithVariants(page: Page, stopCount: number, requests: Array<Record<string, unknown>>) {
+    await authenticated(page, async (route, path) => {
+      if (path === '/dashboard') { await json(route, { vehicles: [{ vehicle, tour: null, statusText: 'Свободен' }] }); return true }
+      if (path === '/vehicles' && route.request().method() === 'GET') { await json(route, [vehicle]); return true }
+      if (path === '/route-scenarios/preview') {
+        const body = route.request().postDataJSON() as { stops: Array<{ address: string }>; legChoices?: Array<{ durationSeconds: number }> }
+        requests.push(body)
+        const retimed = Boolean(body.legChoices)
+        await json(route, { vehicleId: null, vehicleNumber: null, generatedAt: '2026-11-02T10:00:00Z',
+          startRange: { earliest: '2026-11-02T10:00:00Z', latest: '2026-11-02T10:00:00Z' },
+          completion: { earliest: '2026-11-02T15:13:00Z', latest: retimed ? '2026-11-02T15:24:00Z' : '2026-11-02T15:13:00Z' },
+          finishToday: 'UNKNOWN', preliminary: true, requiresDailyRest: false, distanceMeters: 383000 * stopCount,
+          geometry: retimed ? [] : line(0), routingProviders: ['tomtom'], warnings: [],
+          stops: body.stops.map((stop, index) => ({ address: stop.address, type: 'VISIT', coords: { latitude: 52 + index, longitude: 9.7 },
+            earliestArrival: '2026-11-02T15:13:00Z', latestArrival: retimed ? '2026-11-02T15:24:00Z' : '2026-11-02T15:13:00Z',
+            earliestDeparture: null, latestDeparture: null, risk: 'UNKNOWN', serviceMinMinutes: 0, serviceMaxMinutes: 0 })),
+          legs: retimed ? [] : legsFor(stopCount), downstreamQueueImpact: [] })
+        return true
+      }
+      if (path.startsWith('/vehicles/')) { await json(route, path.endsWith('/current-position') ? { position: null } : []); return true }
+      return false
+    })
+    await page.route('https://api.tomtom.com/**', route => route.abort())
+    await page.goto('/')
+    await page.getByRole('button', { name: 'Маршрут', exact: true }).first().click()
+    const form = page.getByRole('form', { name: 'Построить маршрут' })
+    await form.getByLabel('Старт: номер машины или адрес').fill('VOLLMANN Elterlein')
+    if (stopCount > 1) await form.getByRole('button', { name: 'Добавить точку' }).click()
+    const inputs = form.locator('.route-point input')
+    for (let index = 1; index <= stopCount; index += 1) await inputs.nth(index).fill(index === 1 ? 'VW Hannover, Hansa Str. 51' : `Ziel ${index}, Kassel`)
+    await form.getByRole('button', { name: 'Проложить маршрут' }).click()
+    return form
+  }
+
+  test('показывает 3 варианта с автобанами, лучший выбран, выбор другого не убирает остальные', async ({ page }) => {
+    const requests: Array<Record<string, unknown>> = []
+    const form = await openWithVariants(page, 1, requests)
+    const variants = form.getByRole('radiogroup', { name: /Варианты участка 1 → 2/ })
+    await expect(variants.getByRole('radio')).toHaveCount(3)
+    const best = variants.getByRole('radio', { name: /через A14 и A2/ })
+    await expect(best).toHaveAttribute('aria-checked', 'true')
+    await expect(best).toContainText('Лучший')
+    await expect(best).toContainText('5 ч 13 мин')
+    await expect(best).toContainText('пробки +12 мин')
+    const second = variants.getByRole('radio', { name: /через A72 и A38/ })
+    await expect(second).toContainText('399 км · +11 мин · +16 км')
+    await expect(page.locator('.route-alt-chip')).toHaveCount(2)
+    await expect(form.locator('.route-builder-leg-km')).toHaveText(['383 км'])
+
+    await second.click()
+    await expect(second).toHaveAttribute('aria-checked', 'true')
+    await expect(variants.getByRole('radio')).toHaveCount(3)
+    await expect.poll(() => requests.length).toBe(2)
+    expect(requests[1]).toMatchObject({ originAddress: 'VOLLMANN Elterlein', legChoices: [{ distanceMeters: 399000, durationSeconds: 19440 }],
+      stops: [{ address: 'VW Hannover, Hansa Str. 51', coords: { latitude: 52, longitude: 9.7 } }] })
+    await expect(form.locator('.route-builder-leg-km')).toHaveText(['399 км'])
+    await expect(form.getByText('5 ч 24 мин в пути')).toBeVisible()
+    await expect(page.locator('.route-alt-chip')).toHaveCount(2)
+
+    // Back to the best variant: the original forecast comes back without a new request.
+    await page.locator('.route-alt-chip').filter({ hasText: '5 ч 13 мин' }).click()
+    await expect(best).toHaveAttribute('aria-checked', 'true')
+    await expect(form.getByText('5 ч 13 мин в пути')).toBeVisible()
+    expect(requests).toHaveLength(2)
+  })
+
+  test('варианты по участкам для маршрута с несколькими точками и выбор стрелками', async ({ page }) => {
+    const requests: Array<Record<string, unknown>> = []
+    const form = await openWithVariants(page, 2, requests)
+    const tabs = form.getByRole('tablist', { name: 'Участки маршрута' })
+    await expect(tabs.getByRole('tab')).toHaveCount(2)
+    await tabs.getByRole('tab', { name: /2 → 3/ }).click()
+    const variants = form.getByRole('radiogroup', { name: /Варианты участка 2 → 3/ })
+    await variants.getByRole('radio', { name: /через A14 и A2/ }).focus()
+    await page.keyboard.press('ArrowDown')
+    await expect(variants.getByRole('radio', { name: /через A72 и A38/ })).toHaveAttribute('aria-checked', 'true')
+    await expect.poll(() => requests.length).toBe(2)
+    expect((requests[1].legChoices as Array<{ durationSeconds: number }>).map((choice) => choice.durationSeconds)).toEqual([18780, 19440])
+  })
+})
