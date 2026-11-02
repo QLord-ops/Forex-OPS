@@ -306,3 +306,47 @@ test('показывает пробки на маршруте выбранной
   await expect(legend).toContainText('медленно')
   await expect(legend).not.toContainText('стоит')
 })
+
+test.describe('этап машины в точках маршрута', () => {
+  const thirdStop = { ...unloadStop, id: 'stop-3', sequence: 3, city: 'Leipzig', address: 'Hafenstraße 3, Leipzig', latitude: 51.34, longitude: 12.37 }
+  const line = Array.from({ length: 10 }, (_, i) => [13.4 - i * 0.03, 52.5 - i * 0.01])
+
+  async function openDashboard(page: Page, stops: typeof loadStop[], status: string, progress: number) {
+    await authenticated(page, async (route, path) => {
+      if (path === '/dashboard') { await json(route, { vehicles: [{ vehicle, tour: tour(stops), statusText: status, remainingKm: 35, eta: new Date(Date.now() + 3_600_000).toISOString(), operationVersion: 1 }] }); return true }
+      if (path === '/vehicles') { await json(route, [vehicle]); return true }
+      if (path.endsWith('/current-position')) {
+        await json(route, { state: 'UNTERWEGS', status, progress, positionSource: 'CALCULATED', coordinate: line[4], position: { latitude: line[4][1], longitude: line[4][0] },
+          tourId: 'tour-1', legId: 'leg-1', geometryVersion: 'leg-1:a', routeGeometry: line, travelledGeometry: line.slice(0, 5), remainingGeometry: line.slice(4) }); return true
+      }
+      if (path.startsWith('/vehicles/veh-1')) { await json(route, []); return true }
+      return false
+    })
+    await page.goto('/?vehicleId=veh-1')
+  }
+
+  test('машина в пути: этап в свёрнутой шторке и шкала с пройденной точкой', async ({ page }) => {
+    const done = { ...loadStop, arrivedAt: '2026-10-30T08:00:00.000Z', completedAt: '2026-10-30T09:00:00.000Z' }
+    await openDashboard(page, [done, unloadStop, thirdStop], 'MOVING', 0.4)
+    const trigger = page.getByRole('button', { name: /Точки маршрута · 3/ })
+    await expect(trigger).toContainText('Этап 2 из 3 · В пути на выгрузку')
+    await expect(trigger.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '40')
+    await trigger.click()
+    const track = page.getByRole('list', { name: 'Этапы маршрута' })
+    await expect(track.getByRole('listitem').nth(0)).toHaveAttribute('aria-label', /Загружено/)
+    await expect(track.getByRole('listitem').nth(1)).toHaveAttribute('aria-label', /Едем сюда · ETA/)
+    await expect(track.getByRole('listitem').nth(2)).toHaveAttribute('aria-label', /Следующая/)
+    await expect(page.locator('.stop-marker-done')).toHaveCount(1)
+    await expect(page.locator('.stop-marker-current')).toHaveCount(1)
+  })
+
+  test('машина на точке: «На выгрузке» и отметка «машина здесь»', async ({ page }) => {
+    const done = { ...loadStop, arrivedAt: '2026-10-30T08:00:00.000Z', completedAt: '2026-10-30T09:00:00.000Z' }
+    const here = { ...unloadStop, arrivedAt: new Date(Date.now() - 25 * 60_000).toISOString() }
+    await openDashboard(page, [done, here], 'ARRIVED', 1)
+    const trigger = page.getByRole('button', { name: /Точки маршрута · 2/ })
+    await expect(trigger).toContainText(/Этап 2 из 2 · На выгрузке, Potsdam · 2[45] мин/)
+    await trigger.click()
+    await expect(page.getByRole('list', { name: 'Этапы маршрута' }).getByRole('listitem').nth(1)).toHaveAttribute('aria-label', /Машина здесь/)
+  })
+})

@@ -12,6 +12,7 @@ import { TourTimeline } from '../components/Timeline'
 import { usePolling } from '../hooks/usePolling'
 import { useVehiclePosition } from '../hooks/useVehiclePosition'
 import { api } from '../lib/api'
+import { routeProgress } from '../lib/route-progress'
 import {
   calculatedPositionLabel,
   formatDateTime,
@@ -100,7 +101,7 @@ export function VehicleDetailPage() {
           <MetricsPanel tour={activeTour} position={position.data} />
         </div>
         <div className="min-w-0 space-y-4">
-          <TourSummary tour={activeTour} />
+          <TourSummary tour={activeTour} position={position.data} />
           {activeTour && ['ACTIVE', 'QUEUED'].includes(activeTour.status) ? <AppointmentPlanner key={`appointment-${activeTour.id}`} tour={activeTour} onChange={refreshOperations} /> : null}
           <VehicleOperationsPanel key={id} vehicleId={id} onChange={refreshOperations} />
           {activeTour && ['ACTIVE', 'QUEUED'].includes(activeTour.status) && <RouteEditor key={activeTour.id} tour={activeTour} onChange={refreshOperations} />}
@@ -139,7 +140,7 @@ function Metric({ label, value, accent = false }: { label: string; value: string
   )
 }
 
-function TourSummary({ tour }: { tour?: Tour | null }) {
+function TourSummary({ tour, position }: { tour?: Tour | null; position?: CurrentPosition | null }) {
   if (!tour) {
     return (
       <section className="work-surface p-4">
@@ -150,6 +151,7 @@ function TourSummary({ tour }: { tour?: Tour | null }) {
   }
 
   const stops = tour.stops?.slice().sort((a, b) => a.sequence - b.sequence) ?? []
+  const progress = routeProgress(stops, null, position)
 
   return (
     <section className="work-surface min-w-0 p-4">
@@ -160,6 +162,10 @@ function TourSummary({ tour }: { tour?: Tour | null }) {
         </div>
         <TourStatusBadge status={tour.status} />
       </div>
+      {progress.stops.length ? <div className="vehicle-stage">
+        <span className={`route-stage-summary route-stage-summary-${progress.stage.toLowerCase()}`}>{progress.summary}</span>
+        <span className="route-stage-bar" role="progressbar" aria-label="Пройдено от тура" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress.tourProgress * 100)}><span style={{ width: `${progress.tourProgress * 100}%` }} /></span>
+      </div> : null}
       <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
         <div>
           <dt className="text-slate-500">Заказ</dt>

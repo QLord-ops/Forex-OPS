@@ -1,5 +1,5 @@
-import { ArrowUpRight, CheckCircle2, ChevronDown, CircleDot, Clock3, Loader2, MapPin, PackageCheck, PauseCircle, Pin, PinOff, PlayCircle, Search, X } from 'lucide-react'
-import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { ArrowUpRight, Check, CheckCircle2, ChevronDown, CircleDot, Clock3, Loader2, MapPin, PackageCheck, PauseCircle, Pin, PinOff, PlayCircle, Search, Truck, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 
 import { LazyMapPanel } from '../components/LazyMapPanel'
@@ -9,8 +9,9 @@ import { usePolling } from '../hooks/usePolling'
 import { useVehiclePosition } from '../hooks/useVehiclePosition'
 import { api } from '../lib/api'
 import { getRoutePreview, setRoutePreview, subscribeRoutePreview } from '../lib/route-preview'
+import { etaText, routeProgress, type StopState } from '../lib/route-progress'
 import { classNames, formatAppointment, formatDateTime, formatDelay, formatDurationMinutes, formatKm, shortAddress, statusLabel, stopTypeLabel } from '../lib/format'
-import type { Coordinate, DashboardVehicle, Stop } from '../types/domain'
+import type { Coordinate, CurrentPosition, DashboardVehicle, Stop } from '../types/domain'
 
 const PIN_STORAGE_KEY = 'ops-dashboard-pinned-vehicles'
 type FleetFilter = 'ALL' | 'ATTENTION' | 'MOVING' | 'AT_STOP' | 'IDLE'
@@ -151,7 +152,7 @@ export function DashboardPage() {
       <section className="dashboard-stage" aria-label="Карта выбранного грузовика">
         <LazyMapPanel tour={selected?.tour} position={position.data} vehicleNumber={selected?.vehicle.vehicleNumber} focusCoordinate={mapFocus} previewRoute={draftRoute?.geometry} previewStops={draftRoute?.stops} previewTraffic={draftRoute?.trafficSegments} height="100%" fill />
         {draftRoute ? <div className="map-draft-banner"><span>{draftRoute.label} · черновик</span><button type="button" aria-label="Убрать черновой маршрут с карты" onClick={() => setRoutePreview(null)}><X size={16} /></button></div> : null}
-        {selected ? <><VehicleMapHud row={selected} open={hudOpen} onToggle={() => setHudOpen((value) => !value)} /><RouteStopsDrawer row={selected} open={drawerOpen} onToggle={() => setDrawerOpen((value) => !value)} /></> : null}
+        {selected ? <><VehicleMapHud row={selected} open={hudOpen} onToggle={() => setHudOpen((value) => !value)} /><RouteStopsDrawer row={selected} position={position.data} open={drawerOpen} onToggle={() => setDrawerOpen((value) => !value)} /></> : null}
         <QuickOrderPanel row={selected} vehicles={vehicles.map((item) => item.vehicle)} onAddressFound={setMapFocus} onRoutePreview={setRoutePreview} onCreated={async (vehicleId) => { selectVehicle(vehicleId); await refetch() }} />
         {position.error ? <button type="button" className="map-error" onClick={() => void position.refetch()}>Позиция временно недоступна · повторить</button> : null}
         {error ? <div className="dashboard-sync-warning">Данные автопарка не обновлены. Повторим автоматически.</div> : null}
@@ -222,17 +223,59 @@ function VehicleMapHud({ row, open, onToggle }: { row: DashboardVehicle; open: b
   </div>
 }
 
-function RouteStopsDrawer({ row, open, onToggle }: { row: DashboardVehicle; open: boolean; onToggle: () => void }) {
-  const stops = row.tour?.stops?.slice().sort((a, b) => a.sequence - b.sequence) ?? []
+function RouteStopsDrawer({ row, position, open, onToggle }: { row: DashboardVehicle; position?: CurrentPosition | null; open: boolean; onToggle: () => void }) {
+  const progress = useMemo(() => routeProgress(row.tour?.stops, row, position), [row, position])
+  const trackRef = useRef<HTMLOListElement | null>(null)
+  useEffect(() => {
+    if (!open) return
+    // On the road, start from the previous stop so the truck on the leg stays in view.
+    const items = trackRef.current?.querySelectorAll<HTMLElement>('.route-stage')
+    const target = items?.[progress.stage === 'ON_ROUTE' && progress.currentIndex > 0 ? progress.currentIndex - 1 : progress.currentIndex]
+    target?.scrollIntoView({ behavior: 'smooth', inline: 'start', block: 'nearest' })
+  }, [open, progress.currentIndex, progress.stage])
+  const last = progress.stops.length - 1
   return <div className={classNames('route-stops-drawer', open && 'route-stops-drawer-open')}>
-    <button type="button" className="route-stops-drawer-trigger" onClick={onToggle} aria-expanded={open}><span className="drawer-handle" aria-hidden="true" /><span className="min-w-0 text-left"><span className="block text-sm font-black text-slate-950">Точки маршрута · {stops.length}</span><span className="block truncate text-xs font-semibold text-slate-500">{routeSummary(stops)}</span></span><ChevronDown className="drawer-chevron h-5 w-5 shrink-0" aria-hidden="true" /></button>
-    <div className="route-stops-drawer-body">{stops.length ? <div className="route-stops-grid">{stops.map((stop) => <StopCard key={stop.id} stop={stop} />)}</div> : <EmptyState label="У машины нет активного маршрута." />}</div>
+    <button type="button" className="route-stops-drawer-trigger" onClick={onToggle} aria-expanded={open}>
+      <span className="drawer-handle" aria-hidden="true" />
+      <span className="min-w-0 flex-1 text-left">
+        <span className="block text-sm font-black text-slate-950">Точки маршрута · {progress.stops.length}</span>
+        <span className={classNames('route-stage-summary', `route-stage-summary-${progress.stage.toLowerCase()}`)}>{progress.summary}</span>
+        {progress.stops.length ? <span className="route-stage-bar" role="progressbar" aria-label="Пройдено от тура" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress.tourProgress * 100)}><span style={{ width: `${progress.tourProgress * 100}%` }} /></span> : null}
+      </span>
+      <ChevronDown className="drawer-chevron h-5 w-5 shrink-0" aria-hidden="true" />
+    </button>
+    <div className="route-stops-drawer-body">{progress.stops.length ? <ol ref={trackRef} className="route-stage-track" aria-label="Этапы маршрута">
+      {progress.stops.map(({ stop, state }, index) => {
+        // The line after stop i leads to stop i+1; it fills as the truck drives that leg.
+        const fill = index < progress.currentIndex - 1 ? 1 : index === progress.currentIndex - 1 ? progress.legProgress : 0
+        const truckOnLine = index === progress.currentIndex - 1 && progress.stage === 'ON_ROUTE'
+        return <li key={stop.id} className={classNames('route-stage', `route-stage-${state.toLowerCase()}`)} data-current={index === progress.currentIndex} aria-label={`Точка ${stop.sequence}, ${shortAddress(stop)}: ${stopStateText(stop, state, progress.stage, row)}`}>
+          <div className="route-stage-rail" aria-hidden="true">
+            <span className="route-stage-dot">{state === 'DONE' ? <Check className="h-3.5 w-3.5" strokeWidth={3} /> : stop.sequence}</span>
+            {index < last ? <span className="route-stage-line"><span className="route-stage-line-fill" style={{ width: `${fill * 100}%` }} />{truckOnLine ? <span className="route-stage-truck" style={{ left: `${fill * 100}%` }}><Truck className="h-3.5 w-3.5" /></span> : null}</span> : null}
+          </div>
+          <p className="route-stage-state">{stopStateText(stop, state, progress.stage, row)}</p>
+          <StopCard stop={stop} current={index === progress.currentIndex} />
+        </li>
+      })}
+    </ol> : <EmptyState label="У машины нет активного маршрута." />}</div>
   </div>
 }
 
-function StopCard({ stop }: { stop: Stop }) {
+function stopStateText(stop: Stop, state: StopState, stage: string, row: DashboardVehicle) {
+  if (state === 'DONE') return `${stop.type === 'LOAD' ? 'Загружено' : 'Выгружено'} ${stop.completedAt ? formatDateTime(stop.completedAt) : ''}`.trim()
+  if (state === 'AT_STOP') {
+    const minutes = stop.arrivedAt ? Math.max(0, Math.floor((Date.now() - new Date(stop.arrivedAt).getTime()) / 60_000)) : null
+    return `Машина здесь${minutes !== null ? ` · ${formatDurationMinutes(minutes)}` : ''}`
+  }
+  if (state === 'HEADING') return stage === 'ARRIVING' ? 'Прибывает · подтвердите' : stage === 'WAITING' ? 'Первая точка' : `Едем сюда · ETA ${etaText(row.eta ?? stop.predictedEta)}`
+  if (state === 'NEXT') return `Следующая${stop.predictedEta ? ` · ETA ${etaText(stop.predictedEta)}` : ''}`
+  return 'Впереди'
+}
+
+function StopCard({ stop, current = false }: { stop: Stop; current?: boolean }) {
   const references = stop.referenceNumbers ?? parseStopReferences(stop.referenceNumbersJson)
-  return <article className={classNames('route-stop-card', stop.status === 'CURRENT' && 'route-stop-card-current')}><div className="flex items-center justify-between gap-2"><span className="badge border-slate-200 bg-slate-50 text-slate-700">{stop.sequence} · {stopTypeLabel(stop.type)}</span><span className="text-xs font-bold text-slate-500">{stop.status ? statusLabel(stop.status) : ''}</span></div><p className="mt-2 truncate font-black" title={stop.city || stop.address}>{shortAddress(stop)}</p><p className="mt-1 line-clamp-2 text-xs text-slate-500" title={stop.address}>{stop.address}</p><div className="mt-3 grid gap-1 text-xs font-semibold text-slate-600"><span className="inline-flex items-center gap-1"><Clock3 className="h-3.5 w-3.5" /> {formatAppointment(stop.appointmentAt)}</span><span className="inline-flex items-center gap-1"><MapPin className="h-3.5 w-3.5" /> ETA {formatDateTime(stop.predictedEta)}</span>{stop.loadingMeters ? <span>{stop.loadingMeters} LDM</span> : null}{references.length ? <span>Ref: {references.join(', ')}</span> : null}{stop.instructions ? <span className="line-clamp-2">{stop.instructions}</span> : null}</div></article>
+  return <article className={classNames('route-stop-card', current && 'route-stop-card-current')}><div className="flex items-center justify-between gap-2"><span className="badge border-slate-200 bg-slate-50 text-slate-700">{stop.sequence} · {stopTypeLabel(stop.type)}</span><span className="text-xs font-bold text-slate-500">{stop.status ? statusLabel(stop.status) : ''}</span></div><p className="mt-2 truncate font-black" title={stop.city || stop.address}>{shortAddress(stop)}</p><p className="mt-1 line-clamp-2 text-xs text-slate-500" title={stop.address}>{stop.address}</p><div className="mt-3 grid gap-1 text-xs font-semibold text-slate-600"><span className="inline-flex items-center gap-1"><Clock3 className="h-3.5 w-3.5" /> {formatAppointment(stop.appointmentAt)}</span><span className="inline-flex items-center gap-1"><MapPin className="h-3.5 w-3.5" /> ETA {formatDateTime(stop.predictedEta)}</span>{stop.loadingMeters ? <span>{stop.loadingMeters} LDM</span> : null}{references.length ? <span>Ref: {references.join(', ')}</span> : null}{stop.instructions ? <span className="line-clamp-2">{stop.instructions}</span> : null}</div></article>
 }
 
 function parseStopReferences(value?: string | null): string[] { if (!value) return []; try { const parsed = JSON.parse(value) as unknown; return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [] } catch { return [] } }
@@ -312,5 +355,4 @@ function matchesFleetFilter(row: DashboardVehicle, filter: FleetFilter) {
   return !row.tour || ['IDLE', 'NO_ACTIVE_ROUTE'].includes(row.statusText)
 }
 
-function routeSummary(stops: Stop[]) { return stops.length ? stops.map((stop) => shortAddress(stop)).join(' → ') : 'Нет активного маршрута' }
 function readPinnedVehicles(): string[] { try { const parsed = JSON.parse(window.localStorage.getItem(PIN_STORAGE_KEY) ?? '[]'); return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === 'string') : [] } catch { return [] } }
