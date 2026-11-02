@@ -42,12 +42,12 @@ export function formatRouteKm(meters: number) {
   return meters < 10_000 ? `${(meters / 1000).toFixed(1).replace('.', ',')} км` : `${Math.round(meters / 1000)} км`
 }
 
-/** «+11 мин · +15 км» against the best variant. */
+/** «+11 мин, +15 км к лучшему»: a difference always says what it is compared with. */
 export function variantDelta(option: RouteOption, best: RouteOption) {
   const minutes = Math.round((option.durationSeconds - best.durationSeconds) / 60)
   const km = Math.round((option.distanceMeters - best.distanceMeters) / 1000)
   const signed = (value: number) => value > 0 ? `+${value}` : value < 0 ? `−${Math.abs(value)}` : '±0'
-  return `${signed(minutes)} мин · ${signed(km)} км`
+  return `${signed(minutes)} мин, ${signed(km)} км к лучшему`
 }
 
 export function placeName(address: string) {

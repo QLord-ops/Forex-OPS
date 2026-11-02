@@ -2,8 +2,8 @@ import { LoaderCircle } from 'lucide-react'
 import { useRef, type KeyboardEvent } from 'react'
 
 import { classNames } from '../lib/format'
-import { formatDrive, formatRouteKm, placeName, routeVia, variantDelta } from '../lib/route-variants'
-import type { RouteLeg } from '../types/assistant'
+import { formatDrive, formatRouteKm, placeName, variantDelta } from '../lib/route-variants'
+import type { RouteLeg, RouteOption } from '../types/assistant'
 
 /** Webfleet-style list: every variant stays listed, the chosen one is highlighted. */
 export function RouteVariants({ legs, choice, activeLeg, busy, live, onActiveLeg, onChoose }: {
@@ -44,17 +44,24 @@ export function RouteVariants({ legs, choice, activeLeg, busy, live, onActiveLeg
       {leg.options.map((option, index) => <button key={option.id} ref={(node) => { optionRefs.current[index] = node }} type="button" role="radio" aria-checked={index === selected} tabIndex={index === selected ? 0 : -1}
         className={classNames('route-variant', index === selected && 'route-variant-selected')} onClick={() => onChoose(activeLeg, index)}>
         <span className="route-variant-row">
-          <span className="route-variant-title">{routeVia(option)}</span>
-          {index === 0 ? <span className="route-variant-best">Лучший</span> : null}
+          <span className="route-variant-title"><RoadsVia option={option} /></span>
           <span className="route-variant-time">{formatDrive(option.durationSeconds)}</span>
         </span>
-        <span className="route-variant-meta">{formatRouteKm(option.distanceMeters)}{index > 0 && best ? ` · ${variantDelta(option, best)}` : ''}</span>
+        <span className="route-variant-meta">{formatRouteKm(option.distanceMeters)} · {index === 0 || !best ? 'лучший по времени' : variantDelta(option, best)}</span>
         {option.trafficDelaySeconds >= 60 || option.hasRoadClosure ? <span className="route-variant-flags">
           {option.trafficDelaySeconds >= 60 ? <span className="route-variant-traffic">пробки +{formatDrive(option.trafficDelaySeconds)}</span> : null}
           {option.hasRoadClosure ? <span className="route-variant-closure">перекрытие на пути</span> : null}
         </span> : null}
       </button>)}
     </div>
-    {leg.options.length < 2 ? <p className="route-variants-note">{live ? 'Других вариантов для этого участка нет.' : 'Варианты доступны только с TomTom.'}</p> : null}
+    {leg.options.length < 2 ? <p className="route-variants-note">{live ? 'Других вариантов для этого участка нет' : 'Варианты доступны только с TomTom'}</p> : null}
   </section>
+}
+
+/** «через [A14] и [A2]» with road numbers drawn as German road shields. */
+function RoadsVia({ option }: { option: RouteOption }) {
+  const [first, second] = option.mainRoads
+  if (!first) return <>по местным дорогам</>
+  const shield = (road: string) => <span className={classNames('road-shield', road.startsWith('B') && 'road-shield-b')}>{road}</span>
+  return <>через {shield(first)}{second ? <> и {shield(second)}</> : null}</>
 }
