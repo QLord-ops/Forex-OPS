@@ -237,16 +237,20 @@ export class WebfleetSyncService {
       const positions = await this.fetchReport(this.config);
       let matched = 0;
       let rejected = 0;
+      let failed = 0;
       const unmatched: Array<WebfleetObject & { ambiguous: boolean }> = [];
       for (const position of positions) {
         if (position.recordedAt > now || freshAgeSeconds(position.recordedAt, now) > FALLBACK_SECONDS) { rejected += 1; continue; }
-        const result = await this.telemetry.applyPosition(position, now);
+        // One bad object must not stop positions for the rest of the fleet.
+        let result: Awaited<ReturnType<typeof this.telemetry.applyPosition>>;
+        try { result = await this.telemetry.applyPosition(position, now); }
+        catch { failed += 1; continue; }
         if (result.matched) matched += 1;
         else if (!result.duplicate && unmatched.length < 500) unmatched.push({ objectUid: position.objectUid, objectNo: position.objectNo, licensePlate: position.licensePlate, ambiguous: 'ambiguous' in result && Boolean(result.ambiguous) });
       }
       await this.db.integrationSyncState.update({
         where: { id: stateId },
-        data: { lastSnapshotAt: now, lockedUntil: null, cursor: JSON.stringify({ received: positions.length, matched, rejected, unmatched, lastError: null }) }
+        data: { lastSnapshotAt: now, lockedUntil: null, cursor: JSON.stringify({ received: positions.length, matched, rejected, failed, unmatched, lastError: null }) }
       });
       this.nextCheckAt = now.getTime() + SNAPSHOT_INTERVAL_MS;
       return { configured: true, refreshed: true, received: positions.length, matched, lastSnapshotAt: now };

@@ -55,6 +55,8 @@ export interface ExcelOrderImportOptions {
   openAiModel?: string;
   fetchImpl?: typeof fetch;
   openAiTimeoutMs?: number;
+  /** Reserves the AI budget; a thrown error (e.g. limit reached) stops the import. */
+  beforeAi?: () => Promise<void>;
 }
 
 export interface ExcelImportPreview {
@@ -249,6 +251,7 @@ export async function importExcelPreview(
     };
   }
 
+  await options.beforeAi?.();
   try {
     const { importOrdersWithOpenAi } = await import("./openai-order-import.js");
     const aiResult = await importOrdersWithOpenAi(rows, {
@@ -276,7 +279,10 @@ export async function importExcelPreview(
       drafts: [],
       warnings: [
         ...warnings,
-        warning("OPENAI_FAILED", `Резервное распознавание OpenAI завершилось ошибкой: ${error instanceof Error ? error.message : "неизвестная ошибка"}`)
+        // The provider's raw error text is not shown to dispatchers.
+        warning("OPENAI_FAILED", error instanceof Error && error.name === "AbortError"
+          ? "ИИ не ответил вовремя. Повторите загрузку или заполните заказ вручную."
+          : "ИИ не смог распознать эту книгу. Повторите загрузку или заполните заказ вручную.")
       ],
       aiAvailable,
       usedAi: false,

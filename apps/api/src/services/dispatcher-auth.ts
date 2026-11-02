@@ -18,7 +18,13 @@ declare module 'fastify' {
   }
 }
 
-type QuotaStore = { apiQuota: { upsert(args: { where: { id: string }; create: { id: string; used: number }; update: { used: { increment: number } } }): Promise<{ used: number }> } };
+type QuotaStore = { apiQuota: {
+  upsert(args: { where: { id: string }; create: { id: string; used: number }; update: { used: { increment: number } } }): Promise<{ used: number }>;
+  findUnique(args: { where: { id: string } }): Promise<{ used: number } | null>;
+} };
+const LOGIN_FAILURES_PER_IP = 10;
+const LOGIN_FAILURES_TOTAL = 100;
+const REVOCATION_RECHECK_MS = 60_000;
 export interface DispatcherAuthOptions {
   disabled?: boolean;
   /** @deprecated Use dispatcherPasswordHash. */
@@ -71,6 +77,20 @@ export function registerDispatcherAuth(app: FastifyInstance, prisma: QuotaStore,
   };
   const cookie = (token: string, maxAge: number) => `${COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${process.env.NODE_ENV === 'production' || process.env.VERCEL ? '; Secure' : ''}`;
 
+  // Logout revokes the signed token server-side; other instances notice within a minute.
+  const revoked = new Set<string>();
+  const checked = new Map<string, number>();
+  const isRevoked = async (sessionId: string) => {
+    if (revoked.has(sessionId)) return true;
+    const last = checked.get(sessionId);
+    if (last !== undefined && now() - last < REVOCATION_RECHECK_MS) return false;
+    const row = await prisma.apiQuota.findUnique({ where: { id: `revoked:${sessionId}` } });
+    if (row) { revoked.add(sessionId); return true; }
+    if (checked.size > 5000) checked.clear();
+    checked.set(sessionId, now());
+    return false;
+  };
+
   app.decorateRequest('dispatcherSession', null);
 
   app.addHook('onRequest', async (request, reply) => {
@@ -85,14 +105,15 @@ export function registerDispatcherAuth(app: FastifyInstance, prisma: QuotaStore,
     if (mutation && (!request.headers.origin || !origins.has(request.headers.origin))) return reply.code(403).send({ error: 'Недопустимый источник запроса.' });
     if (path === '/auth/login' || path === '/auth/session') return;
     const current = session(request);
-    if (!current) return reply.code(401).send({ error: 'Войдите в диспетчерскую.' });
+    if (!current || await isRevoked(current.sessionId)) return reply.code(401).send({ error: 'Войдите в диспетчерскую.' });
     request.dispatcherSession = current;
     if (mutation && !equal(String(request.headers['x-csrf-token'] ?? ''), csrf(current.token))) return reply.code(403).send({ error: 'Обновите страницу перед выполнением действия.' });
   });
 
   app.get('/auth/session', async (request, reply) => {
     if (options.disabled) return { authenticated: true, role: 'admin' as const, csrfToken: '', expiresAt: null };
-    const current = session(request);
+    const found = session(request);
+    const current = found && !await isRevoked(found.sessionId) ? found : null;
     reply.header('Cache-Control', 'no-store');
     return current ? { authenticated: true, role: current.role, csrfToken: csrf(current.token), expiresAt: new Date(current.expiresAt).toISOString() } : { authenticated: false };
   });
@@ -100,10 +121,11 @@ export function registerDispatcherAuth(app: FastifyInstance, prisma: QuotaStore,
     reply.header('Cache-Control', 'no-store');
     const bucket = Math.floor(now() / (15 * 60_000));
     const ip = createHash('sha256').update(request.ip).digest('hex').slice(0, 24);
-    for (const [key, limit] of [[`ip:${ip}`, 10], ['global', 30]] as const) {
-      const id = `auth:${bucket}:${key}`;
-      const quota = await prisma.apiQuota.upsert({ where: { id }, create: { id, used: 1 }, update: { used: { increment: 1 } } });
-      if (quota.used > limit) return reply.header('Retry-After', String(Math.ceil((900_000 - now() % 900_000) / 1000))).code(429).send({ error: 'Слишком много попыток. Попробуйте позднее.' });
+    // Only wrong passwords count, so colleagues behind one office IP are not locked out by normal logins.
+    const failureKeys = [[`auth:${bucket}:ip:${ip}`, LOGIN_FAILURES_PER_IP], [`auth:${bucket}:global`, LOGIN_FAILURES_TOTAL]] as const;
+    for (const [id, limit] of failureKeys) {
+      const quota = await prisma.apiQuota.findUnique({ where: { id } });
+      if ((quota?.used ?? 0) >= limit) return reply.header('Retry-After', String(Math.ceil((900_000 - now() % 900_000) / 1000))).code(429).send({ error: 'Слишком много попыток. Попробуйте позднее.' });
     }
     const parsed = z.object({ password: z.string().min(1).max(1024) }).strict().safeParse(request.body);
     const password = parsed.success ? parsed.data.password : null;
@@ -114,14 +136,23 @@ export function registerDispatcherAuth(app: FastifyInstance, prisma: QuotaStore,
     const adminMatches = hashPattern.test(adminHash) && verify(adminHash);
     const dispatcherMatches = hashPattern.test(dispatcherHash) && verify(dispatcherHash);
     const role: DispatcherRole | null = adminMatches ? 'admin' : dispatcherMatches ? 'dispatcher' : null;
-    if (!role) return reply.code(401).send({ error: 'Неверный пароль.' });
+    if (!role) {
+      for (const [id] of failureKeys) await prisma.apiQuota.upsert({ where: { id }, create: { id, used: 1 }, update: { used: { increment: 1 } } });
+      return reply.code(401).send({ error: 'Неверный пароль.' });
+    }
     const expiresAt = now() + SESSION_MS;
     const payload = `${expiresAt}.${role}.${randomBytes(24).toString('base64url')}`;
     const token = `${payload}.${sign(payload)}`;
     reply.header('Set-Cookie', cookie(token, SESSION_MS / 1000));
     return { authenticated: true, role, csrfToken: csrf(token), expiresAt: new Date(expiresAt).toISOString() };
   });
-  app.post('/auth/logout', async (_request, reply) => {
+  app.post('/auth/logout', async (request, reply) => {
+    const sessionId = request.dispatcherSession?.sessionId;
+    if (sessionId && !options.disabled) {
+      const id = `revoked:${sessionId}`;
+      await prisma.apiQuota.upsert({ where: { id }, create: { id, used: 1 }, update: { used: { increment: 0 } } });
+      revoked.add(sessionId);
+    }
     reply.header('Set-Cookie', cookie('', 0)).header('Cache-Control', 'no-store');
     return { authenticated: false };
   });

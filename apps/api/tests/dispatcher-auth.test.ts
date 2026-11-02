@@ -8,9 +8,13 @@ async function fixture() {
   let now = Date.UTC(2026, 9, 16);
   const counts = new Map<string, number>();
   const app = Fastify();
-  registerDispatcherAuth(app, { apiQuota: { upsert: async ({ where }) => {
-    const used = (counts.get(where.id) ?? 0) + 1; counts.set(where.id, used); return { used };
-  } } }, { dispatcherPasswordHash: passwordHash, adminPasswordHash, secret: 'a'.repeat(32), origins: ['https://ops.test'], now: () => now });
+  registerDispatcherAuth(app, { apiQuota: {
+    upsert: async ({ where, create, update }) => {
+      const used = counts.has(where.id) ? counts.get(where.id)! + update.used.increment : create.used;
+      counts.set(where.id, used); return { used };
+    },
+    findUnique: async ({ where }) => counts.has(where.id) ? { used: counts.get(where.id)! } : null
+  } }, { dispatcherPasswordHash: passwordHash, adminPasswordHash, secret: 'a'.repeat(32), origins: ['https://ops.test'], now: () => now });
   app.get('/health', async () => ({ ok: true }));
   app.get('/vehicles', async () => []);
   app.post('/vehicles', async () => ({ created: true }));
@@ -61,6 +65,25 @@ describe('dispatcher auth', () => {
       expect((await app.inject({ method: 'POST', url: '/auth/login', headers: { origin: 'https://ops.test' }, payload: { password: 'test password' } })).statusCode).toBe(429);
     } finally { await app.close(); }
   });
+  it('does not count successful logins against the limit', async () => {
+    const { app } = await fixture();
+    try {
+      for (let index = 0; index < 40; index++) expect((await app.inject({ method: 'POST', url: '/auth/login', headers: { origin: 'https://ops.test' }, payload: { password: 'test password' } })).statusCode).toBe(200);
+      for (let index = 0; index < 9; index++) expect((await app.inject({ method: 'POST', url: '/auth/login', headers: { origin: 'https://ops.test' }, payload: { password: 'wrong' } })).statusCode).toBe(401);
+      expect((await app.inject({ method: 'POST', url: '/auth/login', headers: { origin: 'https://ops.test' }, payload: { password: 'test password' } })).statusCode).toBe(200);
+    } finally { await app.close(); }
+  });
+  it('revokes the session on logout so the old cookie stops working', async () => {
+    const { app } = await fixture();
+    try {
+      const login = await app.inject({ method: 'POST', url: '/auth/login', headers: { origin: 'https://ops.test' }, payload: { password: 'test password' } });
+      const cookie = String(login.headers['set-cookie']).split(';')[0];
+      expect((await app.inject({ url: '/vehicles', headers: { cookie } })).statusCode).toBe(200);
+      await app.inject({ method: 'POST', url: '/auth/logout', headers: { origin: 'https://ops.test', cookie, 'x-csrf-token': login.json().csrfToken } });
+      expect((await app.inject({ url: '/vehicles', headers: { cookie } })).statusCode).toBe(401);
+      expect((await app.inject({ url: '/auth/session', headers: { cookie } })).json().authenticated).toBe(false);
+    } finally { await app.close(); }
+  });
   it('clears the cookie on logout and fails closed when unconfigured', async () => {
     const { app } = await fixture();
     try {
@@ -69,7 +92,7 @@ describe('dispatcher auth', () => {
       expect(logout.statusCode).toBe(200); expect(logout.headers['set-cookie']).toContain('Max-Age=0');
     } finally { await app.close(); }
     const closed = Fastify();
-    registerDispatcherAuth(closed, { apiQuota: { upsert: async () => ({ used: 1 }) } }, { passwordHash: '', secret: '' });
+    registerDispatcherAuth(closed, { apiQuota: { upsert: async () => ({ used: 1 }), findUnique: async () => null } }, { passwordHash: '', secret: '' });
     expect((await closed.inject('/auth/session')).statusCode).toBe(503);
     await closed.close();
   });

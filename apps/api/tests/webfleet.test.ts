@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { PrismaClient as PostgresPrismaClient } from '@prisma/client';
-import { afterAll, beforeAll, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it, vi } from 'vitest';
 import { PrismaClient } from '../src/generated/sqlite-client/index.js';
 import { MockRoutingProvider } from '../src/services/routing.js';
 import { OperationsService, SYSTEM_WEBFLEET_ACTOR } from '../src/services/operations.js';
@@ -266,4 +266,23 @@ it('binds an unmatched object manually, then matches it on the next snapshot', a
   await unbindWebfleetVehicle(dbClient, vehicle.id);
   expect(await matchWebfleetObject(dbClient, { objectUid: 'wf-manual', objectNo: 'Truck seventy-seven' })).toMatchObject({ vehicleId: null });
   expect(await db.vehicleTelemetry.count({ where: { externalId: 'wf-manual' } })).toBe(0);
+});
+
+it('keeps syncing the fleet when one Webfleet object fails', async () => {
+  await db.integrationSyncState.deleteMany({ where: { id: 'WEBFLEET:SNAPSHOT' } });
+  const freshAt = new Date(Date.now() - 60_000);
+  const report = async () => [
+    { objectUid: 'wf-broken', objectNo: 'broken', licensePlate: null, latitude: 51.6, longitude: 9.95, standstill: false, recordedAt: freshAt },
+    { objectUid: 'wf-fine', objectNo: 'fine', licensePlate: null, latitude: 51.6, longitude: 9.95, standstill: false, recordedAt: freshAt }
+  ];
+  const original = WebfleetTelemetryService.prototype.applyPosition;
+  const spy = vi.spyOn(WebfleetTelemetryService.prototype, 'applyPosition').mockImplementation(async function (this: WebfleetTelemetryService, position, receivedAt) {
+    if (position.objectUid === 'wf-broken') throw new Error('bad row');
+    return original.call(this, position, receivedAt);
+  });
+  try {
+    const sync = new WebfleetSyncService(db as unknown as PostgresPrismaClient, config, report);
+    expect(await sync.refreshIfDue()).toMatchObject({ refreshed: true, received: 2 });
+    expect((await sync.status()).summary).toMatchObject({ failed: 1, unmatched: [{ objectUid: 'wf-fine' }] });
+  } finally { spy.mockRestore(); }
 });
