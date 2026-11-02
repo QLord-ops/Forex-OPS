@@ -14,6 +14,7 @@ export function isCurrentPollingRequest(
   return mounted && snapshot.requestId === latestRequestId && Object.is(snapshot.key, activeKey)
 }
 
+/** `intervalMs` 0 loads once (forms, history) and refreshes only on refetch or when the tab is shown again. */
 export function usePolling<T>(fetcher: () => Promise<T>, intervalMs: number, enabled = true, key: string | number = 'default') {
   const [data, setData] = useState<T | null>(null)
   const [error, setError] = useState<Error | null>(null)
@@ -25,6 +26,7 @@ export function usePolling<T>(fetcher: () => Promise<T>, intervalMs: number, ena
   const inFlightRef = useRef<Promise<void> | null>(null)
   const queuedRef = useRef(false)
   const refetchRef = useRef<() => Promise<void>>(async () => undefined)
+  const shownKeyRef = useRef<string | number | null>(null)
 
   keyRef.current = key
 
@@ -78,22 +80,27 @@ export function usePolling<T>(fetcher: () => Promise<T>, intervalMs: number, ena
 
   useEffect(() => {
     if (!enabled) return
-    requestRef.current += 1
-    setData(null)
-    setError(null)
-    setLoading(true)
+    // Only a different subject (another truck) clears the screen; a re-run for the same key keeps the data.
+    if (shownKeyRef.current !== null && !Object.is(shownKeyRef.current, key)) {
+      requestRef.current += 1
+      setData(null)
+      setError(null)
+      setLoading(true)
+    }
+    shownKeyRef.current = key
     const visible = () => typeof document === 'undefined' || document.visibilityState !== 'hidden'
-    if (visible() && !inFlightRef.current) void refetch()
-    const timer = window.setInterval(() => {
+    // refetch() queues behind a request for the previous key, so the new subject always loads.
+    if (visible()) void refetch()
+    const timer = intervalMs > 0 ? window.setInterval(() => {
       if (visible() && !inFlightRef.current) void refetch()
-    }, intervalMs)
+    }, intervalMs) : undefined
     const handleVisibility = () => {
       if (visible() && !inFlightRef.current) void refetch()
     }
     document.addEventListener('visibilitychange', handleVisibility)
 
     return () => {
-      window.clearInterval(timer)
+      if (timer !== undefined) window.clearInterval(timer)
       document.removeEventListener('visibilitychange', handleVisibility)
     }
   }, [enabled, intervalMs, refetch, key])

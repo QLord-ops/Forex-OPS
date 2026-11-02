@@ -112,7 +112,7 @@ function normalizeVehicleIdentifier(value: string) {
 
 export function NewOrderPage() {
   const navigate = useNavigate()
-  const vehicles = usePolling(api.vehicles, 30_000)
+  const vehicles = usePolling(api.vehicles, 0)
   const [vehicleId, setVehicleId] = useState('')
   const [orderNumber, setOrderNumber] = useState('')
   const [createNewVehicle, setCreateNewVehicle] = useState(false)

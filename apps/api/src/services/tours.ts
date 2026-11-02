@@ -289,18 +289,19 @@ export class TourService {
   }
 
   async getCurrentPosition(vehicleId: string, now = new Date()): Promise<CurrentPosition> {
-    await this.db.vehicle.findUniqueOrThrow({ where: { id: vehicleId } });
-    const activeTour = await this.db.tour.findFirst({
-      where: { vehicleId, status: "ACTIVE" },
-      include: { stops: { orderBy: { sequence: "asc" } } },
-      orderBy: [{ queueIndex: "asc" }, { createdAt: "asc" }]
-    });
-    const vehicle = await this.db.vehicle.findUniqueOrThrow({ where: { id: vehicleId }, include: { issues: { where: { resolvedAt: null } } } });
-    const activeLeg = await this.db.leg.findFirst({
-      where: { tour: { vehicleId, status: "ACTIVE" }, status: { in: ["ACTIVE", "ARRIVED"] } },
-      include: { toStop: true },
-      orderBy: { startedAt: "desc" }
-    });
+    const [vehicle, activeTour, activeLeg] = await Promise.all([
+      this.db.vehicle.findUniqueOrThrow({ where: { id: vehicleId }, include: { issues: { where: { resolvedAt: null } } } }),
+      this.db.tour.findFirst({
+        where: { vehicleId, status: "ACTIVE" },
+        include: { stops: { orderBy: { sequence: "asc" } } },
+        orderBy: [{ queueIndex: "asc" }, { createdAt: "asc" }]
+      }),
+      this.db.leg.findFirst({
+        where: { tour: { vehicleId, status: "ACTIVE" }, status: { in: ["ACTIVE", "ARRIVED"] } },
+        include: { toStop: true },
+        orderBy: { startedAt: "desc" }
+      })
+    ]);
 
     if (!activeLeg) {
       const stop = activeTour?.stops.find(item => item.arrivedAt && !item.completedAt);

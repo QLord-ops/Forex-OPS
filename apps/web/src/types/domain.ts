@@ -218,6 +218,8 @@ export interface TimeReport {
 
 export interface HistoryResponse {
   generatedAt: string
+  truncated?: boolean
+  limits?: { tours: number; events: number }
   tours: Tour[]
   events: EventRecord[]
   operationEvents?: OperationEventRecord[]
