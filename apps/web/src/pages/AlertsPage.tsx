@@ -1,4 +1,5 @@
 import { RefreshCw } from 'lucide-react'
+import { Link } from 'react-router-dom'
 
 import { DataTable } from '../components/DataTable'
 import { EmptyState, ErrorState, LoadingState } from '../components/States'
@@ -36,7 +37,7 @@ export function AlertsPage() {
                   {alert.type === 'ONE_HOUR' ? 'СРОЧНО' : 'ПРЕДУПРЕЖДЕНИЕ — 2 Ч'}
                 </span>
               </td>
-              <td className="px-3 py-3 text-lg font-bold tabular-nums">{alert.vehicle?.vehicleNumber ?? alert.vehicleId}</td>
+              <td className="px-3 py-3 text-lg font-bold tabular-nums"><Link className="underline-offset-2 hover:underline focus-visible:underline" to={`/vehicles/${alert.vehicleId}`} aria-label={`Открыть LKW ${alert.vehicle?.vehicleNumber ?? ''}`}>{alert.vehicle?.vehicleNumber ?? alert.vehicleId}</Link></td>
               <td className="px-3 py-3 text-sm">{alert.tour?.orderNumber ?? alert.tourId}</td>
               <td className="px-3 py-3 text-sm">{shortAddress(alert.stop)}</td>
               <td className="px-3 py-3 text-sm tabular-nums">{formatDateTime(alert.appointmentAt)}</td>

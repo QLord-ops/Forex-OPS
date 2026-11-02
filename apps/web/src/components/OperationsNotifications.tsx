@@ -3,13 +3,23 @@ import { Link } from 'react-router-dom'
 import { usePolling } from '../hooks/usePolling'
 import { localDateTime, operationsBase, operationsRequest } from './VehicleOperationsPanel'
 
+const HIDDEN_KEY = 'ops-hidden-notifications'
+function readHiddenNotifications(): string[] {
+  try {
+    const value: unknown = JSON.parse(sessionStorage.getItem(HIDDEN_KEY) ?? '[]')
+    return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+  } catch { return [] }
+}
+
 interface Notification { id: string; vehicleId: string; stopId?: string | null; type: string; message: string; createdAt: string }
 export function OperationsNotifications() {
   const notifications = usePolling(() => operationsRequest<{ notifications: Notification[] }>('/notifications'), 30000)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [arrival, setArrival] = useState(localDateTime())
-  const [hidden, setHidden] = useState<string[]>([])
+  // Notifications set aside with «Открыть грузовик» stay aside after a reload in this tab.
+  const [hidden, setHidden] = useState<string[]>(readHiddenNotifications)
+  useEffect(() => { try { sessionStorage.setItem(HIDDEN_KEY, JSON.stringify(hidden.slice(-200))) } catch { /* Storage may be unavailable. */ } }, [hidden])
   const [correcting, setCorrecting] = useState(false)
   const [coordinate, setCoordinate] = useState({ latitude: '', longitude: '' })
   useEffect(() => {

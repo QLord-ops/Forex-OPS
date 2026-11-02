@@ -112,7 +112,7 @@ export function DashboardPage() {
             <input className="field-input pl-9" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="LKW, Auftrag или город" />
           </label>
           <div className="mt-2 flex gap-1 overflow-x-auto pb-1" aria-label="Фильтр автопарка">
-            {filters.map((item) => <button key={item.value} type="button" className={classNames('filter-chip', filter === item.value && 'filter-chip-active')} onClick={() => setFilter(item.value)}>{item.label}</button>)}
+            {filters.map((item) => <button key={item.value} type="button" aria-pressed={filter === item.value} className={classNames('filter-chip', filter === item.value && 'filter-chip-active')} onClick={() => setFilter(item.value)}>{item.label}</button>)}
           </div>
         </div>
         <div className="fleet-list">
@@ -122,7 +122,7 @@ export function DashboardPage() {
             const isPinned = pinned.includes(row.vehicle.id)
             return (
               <article key={row.vehicle.id} className={classNames('vehicle-card', `vehicle-card-${attention.tone}`, isSelected && 'vehicle-card-selected')}>
-                <button type="button" className="min-w-0 flex-1 text-left" onClick={() => selectVehicle(row.vehicle.id)}>
+                <button type="button" className="min-w-0 flex-1 text-left" aria-current={isSelected ? 'true' : undefined} onClick={() => selectVehicle(row.vehicle.id)}>
                   <div className="flex min-w-0 items-start justify-between gap-2">
                     <div className="min-w-0">
                       <div className="flex min-w-0 items-center gap-2"><span className="text-lg font-black tabular-nums">LKW {row.vehicle.vehicleNumber}</span>{row.vehicle.licensePlate ? <span className="truncate text-xs font-semibold text-slate-500">{row.vehicle.licensePlate}</span> : null}</div>
@@ -195,7 +195,7 @@ function ActionPopover({
   if (!action) return null
   const needsTime = action.type === 'CONFIRM_ARRIVAL' || action.type === 'MARK_LOADED' || action.type === 'MARK_UNLOADED'
   return (
-    <div className="vehicle-action-popover" role="dialog" aria-label={`${action.label} LKW ${row.vehicle.vehicleNumber}`}>
+    <div className="vehicle-action-popover" role="dialog" aria-label={`${action.label} LKW ${row.vehicle.vehicleNumber}`} onKeyDown={(event) => { if (event.key === 'Escape') onClose() }}>
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="text-sm font-black text-slate-950">{action.label}</p>
@@ -317,10 +317,11 @@ function localDateTime(date = new Date()) {
 }
 
 function compareVehicles(a: DashboardVehicle, b: DashboardVehicle, pinned: string[]) {
-  const rankDifference = getAttention(a).rank - getAttention(b).rank
-  if (rankDifference) return rankDifference
+  // Pinned trucks stay on top whatever their state; inside each group the most urgent come first.
   const pinDifference = Number(pinned.includes(b.vehicle.id)) - Number(pinned.includes(a.vehicle.id))
   if (pinDifference) return pinDifference
+  const rankDifference = getAttention(a).rank - getAttention(b).rank
+  if (rankDifference) return rankDifference
   const delayDifference = (b.delayMinutes ?? 0) - (a.delayMinutes ?? 0)
   return delayDifference || a.vehicle.vehicleNumber.localeCompare(b.vehicle.vehicleNumber, 'ru', { numeric: true })
 }

@@ -33,7 +33,7 @@ function isPasswordError(cause: unknown): boolean {
 
 export function DispatcherLogout({ className = 'dispatcher-logout' }: { className?: string }) {
   const [error, setError] = useState('')
-  return <><button type="button" className={className} title="Выйти из диспетчерской" onClick={() => { void dispatcherAuth.logout().then(() => window.dispatchEvent(new Event('ops:session-expired'))).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Не удалось выйти')) }}><LogOut className="h-5 w-5 shrink-0" aria-hidden="true" /><span>Выйти</span></button>{error && <span role="alert" className="dispatcher-logout-error">{error}</span>}</>
+  return <><button type="button" className={className} title="Выйти из диспетчерской" onClick={() => { void dispatcherAuth.logout().then(() => window.dispatchEvent(new Event('ops:logged-out'))).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Не удалось выйти')) }}><LogOut className="h-5 w-5 shrink-0" aria-hidden="true" /><span>Выйти</span></button>{error && <span role="alert" className="dispatcher-logout-error">{error}</span>}</>
 }
 
 export function AuthGate({ children }: { children: ReactNode }) {
@@ -43,19 +43,38 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const [passwordVisible, setPasswordVisible] = useState(false)
   const [error, setError] = useState('')
   const [passwordError, setPasswordError] = useState(false)
+  // An expired session keeps the app mounted under the sign-in window, so forms and drafts survive.
+  const [reauth, setReauth] = useState(false)
+  const authenticatedRef = useRef(false)
+  const reauthRef = useRef(false)
   const transitionTimer = useRef<number | null>(null)
+  authenticatedRef.current = authenticated
+  reauthRef.current = reauth
 
   useEffect(() => {
     let active = true
-    const expired = () => {
+    const signedOut = () => {
       if (transitionTimer.current) window.clearTimeout(transitionTimer.current)
       setAuthenticated(false)
+      setReauth(false)
+      setPhase('idle')
+      setPassword('')
+      setPasswordError(false)
+      setError('')
+    }
+    const expired = () => {
+      // Every poll that hits 401 reports again; typing in the open window must not be wiped.
+      if (reauthRef.current) return
+      if (transitionTimer.current) window.clearTimeout(transitionTimer.current)
+      if (authenticatedRef.current) setReauth(true)
+      else setAuthenticated(false)
       setPhase('idle')
       setPassword('')
       setPasswordError(false)
       setError('Your session has ended. Sign in again.')
     }
     window.addEventListener('ops:session-expired', expired)
+    window.addEventListener('ops:logged-out', signedOut)
     void dispatcherAuth.session()
       .then(session => {
         if (!active) return
@@ -72,6 +91,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
       active = false
       if (transitionTimer.current) window.clearTimeout(transitionTimer.current)
       window.removeEventListener('ops:session-expired', expired)
+      window.removeEventListener('ops:logged-out', signedOut)
     }
   }, [])
 
@@ -85,6 +105,14 @@ export function AuthGate({ children }: { children: ReactNode }) {
       const session = await dispatcherAuth.login(password)
       if (!session.authenticated) throw new Error('Unauthenticated response')
       setPassword('')
+      if (reauthRef.current) {
+        // Back to the same screen at once; open pages reload their data.
+        setReauth(false)
+        setPhase('idle')
+        setError('')
+        window.dispatchEvent(new CustomEvent('ops:data-changed'))
+        return
+      }
       setPhase('success')
       const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
       transitionTimer.current = window.setTimeout(() => {
@@ -97,10 +125,14 @@ export function AuthGate({ children }: { children: ReactNode }) {
     }
   }
 
-  if (authenticated) return <>{children}</>
+  const app = authenticated
+    ? <div className="auth-app" inert={reauth} aria-hidden={reauth || undefined}>{children}</div>
+    : null
+  // Same tree shape with and without the window, so React keeps the app's state.
+  if (authenticated && !reauth) return <>{app}{null}</>
 
   const busy = phase === 'checking' || phase === 'submitting' || phase === 'success'
-  return <main className={`auth-shell auth-shell--${phase}`}>
+  const shell = <main className={`auth-shell auth-shell--${phase}`}>
     <section className="auth-hero" aria-hidden="true">
       <img
         className="auth-hero__image"
@@ -178,4 +210,6 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
     <div className="auth-transition-light" aria-hidden="true" />
   </main>
+  if (!app) return shell
+  return <>{app}<div className="auth-reauth-overlay" role="dialog" aria-modal="true" aria-label="Сессия истекла, войдите снова">{shell}</div></>
 }

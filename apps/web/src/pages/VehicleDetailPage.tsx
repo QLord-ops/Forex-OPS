@@ -4,7 +4,7 @@ import { useParams } from 'react-router-dom'
 
 import { LazyMapPanel } from '../components/LazyMapPanel'
 import { AppointmentPlanner } from '../components/AppointmentPlanner'
-import { VehicleOperationsPanel } from '../components/VehicleOperationsPanel'
+import { localDateTime, VehicleOperationsPanel } from '../components/VehicleOperationsPanel'
 import { RouteEditor } from '../components/RouteEditor'
 import { ErrorState, LoadingState } from '../components/States'
 import { TourStatusBadge } from '../components/StatusBadge'
@@ -29,6 +29,9 @@ export function VehicleDetailPage() {
   const { id = '' } = useParams()
   const [actionError, setActionError] = useState<Error | null>(null)
   const [busyStopId, setBusyStopId] = useState<string | null>(null)
+  // BELADEN/ENTLADEN is history that cannot be undone, so it takes the actual time and a second click, as on the dashboard.
+  const [stopDialog, setStopDialog] = useState<Stop | null>(null)
+  const [stopTime, setStopTime] = useState(localDateTime())
   const vehicle = usePolling(() => api.vehicle(id), 30_000, Boolean(id), id)
   const tours = usePolling(() => api.vehicleTours(id), 30_000, Boolean(id), id)
   const timeline = usePolling(() => api.vehicleTimeline(id), 30_000, Boolean(id), id)
@@ -42,15 +45,23 @@ export function VehicleDetailPage() {
 
   const currentStop = useMemo(() => findNextActionStop(activeTour), [activeTour])
 
-  async function handleStopAction(stop: Stop) {
+  function openStopDialog(stop: Stop) {
+    setActionError(null)
+    setStopTime(localDateTime())
+    setStopDialog(stop)
+  }
+
+  async function handleStopAction(stop: Stop, time: string) {
     setActionError(null)
     setBusyStopId(stop.id)
     try {
+      const timestamp = new Date(time).toISOString()
       if (stop.type === 'LOAD') {
-        await api.markLoaded(stop.id)
+        await api.markLoaded(stop.id, timestamp)
       } else {
-        await api.markUnloaded(stop.id)
+        await api.markUnloaded(stop.id, timestamp)
       }
+      setStopDialog(null)
       await Promise.all([tours.refetch(), timeline.refetch(), position.refetch()])
     } catch (error) {
       setActionError(error as Error)
@@ -86,7 +97,8 @@ export function VehicleDetailPage() {
               className="primary-button"
               disabled={busyStopId === currentStop.id || !currentStop.arrivedAt}
               title={!currentStop.arrivedAt ? 'Сначала подтвердите фактическое прибытие' : undefined}
-              onClick={() => void handleStopAction(currentStop)}
+              aria-expanded={stopDialog?.id === currentStop.id}
+              onClick={() => openStopDialog(currentStop)}
             >
               {currentStop.type === 'LOAD' ? <PackageCheck className="h-4 w-4" /> : <Check className="h-4 w-4" />}
               {currentStop.type === 'LOAD' ? 'ЗАГРУЖЕНО' : 'ВЫГРУЖЕНО'}
@@ -94,6 +106,29 @@ export function VehicleDetailPage() {
           ) : null}
         </div>
       </div>
+
+      {stopDialog && currentStop?.id === stopDialog.id ? (
+        <section
+          className="work-surface flex flex-wrap items-end gap-3 p-4"
+          role="dialog"
+          aria-label={`${stopDialog.type === 'LOAD' ? 'BELADEN' : 'ENTLADEN'}: ${stopDialog.city || stopDialog.address}`}
+          onKeyDown={(event) => { if (event.key === 'Escape') setStopDialog(null) }}
+        >
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold text-slate-950">{stopDialog.type === 'LOAD' ? 'BELADEN' : 'ENTLADEN'} · {stopDialog.city || stopDialog.address}</p>
+            <p className="text-xs text-slate-500">Событие попадёт в историю, отменить его нельзя</p>
+          </div>
+          <label className="text-xs font-semibold text-slate-600">Фактическое время
+            <input className="field-input mt-1 h-9" type="datetime-local" value={stopTime} autoFocus onChange={(event) => setStopTime(event.target.value)} />
+          </label>
+          <div className="flex gap-2">
+            <button type="button" className="secondary-button" onClick={() => setStopDialog(null)} disabled={busyStopId === stopDialog.id}>Отмена</button>
+            <button type="button" className="primary-button" onClick={() => void handleStopAction(stopDialog, stopTime)} disabled={busyStopId === stopDialog.id || !stopTime}>
+              {busyStopId === stopDialog.id ? 'Сохранение…' : 'Подтвердить'}
+            </button>
+          </div>
+        </section>
+      ) : null}
 
       <div className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,440px)]">
         <div className="min-w-0 space-y-4">
