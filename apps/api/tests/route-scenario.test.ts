@@ -178,7 +178,7 @@ describe('traffic on the planned route', () => {
       trafficSections: destination.latitude === a.latitude ? [{ start: 0, end: 2, level: 'JAM', delaySeconds: 300, speedKmh: 20 }] : [{ start: 1, end: 2, level: 'SLOW', delaySeconds: 60, speedKmh: 40 }] }));
     const result = await service.calculate({ originAddress: 'Start', stops: [{ address: 'A', coords: a }, { address: 'B', coords: b }] }, now);
     expect(result.geometry).toHaveLength(5);
-    expect(result.trafficSegments).toEqual([{ from: 0, to: 2, level: 'JAM' }, { from: 3, to: 4, level: 'SLOW' }]);
+    expect(result.trafficSegments).toEqual([{ from: 0, to: 2, level: 'JAM', delaySeconds: 300, speedKmh: 20 }, { from: 3, to: 4, level: 'SLOW', delaySeconds: 60, speedKmh: 40 }]);
   });
 });
 

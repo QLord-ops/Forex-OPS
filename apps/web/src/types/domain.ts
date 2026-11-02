@@ -398,4 +398,4 @@ export type ExcelImportPreview = OrderImportPreview
 
 export type TrafficLevel = 'SLOW' | 'JAM' | 'STANDSTILL' | 'CLOSED'
 /** Congested stretch of a route line, as point indices (inclusive). */
-export interface TrafficSegment { from: number; to: number; level: TrafficLevel }
+export interface TrafficSegment { from: number; to: number; level: TrafficLevel; delaySeconds?: number; speedKmh?: number | null }

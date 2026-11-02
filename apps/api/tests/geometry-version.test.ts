@@ -55,6 +55,6 @@ it("returns congested stretches shifted by the already travelled part", async ()
       trafficSections: [{ start: 1, end: 2, level: "JAM", delaySeconds: 240, speedKmh: 22 }, { start: 2, end: 9, level: "SLOW", delaySeconds: 10, speedKmh: 60 }] } }) } });
   const position = await service.getCurrentPosition(vehicle.id);
   expect(position.routeGeometry).toHaveLength(6);
-  expect(position.trafficSegments).toEqual([{ from: 3, to: 4, level: "JAM" }]);
+  expect(position.trafficSegments).toEqual([{ from: 3, to: 4, level: "JAM", delaySeconds: 240, speedKmh: 22 }]);
   expect(position.trafficCheckedAt).toBe("2026-11-02T10:00:00.000Z");
 });

@@ -310,7 +310,7 @@ function appendGeometry(target: Coordinate[], points: Coordinate[]): number {
   for (let index = start; index < points.length; index += 1) target.push(points[index]);
   return offset;
 }
-type ScenarioTrafficSegment = { from: number; to: number; level: TrafficSection['level'] };
+type ScenarioTrafficSegment = { from: number; to: number; level: TrafficSection['level']; delaySeconds?: number; speedKmh?: number | null };
 /** The best route plus up to two alternatives the router returned in the same request (no extra quota). */
 function routeOptions(legIndex: number, route: RouteResult, duration: (option: RouteResult) => number): ScenarioRouteOption[] {
   const primary = route as RouteResult & Partial<TrafficRouteResult>;
@@ -324,13 +324,13 @@ function routeOptions(legIndex: number, route: RouteResult, duration: (option: R
     hasRoadClosure: Boolean(option.hasRoadClosure),
     // Five decimals is ~1 m: keeps three long variants small enough for a phone.
     geometry: option.geometry.map(point => [round5(point.longitude), round5(point.latitude)] as [number, number]),
-    trafficSegments: (option.trafficSections ?? []).map(section => ({ from: section.start, to: section.end, level: section.level }))
+    trafficSegments: (option.trafficSections ?? []).map(section => ({ from: section.start, to: section.end, level: section.level, delaySeconds: section.delaySeconds, speedKmh: section.speedKmh }))
   }));
 }
 function round5(value: number) { return Math.round(value * 1e5) / 1e5; }
 function appendTraffic(target: ScenarioTrafficSegment[], route: object, offset: number) {
   const sections = (route as Partial<TrafficRouteResult>).trafficSections ?? [];
-  for (const section of sections) target.push({ from: offset + section.start, to: offset + section.end, level: section.level });
+  for (const section of sections) target.push({ from: offset + section.start, to: offset + section.end, level: section.level, delaySeconds: section.delaySeconds, speedKmh: section.speedKmh });
 }
 async function geocodeAddress(routing: RoutingProvider, address: string, notFound: string): Promise<Coordinate> {
   try {

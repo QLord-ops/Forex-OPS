@@ -114,7 +114,7 @@ export type CurrentPosition = {
   travelledGeometry: Array<[number, number]>;
   remainingGeometry: Array<[number, number]>;
   /** Congested stretches of routeGeometry (point indices) from the last TomTom check. */
-  trafficSegments?: Array<{ from: number; to: number; level: "SLOW" | "JAM" | "STANDSTILL" | "CLOSED" }>;
+  trafficSegments?: Array<{ from: number; to: number; level: "SLOW" | "JAM" | "STANDSTILL" | "CLOSED"; delaySeconds?: number; speedKmh?: number | null }>;
   trafficCheckedAt?: string | null;
   progress: number;
   distanceTravelledMeters: number;
