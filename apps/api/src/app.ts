@@ -36,7 +36,7 @@ import { parseClockState } from './services/tours.js';
 import { registerDispatcherAuth, requireDispatcherRoles, type DispatcherAuthOptions } from './services/dispatcher-auth.js';
 import { RouteScenarioService, routeScenarioInputSchema } from './services/route-scenario.js';
 import { registerRouteScenarioRoutes } from './routes/route-scenario.js';
-import { DispatcherAssistantService } from './services/dispatcher-assistant.js';
+import { AssistantError, DispatcherAssistantService } from './services/dispatcher-assistant.js';
 import { assistantSessionKey, registerDispatcherAssistantRoutes } from './routes/dispatcher-assistant.js';
 import { createDispatcherDependencies } from './services/dispatcher-adapters.js';
 import { writeAuditLog, type AuditActor } from './services/audit-log.js';
@@ -134,10 +134,31 @@ export interface BuildAppOptions {
   auth?: DispatcherAuthOptions;
   pdfImport?: (buffer: Buffer, filename: string) => Promise<PdfImportPreview>;
   imageImport?: (buffer: Buffer, filename: string, mimeType: "image/png" | "image/jpeg" | "image/webp") => Promise<ImageImportPreview>;
+  databaseCheck?: () => Promise<unknown>;
 }
 
+/** Number of proxies in front of the API; 0 means use the socket address. */
+export function trustedProxyHops(value = process.env.TRUST_PROXY_HOPS, production = process.env.NODE_ENV === 'production'): number | false {
+  if (value !== undefined && /^\d+$/.test(value.trim())) return Number(value.trim()) || false;
+  return production ? 2 : false;
+}
+
+export function proxyTrust(hops: number | false) {
+  return hops ? (_address: string, hop: number) => hop < hops : false;
+}
+
+// TomTom calls on behalf of a dispatcher: generous for real work, too low to burn the monthly quota.
+const routingRateLimit = { max: 20, timeWindow: '1 minute' };
+
 export async function buildApp(options: BuildAppOptions = {}) {
-  const app = Fastify({ logger: true });
+  const app = Fastify({
+    // Browser → Vercel rewrite → DigitalOcean edge → app: without this every user shares one proxy IP.
+    trustProxy: proxyTrust(trustedProxyHops()),
+    logger: {
+      redact: { paths: ['req.headers.cookie', 'req.headers.authorization', 'req.headers["x-csrf-token"]', 'res.headers["set-cookie"]'], censor: '[скрыто]' },
+      serializers: { req: (request: { method: string; url: string; ip?: string }) => ({ method: request.method, url: request.url.split('?')[0] }) }
+    }
+  });
   const isServerless = Boolean(process.env.VERCEL);
   const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? process.env.DISPATCHER_ALLOWED_ORIGINS ?? 'https://ops-disponent-web.vercel.app,http://localhost:5173,http://127.0.0.1:5173')
     .split(',').map(value => value.trim()).filter(Boolean);
@@ -171,6 +192,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   let activeOrderImports = 0;
   const pdfImport = options.pdfImport ?? importPdfPreview;
   const imageImport = options.imageImport ?? importImagePreview;
+  const databaseCheck = options.databaseCheck ?? (() => prisma.$queryRaw`SELECT 1`);
   const subscribers = new Set<import('node:http').ServerResponse>();
   const subscriberSessions = new Map<string, number>();
   const maxSseConnectionsPerSession = Math.max(1, Number.parseInt(process.env.SSE_MAX_CONNECTIONS_PER_SESSION ?? '3', 10) || 3);
@@ -282,7 +304,16 @@ export async function buildApp(options: BuildAppOptions = {}) {
   });
 
   app.get("/", async (_request, reply) => reply.redirect("https://ops-disponent-web.vercel.app/"));
-  app.get("/health", async () => ({ ok: true, service: "@ops/api", timestamp: new Date().toISOString() }));
+  app.get("/health", async (_request, reply) => {
+    const timestamp = new Date().toISOString();
+    try {
+      await databaseCheck();
+      return { ok: true, service: "@ops/api", database: "ok", timestamp };
+    } catch (error) {
+      app.log.error({ errorType: error instanceof Error ? error.name : 'unknown' }, "База данных недоступна для /health");
+      return reply.code(503).send({ ok: false, service: "@ops/api", database: "unavailable", timestamp });
+    }
+  });
 
   const idParams = z.object({ id: z.string().min(1) });
   const versionInput = z.object({ version: z.number().int().nonnegative() });
@@ -469,8 +500,11 @@ export async function buildApp(options: BuildAppOptions = {}) {
       }
       let result;
       try {
-        result = await importExcelPreview(buffer, filename);
+        result = await importExcelPreview(buffer, filename, {
+          beforeAi: options.auth?.disabled ? undefined : () => assistantService.consumeUsage(assistantSessionKey(request))
+        });
       } catch (error) {
+        if (error instanceof AssistantError) throw error;
         request.log.error({ errorType: error instanceof Error ? error.name : 'unknown' }, "Не удалось разобрать книгу Excel");
         return reply.status(422).send({ error: "Не удалось безопасно прочитать книгу Excel." });
       }
@@ -625,7 +659,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     return enrichToursWithSchedule(tours);
   });
 
-  app.put("/vehicles/:id/manual-position", async (request) => {
+  app.put("/vehicles/:id/manual-position", { config: { rateLimit: routingRateLimit } }, async (request) => {
     const { id } = z.object({ id: z.string().min(1) }).parse(request.params);
     const { address } = z.object({ address: z.string().trim().min(3).max(2000) }).parse(request.body);
     const vehicle = await prisma.vehicle.findUniqueOrThrow({ where: { id } });
@@ -728,7 +762,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     return reply.status(201).send({ vehicle: toIsoObject(result.vehicle), tour: enrichTour(result.tour) });
   });
 
-  app.post("/tours/preview", async (request) => {
+  app.post("/tours/preview", { config: { rateLimit: routingRateLimit } }, async (request) => {
     const input = z.object({
       vehicleId: z.string().optional(),
       stops: z.array(z.object({

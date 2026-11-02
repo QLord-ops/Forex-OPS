@@ -11,7 +11,20 @@ function hoursFromNow(hours: number): string {
   return new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
 }
 
+// The seed wipes vehicles and tours, so it only runs against a local development database.
+function assertLocalDatabase() {
+  const url = process.env.DATABASE_URL ?? "";
+  const local = url.startsWith("file:") || /@(localhost|127\.0\.0\.1|\[::1\])(:\d+)?\//.test(url);
+  // A separate development database elsewhere can be seeded on purpose; production never.
+  const allowedRemote = process.env.OPS_SEED_ALLOW_REMOTE === "yes";
+  if (process.env.NODE_ENV === "production" || (!local && !allowedRemote)) {
+    console.error("Seed отменён: он удаляет все машины и туры и работает только с локальной базой (для отдельной тестовой базы: OPS_SEED_ALLOW_REMOTE=yes).");
+    process.exit(1);
+  }
+}
+
 async function main() {
+  assertLocalDatabase();
   await prisma.alert.deleteMany();
   await prisma.event.deleteMany();
   await prisma.leg.deleteMany();
