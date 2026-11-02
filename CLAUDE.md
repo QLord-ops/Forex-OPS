@@ -50,5 +50,5 @@ npm run webfleet:check -w @ops/api   # одна read-only проверка кл�
 
 ## Скиллы
 
-Проектные скиллы в `.claude/skills/`: `ops-verify`, `webfleet-connect`, `eu-driving-time`, `dispatch-security`.
+Проектные скиллы в `.claude/skills/`: `ops-verify`, `webfleet-connect`, `eu-driving-time`, `dispatch-security`, `unslop` (полировка интерфейса, чтобы не выглядел «сгенерированным»; автор Damir Sokolovsky, CC BY 4.0 — при копировании сохранять указание автора).
 Полезные общие: `security-review`, `code-review`, `impeccable` / `ui-ux-pro-max` (интерфейс), `dataviz` (KPI и графики).
