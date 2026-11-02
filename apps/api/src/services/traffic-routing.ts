@@ -50,6 +50,8 @@ export type TrafficRouteResult = RouteResult & {
   historicTrafficDurationSeconds?: number;
   liveTrafficDurationSeconds?: number;
   roadNumbers: string[];
+  /** Up to two main motorways in driving order, for a "via A7 and A2" label. */
+  mainRoads?: string[];
   instructions: RouteInstruction[];
   alternatives: TrafficRouteResult[];
   hasRoadClosure: boolean;
@@ -435,6 +437,7 @@ function toTrafficRouteResult(
     historicTrafficDurationSeconds: numberOrUndefined(summary.historicTrafficTravelTimeInSeconds),
     liveTrafficDurationSeconds: numberOrUndefined(summary.liveTrafficIncidentsTravelTimeInSeconds),
     roadNumbers: extractRoadNumbers(route),
+    mainRoads: extractMainRoads(route, geometry),
     instructions: extractInstructions(route),
     alternatives: alternatives.map((alternative) => toTrafficRouteResult(alternative, providerStatus, warning, [], options)),
     hasRoadClosure: hasRoadClosure(route),
@@ -471,6 +474,7 @@ function fromFallbackRoute(route: RouteResult, status: TrafficProviderStatus, wa
     checkedAt: new Date().toISOString(),
     trafficDelaySeconds: 0,
     roadNumbers: [],
+    mainRoads: [],
     instructions: [],
     alternatives: [],
     hasRoadClosure: false,
@@ -541,6 +545,68 @@ function quotaSettings(
     reservedForManual,
     sourceLimit
   };
+}
+
+/**
+ * The two longest motorways of a route in driving order ("через A14 и A2", as Webfleet shows it).
+ * Prefers TomTom's important road stretches, then road shields; B-roads only fill in when there are too few motorways.
+ */
+export function extractMainRoads(route: Pick<TomTomRoute, "sections" | "guidance">, geometry: Coordinate[]): string[] {
+  const along = cumulativeMeters(geometry);
+  const collect = (type: "IMPORTANT_ROAD_STRETCH" | "ROAD_SHIELDS") => {
+    const roads = new Map<string, { meters: number; first: number }>();
+    for (const section of route.sections ?? []) {
+      if ((section.sectionType ?? "").toUpperCase() !== type) continue;
+      const start = section.startPointIndex;
+      const end = section.endPointIndex;
+      if (!Number.isInteger(start) || !Number.isInteger(end) || start! < 0 || end! <= start! || !along.length) continue;
+      const meters = along[Math.min(end!, along.length - 1)] - along[Math.min(start!, along.length - 1)];
+      const names = type === "ROAD_SHIELDS"
+        ? (section.roadShieldReferences ?? []).map((shield) => shield.shieldContent ?? shield.roadNumber ?? shield.text)
+        : section.roadNumbers ?? [];
+      for (const name of new Set(names.map(roadName).filter((value): value is string => Boolean(value)))) {
+        const entry = roads.get(name) ?? { meters: 0, first: start! };
+        entry.meters += meters;
+        entry.first = Math.min(entry.first, start!);
+        roads.set(name, entry);
+      }
+    }
+    return roads;
+  };
+  let roads = collect("IMPORTANT_ROAD_STRETCH");
+  if (!roads.size) roads = collect("ROAD_SHIELDS");
+  if (!roads.size) {
+    // No positions known: keep the order the road numbers appear in.
+    extractRoadNumbers(route as TomTomRoute).map(roadName).forEach((name, index) => {
+      if (name && !roads.has(name)) roads.set(name, { meters: 0, first: index });
+    });
+  }
+  const ranked = [...roads.entries()].sort((a, b) => b[1].meters - a[1].meters || a[1].first - b[1].first);
+  const motorways = ranked.filter(([name]) => name.startsWith("A"));
+  const picked = [...motorways, ...ranked.filter(([name]) => !name.startsWith("A"))].slice(0, 2);
+  return picked.sort((a, b) => a[1].first - b[1].first).map(([name]) => name);
+}
+
+function roadName(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const match = /^\s*([AB])\s*-?\s*(\d{1,3}[a-z]?)\s*$/i.exec(value);
+  return match ? `${match[1].toUpperCase()}${match[2]}` : null;
+}
+
+function cumulativeMeters(points: Coordinate[]): number[] {
+  const result: number[] = [];
+  let total = 0;
+  points.forEach((point, index) => {
+    if (index) {
+      const previous = points[index - 1];
+      const lat = ((point.latitude + previous.latitude) / 2) * Math.PI / 180;
+      const dx = (point.longitude - previous.longitude) * Math.cos(lat) * 111_320;
+      const dy = (point.latitude - previous.latitude) * 110_574;
+      total += Math.hypot(dx, dy);
+    }
+    result.push(total);
+  });
+  return result;
 }
 
 function extractRoadNumbers(route: TomTomRoute): string[] {

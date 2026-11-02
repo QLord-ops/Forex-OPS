@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Coordinate, RouteResult } from "../src/domain.js";
 import { RoutingError, type RoutingProvider } from "../src/services/routing.js";
-import { extractTrafficSections,
+import { extractMainRoads, extractTrafficSections,
   PrismaTrafficQuotaStore,
   TomTomRoutingProvider,
   TrafficRoutingService,
@@ -348,5 +348,39 @@ describe("traffic sections for route colouring", () => {
       { start: 30, end: 49, level: "STANDSTILL", delaySeconds: 900, speedKmh: null },
       { start: 40, end: 45, level: "CLOSED", delaySeconds: 0, speedKmh: null }
     ]);
+  });
+});
+
+describe("main motorways for the route label", () => {
+  const line = Array.from({ length: 101 }, (_, index) => ({ latitude: 51, longitude: 10 + index * 0.01 }));
+
+  it("picks the two longest motorways in driving order, ignoring B-roads when motorways exist", () => {
+    const roads = extractMainRoads({ sections: [
+      { sectionType: "ROAD_SHIELDS", startPointIndex: 0, endPointIndex: 5, roadShieldReferences: [{ shieldContent: "B 27" }] },
+      { sectionType: "ROAD_SHIELDS", startPointIndex: 5, endPointIndex: 40, roadShieldReferences: [{ shieldContent: "A14" }] },
+      { sectionType: "ROAD_SHIELDS", startPointIndex: 40, endPointIndex: 45, roadShieldReferences: [{ shieldContent: "A38" }] },
+      { sectionType: "ROAD_SHIELDS", startPointIndex: 45, endPointIndex: 100, roadShieldReferences: [{ shieldContent: "A 2" }, { shieldContent: "E30" }] }
+    ] }, line);
+    expect(roads).toEqual(["A14", "A2"]);
+  });
+
+  it("prefers important road stretches and falls back to B-roads for local routes", () => {
+    expect(extractMainRoads({ sections: [
+      { sectionType: "IMPORTANT_ROAD_STRETCH", startPointIndex: 0, endPointIndex: 60, roadNumbers: ["A7"] },
+      { sectionType: "ROAD_SHIELDS", startPointIndex: 0, endPointIndex: 100, roadShieldReferences: [{ shieldContent: "A44" }] }
+    ] }, line)).toEqual(["A7"]);
+    expect(extractMainRoads({ sections: [
+      { sectionType: "ROAD_SHIELDS", startPointIndex: 0, endPointIndex: 70, roadShieldReferences: [{ shieldContent: "B3" }] },
+      { sectionType: "ROAD_SHIELDS", startPointIndex: 70, endPointIndex: 100, roadShieldReferences: [{ shieldContent: "L554" }] }
+    ] }, line)).toEqual(["B3"]);
+  });
+
+  it("returns main roads for the route and each alternative", async () => {
+    const provider = new TomTomRoutingProvider(alwaysQuota(), fakeFallback(), vi.fn().mockResolvedValue(jsonResponse(tomTomResponse())), {
+      apiKey: "test-key", freeTierConfirmed: true, baseUrl: "https://api.tomtom.test/"
+    });
+    const route = await provider.calculateRoute(origin, destination, { maxAlternatives: 2 });
+    expect(route.mainRoads).toEqual(["A24", "A1"]);
+    expect(route.alternatives[0].mainRoads).toEqual(["A7"]);
   });
 });

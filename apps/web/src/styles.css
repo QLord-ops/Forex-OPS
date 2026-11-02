@@ -950,3 +950,31 @@ aside > .dispatcher-logout-error { position: absolute; bottom: 4.25rem; left: .5
   .dashboard-stage:has(.route-stops-drawer-open) .map-provider-note,
   .dashboard-stage:has(.route-stops-drawer-open) .map-traffic-legend { bottom: calc(58% + 4.4rem); }
 }
+
+/* Route variants (Webfleet-style), polished with unslop by @heydamir: 4px grid, weights 400-600,
+   quiet chrome; the only colour is the chosen route blue and the road shields. */
+.route-variants { margin-top: 12px; }
+.route-variants-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #0f172a; font-size: 13px; font-weight: 600; }
+.route-variants-busy { display: inline-flex; align-items: center; gap: 4px; color: #64748b; font-size: 12px; font-weight: 400; }
+.route-leg-tabs { display: flex; gap: 4px; margin-top: 8px; overflow-x: auto; padding-bottom: 4px; }
+.route-leg-tab { display: inline-flex; flex: 0 0 auto; max-width: 176px; height: 28px; align-items: center; gap: 4px; border: 1px solid rgb(15 23 42 / .1); border-radius: 6px; background: white; padding: 0 8px; color: #475569; font-size: 12px; font-weight: 500; transition: border-color 150ms cubic-bezier(0.22, 1, 0.36, 1), background-color 150ms cubic-bezier(0.22, 1, 0.36, 1); }
+.route-leg-tab.active { border-color: #1a73e8; background: #f1f6fe; color: #174ea6; }
+.route-variant-list { display: grid; gap: 8px; margin-top: 8px; }
+.route-variant { display: grid; gap: 4px; width: 100%; border: 1px solid rgb(15 23 42 / .1); border-radius: 10px; background: white; padding: 8px 12px; text-align: left; transition: border-color 150ms cubic-bezier(0.22, 1, 0.36, 1), background-color 150ms cubic-bezier(0.22, 1, 0.36, 1); }
+.route-variant:hover { border-color: rgb(26 115 232 / .45); }
+.route-variant:focus-visible, .route-leg-tab:focus-visible { outline: 2px solid #1a73e8; outline-offset: 2px; }
+.route-variant-selected { border-color: #1a73e8; background: #f1f6fe; }
+.route-variant-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.route-variant-title { display: inline-flex; min-width: 0; align-items: center; gap: 4px; overflow: hidden; color: #334155; font-size: 13px; font-weight: 400; white-space: nowrap; }
+.route-variant-time { margin-left: auto; flex: 0 0 auto; color: #0f172a; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.route-variant-meta { color: #64748b; font-size: 12px; font-weight: 400; font-variant-numeric: tabular-nums; }
+.route-variant-flags { display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; font-weight: 500; }
+.route-variant-traffic { color: #b45309; }
+.route-variant-closure { color: #b91c1c; }
+.route-variants-note { margin-top: 8px; color: #64748b; font-size: 12px; }
+/* Signature: road numbers as small German road shields, blue Autobahn and yellow Bundesstraße. */
+.road-shield { display: inline-block; min-width: 28px; border-radius: 4px; background: #1d4f91; padding: 0 4px; color: white; font-size: 12px; font-weight: 600; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums; box-shadow: inset 0 0 0 1px rgb(255 255 255 / .55); }
+.road-shield-b { background: #f2c200; color: #111827; box-shadow: inset 0 0 0 1px rgb(17 24 39 / .55); }
+.route-builder-leg-km { flex: 0 0 auto; color: #64748b; font-size: 12px; font-weight: 400; font-variant-numeric: tabular-nums; }
+.route-alt-chip { border: 1px solid rgb(15 23 42 / .12); border-radius: 6px; background: white; padding: 2px 8px; color: #334155; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; box-shadow: 0 1px 2px rgb(0 0 0 / .08); cursor: pointer; transition: border-color 150ms cubic-bezier(0.22, 1, 0.36, 1), color 150ms cubic-bezier(0.22, 1, 0.36, 1); }
+.route-alt-chip:hover, .route-alt-chip:focus-visible { border-color: #1a73e8; color: #174ea6; outline: none; }

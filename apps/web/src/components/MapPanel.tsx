@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { boundsFor, geometryToCoordinates, stopCoordinates, toLineString, trafficFeatures } from '../lib/geometry'
 import { calculatedPositionLabel } from '../lib/format'
-import type { MapRouteStop } from '../lib/route-preview'
+import type { MapRouteAlternative, MapRouteStop } from '../lib/route-preview'
 import type { Coordinate, CurrentPosition, TrafficSegment, Tour } from '../types/domain'
 
 setWorkerUrl(mapLibreWorkerUrl)
@@ -52,6 +52,9 @@ export type MapPanelProps = {
   previewRoute?: Coordinate[]
   previewStops?: MapRouteStop[]
   previewTraffic?: TrafficSegment[]
+  previewAlternatives?: MapRouteAlternative[]
+  onSelectPreviewAlternative?: (id: string) => void
+  previewKey?: string
   height?: number | string
   fill?: boolean
 }
@@ -64,6 +67,9 @@ export function MapPanel({
   previewRoute,
   previewStops,
   previewTraffic,
+  previewAlternatives,
+  onSelectPreviewAlternative,
+  previewKey,
   height = 520,
   fill = false
 }: MapPanelProps) {
@@ -72,6 +78,9 @@ export function MapPanel({
   const markerRef = useRef<Marker | null>(null)
   const stopMarkersRef = useRef<Marker[]>([])
   const previewMarkersRef = useRef<Marker[]>([])
+  const alternativeMarkersRef = useRef<Marker[]>([])
+  const onSelectAlternativeRef = useRef(onSelectPreviewAlternative)
+  onSelectAlternativeRef.current = onSelectPreviewAlternative
   // isStyleLoaded() is false while tiles load, so track the style lifecycle ourselves.
   const styleReadyRef = useRef(false)
   const [styleVersion, setStyleVersion] = useState(0)
@@ -99,6 +108,13 @@ export function MapPanel({
       zoom: readCamera()?.zoom ?? 5.2
     })
     mapRef.current.addControl(new NavigationControl({ visualizePitch: false }), 'top-left')
+    // Grey route variants: a wide invisible line makes them easy to hit with a finger.
+    mapRef.current.on('click', 'preview-alt-hit', (event) => {
+      const id = event.features?.[0]?.properties?.id
+      if (typeof id === 'string') onSelectAlternativeRef.current?.(id)
+    })
+    mapRef.current.on('mouseenter', 'preview-alt-hit', () => { if (mapRef.current) mapRef.current.getCanvas().style.cursor = 'pointer' })
+    mapRef.current.on('mouseleave', 'preview-alt-hit', () => { if (mapRef.current) mapRef.current.getCanvas().style.cursor = '' })
     mapRef.current.on('style.load', () => {
       styleReadyRef.current = true
       setStyleVersion((value) => value + 1)
@@ -117,6 +133,7 @@ export function MapPanel({
       markerRef.current?.remove()
       stopMarkersRef.current.forEach((marker) => marker.remove())
       previewMarkersRef.current.forEach((marker) => marker.remove())
+      alternativeMarkersRef.current.forEach((marker) => marker.remove())
       mapRef.current?.remove()
       mapRef.current = null
       markerRef.current = null
@@ -158,7 +175,7 @@ export function MapPanel({
 
     if (!styleReadyRef.current) return
     const render = () => {
-      renderMapContent(map, fullRoute, position, previewRoute, previewTraffic)
+      renderMapContent(map, fullRoute, position, previewRoute, previewTraffic, previewAlternatives)
       stopMarkersRef.current.forEach((marker) => marker.remove())
       // Same stages as the route drawer: finished stops green, the current one blue and larger.
       const currentId = stops.slice().sort((a, b) => a.sequence - b.sequence).find((stop) => !stop.completedAt)?.id
@@ -180,7 +197,7 @@ export function MapPanel({
       }
     }
     render()
-  }, [fullRoute, position, previewRoute, previewTraffic, stops, styleVersion, tour?.id])
+  }, [fullRoute, position, previewRoute, previewTraffic, previewAlternatives, stops, styleVersion, tour?.id])
 
   useEffect(() => {
     const map = mapRef.current
@@ -197,15 +214,35 @@ export function MapPanel({
     })
   }, [previewStops])
 
+  // Travel time chip in the middle of every grey variant, like Google Maps; a click picks that variant.
+  useEffect(() => {
+    const map = mapRef.current
+    alternativeMarkersRef.current.forEach((marker) => marker.remove())
+    alternativeMarkersRef.current = []
+    if (!map || !previewAlternatives?.length) return
+    alternativeMarkersRef.current = previewAlternatives.filter((item) => item.geometry.length >= 2).map((item) => {
+      const element = document.createElement('button')
+      element.type = 'button'
+      element.className = 'route-alt-chip'
+      element.textContent = item.label
+      element.setAttribute('aria-label', `Выбрать вариант маршрута: ${item.label}`)
+      element.addEventListener('click', (event) => { event.stopPropagation(); onSelectAlternativeRef.current?.(item.id) })
+      return new Marker({ element }).setLngLat(item.geometry[Math.floor(item.geometry.length / 2)]).addTo(map)
+    })
+  }, [previewAlternatives])
+
   useEffect(() => {
     const map = mapRef.current
     if (map && focusCoordinate) map.easeTo({ center: focusCoordinate, zoom: Math.max(map.getZoom(), 14), duration: 350 })
   }, [focusCoordinate])
 
+  // Fit once per route search: picking another variant must not move the camera.
+  const previewFitKey = previewKey ?? previewRoute
   useEffect(() => {
     const map = mapRef.current
-    if (map && previewRoute?.length) fitRoute(map, [...previewRoute, ...(previewStops ?? []).map((stop) => stop.coordinate)], FIT_MAX_ZOOM, 350)
-  }, [previewRoute, previewStops])
+    if (map && previewRoute?.length) fitRoute(map, [...previewRoute, ...(previewAlternatives ?? []).flatMap((item) => item.geometry), ...(previewStops ?? []).map((stop) => stop.coordinate)], FIT_MAX_ZOOM, 350)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewFitKey, previewStops])
 
   useEffect(() => {
     const map = mapRef.current
@@ -262,6 +299,7 @@ export function MapPanel({
 // Google-style route: white casing, blue line, congestion on top, travelled part grey.
 const ROUTE_BLUE = '#1a73e8'
 const PREVIEW_BLUE = '#174ea6'
+const ALT_GREY = '#8fa3bf'
 const TRAFFIC_COLORS = { SLOW: '#f29900', JAM: '#d93025', STANDSTILL: '#8b0000', CLOSED: '#202124' } as const
 const TRAFFIC_LABELS = { SLOW: 'медленно', JAM: 'пробка', STANDSTILL: 'стоит', CLOSED: 'перекрыто' } as const
 const LINE_WIDTH = ['interpolate', ['linear'], ['zoom'], 5, 3.5, 10, 6.5, 14, 10] as unknown as number
@@ -270,13 +308,18 @@ const TRAFFIC_COLOR = ['match', ['get', 'level'], 'SLOW', TRAFFIC_COLORS.SLOW, '
 const TRAFFIC_FLOW_OPACITY = 0.72
 const TRAFFIC_FLOW_OPACITY_WITH_ROUTE = 0.4
 
-function renderMapContent(map: Map, fullRoute: Coordinate[], position?: CurrentPosition | null, previewRoute?: Coordinate[], previewTraffic?: TrafficSegment[]) {
+function renderMapContent(map: Map, fullRoute: Coordinate[], position?: CurrentPosition | null, previewRoute?: Coordinate[], previewTraffic?: TrafficSegment[], previewAlternatives?: MapRouteAlternative[]) {
   const travelled = geometryToCoordinates(position?.travelledGeometry)
   upsertRouteLayer(map, 'route-casing', toLineString(fullRoute), { 'line-color': '#ffffff', 'line-width': CASING_WIDTH, 'line-opacity': 0.95 })
   upsertRouteLayer(map, 'route-main', toLineString(fullRoute), { 'line-color': ROUTE_BLUE, 'line-width': LINE_WIDTH })
   upsertRouteLayer(map, 'route-traffic', trafficFeatures(fullRoute, position?.trafficSegments), { 'line-color': TRAFFIC_COLOR, 'line-width': LINE_WIDTH })
   upsertRouteLayer(map, 'route-travelled', toLineString(travelled), { 'line-color': '#9aa0a6', 'line-width': LINE_WIDTH })
   const preview = previewRoute ?? []
+  const alternatives = { type: 'FeatureCollection' as const, features: (previewAlternatives ?? []).filter((item) => item.geometry.length >= 2)
+    .map((item) => ({ type: 'Feature' as const, properties: { id: item.id }, geometry: { type: 'LineString' as const, coordinates: item.geometry } })) }
+  upsertRouteLayer(map, 'preview-alt-casing', alternatives, { 'line-color': '#ffffff', 'line-width': CASING_WIDTH, 'line-opacity': 0.9 })
+  upsertRouteLayer(map, 'preview-alt', alternatives, { 'line-color': ALT_GREY, 'line-width': LINE_WIDTH })
+  upsertRouteLayer(map, 'preview-alt-hit', alternatives, { 'line-color': '#000000', 'line-width': 18, 'line-opacity': 0 })
   upsertRouteLayer(map, 'preview-casing', toLineString(preview), { 'line-color': '#ffffff', 'line-width': CASING_WIDTH, 'line-opacity': 0.95 })
   upsertRouteLayer(map, 'preview-main', toLineString(preview), { 'line-color': PREVIEW_BLUE, 'line-width': LINE_WIDTH })
   upsertRouteLayer(map, 'preview-traffic', trafficFeatures(preview, previewTraffic), { 'line-color': TRAFFIC_COLOR, 'line-width': LINE_WIDTH })

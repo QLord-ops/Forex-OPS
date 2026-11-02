@@ -181,3 +181,54 @@ describe('traffic on the planned route', () => {
     expect(result.trafficSegments).toEqual([{ from: 0, to: 2, level: 'JAM' }, { from: 3, to: 4, level: 'SLOW' }]);
   });
 });
+
+describe('route variants per leg', () => {
+  const variant = (origin: { latitude: number; longitude: number }, destination: typeof origin, distanceMeters: number, durationSeconds: number, mainRoads: string[]) =>
+    ({ geometry: [origin, destination], distanceMeters, durationSeconds, provider: 'tomtom', providerStatus: 'live-traffic', mainRoads, trafficDelaySeconds: 0, hasRoadClosure: false, alternatives: [] });
+
+  it('returns the best route and up to two alternatives for every leg from one request', async () => {
+    const { service, route } = fixture();
+    route.mockImplementation(async (origin, destination) => ({ ...variant(origin, destination, 383_400, 18_780, ['A14', 'A2']),
+      alternatives: [variant(origin, destination, 398_700, 19_440, ['A72', 'A38']), variant(origin, destination, 420_300, 22_140, ['A36', 'A2'])] }));
+    const result = await service.calculate({ originAddress: 'Elterlein', stops: [{ address: 'Hannover', coords }, { address: 'Kassel', coords }] }, now);
+    expect(route).toHaveBeenCalledTimes(2);
+    expect(route.mock.calls[0][2]).toMatchObject({ maxAlternatives: 2 });
+    expect(result.legs).toHaveLength(2);
+    expect(result.legs[0]).toMatchObject({ from: 'Elterlein', to: 'Hannover' });
+    expect(result.legs[1]).toMatchObject({ from: 'Hannover', to: 'Kassel' });
+    expect(result.legs[0].options.map(option => [option.id, option.mainRoads.join('+'), option.distanceMeters, option.durationSeconds]))
+      .toEqual([['0-0', 'A14+A2', 383_400, 18_780], ['0-1', 'A72+A38', 398_700, 19_440], ['0-2', 'A36+A2', 420_300, 22_140]]);
+    expect(result.legs[0].options[0].geometry).toEqual([[13, 52], [13, 52]]);
+  });
+
+  it('re-times the plan for a chosen variant without asking the router again', async () => {
+    const { service, route } = fixture();
+    const result = await service.calculate({ originAddress: 'Berlin', stops: [{ ...visit }, { ...visit, address: 'B' }],
+      legChoices: [{ distanceMeters: 5000, durationSeconds: 7200 }, { distanceMeters: 1000, durationSeconds: 3600 }] }, now);
+    expect(route).not.toHaveBeenCalled();
+    expect(result.stops[0].earliestArrival).toBe('2026-10-16T10:00:00.000Z');
+    expect(result.stops[1].earliestArrival).toBe('2026-10-16T11:00:00.000Z');
+    expect(result.distanceMeters).toBe(6000);
+    expect(result.legs).toEqual([]);
+  });
+
+  it('uses the chosen variant for the vehicle forecast too', async () => {
+    const { service, route } = fixture();
+    const result = await service.calculate({ vehicleId: 'v1', stops: [visit], legChoices: [{ distanceMeters: 9000, durationSeconds: 5400 }] }, now);
+    expect(route).not.toHaveBeenCalled();
+    expect(result.stops[0].earliestArrival).toBe('2026-10-16T09:30:00.000Z');
+    expect(result.distanceMeters).toBe(9000);
+  });
+
+  it('rejects choices that do not match the stops or are out of range', async () => {
+    const app = Fastify();
+    const calculate = vi.fn();
+    await registerRouteScenarioRoutes(app, { service: { calculate } });
+    for (const legChoices of [[{ distanceMeters: 1, durationSeconds: 1 }, null], [{ distanceMeters: -1, durationSeconds: 60 }], [{ distanceMeters: 1, durationSeconds: 99_999_999 }]]) {
+      const response = await app.inject({ method: 'POST', url: '/route-scenarios/preview', payload: { originAddress: 'Berlin', stops: [visit], legChoices } });
+      expect(response.statusCode).toBe(400);
+    }
+    expect(calculate).not.toHaveBeenCalled();
+    await app.close();
+  });
+});
