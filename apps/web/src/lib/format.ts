@@ -2,6 +2,16 @@ import type { RiskColor, Stop, Tour } from '../types/domain'
 
 export const calculatedPositionLabel = 'Расчётная позиция — без данных GPS'
 
+/** Where the shown position comes from: fresh Webfleet, stale Webfleet, manual or calculated (never hidden). */
+export function positionSourceText(position?: { positionSource?: 'WEBFLEET' | 'CALCULATED' | 'MANUAL'; telemetryStale?: boolean; telemetryAgeSeconds?: number | null } | null): string {
+  if (position?.positionSource === 'WEBFLEET') {
+    const age = typeof position.telemetryAgeSeconds === 'number' ? ` · ${Math.max(0, Math.round(position.telemetryAgeSeconds / 60))} мин назад` : ''
+    return position.telemetryStale ? `Webfleet GPS устарел${age}` : `Webfleet GPS${age}`
+  }
+  if (position?.positionSource === 'MANUAL') return 'Позиция указана диспетчером вручную'
+  return calculatedPositionLabel
+}
+
 export function formatDateTime(value?: string | null): string {
   if (!value) return '–'
   return new Intl.DateTimeFormat('ru-RU', {

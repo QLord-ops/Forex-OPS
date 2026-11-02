@@ -60,9 +60,12 @@ export class TrafficOperationsService {
       for (const item of moving) {
         const context = await this.context(item.id);
         if (!context.leg) continue;
-        await this.db.leg.updateMany({ where: { id: context.leg.id, updatedAt: context.leg.updatedAt }, data: { routeDetails: JSON.stringify({ ...context.details,
-          refreshIntervalSeconds: Number.isFinite(interval) ? interval : null,
-          reason: !Number.isFinite(interval) ? 'Бесплатная квота недоступна.' : interval > 600 ? 'Интервал увеличен из-за бесплатной квоты.' : null }) } });
+        const refreshIntervalSeconds = Number.isFinite(interval) ? interval : null;
+        const reason = !Number.isFinite(interval) ? 'Бесплатная квота недоступна.' : interval > 600 ? 'Интервал увеличен из-за бесплатной квоты.' : null;
+        // Write only when something changed: a rewrite every 15 s would void the dispatcher's open previews.
+        if (context.details.refreshIntervalSeconds !== refreshIntervalSeconds || (context.details.reason ?? null) !== reason) {
+          await this.db.leg.updateMany({ where: { id: context.leg.id, updatedAt: context.leg.updatedAt }, data: { routeDetails: JSON.stringify({ ...context.details, refreshIntervalSeconds, reason }) } });
+        }
         if (now.getTime() - item.due < interval * 1000) continue;
         try { await this.refresh(item.id, 'background', now); } catch { /* Next tick retries; old traffic remains explicitly aged. */ }
       }

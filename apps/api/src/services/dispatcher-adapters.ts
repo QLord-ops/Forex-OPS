@@ -175,7 +175,7 @@ export function createDispatcherDependencies(db: PrismaClient, routing: RoutingP
       }
       if (action === 'REPLAN') { await ownedTour(client, String(input.tourId), vehicleId); return s.replanning.apply(String(input.tourId), { previewId: String(input.previewId), version: z.number().int().parse(input.version) }, now); }
       if (action === 'APPOINTMENT') { await ownedStop(client, String(input.stopId), vehicleId); return s.appointments.apply(String(input.stopId), { appointmentAt: date.parse(input.appointmentAt), version: z.number().int().parse(input.version) }, now); }
-      if (action === 'ARRIVAL') { await ownedStop(client, String(input.stopId), vehicleId); return s.operations.confirmArrival(String(input.stopId), new Date(date.parse(input.arrivedAt)), now); }
+      if (action === 'ARRIVAL') { await ownedStop(client, String(input.stopId), vehicleId); return s.operations.confirmArrival(String(input.stopId), new Date(date.parse(input.arrivedAt)), now, undefined, { source: 'ASSISTANT' }); }
       const vehicle = await client.vehicle.findUniqueOrThrow({ where: { id: vehicleId } });
       if (action === 'BREAKDOWN') {
         if (vehicle.manualStoppedAt) return { stopped: true };

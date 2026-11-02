@@ -50,9 +50,9 @@ test('создаёт Auftrag из импортированного PDF', async (
       const address = new URL(route.request().url()).searchParams.get('address') ?? requestBody?.address ?? ''
       await json(route, { address, latitude: address.includes('Potsdam') ? 52.39 : 52.52, longitude: address.includes('Potsdam') ? 13.06 : 13.405, city: address.includes('Potsdam') ? 'Potsdam' : 'Berlin', provider: 'e2e' }); return true
     }
-    if (path === '/tours' && route.request().method() === 'POST') {
+    if (path === '/imports/tours/confirm' && route.request().method() === 'POST') {
       createdPayload = route.request().postDataJSON() as Record<string, unknown>
-      await json(route, { ...tour(), orderNumber: 'A-200' }, 201); return true
+      await json(route, { tour: { ...tour(), orderNumber: 'A-200' }, created: true, reused: false }, 201); return true
     }
     if (path.startsWith('/vehicles/veh-1')) { await json(route, path.endsWith('/tours') ? [tour()] : vehicle); return true }
     return false
@@ -63,7 +63,8 @@ test('создаёт Auftrag из импортированного PDF', async (
   await expect(page.getByLabel('Номер Auftrag')).toHaveValue('A-200')
   await page.getByRole('button', { name: 'Подтвердить', exact: true }).click()
   await expect.poll(() => createdPayload).not.toBeNull()
-  expect(createdPayload).toMatchObject({ vehicleId: 'veh-1', orderNumber: 'A-200' })
+  // An imported Auftrag goes through the idempotent confirm, so a retry never creates it twice.
+  expect(createdPayload).toMatchObject({ vehicleId: 'veh-1', orderNumber: 'A-200', importAttemptId: expect.stringMatching(/:0$/), importFingerprint: expect.stringMatching(/^auftrag-/) })
 })
 
 test('подтверждает фактическое прибытие', async ({ page }) => {
@@ -115,7 +116,8 @@ test('редактирует будущий тур', async ({ page }) => {
   await page.getByLabel('Номер заказа').fill('A-301')
   await page.getByRole('button', { name: 'Сохранить изменения' }).click()
   await expect.poll(() => updatedPayload).not.toBeNull()
-  expect(updatedPayload).toMatchObject({ vehicleId: 'veh-1', orderNumber: 'A-301' })
+  // Stop ids and the plan version let the server keep LDM/references and reject a stale edit.
+  expect(updatedPayload).toMatchObject({ vehicleId: 'veh-1', orderNumber: 'A-301', version: 1, stops: [{ id: 'stop-load' }, { id: 'stop-unload' }] })
 })
 
 test('показывает причину ошибки Webfleet и привязывает объект к грузовику', async ({ page }) => {

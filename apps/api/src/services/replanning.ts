@@ -54,7 +54,9 @@ export class ReplanningService {
     const tour = await db.tour.findUniqueOrThrow({ where: { id: tourId }, include });
     const vehicle = await db.vehicle.findUniqueOrThrow({ where: { id: tour.vehicleId } });
     const tours = await db.tour.findMany({ where: { vehicleId: vehicle.id, status: { in: ['ACTIVE', 'QUEUED'] } }, include, orderBy: [{ queueIndex: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }] });
-    return { tour, vehicle, tours };
+    // The newest dispatcher-side event (clock edit, stop, arrival...); background traffic refreshes do not count.
+    const lastEvent = await db.operationEvent.findFirst({ where: { vehicleId: vehicle.id, type: { not: 'TRAFFIC_REFRESH' } }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], select: { id: true } });
+    return { tour, vehicle, tours, lastEventId: lastEvent?.id ?? null };
   }
 
   async preview(tourId: string, input: ReplanInput, now = new Date()) {
@@ -103,8 +105,8 @@ export class ReplanningService {
       }
     }
     const affectedTourIds = [tourId, ...downstream.map(t => t.id)];
-    const plan: StoredPlan = { context: JSON.stringify(context), stops, legs, affectedTourIds, position, origin };
-    if (JSON.stringify(await this.context(this.db, tourId)) !== plan.context) throw new ReplanConflict('Маршрут изменился во время расчёта.');
+    const plan: StoredPlan = { context: planFingerprint(context), stops, legs, affectedTourIds, position, origin };
+    if (planFingerprint(await this.context(this.db, tourId)) !== plan.context) throw new ReplanConflict('Маршрут изменился во время расчёта.');
     const preview = await this.db.routePreview.create({ data: { tourId, version: input.version, vehicleVersion: vehicle.operationVersion, inputJson: JSON.stringify(input), planJson: JSON.stringify(plan), expiresAt: new Date(now.getTime() + 10 * 60_000) } });
     const beforeLegs = tours.filter(t => affectedTourIds.includes(t.id)).flatMap(t => t.legs.filter(l => l.status !== 'COMPLETED'));
     const snapshot = snapshotVehicleClock(vehicle, oldActive ?? null, now);
@@ -123,7 +125,7 @@ export class ReplanningService {
       if (preview.tourId !== tourId || preview.version !== input.version || preview.appliedAt || preview.expiresAt <= now) throw new ReplanConflict('Предварительный расчёт истёк или уже применён.');
       const plan = JSON.parse(preview.planJson) as StoredPlan;
       const context = await this.context(tx, tourId);
-      if (JSON.stringify(context) !== plan.context) throw new ReplanConflict('Предварительный расчёт устарел: рассчитайте маршрут заново.');
+      if (planFingerprint(context) !== plan.context) throw new ReplanConflict('Предварительный расчёт устарел: рассчитайте маршрут заново.');
       await this.checkpoint?.(tx, context.vehicle.id, now);
       const currentLeg = context.tour.legs.find(l => ['ACTIVE', 'ARRIVED'].includes(l.status));
       const clock = snapshotVehicleClock(context.vehicle, currentLeg ?? null, now).clockState;
@@ -162,3 +164,19 @@ export class ReplanningService {
   }
 }
 export { ReplanningService as RouteReplanningService };
+
+type ReplanContext = Awaited<ReturnType<ReplanningService['context']>>;
+/**
+ * What a replan depends on: stops, their state, tour order and the dispatcher's own events.
+ * The 15 s traffic job rewrites leg details and plan versions while a truck drives; that alone must not void a preview.
+ */
+export function planFingerprint(context: Pick<ReplanContext, 'tours' | 'vehicle' | 'lastEventId'> & { tour: { id: string } }): string {
+  const tours = context.tours.map(tour => ({
+    id: tour.id, status: tour.status, queueIndex: tour.queueIndex, previousTourId: tour.previousTourId,
+    stops: tour.stops.map(stop => ({ id: stop.id, sequence: stop.sequence, type: stop.type, address: stop.address, latitude: stop.latitude, longitude: stop.longitude,
+      appointmentAt: stop.appointmentAt?.toISOString() ?? null, arrivedAt: stop.arrivedAt?.toISOString() ?? null, completedAt: stop.completedAt?.toISOString() ?? null })),
+    legs: tour.legs.map(leg => ({ id: leg.id, status: leg.status, fromStopId: leg.fromStopId, toStopId: leg.toStopId })),
+    events: tour.events.map(event => event.id)
+  }));
+  return JSON.stringify({ tourId: context.tour.id, tours, manualStoppedAt: context.vehicle.manualStoppedAt?.toISOString() ?? null, lastEventId: context.lastEventId });
+}

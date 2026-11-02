@@ -70,6 +70,7 @@ export function EditTourPage() {
     }
   }, [id])
 
+  const savedStopIds = useMemo(() => new Set((tour?.stops ?? []).map((stop) => stop.id)), [tour])
   const canSubmit = useMemo(
     () => Boolean(vehicleId && orderNumber.trim() && stops.length >= 2 && stops.every((stop) =>
       stop.geocode
@@ -126,7 +127,10 @@ export function EditTourPage() {
       await api.updateTour(id, {
         vehicleId,
         orderNumber: orderNumber.trim(),
+        // The server keeps fields this form does not show (LDM, references, windows, trailer, remarks) by stop id.
+        version: tour?.planVersion,
         stops: stops.map((stop, index): CreateTourStopInput => ({
+          id: savedStopIds.has(stop.id) ? stop.id : undefined,
           sequence: index + 1,
           type: stop.type,
           company: stop.company.trim() || undefined,

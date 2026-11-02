@@ -8,6 +8,7 @@ import type { MapRoutePreview } from '../lib/route-preview'
 import { vehicleMatch } from '../lib/vehicle-match'
 import { RouteBuilder } from './RouteBuilder'
 import type { AddressResolution, Coordinate, CreateTourStopInput, DashboardVehicle, ImportedOrderDraft, ImportedStopDraft, Vehicle } from '../types/domain'
+import { createImportAttemptId, importFingerprint } from '../lib/import-fingerprint'
 
 type DockTab = 'search' | 'route' | 'order'
 type DraftStop = ImportedStopDraft & { city: string; company: string; address: string; appointmentLocal: string; loadingMetersText: string; referenceText: string; instructionsText: string; resolution?: AddressResolution | null }
@@ -242,11 +243,8 @@ function classifyFile(file: File): 'PDF' | 'EXCEL' | 'IMAGE' | 'UNKNOWN' {
   if (/[.](png|jpe?g|webp)$/.test(name)) return 'IMAGE'
   return 'UNKNOWN'
 }
-function createImportAttemptId() {
-  return globalThis.crypto?.randomUUID?.() ?? `import-${Date.now()}-${Math.random().toString(36).slice(2)}`
-}
 async function createImportFingerprint(input: { fileName: string; orderNumber: string; trailerPlate?: string | null; stops: DraftStop[] }) {
-  const canonical = JSON.stringify({
+  return importFingerprint({
     fileName: input.fileName.trim().toLocaleLowerCase('de-DE'),
     orderNumber: input.orderNumber.trim().toLocaleUpperCase('de-DE'),
     trailerPlate: normalizeVehicle(input.trailerPlate ?? ''),
@@ -257,13 +255,6 @@ async function createImportFingerprint(input: { fileName: string; orderNumber: s
       references: splitReferences(stop.referenceText).map((value) => value.toLocaleUpperCase('de-DE'))
     }))
   })
-  if (globalThis.crypto?.subtle) {
-    const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical))
-    return `auftrag-${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')}`
-  }
-  let hash = 2166136261
-  for (const character of canonical) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619)
-  return `auftrag-${(hash >>> 0).toString(16).padStart(8, '0')}`
 }
 function resolutionLabel(resolution: AddressResolution) {
   if (resolution.researchUsed) return `ИИ нашёл вероятный полный адрес: ${resolution.resolvedAddress}. Проверьте перед подтверждением.`

@@ -313,6 +313,8 @@ export type RouteGeometry =
   | string
 
 export interface CreateTourStopInput {
+  /** Existing stop being edited; omitted fields keep their saved values. */
+  id?: string
   sequence: number
   type: StopType
   company?: string

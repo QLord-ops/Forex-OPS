@@ -47,6 +47,12 @@ function auditActor(request: FastifyRequest): AuditActor | undefined {
     : undefined;
 }
 
+/** Records who changed what after a mutating route succeeded (CLAUDE.md rule 7). */
+async function audit(request: FastifyRequest, action: string, entityType: string, entityId: string,
+  extra: { vehicleId?: string | null; tourId?: string | null; stopId?: string | null; metadata?: Record<string, unknown> } = {}) {
+  await writeAuditLog(prisma, auditActor(request), { action, entityType, entityId, ...extra });
+}
+
 const trafficQuota = new PrismaTrafficQuotaStore(prisma);
 const trafficProvider = new TomTomRoutingProvider(trafficQuota, new OsrmRoutingProvider());
 const routingService = new RoutingService(trafficProvider);
@@ -79,6 +85,7 @@ const vehicleSchema = z.object({
 });
 
 const stopSchema = z.object({
+  id: z.string().trim().min(1).max(200).optional(),
   sequence: z.number().int().positive(),
   type: z.enum(["LOAD", "UNLOAD"]),
   company: z.string().optional(),
@@ -120,7 +127,7 @@ const confirmImportedTourSchema = createTourSchema.extend({
 
 const patchTourSchema = z.union([
   z.object({ status: z.literal("CANCELLED") }),
-  createTourSchema
+  createTourSchema.extend({ version: z.number().int().nonnegative().optional() })
 ]);
 
 export interface BuildAppOptions {
@@ -232,6 +239,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   app.post('/notifications/:id/ack', async (request) => {
     const { id } = z.object({ id: z.string() }).parse(request.params);
     await notificationService.acknowledge(id);
+    await audit(request, 'NOTIFICATION_ACKNOWLEDGED', 'Notification', id);
     return { ok: true };
   });
   app.get('/events/stream', async (request, reply) => {
@@ -290,24 +298,47 @@ export async function buildApp(options: BuildAppOptions = {}) {
       extendedDrivingUsed: z.number().int().min(0).max(2), reducedRestUsed: z.number().int().min(0).max(3),
       reason: z.string().trim().min(3).max(2000)
     }).refine(value => value.drivingSinceBreakMinutes <= value.dailyDrivingMinutes).parse(request.body);
-    return operationsService.setClock(idParams.parse(request.params).id, input);
+    const id = idParams.parse(request.params).id;
+    const result = await operationsService.setClock(id, input);
+    await audit(request, 'VEHICLE_CLOCK_SET', 'Vehicle', id, { vehicleId: id, metadata: { reason: input.reason, cycleStartedAt: input.cycleStartedAt, dailyDrivingMinutes: input.dailyDrivingMinutes } });
+    return result;
   });
-  app.post('/vehicles/:id/manual-stop', async request => operationsService.manualStop(idParams.parse(request.params).id, versionInput.parse(request.body).version));
+  app.post('/vehicles/:id/manual-stop', async request => {
+    const id = idParams.parse(request.params).id;
+    const result = await operationsService.manualStop(id, versionInput.parse(request.body).version);
+    await audit(request, 'VEHICLE_MANUAL_STOP', 'Vehicle', id, { vehicleId: id });
+    return result;
+  });
   app.post('/vehicles/:id/resume', async request => {
     const id = idParams.parse(request.params).id;
     const { version } = versionInput.parse(request.body);
     const vehicle = await prisma.vehicle.findUniqueOrThrow({ where: { id } });
     if (vehicle.operationVersion !== version || !vehicle.manualStoppedAt) throw Object.assign(new Error('Состояние грузовика изменилось или он не остановлен.'), { statusCode: 409 });
     const refreshed = await trafficService.refresh(id, 'manual');
-    return operationsService.resume(id, refreshed.version);
+    const result = await operationsService.resume(id, refreshed.version);
+    await audit(request, 'VEHICLE_RESUMED', 'Vehicle', id, { vehicleId: id });
+    return result;
   });
   app.get('/vehicles/:id/traffic', async request => trafficService.status(idParams.parse(request.params).id));
-  app.post('/vehicles/:id/traffic/refresh', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async request => trafficService.refresh(idParams.parse(request.params).id, 'manual'));
+  app.post('/vehicles/:id/traffic/refresh', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async request => {
+    const id = idParams.parse(request.params).id;
+    const result = await trafficService.refresh(id, 'manual');
+    await audit(request, 'TRAFFIC_REFRESHED', 'Vehicle', id, { vehicleId: id });
+    return result;
+  });
   app.post('/vehicles/:id/traffic/accept', async request => {
     const input = versionInput.extend({ index: z.number().int().min(0).max(1), origin: z.object({ latitude: z.number().min(-90).max(90), longitude: z.number().min(-180).max(180) }).optional() }).parse(request.body);
-    return trafficService.accept(idParams.parse(request.params).id, input.index, input.version, input.origin);
+    const id = idParams.parse(request.params).id;
+    const result = await trafficService.accept(id, input.index, input.version, input.origin);
+    await audit(request, 'TRAFFIC_ROUTE_ACCEPTED', 'Vehicle', id, { vehicleId: id, metadata: { index: input.index } });
+    return result;
   });
-  app.post('/vehicles/:id/traffic/reject', async request => trafficService.reject(idParams.parse(request.params).id, versionInput.parse(request.body).version));
+  app.post('/vehicles/:id/traffic/reject', async request => {
+    const id = idParams.parse(request.params).id;
+    const result = await trafficService.reject(id, versionInput.parse(request.body).version);
+    await audit(request, 'TRAFFIC_ROUTE_REJECTED', 'Vehicle', id, { vehicleId: id });
+    return result;
+  });
   app.put('/vehicles/:id/truck-profile', async request => {
     const { version, ...profile } = versionInput.extend({
       heightMeters: z.number().positive().max(10), widthMeters: z.number().positive().max(10),
@@ -318,18 +349,30 @@ export async function buildApp(options: BuildAppOptions = {}) {
       const changed = await tx.vehicle.updateMany({ where: { id: vehicleId, operationVersion: version }, data: { truckProfile: JSON.stringify(profile), operationVersion: { increment: 1 } } });
       if (!changed.count) throw Object.assign(new Error('Состояние грузовика изменилось.'), { statusCode: 409 });
       await tx.operationEvent.create({ data: { vehicleId, type: 'TRUCK_PROFILE_UPDATED', payloadJson: JSON.stringify(profile) } });
+      await writeAuditLog(tx, auditActor(request), { action: 'TRUCK_PROFILE_UPDATED', entityType: 'Vehicle', entityId: vehicleId, vehicleId, metadata: profile });
     });
     return operationsService.get(vehicleId);
   });
   app.post('/vehicles/:id/weekly-rest', async request => {
     const input = versionInput.extend({ reason: z.string().trim().min(3).max(2000) }).parse(request.body);
-    return operationsService.weeklyRest(idParams.parse(request.params).id, input.version, input.reason);
+    const id = idParams.parse(request.params).id;
+    const result = await operationsService.weeklyRest(id, input.version, input.reason);
+    await audit(request, 'WEEKLY_REST_CONFIRMED', 'Vehicle', id, { vehicleId: id, metadata: { reason: input.reason } });
+    return result;
   });
   app.post('/vehicles/:id/exceptions', async request => {
     const input = versionInput.extend({ kind: z.enum(['EXTENDED_DRIVING', 'REDUCED_REST', 'BOTH']) }).parse(request.body);
-    return operationsService.acceptException(idParams.parse(request.params).id, input.version, input.kind);
+    const id = idParams.parse(request.params).id;
+    const result = await operationsService.acceptException(id, input.version, input.kind);
+    await audit(request, 'DRIVING_EXCEPTION_ACCEPTED', 'Vehicle', id, { vehicleId: id, metadata: { kind: input.kind } });
+    return result;
   });
-  app.delete('/vehicles/:id/exceptions', async request => operationsService.cancelExceptions(idParams.parse(request.params).id, versionInput.parse(request.body).version));
+  app.delete('/vehicles/:id/exceptions', async request => {
+    const id = idParams.parse(request.params).id;
+    const result = await operationsService.cancelExceptions(id, versionInput.parse(request.body).version);
+    await audit(request, 'DRIVING_EXCEPTIONS_CANCELLED', 'Vehicle', id, { vehicleId: id });
+    return result;
+  });
   app.post('/stops/:id/arrival', async request => {
     const input = z.object({ arrivedAt: z.string().datetime().optional() }).parse(request.body ?? {});
     return operationsService.confirmArrival(idParams.parse(request.params).id, input.arrivedAt ? new Date(input.arrivedAt) : new Date(), new Date(), auditActor(request));
@@ -365,6 +408,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const stopId = idParams.parse(request.params).id;
     const input = versionInput.extend({ appointmentAt: z.string().datetime() }).parse(request.body);
     const analysis = await appointmentService.apply(stopId, input);
+    await audit(request, 'STOP_APPOINTMENT_SET', 'Stop', stopId, { vehicleId: analysis.vehicleId, stopId, metadata: { appointmentAt: input.appointmentAt } });
     await refreshAlertsForVehicle(analysis.vehicleId);
     return analysis;
   });
@@ -555,6 +599,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   app.post("/vehicles", async (request, reply) => {
     const body = vehicleSchema.parse(request.body);
     const vehicle = await vehicleService.create(body);
+    await audit(request, 'VEHICLE_CREATED', 'Vehicle', vehicle.id, { vehicleId: vehicle.id, metadata: { vehicleNumber: vehicle.vehicleNumber } });
     return reply.status(201).send(toIsoObject(vehicle));
   });
 
@@ -623,6 +668,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
         reason: "Позиция указана диспетчером; не GPS.",
         payloadJson: JSON.stringify({ address, latitude: place.latitude, longitude: place.longitude })
       } });
+      await writeAuditLog(tx, auditActor(request), { action: "VEHICLE_MANUAL_POSITION_SET", entityType: "Vehicle", entityId: id, vehicleId: id, tourId: activeTour?.id ?? null,
+        metadata: { address } });
     });
     await refreshAlertsForVehicle(id);
     return { address, latitude: place.latitude, longitude: place.longitude, approachDurationSeconds: duration };
@@ -758,8 +805,9 @@ export async function buildApp(options: BuildAppOptions = {}) {
   });
 
   app.get('/integrations/webfleet/status', async () => webfleetSync.status());
-  app.post('/integrations/webfleet/sync', { preHandler: requireDispatcherRoles('admin') }, async () => {
+  app.post('/integrations/webfleet/sync', { preHandler: requireDispatcherRoles('admin') }, async (request) => {
     await webfleetSync.refreshIfDue();
+    await audit(request, 'WEBFLEET_SYNC_REQUESTED', 'Integration', 'webfleet');
     return webfleetSync.status();
   });
   app.get('/integrations/webfleet/bindings', async () => listWebfleetBindings(prisma));

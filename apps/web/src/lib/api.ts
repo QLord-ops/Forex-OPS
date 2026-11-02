@@ -38,15 +38,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     if (response.status === 401) notifySessionExpired()
-    const text = await response.text()
-    let message = text
-    try {
-      const parsed = JSON.parse(text) as { error?: unknown }
-      if (typeof parsed.error === 'string') message = parsed.error
-    } catch {
-      // Keep the plain response body when the server did not return JSON.
-    }
-    throw new ApiError(message || `Ошибка API ${response.status}`, response.status)
+    throw new ApiError(await readErrorMessage(response), response.status)
   }
 
   if (response.status === 204) {
@@ -54,6 +46,28 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   return (await response.json()) as T
+}
+
+/**
+ * Turns an error response into a short Russian message. Only the API's own JSON `error`/`message` is shown;
+ * proxy pages, HTML and stack traces never reach the dispatcher (CLAUDE.md rule 1).
+ */
+export async function readErrorMessage(response: Response): Promise<string> {
+  const text = await response.text().catch(() => '')
+  try {
+    const parsed = JSON.parse(text) as { error?: unknown; message?: unknown }
+    const value = typeof parsed.error === 'string' ? parsed.error : typeof parsed.message === 'string' ? parsed.message : ''
+    if (value.trim() && value.length <= 500) return value.trim()
+  } catch {
+    // Not JSON: a proxy or gateway page.
+  }
+  if (response.status === 401) return 'Сессия истекла. Войдите снова.'
+  if (response.status === 403) return 'Недостаточно прав для этого действия.'
+  if (response.status === 404) return 'Данные не найдены. Обновите страницу.'
+  if (response.status === 409) return 'Данные изменились. Обновите страницу и повторите.'
+  if (response.status === 429) return 'Слишком много запросов. Подождите минуту и повторите.'
+  if (response.status >= 500) return 'Сервер временно недоступен. Повторите через минуту.'
+  return `Не удалось выполнить запрос (код ${response.status}).`
 }
 
 export const api = {
@@ -95,7 +109,7 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ address })
     }),
-  updateTour: (id: string, payload: CreateTourInput | { status: 'CANCELLED' }) =>
+  updateTour: (id: string, payload: (CreateTourInput & { version?: number }) | { status: 'CANCELLED' }) =>
     request<Tour>(`/tours/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(payload)

@@ -51,6 +51,7 @@ it('rejects new clock edits and leaves all data unchanged', async () => {
   const f = await fixture();
   const preview = await f.service.preview(f.tour.id, { version: 0, futureStops: [replacement] }, now);
   await db.vehicle.update({ where: { id: f.vehicle.id }, data: { operationVersion: 1 } });
+  await db.operationEvent.create({ data: { vehicleId: f.vehicle.id, type: 'CLOCK_CORRECTION', payloadJson: '{}', reason: 'Tachograph korrigiert' } });
   await expect(f.service.apply(f.tour.id, { previewId: preview.id, version: 0 }, now)).rejects.toMatchObject({ statusCode: 409 });
   expect(await db.routeRevision.count()).toBe(0);
   expect(await db.leg.findUnique({ where: { id: f.leg.id } })).not.toBeNull();
@@ -92,4 +93,23 @@ it('rejects an event occurring during external routing before storing a preview'
   });
   await expect(f.service.preview(f.tour.id, { version: 0, futureStops: [replacement] }, now)).rejects.toMatchObject({ statusCode: 409 });
   expect(await db.routePreview.count()).toBe(0);
+});
+
+it('a background traffic refresh between preview and apply does not void the preview', async () => {
+  const f = await fixture();
+  const preview = await f.service.preview(f.tour.id, { version: 0, futureStops: [replacement] }, now);
+  // What the 15 s traffic job does to a moving truck: new leg details, plan and vehicle versions, a TRAFFIC_REFRESH event.
+  await db.leg.update({ where: { id: f.leg.id }, data: { routeDetails: JSON.stringify({ checkedAt: now.toISOString(), refreshIntervalSeconds: 300 }) } });
+  await db.tour.update({ where: { id: f.tour.id }, data: { planVersion: { increment: 1 } } });
+  await db.vehicle.update({ where: { id: f.vehicle.id }, data: { operationVersion: { increment: 1 } } });
+  await db.operationEvent.create({ data: { vehicleId: f.vehicle.id, tourId: f.tour.id, type: 'TRAFFIC_REFRESH', payloadJson: '{}' } });
+  const result = await f.service.apply(f.tour.id, { previewId: preview.id, version: 0 }, now);
+  expect(result.stops.at(-1)).toMatchObject({ address: 'Kassel' });
+});
+
+it('a changed stop still voids the preview', async () => {
+  const f = await fixture();
+  const preview = await f.service.preview(f.tour.id, { version: 0, futureStops: [replacement] }, now);
+  await db.stop.update({ where: { id: f.unload.id }, data: { address: 'Hamburg Hafen' } });
+  await expect(f.service.apply(f.tour.id, { previewId: preview.id, version: 0 }, now)).rejects.toMatchObject({ statusCode: 409 });
 });
