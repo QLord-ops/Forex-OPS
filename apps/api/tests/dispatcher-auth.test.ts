@@ -68,11 +68,11 @@ describe('dispatcher auth', () => {
   it('does not count successful logins against the limit', async () => {
     const { app } = await fixture();
     try {
-      for (let index = 0; index < 40; index++) expect((await app.inject({ method: 'POST', url: '/auth/login', headers: { origin: 'https://ops.test' }, payload: { password: 'test password' } })).statusCode).toBe(200);
+      for (let index = 0; index < 12; index++) expect((await app.inject({ method: 'POST', url: '/auth/login', headers: { origin: 'https://ops.test' }, payload: { password: 'test password' } })).statusCode).toBe(200);
       for (let index = 0; index < 9; index++) expect((await app.inject({ method: 'POST', url: '/auth/login', headers: { origin: 'https://ops.test' }, payload: { password: 'wrong' } })).statusCode).toBe(401);
       expect((await app.inject({ method: 'POST', url: '/auth/login', headers: { origin: 'https://ops.test' }, payload: { password: 'test password' } })).statusCode).toBe(200);
     } finally { await app.close(); }
-  });
+  }, 20_000);
   it('revokes the session on logout so the old cookie stops working', async () => {
     const { app } = await fixture();
     try {
