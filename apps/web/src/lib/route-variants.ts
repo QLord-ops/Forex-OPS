@@ -26,7 +26,7 @@ export function composeRoute(legs: RouteLeg[], choice: number[]) {
     const skip = last && first && last[0] === first[0] && last[1] === first[1] ? 1 : 0
     const offset = geometry.length - skip
     for (const point of option.geometry.slice(skip)) geometry.push(point)
-    for (const segment of option.trafficSegments) trafficSegments.push({ from: segment.from + offset, to: segment.to + offset, level: segment.level })
+    for (const segment of option.trafficSegments) trafficSegments.push({ ...segment, from: segment.from + offset, to: segment.to + offset })
     distanceMeters += option.distanceMeters
   })
   return { geometry, trafficSegments, distanceMeters }

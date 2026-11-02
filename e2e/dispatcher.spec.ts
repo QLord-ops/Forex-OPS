@@ -296,7 +296,7 @@ test('показывает пробки на маршруте выбранной
     if (path.endsWith('/current-position')) {
       await json(route, { state: 'UNTERWEGS', status: 'MOVING', positionSource: 'CALCULATED', coordinate: line[5], position: { latitude: line[5][1], longitude: line[5][0] },
         tourId: 'tour-1', legId: 'leg-1', geometryVersion: 'leg-1:a', routeGeometry: line, travelledGeometry: line.slice(0, 6), remainingGeometry: line.slice(5),
-        trafficSegments: [{ from: 8, to: 12, level: 'JAM' }, { from: 14, to: 16, level: 'SLOW' }], trafficCheckedAt: new Date().toISOString() }); return true
+        trafficSegments: [{ from: 8, to: 12, level: 'JAM', delaySeconds: 720, speedKmh: 15 }, { from: 14, to: 16, level: 'SLOW', delaySeconds: 20, speedKmh: 60 }], trafficCheckedAt: new Date().toISOString() }); return true
     }
     if (path.startsWith('/vehicles/veh-1')) { await json(route, []); return true }
     return false
@@ -307,6 +307,18 @@ test('показывает пробки на маршруте выбранной
   await expect(legend).toContainText('пробка')
   await expect(legend).toContainText('медленно')
   await expect(legend).not.toContainText('стоит')
+
+  // Only the jam that costs time gets an icon; the short slow-down stays a colour on the line.
+  const icons = page.getByRole('button', { name: /Подробнее о пробке/ })
+  await expect(icons).toHaveCount(1)
+  await icons.first().click()
+  const details = page.locator('.traffic-incident-details')
+  await expect(details).toContainText('Пробка')
+  await expect(details).toContainText('Задержка+12 мин')
+  await expect(details).toContainText('Скорость~15 км/ч')
+  await expect(details).toContainText('До пробки')
+  await page.keyboard.press('Escape')
+  await expect(details).toHaveCount(0)
 })
 
 test.describe('этап машины в точках маршрута', () => {

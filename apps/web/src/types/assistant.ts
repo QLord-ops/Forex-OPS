@@ -10,7 +10,7 @@ export interface RouteScenarioStop {
 }
 export interface RouteOption {
   id: string; mainRoads: string[]; distanceMeters: number; durationSeconds: number; trafficDelaySeconds: number; hasRoadClosure: boolean
-  geometry: Array<[number, number]>; trafficSegments: Array<{ from: number; to: number; level: 'SLOW' | 'JAM' | 'STANDSTILL' | 'CLOSED' }>
+  geometry: Array<[number, number]>; trafficSegments: Array<{ from: number; to: number; level: 'SLOW' | 'JAM' | 'STANDSTILL' | 'CLOSED'; delaySeconds?: number; speedKmh?: number | null }>
 }
 /** Up to three ways to drive one leg; option 0 is the router's best. */
 export interface RouteLeg { from: string; to: string; options: RouteOption[] }
@@ -18,7 +18,7 @@ export interface RouteScenario {
   vehicleId: string | null; vehicleNumber: string | null; originAddress?: string; generatedAt: string
   completion: { earliest: string | null; latest: string | null }; startRange: { earliest: string; latest: string }
   finishToday: 'ON_TIME' | 'RISK' | 'LATE' | 'UNKNOWN'; preliminary: boolean; requiresDailyRest: boolean
-  geometry: Array<[number, number]>; trafficSegments?: Array<{ from: number; to: number; level: 'SLOW' | 'JAM' | 'STANDSTILL' | 'CLOSED' }>
+  geometry: Array<[number, number]>; trafficSegments?: Array<{ from: number; to: number; level: 'SLOW' | 'JAM' | 'STANDSTILL' | 'CLOSED'; delaySeconds?: number; speedKmh?: number | null }>
   distanceMeters: number; warnings: string[]; routingProviders?: string[]
   stops: RouteScenarioStop[]
   legs?: RouteLeg[]

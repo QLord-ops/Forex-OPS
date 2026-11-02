@@ -1,5 +1,5 @@
 import 'maplibre-gl/dist/maplibre-gl.css'
-import { GeoJSONSource, Map, Marker, NavigationControl, setWorkerUrl, type StyleSpecification } from 'maplibre-gl'
+import { GeoJSONSource, Map, Marker, NavigationControl, Popup, setWorkerUrl, type StyleSpecification } from 'maplibre-gl'
 import mapLibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
 import { LocateFixed, Route, Satellite, TrafficCone } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -7,6 +7,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { boundsFor, geometryToCoordinates, stopCoordinates, toLineString, trafficFeatures } from '../lib/geometry'
 import { calculatedPositionLabel } from '../lib/format'
 import { useStableValue } from '../hooks/useStableValue'
+import { formatDelay, formatKm, INCIDENT_TITLES, trafficIncidents, type TrafficIncident } from '../lib/traffic-incidents'
 import type { MapRouteAlternative, MapRouteStop } from '../lib/route-preview'
 import type { Coordinate, CurrentPosition, TrafficSegment, Tour } from '../types/domain'
 
@@ -80,6 +81,8 @@ export function MapPanel({
   const stopMarkersRef = useRef<Marker[]>([])
   const previewMarkersRef = useRef<Marker[]>([])
   const alternativeMarkersRef = useRef<Marker[]>([])
+  const trafficMarkersRef = useRef<globalThis.Map<string, Marker>>(new globalThis.Map())
+  const trafficPopupRef = useRef<{ id: string; popup: Popup } | null>(null)
   const onSelectAlternativeRef = useRef(onSelectPreviewAlternative)
   onSelectAlternativeRef.current = onSelectPreviewAlternative
   // isStyleLoaded() is false while tiles load, so track the style lifecycle ourselves.
@@ -108,6 +111,7 @@ export function MapPanel({
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return
+    const trafficMarkers = trafficMarkersRef.current
 
     mapRef.current = new Map({
       container: containerRef.current,
@@ -142,6 +146,9 @@ export function MapPanel({
       stopMarkersRef.current.forEach((marker) => marker.remove())
       previewMarkersRef.current.forEach((marker) => marker.remove())
       alternativeMarkersRef.current.forEach((marker) => marker.remove())
+      trafficPopupRef.current?.popup.remove()
+      trafficMarkers.forEach((marker) => marker.remove())
+      trafficMarkers.clear()
       mapRef.current?.remove()
       mapRef.current = null
       markerRef.current = null
@@ -239,6 +246,59 @@ export function MapPanel({
     })
   }, [previewAlternatives])
 
+  // Jams on the route get a small icon; a click shows what the jam costs. The truck's own route counts from
+  // where the truck is now, a preview from its start.
+  const incidents = useMemo(() => previewRoute?.length
+    ? trafficIncidents(previewRoute, previewTraffic)
+    : trafficIncidents(fullRoute, position?.trafficSegments, { startIndex: Math.max(0, geometryToCoordinates(position?.travelledGeometry).length - 1) }),
+  [fullRoute, position?.trafficSegments, position?.travelledGeometry, previewRoute, previewTraffic])
+  const incidentsCheckedAt = previewRoute?.length ? null : position?.trafficCheckedAt ?? null
+  const incidentFromTruck = !previewRoute?.length
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+    const markers = trafficMarkersRef.current
+    const wanted = new Set(incidents.map((incident) => incident.id))
+    for (const [id, marker] of markers) {
+      if (!wanted.has(id)) { marker.remove(); markers.delete(id) }
+    }
+    const openPopup = (incident: TrafficIncident, button: HTMLElement) => {
+      trafficPopupRef.current?.popup.remove()
+      const popup = new Popup({ offset: 16, closeButton: true, closeOnClick: true, maxWidth: '260px', className: 'traffic-incident-popup' })
+        .setLngLat(incident.coordinate)
+        .setDOMContent(incidentDetails(incident, incidentsCheckedAt, incidentFromTruck))
+        .addTo(map)
+      const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') { popup.remove(); button.focus() } }
+      document.addEventListener('keydown', onKey)
+      popup.on('close', () => {
+        document.removeEventListener('keydown', onKey)
+        if (trafficPopupRef.current?.popup === popup) trafficPopupRef.current = null
+      })
+      trafficPopupRef.current = { id: incident.id, popup }
+    }
+    for (const incident of incidents) {
+      let marker = markers.get(incident.id)
+      if (!marker) {
+        const element = document.createElement('button')
+        element.type = 'button'
+        element.append(warningIcon())
+        marker = new Marker({ element }).setLngLat(incident.coordinate).addTo(map)
+        markers.set(incident.id, marker)
+      }
+      const element = marker.getElement()
+      marker.setLngLat(incident.coordinate)
+      element.className = `traffic-incident-marker traffic-incident-${incident.level.toLowerCase()}`
+      const summary = `${INCIDENT_TITLES[incident.level]}${incident.delaySeconds >= 60 ? `, ${formatDelay(incident.delaySeconds)}` : ''}`
+      element.title = summary
+      element.setAttribute('aria-label', `${summary}. Подробнее о пробке`)
+      element.onclick = (event) => { event.stopPropagation(); openPopup(incident, element) }
+      // An open window follows the data: the truck moves closer, the jam grows or shrinks.
+      if (trafficPopupRef.current?.id === incident.id) trafficPopupRef.current.popup.setDOMContent(incidentDetails(incident, incidentsCheckedAt, incidentFromTruck))
+    }
+    if (trafficPopupRef.current && !wanted.has(trafficPopupRef.current.id)) trafficPopupRef.current.popup.remove()
+  }, [incidents, incidentsCheckedAt, incidentFromTruck, styleVersion])
+
   useEffect(() => {
     const map = mapRef.current
     if (map && focusCoordinate) map.easeTo({ center: focusCoordinate, zoom: Math.max(map.getZoom(), 14), duration: 350 })
@@ -315,6 +375,50 @@ const CASING_WIDTH = ['interpolate', ['linear'], ['zoom'], 5, 6.5, 10, 10.5, 14,
 const TRAFFIC_COLOR = ['match', ['get', 'level'], 'SLOW', TRAFFIC_COLORS.SLOW, 'JAM', TRAFFIC_COLORS.JAM, 'STANDSTILL', TRAFFIC_COLORS.STANDSTILL, 'CLOSED', TRAFFIC_COLORS.CLOSED, ROUTE_BLUE] as unknown as string
 const TRAFFIC_FLOW_OPACITY = 0.72
 const TRAFFIC_FLOW_OPACITY_WITH_ROUTE = 0.4
+
+const STALE_TRAFFIC_MS = 30 * 60_000
+
+function incidentDetails(incident: TrafficIncident, checkedAt: string | null | undefined, fromTruck: boolean) {
+  const root = document.createElement('div')
+  root.className = 'traffic-incident-details'
+  const title = document.createElement('strong')
+  title.textContent = INCIDENT_TITLES[incident.level]
+  root.append(title)
+  const list = document.createElement('dl')
+  const row = (label: string, value: string) => {
+    const item = document.createElement('div')
+    const term = document.createElement('dt')
+    term.textContent = label
+    const detail = document.createElement('dd')
+    detail.textContent = value
+    item.append(term, detail)
+    list.append(item)
+  }
+  row('Задержка', incident.delaySeconds >= 60 ? formatDelay(incident.delaySeconds) : 'нет данных')
+  row('Длина', formatKm(incident.lengthMeters))
+  if (incident.speedKmh !== null) row('Скорость', `~${incident.speedKmh} км/ч`)
+  row(fromTruck ? 'До пробки' : 'От начала маршрута', incident.distanceAheadMeters < 100 ? (fromTruck ? 'машина в пробке' : 'в начале') : formatKm(incident.distanceAheadMeters))
+  root.append(list)
+  const at = checkedAt ? new Date(checkedAt) : null
+  if (at && Number.isFinite(at.getTime())) {
+    const note = document.createElement('small')
+    const stale = Date.now() - at.getTime() > STALE_TRAFFIC_MS
+    note.className = stale ? 'traffic-incident-stale' : ''
+    note.textContent = `${stale ? 'Данные устарели · ' : 'Данные '}${at.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}`
+    root.append(note)
+  }
+  return root
+}
+
+function warningIcon() {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+  svg.setAttribute('viewBox', '0 0 24 24')
+  svg.setAttribute('aria-hidden', 'true')
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+  path.setAttribute('d', 'M12 3 2 21h20L12 3Zm0 6v5m0 3v.5')
+  svg.append(path)
+  return svg
+}
 
 function renderMapContent(map: Map, fullRoute: Coordinate[], position?: CurrentPosition | null, previewRoute?: Coordinate[], previewTraffic?: TrafficSegment[], previewAlternatives?: MapRouteAlternative[]) {
   const travelled = geometryToCoordinates(position?.travelledGeometry)

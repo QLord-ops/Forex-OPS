@@ -978,3 +978,21 @@ aside > .dispatcher-logout-error { position: absolute; bottom: 4.25rem; left: .5
 .route-builder-leg-km { flex: 0 0 auto; color: #64748b; font-size: 12px; font-weight: 400; font-variant-numeric: tabular-nums; }
 .route-alt-chip { border: 1px solid rgb(15 23 42 / .12); border-radius: 6px; background: white; padding: 2px 8px; color: #334155; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; box-shadow: 0 1px 2px rgb(0 0 0 / .08); cursor: pointer; transition: border-color 150ms cubic-bezier(0.22, 1, 0.36, 1), color 150ms cubic-bezier(0.22, 1, 0.36, 1); }
 .route-alt-chip:hover, .route-alt-chip:focus-visible { border-color: #1a73e8; color: #174ea6; outline: none; }
+.traffic-incident-marker { z-index: 2; display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 2px solid white; border-radius: 50%; color: white; box-shadow: 0 1px 3px rgb(0 0 0 / .3); cursor: pointer; }
+.traffic-incident-marker svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+.traffic-incident-marker:focus-visible { outline: 2px solid #1a73e8; outline-offset: 2px; }
+.traffic-incident-slow { background: #b45309; }
+.traffic-incident-jam { background: #d93025; }
+.traffic-incident-standstill { background: #8b0000; }
+.traffic-incident-closed { background: #202124; }
+.maplibregl-popup.traffic-incident-popup { z-index: 5; }
+.traffic-incident-popup .maplibregl-popup-content { padding: 10px 28px 10px 12px; border-radius: 8px; box-shadow: 0 2px 8px rgb(0 0 0 / .18); }
+.traffic-incident-popup .maplibregl-popup-close-button { width: 24px; height: 24px; font-size: 18px; color: #475569; }
+.traffic-incident-details { color: #1f2937; font-size: 13px; }
+.traffic-incident-details strong { display: block; margin-bottom: 4px; font-size: 14px; font-weight: 600; }
+.traffic-incident-details dl { display: grid; gap: 2px; margin: 0; }
+.traffic-incident-details dl > div { display: flex; justify-content: space-between; gap: 16px; }
+.traffic-incident-details dt { color: #475569; }
+.traffic-incident-details dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+.traffic-incident-details small { display: block; margin-top: 6px; color: #475569; font-size: 12px; }
+.traffic-incident-details small.traffic-incident-stale { color: #b45309; }

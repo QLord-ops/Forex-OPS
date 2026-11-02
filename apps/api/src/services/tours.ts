@@ -339,7 +339,7 @@ export class TourService {
     // TomTom indices refer to the stored leg geometry; the line sent out starts with the travelled prefix.
     const trafficSegments = trafficSections
       .filter(section => Number.isInteger(section.start) && Number.isInteger(section.end) && section.end > section.start && section.end < geometry.length)
-      .map(section => ({ from: section.start + travelledPrefix.length, to: section.end + travelledPrefix.length, level: section.level }));
+      .map(section => ({ from: section.start + travelledPrefix.length, to: section.end + travelledPrefix.length, level: section.level, delaySeconds: section.delaySeconds, speedKmh: section.speedKmh }));
 
     return {
       state: activeLeg.toStop.arrivedAt ? "DWELL" : arrived ? "ANGEKOMMEN_WARTET_AUF_BESTAETIGUNG" : "UNTERWEGS",
