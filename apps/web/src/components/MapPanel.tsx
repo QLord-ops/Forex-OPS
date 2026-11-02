@@ -371,8 +371,8 @@ const PREVIEW_BLUE = '#174ea6'
 const ALT_GREY = '#8fa3bf'
 const TRAFFIC_COLORS = { SLOW: '#f29900', JAM: '#d93025', STANDSTILL: '#8b0000', CLOSED: '#202124' } as const
 const TRAFFIC_LABELS = { SLOW: 'медленно', JAM: 'пробка', STANDSTILL: 'стоит', CLOSED: 'перекрыто' } as const
-const LINE_WIDTH = ['interpolate', ['linear'], ['zoom'], 5, 3.5, 10, 6.5, 14, 10] as unknown as number
-const CASING_WIDTH = ['interpolate', ['linear'], ['zoom'], 5, 6.5, 10, 10.5, 14, 14] as unknown as number
+const LINE_WIDTH = ['interpolate', ['linear'], ['zoom'], 5, 4.5, 10, 8.5, 14, 13] as unknown as number
+const CASING_WIDTH = ['interpolate', ['linear'], ['zoom'], 5, 7.5, 10, 12, 14, 17] as unknown as number
 const TRAFFIC_COLOR = ['match', ['get', 'level'], 'SLOW', TRAFFIC_COLORS.SLOW, 'JAM', TRAFFIC_COLORS.JAM, 'STANDSTILL', TRAFFIC_COLORS.STANDSTILL, 'CLOSED', TRAFFIC_COLORS.CLOSED, ROUTE_BLUE] as unknown as string
 const TRAFFIC_FLOW_OPACITY = 0.72
 const TRAFFIC_FLOW_OPACITY_WITH_ROUTE = 0.4
@@ -445,7 +445,7 @@ function renderMapContent(map: Map, fullRoute: Coordinate[], position?: CurrentP
     .map((item) => ({ type: 'Feature' as const, properties: { id: item.id }, geometry: { type: 'LineString' as const, coordinates: item.geometry } })) }
   upsertRouteLayer(map, 'preview-alt-casing', alternatives, { 'line-color': '#ffffff', 'line-width': CASING_WIDTH, 'line-opacity': 0.9 })
   upsertRouteLayer(map, 'preview-alt', alternatives, { 'line-color': ALT_GREY, 'line-width': LINE_WIDTH })
-  upsertRouteLayer(map, 'preview-alt-hit', alternatives, { 'line-color': '#000000', 'line-width': 18, 'line-opacity': 0 })
+  upsertRouteLayer(map, 'preview-alt-hit', alternatives, { 'line-color': '#000000', 'line-width': 20, 'line-opacity': 0 })
   upsertRouteLayer(map, 'preview-casing', toLineString(preview), { 'line-color': '#ffffff', 'line-width': CASING_WIDTH, 'line-opacity': 0.95 })
   upsertRouteLayer(map, 'preview-main', toLineString(preview), { 'line-color': PREVIEW_BLUE, 'line-width': LINE_WIDTH })
   upsertRouteLayer(map, 'preview-traffic', trafficFeatures(preview, previewTraffic), { 'line-color': TRAFFIC_COLOR, 'line-width': LINE_WIDTH })
