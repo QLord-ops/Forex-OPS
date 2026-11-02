@@ -3,6 +3,7 @@ import { usePolling } from '../hooks/usePolling'
 import { formatDateTime, formatDurationMinutes, statusLabel } from '../lib/format'
 import type { Stop } from '../types/domain'
 import { authHeaders, notifySessionExpired } from '../lib/auth'
+import { readErrorMessage } from '../lib/api'
 
 // Shared exclusively by the operations components in this feature.
 // eslint-disable-next-line react-refresh/only-export-components
@@ -12,10 +13,7 @@ export async function operationsRequest<T = unknown>(path: string, method = 'GET
   const response = await fetch(`${operationsBase}${path}`, { method, credentials: 'same-origin', headers: { ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...authHeaders() }, body: body === undefined ? undefined : JSON.stringify(body) })
   if (!response.ok) {
     if (response.status === 401) notifySessionExpired()
-    const text = await response.text()
-    let message = text
-    try { const parsed = JSON.parse(text); message = parsed.error || parsed.message || text } catch { /* Keep plain error. */ }
-    throw new Error(message || `HTTP ${response.status}`)
+    throw new Error(await readErrorMessage(response))
   }
   return response.status === 204 ? undefined as T : response.json() as Promise<T>
 }

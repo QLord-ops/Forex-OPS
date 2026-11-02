@@ -135,3 +135,52 @@ it("confirms an imported Auftrag once and returns the attached tour on retry", a
     importFingerprint: metadata.importFingerprint
   })).rejects.toMatchObject({ statusCode: 409 });
 });
+
+it("editing a queued tour keeps LDM, references, windows, trailer and remarks, and rejects a stale version", async () => {
+  const vehicle = await db.vehicle.create({ data: { vehicleNumber: "EDIT-KEEP" } });
+  const provider = new MockRoutingProvider();
+  provider.calculateRoute = async (from, to) => ({ provider: "test", geometry: [from, to], distanceMeters: 50_000, durationSeconds: 3600 });
+  const tours = new TourService(asAppDatabase(db), provider);
+  const active = await tours.createTour({ vehicleId: vehicle.id, orderNumber: "EDIT-0", stops: [
+    { sequence: 1, type: "LOAD", address: "Berlin", appointmentAt: null },
+    { sequence: 2, type: "UNLOAD", address: "Hamburg", appointmentAt: null }] });
+  expect(active.status).toBe("ACTIVE");
+  const queued = await tours.createTour({ vehicleId: vehicle.id, orderNumber: "EDIT-1", trailerPlate: "GÖ-FX 812", tourRemarks: "Rampe 4, vorher anrufen", stops: [
+    { sequence: 1, type: "LOAD", address: "Berlin", appointmentWindowStartAt: "2026-11-05T06:00:00.000Z", appointmentWindowEndAt: "2026-11-05T08:00:00.000Z",
+      loadingMeters: 13.6, referenceNumbers: ["REF-1", "REF-2"], instructions: "Palettentausch" },
+    { sequence: 2, type: "UNLOAD", address: "Hamburg", appointmentAt: null, loadingMeters: 13.6 }] });
+  const saved = await db.tour.findUniqueOrThrow({ where: { id: queued.id }, include: { stops: { orderBy: { sequence: "asc" } } } });
+
+  // The edit form only knows type, company, address, city, appointment and service minutes.
+  const edited = await tours.updateFutureTour(queued.id, { vehicleId: vehicle.id, orderNumber: "EDIT-1B", version: saved.planVersion, stops: saved.stops.map((stop) => ({
+    id: stop.id, sequence: stop.sequence, type: stop.type as "LOAD" | "UNLOAD", address: stop.address, latitude: stop.latitude, longitude: stop.longitude,
+    appointmentAt: null, serviceMinMinutes: 60, serviceMaxMinutes: 120 })) });
+  const after = await db.tour.findUniqueOrThrow({ where: { id: edited.id }, include: { stops: { orderBy: { sequence: "asc" } } } });
+  expect(after.orderNumber).toBe("EDIT-1B");
+  expect(after.trailerPlate).toBe("GÖ-FX 812");
+  expect(after.tourRemarks).toBe("Rampe 4, vorher anrufen");
+  expect(after.stops[0]).toMatchObject({ loadingMeters: 13.6, instructions: "Palettentausch", referenceNumbersJson: JSON.stringify(["REF-1", "REF-2"]) });
+  expect(after.stops[0].appointmentWindowStartAt?.toISOString()).toBe("2026-11-05T06:00:00.000Z");
+  expect(after.stops[1].loadingMeters).toBe(13.6);
+  expect(after.planVersion).toBe(saved.planVersion + 1);
+
+  await expect(tours.updateFutureTour(queued.id, { vehicleId: vehicle.id, orderNumber: "EDIT-1C", version: saved.planVersion, stops: [
+    { sequence: 1, type: "LOAD", address: "Berlin" }, { sequence: 2, type: "UNLOAD", address: "Hamburg" }] }))
+    .rejects.toMatchObject({ statusCode: 409 });
+});
+
+it("BELADEN/ENTLADEN rejects a time in the future or before the arrival", async () => {
+  const vehicle = await db.vehicle.create({ data: { vehicleNumber: "EVENT-TIME" } });
+  const provider = new MockRoutingProvider();
+  provider.calculateRoute = async (from, to) => ({ provider: "test", geometry: [from, to], distanceMeters: 50_000, durationSeconds: 3600 });
+  const tours = new TourService(asAppDatabase(db), provider);
+  const operations = new OperationsService(asAppDatabase(db), tours);
+  const tour = await tours.createTour({ vehicleId: vehicle.id, orderNumber: "EVENT-1", stops: [
+    { sequence: 1, type: "LOAD", address: "Berlin", appointmentAt: null }, { sequence: 2, type: "UNLOAD", address: "Hamburg", appointmentAt: null }] });
+  const arrived = new Date(Date.now() - 2 * 3600_000);
+  await operations.confirmArrival(tour.stops[0].id, arrived, new Date());
+  await expect(tours.recordLoaded(tour.stops[0].id, new Date(Date.now() + 3600_000))).rejects.toMatchObject({ statusCode: 409, message: expect.stringContaining("будущем") });
+  await expect(tours.recordLoaded(tour.stops[0].id, new Date(arrived.getTime() - 60_000))).rejects.toMatchObject({ statusCode: 409, message: expect.stringContaining("раньше прибытия") });
+  const loaded = await tours.recordLoaded(tour.stops[0].id, new Date(arrived.getTime() + 30 * 60_000));
+  expect(loaded.stops[0].completedAt).not.toBeNull();
+});

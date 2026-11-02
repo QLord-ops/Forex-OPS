@@ -1,3 +1,4 @@
+import { writeAuditLog, type AuditActor } from './audit-log.js';
 import { createHash } from 'node:crypto';
 import type { Prisma, PrismaClient, AssistantProposal } from '@prisma/client';
 import { z } from 'zod';
@@ -129,7 +130,7 @@ export class DispatcherAssistantService {
       return { message, proposals, ...(scenario !== undefined ? { scenario } : {}) };
     });
   }
-  async confirm(id: string, now = new Date()) {
+  async confirm(id: string, now = new Date(), actor?: AuditActor) {
     return this.db.$transaction(async tx => {
       const proposal = await tx.assistantProposal.findUnique({ where: { id } });
       if (!proposal) throw new AssistantError('Предложение не найдено.', 404);
@@ -157,6 +158,9 @@ export class DispatcherAssistantService {
         if (!updated.count) throw new AssistantError('Запись уже закрыта.', 409);
         result = { closed: true, resumeRequired: proposal.action === 'REPAIR' };
       } else result = await this.dependencies.execute(actionSchema.parse(proposal.action), input, proposal.vehicleId ?? undefined, tx, now);
+      // Actions confirmed through the assistant are audited like the dispatcher's own clicks.
+      await writeAuditLog(tx, actor, { action: 'ASSISTANT_PROPOSAL_CONFIRMED', entityType: 'AssistantProposal', entityId: id,
+        vehicleId: proposal.vehicleId, metadata: { proposalAction: proposal.action } });
       if (proposal.vehicleId) {
         await tx.vehicle.update({ where: { id: proposal.vehicleId }, data: { operationVersion: { increment: 1 } } });
         await tx.operationEvent.create({ data: { vehicleId: proposal.vehicleId, type: 'ASSISTANT_ACTION', reason: proposal.summary, payloadJson: JSON.stringify({ proposalId: id, action: proposal.action, input, result }) } });

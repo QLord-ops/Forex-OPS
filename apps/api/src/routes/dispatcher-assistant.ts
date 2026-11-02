@@ -22,7 +22,8 @@ export function registerDispatcherAssistantRoutes(app: FastifyInstance, service:
   }));
   app.get('/assistant/conversations/:id/messages', request => run(() => service.getMessages(idParams.parse(request.params).id)));
   app.post('/assistant/conversations/:id/messages', { bodyLimit: 150000 }, request => run(() => service.message(idParams.parse(request.params).id, dispatcherMessageSchema.parse(request.body), sessionKey(request))));
-  app.post('/assistant/proposals/:id/confirm', request => run(() => service.confirm(idParams.parse(request.params).id)));
+  app.post('/assistant/proposals/:id/confirm', request => run(() => service.confirm(idParams.parse(request.params).id, new Date(),
+    request.dispatcherSession ? { role: request.dispatcherSession.role, sessionId: request.dispatcherSession.sessionId } : undefined)));
   app.post('/assistant/proposals/:id/cancel', request => run(() => service.cancel(idParams.parse(request.params).id)));
 }
 

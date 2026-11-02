@@ -8,6 +8,7 @@ import { usePolling } from '../hooks/usePolling'
 import { api } from '../lib/api'
 import { statusLabel } from '../lib/format'
 import type { CreateTourStopInput, GeocodeResult, ImportedOrderDraft, OrderImportPreview, StopType } from '../types/domain'
+import { importFingerprint } from '../lib/import-fingerprint'
 
 interface StopDraft {
   id: string
@@ -267,9 +268,19 @@ export function NewOrderPage() {
       stops: resolvedStops.map((stop, index): CreateTourStopInput => ({ sequence: index + 1, type: stop.type, company: stop.company.trim() || undefined, address: stop.address.trim(), city: stop.city.trim() || undefined, latitude: stop.geocode!.latitude, longitude: stop.geocode!.longitude, appointmentAt: stop.appointmentAt ? new Date(stop.appointmentAt).toISOString() : null, appointmentWindowStartAt: stop.appointmentWindowStartAt ? new Date(stop.appointmentWindowStartAt).toISOString() : null, appointmentWindowEndAt: stop.appointmentWindowEndAt ? new Date(stop.appointmentWindowEndAt).toISOString() : null, loadingMeters: stop.loadingMeters ? Number(stop.loadingMeters.replace(',', '.')) : null, referenceNumbers: stop.referenceNumbers.split(/[,;\n]+/).map((value) => value.trim()).filter(Boolean), instructions: stop.instructions.trim() || null, serviceMinMinutes: stop.serviceMinMinutes, serviceMaxMinutes: stop.serviceMaxMinutes }))
     }
     try {
+      const importedFile = appliedImportSelection ? importItems.find((item) => item.id === appliedImportSelection.itemId) : undefined
+      // An imported Auftrag goes through the idempotent confirm, so a retry after a lost response never creates it twice.
       const tour = createNewVehicle
         ? (await api.createTourWithVehicle({ vehicle: { vehicleNumber: newVehicleNumber.trim(), licensePlate: newVehiclePlate.trim() || undefined }, tour: tourInput })).tour
-        : await api.createTour({ ...tourInput, vehicleId })
+        : appliedImportSelection && importedFile
+          ? (await api.confirmImportedTour({ ...tourInput, vehicleId,
+              importAttemptId: `${importedFile.id}:${appliedImportSelection.draftIndex}`,
+              importFingerprint: await importFingerprint({
+                fileName: importedFile.fileName.trim().toLocaleLowerCase('de-DE'),
+                orderNumber: tourInput.orderNumber.toLocaleUpperCase('de-DE'),
+                stops: tourInput.stops.map((stop) => ({ type: stop.type, address: stop.address.toLocaleLowerCase('de-DE').replace(/\s+/g, ' '), appointment: stop.appointmentAt ?? null }))
+              }) })).tour
+          : await api.createTour({ ...tourInput, vehicleId })
       if (appliedImportSelection) {
         const nextItems = importItems.map((item) => item.id === appliedImportSelection.itemId ? { ...item, completedDraftIndexes: Array.from(new Set([...item.completedDraftIndexes, appliedImportSelection.draftIndex])) } : item)
         const nextSelection = findNextImportSelection(nextItems, appliedImportSelection)

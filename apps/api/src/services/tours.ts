@@ -48,6 +48,8 @@ export type CreateTourInput = {
   trailerPlate?: string | null;
   tourRemarks?: string | null;
   stops: Array<{
+    /** Existing stop being edited: fields left out of the input keep their saved values. */
+    id?: string;
     sequence: number;
     type: "LOAD" | "UNLOAD";
     company?: string;
@@ -70,7 +72,8 @@ export type CreateTourInput = {
   }>;
 };
 
-export type UpdateFutureTourInput = CreateTourInput;
+/** `version` is the tour's planVersion the dispatcher edited; a newer plan rejects the edit. */
+export type UpdateFutureTourInput = CreateTourInput & { version?: number };
 
 export type ImportTourMetadata = {
   importAttemptId: string;
@@ -201,7 +204,12 @@ export class TourService {
     });
   }
 
-  async updateFutureTour(tourId: string, input: UpdateFutureTourInput, actor?: AuditActor): Promise<TourAggregate> {
+  async updateFutureTour(tourId: string, rawInput: UpdateFutureTourInput, actor?: AuditActor): Promise<TourAggregate> {
+    const saved = await this.db.tour.findUnique({ where: { id: tourId }, include: { stops: true } });
+    if (saved && rawInput.version !== undefined && saved.planVersion !== rawInput.version) {
+      throw new TourPlanConflictError("Маршрут уже изменили. Обновите страницу и внесите правку заново.");
+    }
+    const input = saved ? keepSavedTourFields(rawInput, saved) : rawInput;
     validateTourInput(input);
     const context = await readPlanningContext(this.db, input, tourId);
     const orderedStops = [...input.stops].sort((a, b) => a.sequence - b.sequence);
@@ -209,6 +217,10 @@ export class TourService {
 
     return this.db.$transaction(async (tx) => {
       assertPlanningContextUnchanged(context, await readPlanningContext(tx, input, tourId));
+      if (saved) {
+        const fresh = await tx.tour.findUnique({ where: { id: tourId } });
+        if (fresh?.planVersion !== saved.planVersion) throw new TourPlanConflictError("Маршрут уже изменили. Обновите страницу и внесите правку заново.");
+      }
       const { status, previousTourId } = context;
       await tx.alert.deleteMany({ where: { tourId } });
       await tx.leg.deleteMany({ where: { tourId } });
@@ -374,6 +386,7 @@ export class TourService {
   ): Promise<TourAggregate> {
     const context = await readDepartureContext(this.db, stopId);
     assertStopActionAllowed(context.stop.completedAt, context.stop.tour.status, context.stop.arrivedAt);
+    assertStopEventTime(now, context.stop.arrivedAt);
     let refreshed: RouteResult | null = null;
     if (context.departureLeg) {
       const points = parseGeometry(context.departureLeg.routeGeometry);
@@ -472,6 +485,55 @@ async function readDepartureContext(db: Prisma.TransactionClient, stopId: string
     departureLeg = nextTour?.legs.find(leg => leg.fromStopId === stopId) ?? null;
   }
   return { stop, departureLeg };
+}
+
+type SavedStopFields = {
+  id: string; company: string | null; sourceAddress: string | null; resolvedAddress: string | null; geocodePrecision: string | null; geocodeProvider: string | null;
+  appointmentWindowStartAt: Date | null; appointmentWindowEndAt: Date | null; loadingMeters: number | null; referenceNumbersJson: string | null; instructions: string | null;
+};
+
+/**
+ * The edit form shows only some fields. Anything it leaves out (LDM, references, instructions, time windows,
+ * trailer, Tourbemerkung) keeps its saved value instead of being wiped when the stops are rebuilt.
+ */
+export function keepSavedTourFields(
+  input: UpdateFutureTourInput,
+  saved: { trailerPlate: string | null; tourRemarks: string | null; stops: SavedStopFields[] }
+): UpdateFutureTourInput {
+  const byId = new Map(saved.stops.map((stop) => [stop.id, stop]));
+  return {
+    ...input,
+    trailerPlate: input.trailerPlate === undefined ? saved.trailerPlate : input.trailerPlate,
+    tourRemarks: input.tourRemarks === undefined ? saved.tourRemarks : input.tourRemarks,
+    stops: input.stops.map((stop) => {
+      const old = stop.id ? byId.get(stop.id) : undefined;
+      if (!old) return stop;
+      const keepWindow = !stop.appointmentAt && stop.appointmentWindowStartAt === undefined && stop.appointmentWindowEndAt === undefined;
+      return {
+        ...stop,
+        company: stop.company ?? old.company ?? undefined,
+        sourceAddress: stop.sourceAddress === undefined ? old.sourceAddress : stop.sourceAddress,
+        resolvedAddress: stop.resolvedAddress === undefined ? old.resolvedAddress : stop.resolvedAddress,
+        geocodePrecision: stop.geocodePrecision === undefined ? (old.geocodePrecision as CreateTourInput["stops"][number]["geocodePrecision"]) : stop.geocodePrecision,
+        geocodeProvider: stop.geocodeProvider === undefined ? old.geocodeProvider : stop.geocodeProvider,
+        appointmentWindowStartAt: keepWindow ? old.appointmentWindowStartAt?.toISOString() ?? null : stop.appointmentWindowStartAt,
+        appointmentWindowEndAt: keepWindow ? old.appointmentWindowEndAt?.toISOString() ?? null : stop.appointmentWindowEndAt,
+        loadingMeters: stop.loadingMeters === undefined ? old.loadingMeters : stop.loadingMeters,
+        referenceNumbers: stop.referenceNumbers === undefined ? parseReferenceNumbers(old.referenceNumbersJson) : stop.referenceNumbers,
+        instructions: stop.instructions === undefined ? old.instructions : stop.instructions
+      };
+    })
+  };
+}
+
+function parseReferenceNumbers(value: string | null): string[] | null {
+  if (!value) return null;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : null;
+  } catch {
+    return null;
+  }
 }
 
 async function readPlanningContext(db: Prisma.TransactionClient, input: CreateTourInput, tourId?: string) {
@@ -744,6 +806,13 @@ export function selectNextQueuedTour<T extends Pick<Tour, "id" | "status" | "pla
       .filter((tour) => tour.status === "QUEUED")
       .sort(compareQueuedItems)[0] ?? null
   );
+}
+
+/** BELADEN/ENTLADEN times go into immutable history: never in the future and never before the arrival. */
+export function assertStopEventTime(at: Date, arrivedAt: Date | null, clock = new Date()): void {
+  if (!Number.isFinite(at.getTime())) throw new TourPlanConflictError("Некорректное время события.");
+  if (at.getTime() > clock.getTime() + 60_000) throw new TourPlanConflictError("Время загрузки или выгрузки не может быть в будущем.");
+  if (arrivedAt && at < arrivedAt) throw new TourPlanConflictError("Время загрузки или выгрузки не может быть раньше прибытия.");
 }
 
 export function assertStopActionAllowed(completedAt: Date | null, tourStatus: string, arrivedAt?: Date | null): void {

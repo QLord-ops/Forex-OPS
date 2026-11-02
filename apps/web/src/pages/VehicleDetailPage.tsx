@@ -14,7 +14,7 @@ import { useVehiclePosition } from '../hooks/useVehiclePosition'
 import { api } from '../lib/api'
 import { routeProgress } from '../lib/route-progress'
 import {
-  calculatedPositionLabel,
+  positionSourceText,
   formatDateTime,
   formatAppointment,
   formatDelay,
@@ -126,7 +126,7 @@ function MetricsPanel({ tour, position }: { tour?: Tour | null; position?: Curre
       <Metric label="Пройдено" value={metersToKm(position?.distanceTravelledMeters)} />
       <Metric label="Осталось" value={metersToKm(position?.remainingDistanceMeters)} />
       <Metric label="Прогресс" value={`${progress}%`} />
-      <Metric label="Примечание" value={calculatedPositionLabel} />
+      <Metric label="Источник позиции" value={positionSourceText(position)} />
     </section>
   )
 }
