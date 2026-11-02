@@ -40,7 +40,8 @@ it("atomically creates an Auftrag with a new truck and preserves trailer, remark
   expect(result.vehicle.currentTrailerPlate).toBe("Z-S3153");
   expect(result.tour.trailerPlate).toBe("Z-S3153");
   expect(result.tour.tourRemarks).toContain("Freising");
-  expect(result.tour.plannedStartAt).toBeNull();
+  // The tour is planned to start at the first stop's window start (load date), not "now".
+  expect(result.tour.plannedStartAt?.toISOString()).toBe("2026-10-15T09:00:00.000Z");
   expect(result.tour.stops[0]).toMatchObject({ address: "Lindenstraße 4, 85354 Freising", loadingMeters: 10.4 });
   expect(result.tour.stops[0].appointmentWindowStartAt?.toISOString()).toBe("2026-10-15T09:00:00.000Z");
   expect(result.tour.stops[0].appointmentWindowEndAt?.toISOString()).toBe("2026-10-15T11:00:00.000Z");

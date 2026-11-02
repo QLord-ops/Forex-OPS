@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PrismaClient } from "../src/generated/sqlite-client/index.js";
-import { afterAll, beforeAll, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { MockRoutingProvider } from "../src/services/routing.js";
 import { TourService } from "../src/services/tours.js";
 import { asAppDatabase, migrateTestDatabase } from "./test-database.js";
@@ -183,4 +183,54 @@ it("BELADEN/ENTLADEN rejects a time in the future or before the arrival", async 
   await expect(tours.recordLoaded(tour.stops[0].id, new Date(arrived.getTime() - 60_000))).rejects.toMatchObject({ statusCode: 409, message: expect.stringContaining("раньше прибытия") });
   const loaded = await tours.recordLoaded(tour.stops[0].id, new Date(arrived.getTime() + 30 * 60_000));
   expect(loaded.stops[0].completedAt).not.toBeNull();
+});
+
+describe("queue by load date", () => {
+  const stops = (load: string | null, city = "Berlin") => [
+    { sequence: 1, type: "LOAD" as const, address: city, appointmentWindowStartAt: load, appointmentWindowEndAt: load ? load.replace("T05:00", "T17:00") : null },
+    { sequence: 2, type: "UNLOAD" as const, address: "Hamburg", appointmentAt: null }
+  ];
+  async function setup(name: string) {
+    const vehicle = await db.vehicle.create({ data: { vehicleNumber: name } });
+    const provider = new MockRoutingProvider();
+    provider.calculateRoute = async (from, to) => ({ provider: "test", geometry: [from, to], distanceMeters: 50_000, durationSeconds: 3600 });
+    return { vehicle, tours: new TourService(asAppDatabase(db), provider), operations: new OperationsService(asAppDatabase(db), new TourService(asAppDatabase(db), provider)) };
+  }
+  const read = (vehicleId: string) => db.tour.findMany({ where: { vehicleId, status: { in: ["ACTIVE", "QUEUED"] } }, orderBy: { queueIndex: "asc" }, include: { legs: true, stops: { orderBy: { sequence: "asc" } } } });
+
+  it("a tour that loads earlier becomes active before an active tour that has not started", async () => {
+    const { vehicle, tours } = await setup("QUEUE-FRONT");
+    const later = await tours.createTour({ vehicleId: vehicle.id, orderNumber: "LATER", stops: stops("2026-11-10T05:00:00.000Z") });
+    expect(later.status).toBe("ACTIVE");
+    expect(later.plannedStartAt?.toISOString()).toBe("2026-11-10T05:00:00.000Z");
+    const earlier = await tours.createTour({ vehicleId: vehicle.id, orderNumber: "EARLIER", stops: stops("2026-11-05T05:00:00.000Z", "Göttingen") });
+    const queue = await read(vehicle.id);
+    expect(queue.map((tour) => [tour.orderNumber, tour.status, tour.queueIndex])).toEqual([["EARLIER", "ACTIVE", 0], ["LATER", "QUEUED", 1]]);
+    expect(queue[1].previousTourId).toBe(earlier.id);
+    const transfer = queue[1].legs.find((leg) => leg.toStopId === queue[1].stops[0].id);
+    expect(transfer?.fromStopId).toBe(queue[0].stops.at(-1)!.id);
+  });
+
+  it("goes between a started active tour and a later queued one, re-linking the transfer legs", async () => {
+    const { vehicle, tours, operations } = await setup("QUEUE-MIDDLE");
+    const active = await tours.createTour({ vehicleId: vehicle.id, orderNumber: "RUNNING", stops: stops("2026-11-01T05:00:00.000Z") });
+    await operations.confirmArrival(active.stops[0].id, new Date(Date.now() - 3600_000), new Date());
+    const late = await tours.createTour({ vehicleId: vehicle.id, orderNumber: "NOV-12", stops: stops("2026-11-12T05:00:00.000Z", "Kassel") });
+    const middle = await tours.createTour({ vehicleId: vehicle.id, orderNumber: "NOV-08", stops: stops("2026-11-08T05:00:00.000Z", "Einbeck") });
+    const queue = await read(vehicle.id);
+    expect(queue.map((tour) => [tour.orderNumber, tour.status, tour.queueIndex])).toEqual([["RUNNING", "ACTIVE", 0], ["NOV-08", "QUEUED", 1], ["NOV-12", "QUEUED", 2]]);
+    expect(queue[1].previousTourId).toBe(active.id);
+    expect(queue[2].previousTourId).toBe(middle.id);
+    const transfers = (index: number) => queue[index].legs.filter((leg) => leg.toStopId === queue[index].stops[0].id);
+    expect(transfers(1).map((leg) => leg.fromStopId)).toEqual([queue[0].stops.at(-1)!.id]);
+    expect(transfers(2).map((leg) => leg.fromStopId)).toEqual([queue[1].stops.at(-1)!.id]);
+    expect(late.status).toBe("QUEUED");
+  });
+
+  it("a tour without a date keeps today's behaviour and goes to the end", async () => {
+    const { vehicle, tours } = await setup("QUEUE-UNDATED");
+    await tours.createTour({ vehicleId: vehicle.id, orderNumber: "DATED", stops: stops("2026-11-20T05:00:00.000Z") });
+    await tours.createTour({ vehicleId: vehicle.id, orderNumber: "UNDATED", stops: stops(null) });
+    expect((await read(vehicle.id)).map((tour) => tour.orderNumber)).toEqual(["DATED", "UNDATED"]);
+  });
 });

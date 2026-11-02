@@ -7,6 +7,7 @@ import { ErrorState, LoadingState } from '../components/States'
 import { usePolling } from '../hooks/usePolling'
 import { api } from '../lib/api'
 import type { CreateTourStopInput, GeocodeResult, StopType, Tour } from '../types/domain'
+import { berlinLocalToIso, isoToBerlinLocal } from '../lib/berlin-time'
 
 interface StopDraft {
   id: string
@@ -51,7 +52,7 @@ export function EditTourPage() {
             company: stop.company ?? '',
             address: stop.address,
             city: stop.city ?? '',
-            appointmentAt: toDateTimeLocal(stop.appointmentAt),
+            appointmentAt: isoToBerlinLocal(stop.appointmentAt),
             serviceMinMinutes: stop.serviceMinMinutes ?? 60,
             serviceMaxMinutes: stop.serviceMaxMinutes ?? 120,
             geocode: {
@@ -138,7 +139,7 @@ export function EditTourPage() {
           city: stop.city.trim() || undefined,
           latitude: stop.geocode!.latitude,
           longitude: stop.geocode!.longitude,
-          appointmentAt: stop.appointmentAt ? new Date(stop.appointmentAt).toISOString() : null,
+          appointmentAt: stop.appointmentAt ? berlinLocalToIso(stop.appointmentAt) : null,
           serviceMinMinutes: stop.serviceMinMinutes,
           serviceMaxMinutes: stop.serviceMaxMinutes
         }))
@@ -218,11 +219,4 @@ export function EditTourPage() {
       </div>
     </form>
   )
-}
-
-function toDateTimeLocal(value?: string | null): string {
-  if (!value) return ''
-  const date = new Date(value)
-  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
-  return local.toISOString().slice(0, 16)
 }

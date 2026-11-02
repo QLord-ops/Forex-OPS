@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { isValidLocalDateTime, type BoundedExcelRow, type ImportedOrderDraft, type ImportWarning } from "./excel-order-import.js";
+import { aiDateRules, normalizeAiSchedule } from "./order-dates.js";
 
 const DEFAULT_TIMEOUT_MS = 12_000;
 const MAX_OPENAI_ROWS = 120;
@@ -17,6 +18,9 @@ const stopSchema = z.object({
     .refine(isValidLocalDateTime, "appointmentLocal должен содержать корректные локальные дату и время")
     .nullable()
     .default(null),
+  appointmentWindowStartLocal: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/).refine(isValidLocalDateTime).nullable().default(null),
+  appointmentWindowEndLocal: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/).refine(isValidLocalDateTime).nullable().default(null),
+  appointmentDateLocal: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().default(null),
   loadingMeters: z.number().min(0).max(100).nullable().default(null),
   referenceNumbers: z.array(z.string().trim().min(1).max(200)).max(20).default([]),
   instructions: z.string().trim().max(4000).nullable().default(null),
@@ -54,6 +58,7 @@ export interface OpenAiOrderImportOptions {
   model?: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
+  now?: Date;
 }
 
 export async function importOrdersWithOpenAi(
@@ -90,7 +95,7 @@ export async function importOrdersWithOpenAi(
             role: "user",
             content: JSON.stringify({
               task:
-                "Find loading and unloading stops in these Excel rows. Extract explicit LDM/loading meters, stop reference numbers and operational notes. Missing optional metadata is allowed; never invent it. appointmentLocal must be YYYY-MM-DDTHH:mm or null. Write warnings in Russian.",
+                `Find loading and unloading stops in these Excel rows. Extract explicit LDM/loading meters, stop reference numbers and operational notes. Missing optional metadata is allowed; never invent it. ${aiDateRules(options.now)} Write warnings in Russian.`,
               rows: openAiInput.rows
             })
           }
@@ -128,6 +133,9 @@ export async function importOrdersWithOpenAi(
                             "company",
                             "address",
                             "appointmentLocal",
+                            "appointmentWindowStartLocal",
+                            "appointmentWindowEndLocal",
+                            "appointmentDateLocal",
                             "loadingMeters",
                             "referenceNumbers",
                             "instructions",
@@ -143,6 +151,9 @@ export async function importOrdersWithOpenAi(
                               type: ["string", "null"],
                               pattern: "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}$"
                             },
+                            appointmentWindowStartLocal: { type: ["string", "null"], pattern: "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}$" },
+                            appointmentWindowEndLocal: { type: ["string", "null"], pattern: "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}$" },
+                            appointmentDateLocal: { type: ["string", "null"], pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
                             loadingMeters: { type: ["number", "null"], minimum: 0, maximum: 100 },
                             referenceNumbers: { type: "array", maxItems: 20, items: { type: "string", minLength: 1, maxLength: 200 } },
                             instructions: { type: ["string", "null"], maxLength: 4000 },
@@ -181,6 +192,11 @@ export async function importOrdersWithOpenAi(
     return {
       drafts: parsed.drafts.map((draft): ImportedOrderDraft => ({
         ...draft,
+        // An exact time wins over a window; a date alone becomes the working-hours window.
+        stops: draft.stops.map(({ appointmentDateLocal, ...stop }) => {
+          const schedule = normalizeAiSchedule({ ...stop, appointmentDateLocal });
+          return { ...stop, appointmentLocal: schedule.appointmentLocal, appointmentWindowStartLocal: schedule.appointmentWindowStartLocal, appointmentWindowEndLocal: schedule.appointmentWindowEndLocal };
+        }),
         warnings: draft.warnings.map(compactWarning)
       })),
       warnings: [...openAiInput.warnings, ...parsed.warnings.map(compactWarning)]
