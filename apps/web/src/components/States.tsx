@@ -2,7 +2,7 @@ import { AlertCircle, Inbox, Loader2, RefreshCw } from 'lucide-react'
 
 export function LoadingState({ label = 'Данные загружаются' }: { label?: string }) {
   return (
-    <div className="state-box text-slate-600">
+    <div className="state-box text-slate-600" role="status">
       <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" />
       {label}
     </div>
@@ -20,7 +20,7 @@ export function EmptyState({ label }: { label: string }) {
 
 export function ErrorState({ error, onRetry }: { error: Error; onRetry?: () => void }) {
   return (
-    <div className="state-box border-red-200 bg-red-50 text-red-800">
+    <div className="state-box border-red-200 bg-red-50 text-red-800" role="alert">
       <AlertCircle className="h-5 w-5" aria-hidden="true" />
       <span>Ошибка загрузки: {error.message}</span>
       {onRetry ? (

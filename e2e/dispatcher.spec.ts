@@ -94,12 +94,65 @@ test('фиксирует BELADEN после прибытия', async ({ page }) 
     if (path === '/vehicles/veh-1/timeline') { await json(route, { vehicle, tours: [activeTour], items: [] }); return true }
     if (path === '/vehicles/veh-1/current-position') { await json(route, { vehicleId: vehicle.id, tourId: activeTour.id, status: 'ARRIVED', coordinate: [13.405, 52.52] }); return true }
     if (path === '/vehicles/veh-1/operations') { await json(route, { vehicleId: vehicle.id, version: 1, clock: null, preliminary: true, manualStoppedAt: null, position: { status: 'ARRIVED' }, currentStop: arrivedStop, dwellMinutes: 15, clockProposals: [], traffic: null }); return true }
-    if (path === '/stops/stop-load/loaded') { loaded = true; await json(route, activeTour); return true }
+    if (path === '/stops/stop-load/loaded') { loaded = route.request().postDataJSON(); await json(route, activeTour); return true }
     return false
   })
   await page.goto('/vehicles/veh-1')
   await page.getByRole('button', { name: 'ЗАГРУЖЕНО' }).evaluate((element: HTMLButtonElement) => element.click())
-  await expect.poll(() => loaded).toBe(true)
+  // One click only opens the dialog: history is written after the time is confirmed.
+  const dialog = page.getByRole('dialog', { name: /BELADEN/ })
+  await expect(dialog).toBeVisible()
+  expect(loaded).toBe(false)
+  await dialog.locator('input[type="datetime-local"]').fill('2026-10-30T09:15')
+  await dialog.getByRole('button', { name: 'Подтвердить' }).click()
+  await expect.poll(() => loaded).toMatchObject({ timestamp: expect.stringContaining('2026-10-30T') })
+  await expect(dialog).toHaveCount(0)
+})
+
+test('после истечения сессии вход поверх приложения сохраняет введённое', async ({ page }) => {
+  let expired = false
+  await page.route('**/api/**', async route => {
+    const path = new URL(route.request().url()).pathname.replace(/^\/api/, '')
+    if (path === '/auth/session') return json(route, { authenticated: true, role: 'dispatcher', csrfToken: 'e2e' })
+    if (path === '/auth/login') { expired = false; return json(route, { authenticated: true, role: 'dispatcher', csrfToken: 'e2e-2' }) }
+    if (expired) return json(route, { error: 'Войдите в диспетчерскую.' }, 401)
+    if (path === '/notifications') return json(route, { notifications: [] })
+    if (path === '/dashboard') return json(route, { vehicles: [{ vehicle, tour: tour(), statusText: 'MOVING', operationVersion: 1 }] })
+    if (path === '/vehicles') return json(route, [vehicle])
+    if (path.endsWith('/current-position')) return json(route, { status: 'MOVING', coordinate: [13.4, 52.5] })
+    return json(route, [])
+  })
+  await page.route('https://tile.openstreetmap.org/**', route => route.abort())
+  await page.goto('/')
+  const search = page.getByPlaceholder('LKW, Auftrag или город')
+  await search.fill('125')
+  expired = true
+  await expect(page.getByRole('dialog', { name: 'Сессия истекла, войдите снова' })).toBeVisible({ timeout: 15_000 })
+  await page.locator('#dispatcher-password').fill('e2e-test-password')
+  await page.getByRole('button', { name: 'SIGN IN' }).click()
+  await expect(page.getByRole('dialog', { name: 'Сессия истекла, войдите снова' })).toHaveCount(0)
+  await expect(search).toHaveValue('125')
+})
+
+test('закреплённая машина стоит первой даже без срочных событий', async ({ page }) => {
+  const other = { id: 'veh-2', vehicleNumber: '200', licensePlate: 'B-OPS200', maxSpeedKmh: 85 }
+  await page.addInitScript(() => window.localStorage.setItem('ops-dashboard-pinned-vehicles', JSON.stringify(['veh-1'])))
+  await authenticated(page, async (route, path) => {
+    if (path === '/dashboard') {
+      await json(route, { vehicles: [
+        { vehicle, tour: null, statusText: 'IDLE', operationVersion: 1 },
+        { vehicle: other, tour: tour(), statusText: 'MOVING', delayMinutes: 90, risk: 'RED', warning: 'RED', operationVersion: 1 }
+      ] }); return true
+    }
+    if (path === '/vehicles') { await json(route, [vehicle, other]); return true }
+    if (path.endsWith('/current-position')) { await json(route, { status: 'IDLE' }); return true }
+    return false
+  })
+  await page.goto('/')
+  const cards = page.locator('.fleet-list .vehicle-card')
+  await expect(cards).toHaveCount(2)
+  await expect(cards.first()).toContainText('LKW 125')
+  await expect(page.getByRole('button', { name: 'Все' })).toHaveAttribute('aria-pressed', 'true')
 })
 
 test('редактирует будущий тур', async ({ page }) => {

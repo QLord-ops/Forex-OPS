@@ -462,6 +462,11 @@ button:disabled {
 
 .icon-button:hover { background: #f1f5f9; color: #0f172a; }
 .icon-button:focus-visible { outline: 2px solid #0ea5e9; outline-offset: 2px; }
+/* Keyboard users see where they are in the fleet list, filters and links. */
+.filter-chip:focus-visible,
+.vehicle-card button:focus-visible,
+.app-shell a:focus-visible,
+main a:focus-visible { outline: 2px solid #0ea5e9; outline-offset: 2px; }
 
 .dashboard-stage {
   position: relative;
