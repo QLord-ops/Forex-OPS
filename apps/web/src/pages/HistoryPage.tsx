@@ -9,10 +9,10 @@ import { formatAppointment, formatDateTime, formatDelay, formatElapsedMinutes, o
 import type { Stop, Tour } from '../types/domain'
 
 export function HistoryPage() {
-  const vehicles = usePolling(api.vehicles, 30_000)
+  const vehicles = usePolling(api.vehicles, 0)
   const [vehicleId, setVehicleId] = useState('')
   const [now, setNow] = useState(() => new Date())
-  const history = usePolling(() => api.history(vehicleId || undefined), 30_000, true, vehicleId || 'all')
+  const history = usePolling(() => api.history(vehicleId || undefined), 0, true, vehicleId || 'all')
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 60_000)
@@ -39,6 +39,11 @@ export function HistoryPage() {
           <p className="page-subtitle">
             Маршруты и неизменяемые события загрузки/выгрузки из базы данных · данные на {formatDateTime(history.data?.generatedAt)}
           </p>
+          {history.data?.truncated ? (
+            <p className="page-subtitle" role="status">
+              Показаны последние {history.data.limits?.tours ?? 300} туров и {history.data.limits?.events ?? 2000} событий. Более ранние записи сохранены в базе; выберите машину, чтобы увидеть её историю.
+            </p>
+          ) : null}
         </div>
         <button className="secondary-button" onClick={() => void Promise.all([vehicles.refetch(), history.refetch()])}>
           <RefreshCw className="h-4 w-4" aria-hidden="true" />

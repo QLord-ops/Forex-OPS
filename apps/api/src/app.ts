@@ -147,6 +147,23 @@ export function proxyTrust(hops: number | false) {
   return hops ? (_address: string, hop: number) => hop < hops : false;
 }
 
+export const HISTORY_LIMITS = { tours: 300, events: 2000 } as const;
+const DASHBOARD_CONCURRENCY = 4;
+
+/** Runs `work` for every item with at most `limit` in flight, keeping the input order. */
+export async function mapWithConcurrency<T, R>(items: readonly T[], limit: number, work: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await work(items[index]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
 // TomTom calls on behalf of a dispatcher: generous for real work, too low to burn the monthly quota.
 const routingRateLimit = { max: 20, timeWindow: '1 minute' };
 
@@ -227,6 +244,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     try {
       await webfleetSync.refreshIfDue().catch(() => undefined);
       await notificationService.refresh();
+      await refreshAllAlerts();
       await trafficService.tick();
       lastNotificationRefreshAt = Date.now();
       for (const client of subscribers) client.write(`event: operations\ndata: ${JSON.stringify({ at: Date.now() })}\n\n`);
@@ -901,22 +919,40 @@ export async function buildApp(options: BuildAppOptions = {}) {
   });
 
   app.get("/history", async (request) => {
-    const { vehicleId } = z.object({ vehicleId: z.string().optional() }).parse(request.query);
-    const tours = await prisma.tour.findMany({
-      where: { vehicleId },
-      include: tourInclude,
-      orderBy: [{ plannedStartAt: "desc" }, { createdAt: "desc" }]
-    });
-    const events = await prisma.event.findMany({
-      where: { vehicleId },
-      include: { vehicle: true, tour: true, stop: true },
-      orderBy: { timestamp: "desc" }
-    });
+    const query = z.object({
+      vehicleId: z.string().optional(),
+      from: z.string().datetime().optional(),
+      to: z.string().datetime().optional()
+    }).parse(request.query);
+    const { vehicleId } = query;
+    const period = query.from || query.to ? { gte: query.from ? new Date(query.from) : undefined, lte: query.to ? new Date(query.to) : undefined } : undefined;
+    // History only grows; the page shows the newest records and says when older ones are left out.
+    const [tours, events, operationEvents] = await Promise.all([
+      prisma.tour.findMany({
+        where: { vehicleId, createdAt: period },
+        include: tourInclude,
+        orderBy: [{ plannedStartAt: "desc" }, { createdAt: "desc" }],
+        take: HISTORY_LIMITS.tours + 1
+      }),
+      prisma.event.findMany({
+        where: { vehicleId, timestamp: period },
+        include: { vehicle: true, tour: true, stop: true },
+        orderBy: { timestamp: "desc" },
+        take: HISTORY_LIMITS.events + 1
+      }),
+      prisma.operationEvent.findMany({ where: { vehicleId, createdAt: period }, orderBy: { createdAt: 'desc' }, take: HISTORY_LIMITS.events + 1 })
+    ]);
+    const truncated = tours.length > HISTORY_LIMITS.tours || events.length > HISTORY_LIMITS.events || operationEvents.length > HISTORY_LIMITS.events;
+    tours.splice(HISTORY_LIMITS.tours);
+    events.splice(HISTORY_LIMITS.events);
+    operationEvents.splice(HISTORY_LIMITS.events);
     return {
       generatedAt: new Date().toISOString(),
+      truncated,
+      limits: HISTORY_LIMITS,
       tours: enrichToursWithScheduleGroupedByVehicle(tours),
       events: events.map(toIsoObject),
-      operationEvents: await prisma.operationEvent.findMany({ where: { vehicleId }, orderBy: { createdAt: 'desc' } }),
+      operationEvents,
       timeReports: tours.flatMap(tour => tour.stops.filter(stop => stop.arrivedAt).map(stop => ({
         vehicleId: tour.vehicleId, tourId: tour.id, stopId: stop.id, city: stop.city, type: stop.type,
         arrivedAt: stop.arrivedAt, completedAt: stop.completedAt,
@@ -925,8 +961,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
     };
   });
 
+  // Alerts are recalculated by the background tick every 15 s; reading them never writes.
   app.get("/alerts", async () => {
-    await refreshAllAlerts();
     const alerts = await prisma.alert.findMany({
       where: { resolvedAt: null },
       include: { vehicle: true, stop: true, tour: true },
@@ -949,15 +985,18 @@ export async function buildApp(options: BuildAppOptions = {}) {
       orderBy: { vehicleNumber: "asc" }
     });
 
-    const frontendVehicles = [];
-    for (const vehicle of vehicles) {
+    // Each truck needs a few small queries; running a handful at once keeps the 10 s poll fast as the fleet grows.
+    const frontendVehicles = await mapWithConcurrency(vehicles, DASHBOARD_CONCURRENCY, async (vehicle) => {
       const breakdown = vehicle.issues.find(issue => issue.kind === 'BREAKDOWN');
       const activeTour = vehicle.tours.find((tour) => tour.status === "ACTIVE");
       const currentLeg = activeTour?.legs.find((leg) => leg.status === "ACTIVE" || leg.status === "ARRIVED");
       const fromStop = currentLeg ? activeTour?.stops.find((stop) => stop.id === currentLeg.fromStopId) : undefined;
       const toStop = currentLeg ? activeTour?.stops.find((stop) => stop.id === currentLeg.toStopId) : undefined;
-      const calculatedPosition = await tourService.getCurrentPosition(vehicle.id);
-      const latestTelemetry = await webfleetTelemetry.latest(vehicle.id, generatedAt);
+      const [calculatedPosition, latestTelemetry, lastOperation] = await Promise.all([
+        tourService.getCurrentPosition(vehicle.id),
+        webfleetTelemetry.latest(vehicle.id, generatedAt),
+        prisma.operationEvent.findFirst({ where: { vehicleId: vehicle.id }, orderBy: { createdAt: "desc" } })
+      ]);
       const position = withWebfleetPosition(calculatedPosition, latestTelemetry);
       const currentStop = activeTour?.stops.find((stop) => !stop.completedAt) ?? null;
       const scheduledStop = currentStop ? etaService.calculateVehicleSchedule(vehicle.tours, generatedAt).find((stop) => stop.stopId === currentStop.id) : null;
@@ -965,7 +1004,6 @@ export async function buildApp(options: BuildAppOptions = {}) {
       const displayedDelayMinutes = scheduledStop?.predictedDelayMinutes ?? position.delayMinutes;
       const riskColor = scheduledStop?.riskColor ?? calculateRiskColor(displayedEta ? new Date(displayedEta) : null, currentStop?.appointmentAt);
       const dwell = calculateDwellState(currentStop, generatedAt);
-      const lastOperation = await prisma.operationEvent.findFirst({ where: { vehicleId: vehicle.id }, orderBy: { createdAt: "desc" } });
       const clockSnapshot = snapshotVehicleClock(vehicle, currentLeg ?? null, generatedAt).clockState;
       const statusStartedAt = vehicle.manualStoppedAt
         ?? currentStop?.arrivedAt
@@ -994,7 +1032,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
         nextRestHours: clockSnapshot.kind === "KNOWN" ? ((clockSnapshot.currentCycle.reducedRestReservationId ? VEHICLE_CLOCK_LIMITS.reducedDailyRestSeconds : VEHICLE_CLOCK_LIMITS.normalDailyRestSeconds) / 3600) : null
       };
 
-      frontendVehicles.push({
+      return {
         vehicle: toIsoObject({
           id: vehicle.id,
           vehicleNumber: vehicle.vehicleNumber,
@@ -1035,8 +1073,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
           standstill: latestTelemetry.standstill,
           usable: latestTelemetry.usable
         } : { source: "CALCULATED", checkedAt: generatedAt.toISOString(), stale: false, ageSeconds: 0, usable: true }
-      });
-    }
+      };
+    });
 
     return {
       generatedAt: generatedAt.toISOString(),

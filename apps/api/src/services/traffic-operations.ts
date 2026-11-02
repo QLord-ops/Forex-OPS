@@ -45,12 +45,13 @@ export class TrafficOperationsService {
     this.ticking = true;
     try {
       const vehicles = await this.db.vehicle.findMany({ where: { tours: { some: { status: 'ACTIVE' } }, manualStoppedAt: null } });
-      const moving: Array<{ id: string; due: number; priority: number }> = [];
+      const moving = [];
       for (const vehicle of vehicles) {
         const position = await this.getPosition(vehicle.id, now);
         if (position.status !== 'MOVING') continue;
-        const { details, leg } = await this.context(vehicle.id);
-        moving.push({ id: vehicle.id, due: Date.parse(details.attemptedAt ?? details.checkedAt ?? '') || 0,
+        const context = await this.context(vehicle.id);
+        const { details, leg } = context;
+        moving.push({ id: vehicle.id, context, due: Date.parse(details.attemptedAt ?? details.checkedAt ?? '') || 0,
           priority: Number((details.activeRoute?.trafficDelaySeconds ?? 0) >= 600) + Number(Boolean(leg?.toStop.appointmentAt && position.delayMinutes > 0)) });
       }
       const quota = await this.routing.quotaStatus('background', now);
@@ -58,7 +59,7 @@ export class TrafficOperationsService {
       moving.sort((a, b) => b.priority - a.priority || a.due - b.due);
       // Sequential requests keep the free-quota reserve deterministic and avoid bursts.
       for (const item of moving) {
-        const context = await this.context(item.id);
+        const { context } = item;
         if (!context.leg) continue;
         const refreshIntervalSeconds = Number.isFinite(interval) ? interval : null;
         const reason = !Number.isFinite(interval) ? 'Бесплатная квота недоступна.' : interval > 600 ? 'Интервал увеличен из-за бесплатной квоты.' : null;

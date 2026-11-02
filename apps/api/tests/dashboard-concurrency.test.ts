@@ -1,0 +1,28 @@
+import { describe, expect, it } from "vitest";
+import { HISTORY_LIMITS, mapWithConcurrency } from "../src/app.js";
+
+describe("dashboard concurrency", () => {
+  it("keeps the input order and never runs more than the limit at once", async () => {
+    let running = 0;
+    let peak = 0;
+    const result = await mapWithConcurrency([5, 1, 4, 2, 3, 0], 3, async (delay) => {
+      running += 1;
+      peak = Math.max(peak, running);
+      await new Promise((resolve) => setTimeout(resolve, delay * 3));
+      running -= 1;
+      return delay * 10;
+    });
+    expect(result).toEqual([50, 10, 40, 20, 30, 0]);
+    expect(peak).toBe(3);
+  });
+
+  it("handles an empty fleet and passes errors on", async () => {
+    expect(await mapWithConcurrency([], 4, async () => 1)).toEqual([]);
+    await expect(mapWithConcurrency([1], 4, async () => { throw new Error("boom"); })).rejects.toThrow("boom");
+  });
+
+  it("bounds the history response", () => {
+    expect(HISTORY_LIMITS.tours).toBeGreaterThan(0);
+    expect(HISTORY_LIMITS.events).toBeGreaterThanOrEqual(HISTORY_LIMITS.tours);
+  });
+});

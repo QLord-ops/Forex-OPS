@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { boundsFor, geometryToCoordinates, stopCoordinates, toLineString, trafficFeatures } from '../lib/geometry'
 import { calculatedPositionLabel } from '../lib/format'
+import { useStableValue } from '../hooks/useStableValue'
 import type { MapRouteAlternative, MapRouteStop } from '../lib/route-preview'
 import type { Coordinate, CurrentPosition, TrafficSegment, Tour } from '../types/domain'
 
@@ -61,13 +62,13 @@ export type MapPanelProps = {
 
 export function MapPanel({
   tour,
-  position,
+  position: positionProp,
   vehicleNumber,
   focusCoordinate,
-  previewRoute,
-  previewStops,
-  previewTraffic,
-  previewAlternatives,
+  previewRoute: previewRouteProp,
+  previewStops: previewStopsProp,
+  previewTraffic: previewTrafficProp,
+  previewAlternatives: previewAlternativesProp,
   onSelectPreviewAlternative,
   previewKey,
   height = 520,
@@ -90,8 +91,15 @@ export function MapPanel({
   const initialModeRef = useRef(mode)
   const modeEffectReadyRef = useRef(false)
 
-  const stops = useMemo(() => tour?.stops?.slice().sort((a, b) => a.sequence - b.sequence) ?? [], [tour?.stops])
-  const legs = useMemo(() => tour?.legs ?? [], [tour?.legs])
+  const position = useStableValue(positionProp)
+  const previewRoute = useStableValue(previewRouteProp)
+  const previewStops = useStableValue(previewStopsProp)
+  const previewTraffic = useStableValue(previewTrafficProp)
+  const previewAlternatives = useStableValue(previewAlternativesProp)
+  const tourStops = useStableValue(tour?.stops)
+  const tourLegs = useStableValue(tour?.legs)
+  const stops = useMemo(() => tourStops?.slice().sort((a, b) => a.sequence - b.sequence) ?? [], [tourStops])
+  const legs = useMemo(() => tourLegs ?? [], [tourLegs])
   const fullRoute = useMemo(() => {
     const fromPosition = geometryToCoordinates(position?.routeGeometry)
     if (fromPosition.length) return fromPosition

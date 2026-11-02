@@ -25,7 +25,7 @@ interface StopDraft {
 export function EditTourPage() {
   const { id = '' } = useParams()
   const navigate = useNavigate()
-  const vehicles = usePolling(api.vehicles, 30_000)
+  const vehicles = usePolling(api.vehicles, 0)
   const [tour, setTour] = useState<Tour | null>(null)
   const [vehicleId, setVehicleId] = useState('')
   const [orderNumber, setOrderNumber] = useState('')
