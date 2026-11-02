@@ -263,9 +263,10 @@ export function MapPanel({
     for (const [id, marker] of markers) {
       if (!wanted.has(id)) { marker.remove(); markers.delete(id) }
     }
-    const openPopup = (incident: TrafficIncident, button: HTMLElement) => {
+    const openPopup = (incident: TrafficIncident, button: HTMLElement, fromKeyboard: boolean) => {
       trafficPopupRef.current?.popup.remove()
-      const popup = new Popup({ offset: 16, closeButton: true, closeOnClick: true, maxWidth: '260px', className: 'traffic-incident-popup' })
+      // Focus moves into the window only for keyboard users; a mouse click leaves no focus ring.
+      const popup = new Popup({ offset: 16, closeButton: true, closeOnClick: true, focusAfterOpen: fromKeyboard, maxWidth: '260px', className: 'traffic-incident-popup' })
         .setLngLat(incident.coordinate)
         .setDOMContent(incidentDetails(incident, incidentsCheckedAt, incidentFromTruck))
         .addTo(map)
@@ -292,7 +293,7 @@ export function MapPanel({
       const summary = `${INCIDENT_TITLES[incident.level]}${incident.delaySeconds >= 60 ? `, ${formatDelay(incident.delaySeconds)}` : ''}`
       element.title = summary
       element.setAttribute('aria-label', `${summary}. Подробнее о пробке`)
-      element.onclick = (event) => { event.stopPropagation(); openPopup(incident, element) }
+      element.onclick = (event) => { event.stopPropagation(); openPopup(incident, element, event.detail === 0) }
       // An open window follows the data: the truck moves closer, the jam grows or shrinks.
       if (trafficPopupRef.current?.id === incident.id) trafficPopupRef.current.popup.setDOMContent(incidentDetails(incident, incidentsCheckedAt, incidentFromTruck))
     }
@@ -381,9 +382,19 @@ const STALE_TRAFFIC_MS = 30 * 60_000
 function incidentDetails(incident: TrafficIncident, checkedAt: string | null | undefined, fromTruck: boolean) {
   const root = document.createElement('div')
   root.className = 'traffic-incident-details'
+  // The delay is what the dispatcher acts on, so it leads, in the colour of the jam on the line.
+  const header = document.createElement('header')
   const title = document.createElement('strong')
   title.textContent = INCIDENT_TITLES[incident.level]
-  root.append(title)
+  header.append(title)
+  if (incident.delaySeconds >= 60) {
+    const delay = document.createElement('span')
+    delay.className = `traffic-incident-delay traffic-incident-delay-${incident.level.toLowerCase()}`
+    delay.textContent = formatDelay(incident.delaySeconds)
+    delay.setAttribute('aria-label', `Задержка ${formatDelay(incident.delaySeconds)}`)
+    header.append(delay)
+  }
+  root.append(header)
   const list = document.createElement('dl')
   const row = (label: string, value: string) => {
     const item = document.createElement('div')
@@ -394,7 +405,7 @@ function incidentDetails(incident: TrafficIncident, checkedAt: string | null | u
     item.append(term, detail)
     list.append(item)
   }
-  row('Задержка', incident.delaySeconds >= 60 ? formatDelay(incident.delaySeconds) : 'нет данных')
+  if (incident.delaySeconds < 60) row('Задержка', 'нет данных')
   row('Длина', formatKm(incident.lengthMeters))
   if (incident.speedKmh !== null) row('Скорость', `~${incident.speedKmh} км/ч`)
   row(fromTruck ? 'До пробки' : 'От начала маршрута', incident.distanceAheadMeters < 100 ? (fromTruck ? 'машина в пробке' : 'в начале') : formatKm(incident.distanceAheadMeters))
@@ -414,9 +425,12 @@ function warningIcon() {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
   svg.setAttribute('viewBox', '0 0 24 24')
   svg.setAttribute('aria-hidden', 'true')
-  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
-  path.setAttribute('d', 'M12 3 2 21h20L12 3Zm0 6v5m0 3v.5')
-  svg.append(path)
+  // lucide «triangle-alert», the icon set used across the app.
+  for (const d of ['m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3', 'M12 9v4', 'M12 17h.01']) {
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+    path.setAttribute('d', d)
+    svg.append(path)
+  }
   return svg
 }
 
