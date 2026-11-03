@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, 
 import { Link } from 'react-router-dom'
 
 import { usePolling } from '../hooks/usePolling'
+import { AssignmentBar } from './AssignmentBar'
 import { api } from '../lib/api'
 import { classNames, formatDateTime, formatDelay, shortAddress, statusLabel, stopTypeLabel } from '../lib/format'
 import { currentStopOf, followingTours, sortedStops, terminOf, tourCancellable } from '../lib/tours'
@@ -95,6 +96,7 @@ export function TruckCard({ vehicleId, row, onClose, onTrack }: Props) {
         <SourceChip data={data} />
         <button type="button" className="icon-button icon-button-compact" onClick={onClose} aria-label="Закрыть карточку"><X className="h-4 w-4" /></button>
       </header>
+      {row ? <AssignmentBar row={row} /> : null}
 
       <div className="truck-card-tabbar">
         <div className="truck-card-tabs" role="tablist" aria-label="Разделы карточки" onKeyDown={onTabKey}>
