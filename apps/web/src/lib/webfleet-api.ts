@@ -12,6 +12,16 @@ export interface WebfleetConnectionStatus {
   errorCategory: WebfleetErrorCategory | null
   providerErrorCode: number | null
   retryAfter: string | null
+  details?: {
+    drivingTimes: WebfleetFeedStatus
+    vehicles: WebfleetFeedStatus
+  }
+}
+
+export interface WebfleetFeedStatus {
+  checkedAt: string | null
+  errorCategory: WebfleetErrorCategory | null
+  providerErrorCode: number | null
 }
 
 export interface WebfleetBinding {
@@ -23,6 +33,15 @@ export interface WebfleetBinding {
   externalPlate: string | null
   status: string
   boundAt: string
+}
+
+export interface WebfleetBindingSuggestion {
+  objectUid: string
+  objectNo: string | null
+  vehicleId: string
+  vehicleNumber: string
+  licensePlate: string | null
+  reason: 'EXACT' | 'NUMBER'
 }
 
 export const webfleetErrorText: Record<WebfleetErrorCategory, string> = {
@@ -64,6 +83,7 @@ export const webfleetApi = {
   status: () => request<WebfleetConnectionStatus>('status', 'GET'),
   sync: (signal?: AbortSignal) => request<WebfleetConnectionStatus>('sync', 'POST', {}, signal),
   bindings: () => request<WebfleetBinding[]>('bindings', 'GET'),
+  suggestions: () => request<WebfleetBindingSuggestion[]>('suggestions', 'GET'),
   bind: (input: { objectUid: string; vehicleId: string; objectNo?: string; licensePlate?: string }) => request<WebfleetBinding[]>('bindings', 'POST', input),
   unbind: (vehicleId: string) => request<WebfleetBinding[]>(`bindings/${encodeURIComponent(vehicleId)}`, 'DELETE')
 }

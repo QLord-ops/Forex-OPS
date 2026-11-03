@@ -185,6 +185,7 @@ test('показывает причину ошибки Webfleet и привяз�
     if (path === '/vehicles' && route.request().method() === 'GET') { await json(route, [vehicle]); return true }
     if (path === '/integrations/webfleet/status') { await json(route, status(bound ? [] : [{ objectUid: 'wf-125', objectNo: 'LKW 125', licensePlate: '', ambiguous: false }])); return true }
     if (path === '/integrations/webfleet/bindings' && route.request().method() === 'GET') { await json(route, bound ? [binding] : []); return true }
+    if (path === '/integrations/webfleet/suggestions') { await json(route, []); return true }
     if (path === '/integrations/webfleet/bindings' && route.request().method() === 'POST') {
       bound = route.request().postDataJSON() as Record<string, unknown>
       await json(route, [binding]); return true
@@ -372,6 +373,115 @@ test('показывает пробки на маршруте выбранной
   await expect(details).toContainText('До пробки')
   await page.keyboard.press('Escape')
   await expect(details).toHaveCount(0)
+})
+
+test('карточка машины: компактная строка, вкладки как в телематике, открытие из списка и с карты', async ({ page }) => {
+  const other = { id: 'veh-2', vehicleNumber: '7448', licensePlate: 'B-CY7448', maxSpeedKmh: 85 }
+  const now = Date.now()
+  const at = (minutes: number) => new Date(now + minutes * 60_000).toISOString()
+  // Values of B CY 2803 from the dispatcher's Webfleet screenshot.
+  const card = (id: string, number: string, plate: string) => ({
+    vehicleId: id, vehicleNumber: number, licensePlate: plate, currentTrailerPlate: 'B-TR 1', generatedAt: at(0),
+    webfleet: { objectNo: plate, objectName: 'MB', plate, vin: 'WDB0000000TEST001', tankLiters: 880, objectType: 'heavy_truck' },
+    current: { recordedAt: at(-1), ageSeconds: 60, stale: false, usable: true, coordinate: [9.95, 51.6], address: '06268 Obhausen, DE',
+      speedKmh: 84, courseDeg: 121, standstill: false, ignitionOn: true, ignitionChangedAt: at(-110), fuelPercent: 15, fuelLiters: 132,
+      odometerKm: 1566.9, engineHours: 33.35, businessTrip: true },
+    coupling: { status: 'OK', assetUid: null, assetNo: null, coupledAt: null },
+    driver: { status: 'SIGNED_ON', name: 'Max Mustermann', workState: 5, activitySince: at(-66), checkedAt: at(0), drivingTimesStatus: 'OK', optiDrive: 7.98,
+      drivingTimes: { referenceTime: at(-1), remainDrivingTodayMs: 24_360_000, totalDrivingTodayMs: 11_640_000, totalOtherWorkTodayMs: 5_640_000, totalAvailabilityTodayMs: 0,
+        maxDrivingTodayMs: 36_000_000, remainDrivingWeekMs: 172_440_000, maxDrivingWeekMs: 201_600_000, shiftStartedAt: at(-320), latestShiftEndAt: at(580),
+        nextBreakAt: at(74), nextBreakMinMs: 1_800_000, nextRestAt: at(579), nextRestMinMs: 32_400_000, earliestNextShiftAt: at(540),
+        extendedShiftsUsed: 0, maxExtendedShifts: 2, reducedRestsUsed: 1, maxReducedRests: 3, restBalances: [], infringements: false, lastCardActivityAt: at(-319) } },
+    events: { status: 'OK', unresolved: 1, items: [{ id: 'e1', at: at(-70), level: 'ALARM', text: 'Превышение скорости', address: 'A38', resolved: false }] },
+    trips: { status: 'OK', items: [
+      { id: 't2', startAt: at(-60), endAt: null, startAddress: 'Lindenstraße, 37355 Niederorschel', endAddress: null, distanceKm: null, businessTrip: true },
+      { id: 't1', startAt: at(-330), endAt: at(-152), startAddress: 'BASE Northeim', endAddress: 'Lindenstraße, 37355 Niederorschel', distanceKm: 99, businessTrip: true }
+    ] },
+    maintenance: { status: 'OK', items: [] }
+  })
+  const cardRequests: string[] = []
+  await authenticated(page, async (route, path) => {
+    if (path === '/dashboard') {
+      await json(route, { vehicles: [
+        { vehicle, tour: tour(), statusText: 'ARRIVED', operationVersion: 1, currentAction: { type: 'MARK_LOADED', label: 'BELADEN', stopId: 'stop-load' },
+          telemetry: { source: 'WEBFLEET', checkedAt: at(-1), stale: false, ageSeconds: 60, speedKmh: 84, standstill: false, courseDeg: 121, address: '06268 Obhausen, DE', objectNo: 'B CY 2803', objectName: 'MB', usable: true },
+          mapPosition: { coordinate: [13.4, 52.5], source: 'WEBFLEET', stale: false, courseDeg: 90, standstill: false } },
+        { vehicle: other, tour: null, statusText: 'IDLE', operationVersion: 1, mapPosition: { coordinate: [9.95, 51.6], source: 'WEBFLEET', stale: false, courseDeg: 45, standstill: false } }
+      ] }); return true
+    }
+    if (path === '/vehicles') { await json(route, [vehicle, other]); return true }
+    if (path.endsWith('/card')) {
+      cardRequests.push(path)
+      await json(route, path.includes('veh-2') ? card('veh-2', '7448', 'B CY 7448') : card('veh-1', '125', 'B CY 2803')); return true
+    }
+    if (path.endsWith('/track')) { await json(route, { checkedAt: at(0), points: [[9.9, 51.5], [9.95, 51.6]] }); return true }
+    if (path.endsWith('/current-position')) {
+      const [longitude, latitude] = path.includes('veh-2') ? [9.95, 51.6] : [13.4, 52.5]
+      await json(route, { status: 'MOVING', positionSource: 'WEBFLEET', coordinate: [longitude, latitude], position: { latitude, longitude } }); return true
+    }
+    if (path.startsWith('/vehicles/')) { await json(route, []); return true }
+    return false
+  })
+  await page.goto('/?vehicleId=veh-1')
+  await page.evaluate(() => window.localStorage.removeItem('ops-truck-card-tab'))
+
+  // Compact row like a telematics list: plate and make, speed, GPS time, address, and the dispatcher's action.
+  const row125 = page.locator('.vehicle-card').filter({ hasText: 'LKW 125' })
+  await expect(row125.locator('.vehicle-row-title')).toHaveText(/B CY 2803 – MB\s*LKW 125/)
+  await expect(row125.locator('.vehicle-row-line')).toHaveText(/\(84 км\/ч\) \d\d:\d\d, 06268 Obhausen, DE/)
+  await expect(row125.getByRole('button', { name: 'BELADEN' })).toBeVisible()
+  await row125.locator('.vehicle-row-main').click()
+  const dialog = page.getByRole('dialog', { name: 'B CY 2803' })
+  await expect(dialog.getByRole('heading', { name: 'B CY 2803' })).toBeFocused()
+  await expect(dialog.getByRole('tab', { name: 'Машина' })).toHaveAttribute('aria-selected', 'true')
+  await expect(dialog).toContainText('Едет 84 км/ч, на юго-восток')
+  await expect(dialog).toContainText('Служебная поездка')
+  await expect(dialog).toContainText('15 % · ~132 л')
+  await expect(dialog).toContainText('1 567 км')
+  await expect(dialog).toContainText('GPS · 1 мин')
+
+  await dialog.getByRole('tab', { name: 'Машина' }).focus()
+  await page.keyboard.press('ArrowRight')
+  await expect(dialog.getByRole('tab', { name: 'Водитель' })).toBeFocused()
+  await expect(dialog.getByRole('tab', { name: 'Водитель' })).toHaveAttribute('aria-selected', 'true')
+  await expect(dialog).toContainText('Max Mustermann')
+  await expect(dialog).toContainText(/по тахографу · с \d\d:\d\d \(1 ч 6 мин\)/)
+  await expect(dialog.getByRole('meter', { name: 'Остаток вождения' }).first()).toHaveAttribute('aria-valuetext', '6 ч 46 мин из 10 ч')
+  await expect(dialog).toContainText('Рабочее время всего4 ч 48 мин')
+  await expect(dialog).toContainText(/Следующий перерывдо \d\d:\d\d \(не меньше 30 мин\)/)
+  await expect(dialog).toContainText(/Ежедневный отдыхдо .*\d\d:\d\d \(не меньше 9 ч\)/)
+  await expect(dialog.getByRole('meter', { name: 'Остаток вождения' }).nth(1)).toHaveAttribute('aria-valuetext', '47 ч 54 мин из 56 ч')
+  await expect(dialog.getByLabel('Удлинённое вождение: доступно 2 из 2')).toBeVisible()
+  await expect(dialog.getByLabel('Удлинённый рабочий день: доступно 2 из 3')).toBeVisible()
+  await expect(dialog.getByRole('meter', { name: 'За 7 дней' })).toHaveAttribute('aria-valuetext', '7,98 из 10')
+
+  await dialog.getByRole('tab', { name: /События/ }).click()
+  await expect(dialog.locator('.truck-card-event-alarm')).toContainText('Тревога')
+  await expect(dialog).toContainText('Превышение скорости')
+  await dialog.getByRole('tab', { name: 'Поездки' }).click()
+  await expect(dialog).toContainText('Стоянка 1 ч 32 мин')
+  await expect(dialog).toContainText('поездка продолжается')
+  await expect(dialog).toContainText('99 км · служебная')
+
+  await dialog.getByRole('button', { name: 'Трек за сегодня' }).click()
+  await expect(dialog.getByRole('button', { name: 'Скрыть трек' })).toHaveAttribute('aria-pressed', 'true')
+
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await expect(row125.locator('.vehicle-row-main')).toBeFocused()
+
+  await page.locator('.vehicle-card').filter({ hasText: 'LKW 7448' }).locator('.vehicle-row-main').click()
+  await expect(page.getByRole('dialog', { name: 'B CY 7448' })).toBeVisible()
+  // The last opened tab is remembered for the next truck.
+  await expect(page.getByRole('dialog').getByRole('tab', { name: 'Поездки' })).toHaveAttribute('aria-selected', 'true')
+  await page.getByRole('button', { name: 'Закрыть карточку' }).click()
+
+  // veh-2 is selected now, so the fleet layer shows truck 125 as a small marker; it is a button, so the keyboard works too.
+  // The map is still fitted to the track, so the marker may be off screen: open it from the keyboard.
+  await page.getByRole('button', { name: /LKW 125: GPS, едет\. Открыть карточку/ }).focus()
+  await page.keyboard.press('Enter')
+  await expect(page.getByRole('dialog', { name: 'B CY 2803' })).toBeVisible()
+  expect(cardRequests).toEqual(expect.arrayContaining(['/vehicles/veh-1/card', '/vehicles/veh-2/card']))
 })
 
 test.describe('этап машины в точках маршрута', () => {

@@ -46,7 +46,25 @@ const MIN_RESTORED_ZOOM = 4
 const MAX_RESTORED_ZOOM = 12
 type MapMode = 'traffic' | 'satellite'
 
+/** One truck of the fleet layer; the selected truck is drawn by the main marker instead. */
+export type FleetMapVehicle = {
+  id: string
+  label: string
+  coordinate: Coordinate
+  source: 'WEBFLEET' | 'CALCULATED' | 'MANUAL'
+  stale: boolean | null
+  courseDeg: number | null
+  standstill: boolean | null
+}
+
+const FLEET_LABEL_MIN_ZOOM = 7
+
 export type MapPanelProps = {
+  /** Today's GPS track of the truck in the open card. */
+  track?: Coordinate[] | null
+  fleet?: FleetMapVehicle[]
+  selectedVehicleId?: string | null
+  onSelectFleetVehicle?: (vehicleId: string) => void
   tour?: Tour | null
   position?: CurrentPosition | null
   vehicleNumber?: string | null
@@ -62,6 +80,10 @@ export type MapPanelProps = {
 }
 
 export function MapPanel({
+  track: trackProp,
+  fleet: fleetProp,
+  selectedVehicleId,
+  onSelectFleetVehicle,
   tour,
   position: positionProp,
   vehicleNumber,
@@ -85,6 +107,11 @@ export function MapPanel({
   const trafficPopupRef = useRef<{ id: string; popup: Popup } | null>(null)
   const onSelectAlternativeRef = useRef(onSelectPreviewAlternative)
   onSelectAlternativeRef.current = onSelectPreviewAlternative
+  const fleetMarkersRef = useRef<globalThis.Map<string, Marker>>(new globalThis.Map())
+  const onSelectFleetRef = useRef(onSelectFleetVehicle)
+  onSelectFleetRef.current = onSelectFleetVehicle
+  const selectedIdRef = useRef(selectedVehicleId)
+  selectedIdRef.current = selectedVehicleId
   // isStyleLoaded() is false while tiles load, so track the style lifecycle ourselves.
   const styleReadyRef = useRef(false)
   const [styleVersion, setStyleVersion] = useState(0)
@@ -95,6 +122,8 @@ export function MapPanel({
   const modeEffectReadyRef = useRef(false)
 
   const position = useStableValue(positionProp)
+  const fleet = useStableValue(fleetProp)
+  const track = useStableValue(trackProp)
   const previewRoute = useStableValue(previewRouteProp)
   const previewStops = useStableValue(previewStopsProp)
   const previewTraffic = useStableValue(previewTrafficProp)
@@ -112,6 +141,7 @@ export function MapPanel({
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return
     const trafficMarkers = trafficMarkersRef.current
+    const fleetMarkers = fleetMarkersRef.current
 
     mapRef.current = new Map({
       container: containerRef.current,
@@ -131,6 +161,10 @@ export function MapPanel({
       styleReadyRef.current = true
       setStyleVersion((value) => value + 1)
     })
+    // Fleet numbers only from regional zoom on; at country level they would cover each other.
+    const updateFleetLabels = () => containerRef.current?.classList.toggle('fleet-labels-hidden', (mapRef.current?.getZoom() ?? 0) < FLEET_LABEL_MIN_ZOOM)
+    mapRef.current.on('zoom', updateFleetLabels)
+    updateFleetLabels()
     mapRef.current.on('moveend', () => {
       const map = mapRef.current
       if (!map) return
@@ -149,6 +183,8 @@ export function MapPanel({
       trafficPopupRef.current?.popup.remove()
       trafficMarkers.forEach((marker) => marker.remove())
       trafficMarkers.clear()
+      fleetMarkers.forEach((marker) => marker.remove())
+      fleetMarkers.clear()
       mapRef.current?.remove()
       mapRef.current = null
       markerRef.current = null
@@ -327,6 +363,52 @@ export function MapPanel({
 
   useEffect(() => {
     const map = mapRef.current
+    if (!map || !styleReadyRef.current) return
+    const data = { type: 'Feature' as const, properties: {}, geometry: { type: 'LineString' as const, coordinates: track ?? [] } }
+    const source = map.getSource('vehicle-track') as GeoJSONSource | undefined
+    if (source) source.setData(data)
+    else {
+      map.addSource('vehicle-track', { type: 'geojson', data })
+      map.addLayer({ id: 'vehicle-track', type: 'line', source: 'vehicle-track', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#7c3aed', 'line-width': 4, 'line-opacity': 0.8 } })
+    }
+    if (track && track.length > 1) {
+      const bounds = boundsFor(track)
+      if (bounds) map.fitBounds([bounds[0], bounds[1]], { padding: 60, maxZoom: FIT_MAX_ZOOM, duration: 400 })
+    }
+  }, [track, styleVersion])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+    const markers = fleetMarkersRef.current
+    const shown = new Set<string>()
+    for (const vehicle of fleet ?? []) {
+      if (vehicle.id === selectedVehicleId) continue
+      shown.add(vehicle.id)
+      let marker = markers.get(vehicle.id)
+      if (!marker) {
+        const element = document.createElement('button')
+        element.type = 'button'
+        element.addEventListener('click', (event) => {
+          event.stopPropagation()
+          onSelectFleetRef.current?.(vehicle.id)
+        })
+        marker = new Marker({ element, anchor: 'center' }).setLngLat(vehicle.coordinate).addTo(map)
+        markers.set(vehicle.id, marker)
+      } else {
+        marker.setLngLat(vehicle.coordinate)
+      }
+      drawFleetMarker(marker.getElement() as HTMLButtonElement, vehicle)
+    }
+    for (const [id, marker] of markers) {
+      if (shown.has(id)) continue
+      marker.remove()
+      markers.delete(id)
+    }
+  }, [fleet, selectedVehicleId])
+
+  useEffect(() => {
+    const map = mapRef.current
     const coordinate = position?.coordinate
     if (!map || !coordinate) {
       markerRef.current?.remove()
@@ -338,6 +420,11 @@ export function MapPanel({
       const element = document.createElement('div')
       element.className = 'truck-marker'
       element.setAttribute('aria-label', markerDescription(vehicleNumber, position?.positionSource))
+      // The card is also reachable from the list, so the canvas marker stays a plain click target.
+      element.addEventListener('click', (event) => {
+        event.stopPropagation()
+        if (selectedIdRef.current) onSelectFleetRef.current?.(selectedIdRef.current)
+      })
       markerRef.current = new Marker({ element }).setLngLat(coordinate).addTo(map)
     } else {
       markerRef.current.setLngLat(coordinate)
@@ -515,6 +602,30 @@ function readCamera(): { center: Coordinate; zoom: number } | null {
 
 function readMapMode(): MapMode {
   return window.localStorage.getItem('ops-dashboard-map-mode') === 'satellite' ? 'satellite' : 'traffic'
+}
+
+const FLEET_SOURCE_TEXT: Record<FleetMapVehicle['source'], string> = { WEBFLEET: 'GPS', MANUAL: 'указана вручную', CALCULATED: 'расчёт' }
+
+function drawFleetMarker(element: HTMLButtonElement, vehicle: FleetMapVehicle) {
+  const source = vehicle.source === 'WEBFLEET' ? (vehicle.stale ? 'stale' : 'live') : 'calculated'
+  const moving = vehicle.source === 'WEBFLEET' && vehicle.standstill === false && vehicle.courseDeg !== null
+  const sourceText = vehicle.source === 'WEBFLEET' && vehicle.stale ? 'GPS устарел' : FLEET_SOURCE_TEXT[vehicle.source]
+  const motion = vehicle.source !== 'WEBFLEET' ? '' : vehicle.standstill === true ? ', стоит' : vehicle.standstill === false ? ', едет' : ''
+  const key = `${source}|${moving ? Math.round(vehicle.courseDeg!) : 'dot'}|${vehicle.label}`
+  if (element.dataset.key === key) return
+  element.dataset.key = key
+  element.className = `fleet-marker fleet-marker-${source}`
+  element.setAttribute('aria-label', `LKW ${vehicle.label}: ${sourceText}${motion}. Открыть карточку`)
+  element.title = `LKW ${vehicle.label} · ${sourceText}${motion}`
+  element.replaceChildren()
+  const icon = document.createElement('span')
+  icon.className = moving ? 'fleet-marker-arrow' : 'fleet-marker-dot'
+  if (moving) icon.style.transform = `rotate(${vehicle.courseDeg}deg)`
+  icon.setAttribute('aria-hidden', 'true')
+  const label = document.createElement('span')
+  label.className = 'fleet-marker-label'
+  label.textContent = vehicle.label
+  element.append(icon, label)
 }
 
 function markerDescription(vehicleNumber?: string | null, source?: CurrentPosition['positionSource']): string {
