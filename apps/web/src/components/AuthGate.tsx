@@ -1,16 +1,15 @@
-import { LogOut, ArrowRight, Cog, Eye, EyeOff, LockKeyhole } from 'lucide-react'
+import { LogOut, ArrowRight, Eye, EyeOff, LockKeyhole } from 'lucide-react'
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { DispatcherAuthError, dispatcherAuth } from '../lib/auth'
 import './auth-gate.css'
+import { BrandMark, BrandWordmark } from './Brand'
 
 type AuthPhase = 'checking' | 'idle' | 'submitting' | 'success'
 
 function AuthBrand() {
   return <div className="auth-brand" aria-label="OPS FOREX — Fleet Operations">
-    <span className="auth-brand__ops">OPS</span>
-    <span className="auth-brand__name" aria-hidden="true">
-      <span>F</span><span className="auth-brand__gear"><Cog /></span><span>REX</span>
-    </span>
+    <span className="auth-brand__mark"><BrandMark size={64} /></span>
+    <BrandWordmark className="auth-brand__name" />
     <span className="auth-brand__tagline">FLEET OPERATIONS</span>
   </div>
 }

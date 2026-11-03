@@ -17,9 +17,9 @@ describe('alerts', () => {
   })
 
   it('shows the count in the tab title and links to the truck card', () => {
-    expect(titleWithCount(0)).toBe('OPS Disponent')
-    expect(titleWithCount(3)).toBe('(3) OPS Disponent')
-    expect(titleWithCount(140)).toBe('(99+) OPS Disponent')
+    expect(titleWithCount(0)).toBe('OPS FOREX')
+    expect(titleWithCount(3)).toBe('(3) OPS FOREX')
+    expect(titleWithCount(140)).toBe('(99+) OPS FOREX')
     expect(cardLink('veh 1')).toBe('/?vehicleId=veh%201&card=veh%201')
     expect(alertHeading('TRAFFIC_DELAY')).toBe('Пробка на маршруте')
   })

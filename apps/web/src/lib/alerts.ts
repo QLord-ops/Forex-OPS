@@ -7,7 +7,7 @@ export interface AlertNotification { id: string; vehicleId: string; stopId?: str
 const SEEN_KEY = 'ops-alerted-notifications'
 const SOUND_KEY = 'ops-alert-sound'
 const BANNER_KEY = 'ops-alert-banner-dismissed'
-export const BASE_TITLE = 'OPS Disponent'
+export const BASE_TITLE = 'OPS FOREX'
 
 export type AlertPermission = 'granted' | 'denied' | 'default' | 'unsupported'
 

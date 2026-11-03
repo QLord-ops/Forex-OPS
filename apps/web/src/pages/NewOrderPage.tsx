@@ -319,7 +319,7 @@ export function NewOrderPage() {
     </div> : null}
     <form className="mx-auto max-w-[1480px] space-y-5 pb-8" onSubmit={handleSubmit}>
       <div className="flex flex-wrap items-end justify-between gap-4">
-        <div><p className="mb-1 text-xs font-bold uppercase tracking-[0.18em] text-sky-700">Auftrag intake</p><h2 className="page-title">Новый заказ</h2><p className="page-subtitle">Загрузите документ, проверьте маршрут и назначьте машину.</p></div>
+        <div><p className="mb-1 text-xs font-bold uppercase tracking-[0.18em] text-[#8a6a2c]">Auftrag intake</p><h2 className="page-title">Новый заказ</h2><p className="page-subtitle">Загрузите документ, проверьте маршрут и назначьте машину.</p></div>
         <button type="button" className="secondary-button" onClick={manualMode ? returnToImport : beginManualMode}>{manualMode ? 'Вернуться к импорту' : 'Создать вручную'}</button>
       </div>
 
