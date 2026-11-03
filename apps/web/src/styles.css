@@ -1087,7 +1087,7 @@ aside > .dispatcher-logout-error { bottom: 11.5rem; }
 .alert-toggle-mobile:hover { background: #f1f5f9; color: #0f172a; }
 .alert-toggle-mobile .alert-toggle-label { display: none; }
 .alert-toggle-mobile .alert-toggle-dot { box-shadow: 0 0 0 2px #fff; }
-.alert-toggle-mobile + .dispatcher-logout-mobile { margin-left: 0; }
+.alert-toggle-mobile ~ .dispatcher-logout-mobile { margin-left: 0; }
 
 /* Termin review: the same quiet card as the Auftrag check, with the chosen stop and the ETA risk. */
 .appointment-review-vehicle { align-self: end; color: #475569; font-size: .75rem; }
@@ -1121,3 +1121,15 @@ aside > .dispatcher-logout-error { bottom: 11.5rem; }
 .vehicle-row-termin { display: inline-flex; align-items: center; gap: 4px; margin-top: 3px; border-radius: 6px; background: #4338ca; padding: 1px 6px; color: #fff; font-size: .6875rem; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.5; white-space: nowrap; }
 .truck-card-termin { margin-left: 8px; vertical-align: middle; }
 .fleet-marker-termin .fleet-marker-dot, .fleet-marker-termin .fleet-marker-arrow { box-shadow: 0 0 0 3px #4338ca; }
+
+/* Signed-in dispatcher in the sidebar; the narrow sidebar shows initials only. */
+.account-menu { display: flex; width: calc(100% - 16px); min-height: 44px; align-items: center; justify-content: center; gap: 10px; margin: 0 8px 8px; border-radius: 8px; padding: 6px; color: #e2e8f0; font-size: .8125rem; text-align: left; }
+.account-menu:hover { background: rgb(255 255 255 / .06); }
+.account-menu:focus-visible { outline: 2px solid #0ea5e9; outline-offset: 2px; }
+.account-menu-avatar { display: grid; width: 30px; height: 30px; flex: 0 0 30px; place-items: center; border-radius: 50%; background: #0f766e; color: #fff; font-size: .75rem; font-weight: 600; }
+.account-menu-name { display: none; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (min-width: 1536px) { .account-menu { justify-content: flex-start; } .account-menu-name { display: block; } }
+.account-menu-compact { width: auto; margin: 0; color: #0f172a; }
+.account-menu-compact .account-menu-name { display: block; }
+.account-dialog-backdrop { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; background: rgb(15 23 42 / .45); padding: 16px; }
+.account-dialog { display: grid; width: min(420px, 100%); gap: 12px; border-radius: 12px; background: #fff; padding: 20px; color: #0f172a; box-shadow: 0 20px 50px rgb(15 23 42 / .3); }

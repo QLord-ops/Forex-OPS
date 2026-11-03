@@ -13,6 +13,7 @@ const EditTourPage = lazy(() => import('./pages/EditTourPage').then((module) => 
 const NewOrderPage = lazy(() => import('./pages/NewOrderPage').then((module) => ({ default: module.NewOrderPage })))
 const AlertsPage = lazy(() => import('./pages/AlertsPage').then((module) => ({ default: module.AlertsPage })))
 const HistoryPage = lazy(() => import('./pages/HistoryPage').then((module) => ({ default: module.HistoryPage })))
+const DispatchersPage = lazy(() => import('./pages/DispatchersPage').then((module) => ({ default: module.DispatchersPage })))
 
 function PageLoading() {
   return <div className="page-subtitle p-4" role="status">Загрузка страницы…</div>
@@ -34,6 +35,7 @@ export function App() {
         <Route path="orders/new" element={page(<NewOrderPage />)} />
         <Route path="alerts" element={page(<AlertsPage />)} />
         <Route path="history" element={page(<HistoryPage />)} />
+        <Route path="dispatchers" element={page(<DispatchersPage />)} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes></AuthGate>
