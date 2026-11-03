@@ -32,6 +32,8 @@ const postgres = new PostgresClient({
 });
 
 const modelOrder = [
+  // Vehicles reference their dispatcher, so accounts come first.
+  "dispatcher",
   "vehicle",
   "tour",
   "stop",
@@ -72,11 +74,17 @@ function assertRelations(data) {
   const tourIds = ids("tour");
   const stopIds = ids("stop");
   const conversationIds = ids("assistantConversation");
+  const dispatcherIds = ids("dispatcher");
   const problems = [];
   const requireId = (condition, message) => {
     if (!condition) problems.push(message);
   };
 
+  for (const row of data.vehicle) {
+    if (row.assignedDispatcherId) {
+      requireId(dispatcherIds.has(row.assignedDispatcherId), `Vehicle ${row.id} has missing dispatcher ${row.assignedDispatcherId}`);
+    }
+  }
   for (const row of data.tour) {
     requireId(vehicleIds.has(row.vehicleId), `Tour ${row.id} has missing vehicle ${row.vehicleId}`);
     if (row.previousTourId) {
