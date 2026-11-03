@@ -30,7 +30,7 @@ import { PrismaTrafficQuotaStore, TomTomRoutingProvider, TrafficRoutingService }
 import { TrafficOperationsService } from './services/traffic-operations.js';
 import { VEHICLE_CLOCK_LIMITS } from './services/vehicle-clock.js';
 import { bindWebfleetObject, listWebfleetBindings, unbindWebfleetVehicle, WebfleetSyncService, WebfleetTelemetryService, type AutoArrivalHandler } from './services/webfleet.js';
-import { buildVehicleCard, suggestWebfleetBindings, WebfleetDetailsSync, WebfleetLiveStore } from './services/webfleet-live.js';
+import { buildVehicleCard, suggestWebfleetBindings, vehicleObjectUid, WebfleetDetailsSync, WebfleetLiveStore, WebfleetTrackService } from './services/webfleet-live.js';
 import { calculateRiskColor, calculateSimulatedDuration } from './services/simulation.js';
 import { forecastDrive } from './services/vehicle-clock.js';
 import { parseClockState } from './services/tours.js';
@@ -70,6 +70,7 @@ const autoArrival: AutoArrivalHandler | undefined = process.env.AUTO_ARRIVAL_ENA
 const webfleetLive = new WebfleetLiveStore();
 const webfleetSync = new WebfleetSyncService(prisma, undefined, undefined, autoArrival, (positions, now) => webfleetLive.setObjects(positions, now));
 const webfleetDetails = new WebfleetDetailsSync(webfleetLive);
+const webfleetTracks = new WebfleetTrackService();
 const webfleetTelemetry = new WebfleetTelemetryService(prisma, autoArrival);
 const currentPosition = async (id: string, now = new Date()) => {
   return withWebfleetPosition(await tourService.getCurrentPosition(id, now), await webfleetTelemetry.latest(id, now));
@@ -864,13 +865,22 @@ export async function buildApp(options: BuildAppOptions = {}) {
     ...await webfleetSync.status(),
     details: {
       drivingTimes: feedStatus(webfleetLive.drivingFeed),
-      vehicles: feedStatus(webfleetLive.vehicleFeed)
+      vehicles: feedStatus(webfleetLive.vehicleFeed),
+      couplings: feedStatus(webfleetLive.couplingFeed),
+      events: feedStatus(webfleetLive.eventFeed),
+      trips: feedStatus(webfleetLive.tripFeed),
+      optiDrive: feedStatus(webfleetLive.optiDriveFeed),
+      maintenance: feedStatus(webfleetLive.maintenanceFeed)
     }
   }));
   app.get('/integrations/webfleet/suggestions', async () => suggestWebfleetBindings(prisma, webfleetLive.allObjects()));
   app.get('/vehicles/:id/card', async (request) => {
     const { id } = z.object({ id: z.string().trim().min(1).max(64) }).parse(request.params);
     return buildVehicleCard(prisma, webfleetLive, (vehicleId, now) => webfleetTelemetry.latest(vehicleId, now), id);
+  });
+  app.get('/vehicles/:id/track', async (request) => {
+    const { id } = z.object({ id: z.string().trim().min(1).max(64) }).parse(request.params);
+    return webfleetTracks.track(await vehicleObjectUid(prisma, id));
   });
   app.post('/integrations/webfleet/sync', { preHandler: requireDispatcherRoles('admin') }, async (request) => {
     await webfleetSync.refreshIfDue();
@@ -1089,6 +1099,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
           courseDeg: latestTelemetry.courseDeg,
           fuelPercent: latestTelemetry.fuelPercent,
           address: latestTelemetry.address,
+          objectNo: latestTelemetry.objectNo,
+          objectName: latestTelemetry.objectName,
           usable: latestTelemetry.usable
         } : { source: "CALCULATED", checkedAt: generatedAt.toISOString(), stale: false, ageSeconds: 0, usable: true },
         // Every truck on the fleet map: where it is and where that position comes from.

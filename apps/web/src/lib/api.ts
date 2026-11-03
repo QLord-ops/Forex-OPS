@@ -11,6 +11,7 @@ import type {
   Tour,
   Vehicle,
   VehicleCardData,
+  VehicleTrack,
   VehicleTimeline
 } from '../types/domain'
 
@@ -83,6 +84,7 @@ export const api = {
   vehicleTours: (id: string) => request<Tour[]>(`/vehicles/${id}/tours`),
   vehicleTimeline: (id: string) => request<VehicleTimeline>(`/vehicles/${id}/timeline`),
   vehicleCard: (id: string) => request<VehicleCardData>(`/vehicles/${encodeURIComponent(id)}/card`),
+  vehicleTrack: (id: string) => request<VehicleTrack>(`/vehicles/${encodeURIComponent(id)}/track`),
   currentPosition: (id: string, includeGeometry = true) => request<CurrentPosition>(`/vehicles/${id}/current-position${includeGeometry ? '' : '?geometry=0'}`),
   tours: () => request<Tour[]>('/tours'),
   tour: (id: string) => request<Tour>(`/tours/${id}`),

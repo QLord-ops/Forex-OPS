@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { courseText, formatDurationMs, formatFuel, formatWholeKm, share, workState } from '../src/lib/telemetry-format';
+import { berlinClock, courseText, durationBetween, formatDurationMs, formatFuel, formatWholeKm, share, tripsWithParking, workState } from '../src/lib/telemetry-format';
 
 describe('vehicle card formatting', () => {
   it('turns tachograph milliseconds into hours and minutes and flags overruns', () => {
@@ -19,6 +19,19 @@ describe('vehicle card formatting', () => {
     expect(workState(5)).toEqual({ label: 'За рулём', tone: 'driving' });
     expect(workState(0).label).toBe('Состояние неизвестно');
     expect(workState(42).tone).toBe('unknown');
+  });
+
+  it('shows Webfleet clock times in Berlin time and parking between trips', () => {
+    const now = new Date('2026-11-03T09:00:00Z');
+    expect(berlinClock('2026-11-03T10:06:00Z', now)).toBe('11:06');
+    expect(berlinClock('2026-11-08T05:08:00Z', now)).toBe('08.11, 06:08');
+    expect(durationBetween('2026-11-03T07:46:00Z', now)).toBe('1 ч 14 мин');
+    const rows = tripsWithParking([
+      { id: 'a', startAt: '2026-11-03T03:30:00Z', endAt: '2026-11-03T05:44:00Z' },
+      { id: 'b', startAt: '2026-11-03T07:16:00Z', endAt: null },
+      { id: 'c', startAt: '2026-11-02T18:32:00Z', endAt: '2026-11-02T18:44:00Z' }
+    ]);
+    expect(rows.map((row) => [row.trip.id, row.parkedMs && formatDurationMs(row.parkedMs)])).toEqual([['b', '1 ч 32 мин'], ['a', '8 ч 46 мин'], ['c', null]]);
   });
 
   it('formats fuel, odometer and bar shares', () => {

@@ -26,6 +26,9 @@ export type WebfleetVehicleState = {
   engineHours?: number | null;
   ignitionChangedAt?: string | null;
   objectType?: string | null;
+  objectName?: string | null;
+  /** WEBFLEET.connect tripmode: 1 private, 2 business, 3 commute. */
+  tripMode?: number | null;
   isTrailer?: boolean;
 };
 
@@ -139,6 +142,7 @@ export class WebfleetTelemetryService {
       ...telemetry,
       standstill: isRecord(payload) && typeof payload.standstill === 'boolean' ? payload.standstill : null,
       ...vehicleStateFromPayload(payload),
+      objectNo: isRecord(payload) && typeof payload.objectNo === 'string' ? payload.objectNo : null,
       ageSeconds,
       stale: ageSeconds > FRESH_SECONDS,
       usable: ageSeconds <= FALLBACK_SECONDS
@@ -409,14 +413,15 @@ export function readWebfleetConfig(env = process.env): WebfleetConfig | null {
 }
 
 /** Only reporting actions are allowed: Webfleet stays read-only. */
-export type WebfleetReadAction = 'showObjectReportExtern' | 'showVehicleReportExtern' | 'getRemainingDrivingTimesEU';
+export type WebfleetReadAction = 'showObjectReportExtern' | 'showVehicleReportExtern' | 'getRemainingDrivingTimesEU' | 'showDriverReportExtern'
+  | 'getActiveAssetCouplings' | 'showEventReportExtern' | 'showTripReportExtern' | 'showOptiDriveIndicator' | 'showMaintenanceSchedules' | 'showTracks';
 
 export async function fetchObjectReport(config: WebfleetConfig, fetchImpl: typeof fetch = fetch): Promise<WebfleetPosition[]> {
-  const rows = await webfleetRequest(config, 'showObjectReportExtern', fetchImpl);
+  const rows = await webfleetRequest(config, 'showObjectReportExtern', {}, fetchImpl);
   return rows.map(parseWebfleetObjectRow).filter((row): row is WebfleetPosition => row !== null);
 }
 
-export async function webfleetRequest(config: WebfleetConfig, action: WebfleetReadAction, fetchImpl: typeof fetch = fetch): Promise<unknown[]> {
+export async function webfleetRequest(config: WebfleetConfig, action: WebfleetReadAction, params: Record<string, string> = {}, fetchImpl: typeof fetch = fetch): Promise<unknown[]> {
   const url = new URL(config.baseUrl);
   if (url.protocol !== 'https:' || url.hostname !== 'csv.webfleet.com' || url.pathname !== '/extern' || url.username || url.password) throw new WebfleetError('CONFIG');
   url.searchParams.set('account', config.account);
@@ -427,6 +432,7 @@ export async function webfleetRequest(config: WebfleetConfig, action: WebfleetRe
   url.searchParams.set('outputformat', 'json');
   url.searchParams.set('useUTF8', 'true');
   url.searchParams.set('useISO8601', 'true');
+  for (const [key, value] of Object.entries(params)) if (!['account', 'apikey', 'action', 'username', 'password'].includes(key)) url.searchParams.set(key, value);
   const authorization = Buffer.from(`${config.username}:${config.password}`).toString('base64');
   let response: Response;
   try {
@@ -481,6 +487,8 @@ export function parseWebfleetObjectRow(value: unknown): WebfleetPosition | null 
     engineHours: round1(divide(numberField(value, ['engine_operating_time', 'engine_operation_time']), 3600)),
     ignitionChangedAt: isoOrNull(stringField(value, ['ignition_time'])),
     objectType: stringField(value, ['objecttype'])?.slice(0, 40) ?? null,
+    objectName: stringField(value, ['objectname'])?.trim().slice(0, 60) || null,
+    tripMode: inRange(numberField(value, ['tripmode']), 0, 4),
     isTrailer: stringField(value, ['objectclassname']) === 'Anhänger' || stringField(value, ['objecttype']) === 'trailer',
     ignitionOn: booleanField(value, ['ignition', 'ignitionOn']),
     standstill: booleanField(value, ['standstill']),
@@ -495,7 +503,7 @@ export function parseWebfleetObjectRow(value: unknown): WebfleetPosition | null 
 }
 
 /** Driver fields are deliberately absent: only facts about the truck go into stored history. */
-const STORED_VEHICLE_FIELDS = ['courseDeg', 'address', 'fuelPercent', 'odometerKm', 'engineHours', 'ignitionChangedAt', 'objectType', 'isTrailer'] as const;
+const STORED_VEHICLE_FIELDS = ['courseDeg', 'address', 'fuelPercent', 'odometerKm', 'engineHours', 'ignitionChangedAt', 'objectType', 'objectName', 'tripMode', 'isTrailer'] as const;
 
 export function vehicleStateFromPayload(payload: unknown): Required<WebfleetVehicleState> {
   const record = isRecord(payload) ? payload : {};
@@ -503,7 +511,8 @@ export function vehicleStateFromPayload(payload: unknown): Required<WebfleetVehi
   const str = (key: string) => typeof record[key] === 'string' ? record[key] as string : null;
   return {
     courseDeg: num('courseDeg'), address: str('address'), fuelPercent: num('fuelPercent'), odometerKm: num('odometerKm'),
-    engineHours: num('engineHours'), ignitionChangedAt: str('ignitionChangedAt'), objectType: str('objectType'), isTrailer: record.isTrailer === true
+    engineHours: num('engineHours'), ignitionChangedAt: str('ignitionChangedAt'), objectType: str('objectType'), objectName: str('objectName'),
+    tripMode: num('tripMode'), isTrailer: record.isTrailer === true
   };
 }
 

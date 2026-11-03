@@ -60,6 +60,8 @@ export type FleetMapVehicle = {
 const FLEET_LABEL_MIN_ZOOM = 7
 
 export type MapPanelProps = {
+  /** Today's GPS track of the truck in the open card. */
+  track?: Coordinate[] | null
   fleet?: FleetMapVehicle[]
   selectedVehicleId?: string | null
   onSelectFleetVehicle?: (vehicleId: string) => void
@@ -78,6 +80,7 @@ export type MapPanelProps = {
 }
 
 export function MapPanel({
+  track: trackProp,
   fleet: fleetProp,
   selectedVehicleId,
   onSelectFleetVehicle,
@@ -120,6 +123,7 @@ export function MapPanel({
 
   const position = useStableValue(positionProp)
   const fleet = useStableValue(fleetProp)
+  const track = useStableValue(trackProp)
   const previewRoute = useStableValue(previewRouteProp)
   const previewStops = useStableValue(previewStopsProp)
   const previewTraffic = useStableValue(previewTrafficProp)
@@ -356,6 +360,22 @@ export function MapPanel({
     fitRoute(map, previewRoute?.length ? previewRoute : [...fullRoute, ...stopCoordinates(stops)], FIT_MAX_ZOOM, 260)
     setCameraRequest(null)
   }, [cameraRequest, fullRoute, position?.coordinate, previewRoute, stops])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !styleReadyRef.current) return
+    const data = { type: 'Feature' as const, properties: {}, geometry: { type: 'LineString' as const, coordinates: track ?? [] } }
+    const source = map.getSource('vehicle-track') as GeoJSONSource | undefined
+    if (source) source.setData(data)
+    else {
+      map.addSource('vehicle-track', { type: 'geojson', data })
+      map.addLayer({ id: 'vehicle-track', type: 'line', source: 'vehicle-track', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#7c3aed', 'line-width': 4, 'line-opacity': 0.8 } })
+    }
+    if (track && track.length > 1) {
+      const bounds = boundsFor(track)
+      if (bounds) map.fitBounds([bounds[0], bounds[1]], { padding: 60, maxZoom: FIT_MAX_ZOOM, duration: 400 })
+    }
+  }, [track, styleVersion])
 
   useEffect(() => {
     const map = mapRef.current

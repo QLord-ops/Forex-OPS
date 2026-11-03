@@ -142,6 +142,8 @@ export interface DashboardVehicle {
     courseDeg?: number | null
     fuelPercent?: number | null
     address?: string | null
+    objectNo?: string | null
+    objectName?: string | null
     usable?: boolean
   } | null
   mapPosition?: {
@@ -157,23 +159,32 @@ export interface DrivingTimes {
   referenceTime: string | null
   remainDrivingTodayMs: number | null
   totalDrivingTodayMs: number | null
+  totalOtherWorkTodayMs: number | null
+  totalAvailabilityTodayMs: number | null
   maxDrivingTodayMs: number | null
   remainDrivingWeekMs: number | null
   maxDrivingWeekMs: number | null
   shiftStartedAt: string | null
   latestShiftEndAt: string | null
-  nextBreakInMs: number | null
+  nextBreakAt: string | null
   nextBreakMinMs: number | null
-  nextRestInMs: number | null
+  nextRestAt: string | null
   nextRestMinMs: number | null
   earliestNextShiftAt: string | null
-  extendedShiftsLeft: number | null
+  extendedShiftsUsed: number | null
   maxExtendedShifts: number | null
-  reducedRestsLeft: number | null
+  reducedRestsUsed: number | null
   maxReducedRests: number | null
+  restBalances: Array<{ until: string; ms: number }>
   infringements: boolean
   lastCardActivityAt: string | null
 }
+
+export type CardFeedStatus = 'OK' | 'WAITING' | 'UNAVAILABLE'
+
+export interface CardEvent { id: string; at: string; level: 'INFO' | 'WARNING' | 'ALARM'; text: string; address: string | null; resolved: boolean }
+export interface CardTrip { id: string; startAt: string; endAt: string | null; startAddress: string | null; endAddress: string | null; distanceKm: number | null; businessTrip: boolean }
+export interface CardMaintenance { name: string; description: string | null; dueAt: string | null; dueOdometerKm: number | null }
 
 export interface VehicleCardData {
   vehicleId: string
@@ -181,7 +192,7 @@ export interface VehicleCardData {
   licensePlate: string | null
   currentTrailerPlate: string | null
   generatedAt: string
-  webfleet: { objectNo: string | null; plate: string | null; vin: string | null; tankLiters: number | null; objectType: string | null } | null
+  webfleet: { objectNo: string | null; objectName: string | null; plate: string | null; vin: string | null; tankLiters: number | null; objectType: string | null } | null
   current: {
     recordedAt: string
     ageSeconds: number
@@ -198,7 +209,9 @@ export interface VehicleCardData {
     fuelLiters: number | null
     odometerKm: number | null
     engineHours: number | null
+    businessTrip: boolean
   } | null
+  coupling: { status: CardFeedStatus; assetUid: string | null; assetNo: string | null; coupledAt: string | null } | null
   driver:
     | null
     | { status: 'WAITING' }
@@ -207,11 +220,18 @@ export interface VehicleCardData {
         status: 'SIGNED_ON'
         name: string | null
         workState: number | null
+        activitySince: string | null
         checkedAt: string
         drivingTimes: DrivingTimes | null
         drivingTimesStatus: 'OK' | 'NO_DATA' | 'UNAVAILABLE' | 'WAITING'
+        optiDrive: number | null
       }
+  events: { status: CardFeedStatus; unresolved: number; items: CardEvent[] } | null
+  trips: { status: CardFeedStatus; items: CardTrip[] } | null
+  maintenance: { status: CardFeedStatus; items: CardMaintenance[] } | null
 }
+
+export interface VehicleTrack { checkedAt: string; points: Coordinate[] }
 
 export interface RiskAppointment {
   vehicle: Vehicle

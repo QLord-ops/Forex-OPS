@@ -1,4 +1,4 @@
-import { ArrowUpRight, Check, CheckCircle2, ChevronDown, CircleDot, Clock3, Info, Loader2, MapPin, PackageCheck, PauseCircle, Pin, PinOff, PlayCircle, Search, Truck, X } from 'lucide-react'
+import { ArrowUpRight, Check, CheckCircle2, ChevronDown, AlertTriangle, Clock3, Loader2, MapPin, PackageCheck, PauseCircle, Pin, PinOff, PlayCircle, Search, Truck, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 
@@ -11,7 +11,7 @@ import { useVehiclePosition } from '../hooks/useVehiclePosition'
 import { api } from '../lib/api'
 import { getRoutePreview, setRoutePreview, subscribeRoutePreview } from '../lib/route-preview'
 import { etaText, routeProgress, type StopState } from '../lib/route-progress'
-import { classNames, formatAppointment, formatDateTime, formatDelay, formatDurationMinutes, formatKm, shortAddress, statusLabel, stopTypeLabel } from '../lib/format'
+import { classNames, formatAppointment, formatDateTime, formatDelay, formatDurationMinutes, formatKm, formatTime, shortAddress, statusLabel, stopTypeLabel } from '../lib/format'
 import type { Coordinate, CurrentPosition, DashboardVehicle, Stop } from '../types/domain'
 
 const PIN_STORAGE_KEY = 'ops-dashboard-pinned-vehicles'
@@ -36,6 +36,7 @@ export function DashboardPage() {
   const [actionTime, setActionTime] = useState(localDateTime())
   const [actionError, setActionError] = useState('')
   const [mapFocus, setMapFocus] = useState<Coordinate | null>(null)
+  const [track, setTrack] = useState<Coordinate[] | null>(null)
   const draftRoute = useSyncExternalStore(subscribeRoutePreview, getRoutePreview)
   const vehicles = useMemo(() => data?.vehicles ?? [], [data?.vehicles])
   const orderedVehicles = useMemo(() => vehicles.slice().sort((a, b) => compareVehicles(a, b, pinned)), [pinned, vehicles])
@@ -128,27 +129,29 @@ export function DashboardPage() {
             const isSelected = selected?.vehicle.id === row.vehicle.id
             const isPinned = pinned.includes(row.vehicle.id)
             return (
-              <article key={row.vehicle.id} className={classNames('vehicle-card', `vehicle-card-${attention.tone}`, isSelected && 'vehicle-card-selected')}>
-                <button type="button" className="min-w-0 flex-1 text-left" aria-current={isSelected ? 'true' : undefined} onClick={() => selectVehicle(row.vehicle.id)} onDoubleClick={() => openCard(row.vehicle.id)}>
-                  <div className="flex min-w-0 items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="flex min-w-0 items-center gap-2"><span className="text-lg font-black tabular-nums">LKW {row.vehicle.vehicleNumber}</span>{row.vehicle.licensePlate ? <span className="truncate text-xs font-semibold text-slate-500">{row.vehicle.licensePlate}</span> : null}</div>
-                      {row.vehicle.currentTrailerPlate ? <p className="truncate text-[11px] font-semibold text-slate-500">Прицеп {row.vehicle.currentTrailerPlate}</p> : null}
-                      <p className="mt-0.5 truncate text-sm font-semibold text-slate-800">{shortAddress(row.to)}{row.to ? ` · ${stopTypeLabel(row.to.type)}` : ''}</p>
-                    </div>
-                    <span className={classNames('attention-pill', `attention-pill-${attention.tone}`)}>{attention.label}</span>
-                  </div>
-                  <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
-                    <RailMetric label="Статус" value={statusLine(row)} /><RailMetric label="ETA" value={formatDateTime(row.eta)} />
-                    <RailMetric label="Срок" value={formatAppointment(row.appointmentAt)} /><RailMetric label="Отклонение" value={formatDelay(row.delayMinutes)} accent={(row.delayMinutes ?? 0) > 0} />
-                    <RailMetric label="Руль" value={clockLine(row)} /><RailMetric label="GPS" value={telemetryLine(row)} accent={row.telemetry?.stale} />
-                  </div>
-                  <p className="mt-2 flex items-start gap-1.5 text-xs font-medium text-slate-600"><CircleDot className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" /><span className="text-balance-safe">{attention.reason}</span></p>
-                  {row.issues?.filter(issue => issue.kind === 'NOTE').slice(0, 2).map(issue => <p key={issue.id} className="mt-1 line-clamp-2 text-xs text-slate-600" title={issue.description}>{issue.description}</p>)}
+              <article key={row.vehicle.id} className={classNames('vehicle-card', `vehicle-card-${attention.tone}`, isSelected && 'vehicle-card-selected', cardId === row.vehicle.id && 'vehicle-card-open')}>
+                <button type="button" className="vehicle-row-main" aria-current={isSelected ? 'true' : undefined} aria-expanded={cardId === row.vehicle.id}
+                  onClick={() => {
+                    if (cardId === row.vehicle.id) { closeCard(); return }
+                    openCard(row.vehicle.id)
+                    // A new array each time, so a second click on the same truck flies to it again.
+                    if (row.mapPosition) setMapFocus([...row.mapPosition.coordinate] as Coordinate)
+                  }}>
+                  <VehicleRowIcon row={row} />
+                  <span className="block min-w-0 flex-1">
+                    <span className="vehicle-row-title">
+                      <strong>{row.telemetry?.objectNo ?? `LKW ${row.vehicle.vehicleNumber}`}</strong>
+                      {row.telemetry?.objectName ? <span> – {row.telemetry.objectName}</span> : null}
+                      {row.telemetry?.objectNo ? <span className="vehicle-row-muted">LKW {row.vehicle.vehicleNumber}</span> : row.vehicle.licensePlate ? <span className="vehicle-row-muted">{row.vehicle.licensePlate}</span> : null}
+                    </span>
+                    <span className={classNames('vehicle-row-line', row.telemetry?.stale && 'vehicle-row-stale')}>{vehicleRowLine(row)}</span>
+                  </span>
+                  {attention.tone === 'critical' || attention.tone === 'dwell' || attention.tone === 'action' || attention.tone === 'watch'
+                    ? <span className={classNames('vehicle-row-alert', `vehicle-row-alert-${attention.tone}`)} title={`${attention.label}: ${attention.reason}`}><AlertTriangle className="h-4 w-4" aria-hidden="true" /><span className="sr-only">{attention.label}: {attention.reason}</span></span>
+                    : null}
                 </button>
                 <div className="vehicle-card-actions">
                   <VehicleActionButton row={row} busy={actingId === row.vehicle.id} onClick={() => openAction(row.vehicle.id)} />
-                  <button type="button" className="icon-button vehicle-card-info" onClick={() => openCard(row.vehicle.id)} aria-label={`Карточка LKW ${row.vehicle.vehicleNumber}`} aria-expanded={cardId === row.vehicle.id} title="Карточка машины"><Info className="h-4 w-4" /></button>
                   <button type="button" className="icon-button" onClick={() => togglePin(row.vehicle.id)} aria-label={isPinned ? `Открепить LKW ${row.vehicle.vehicleNumber}` : `Закрепить LKW ${row.vehicle.vehicleNumber}`} title={isPinned ? 'Открепить' : 'Закрепить'}>{isPinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}</button>
                 </div>
                 {actionVehicleId === row.vehicle.id && row.currentAction ? <ActionPopover row={row} value={actionTime} onChange={setActionTime} busy={actingId === row.vehicle.id} error={actionError} onClose={() => setActionVehicleId(null)} onConfirm={() => void handleVehicleAction(row)} /> : null}
@@ -158,16 +161,37 @@ export function DashboardPage() {
         </div>
       </aside>
       <section className="dashboard-stage" aria-label="Карта выбранного грузовика">
-        <LazyMapPanel tour={selected?.tour} position={position.data} vehicleNumber={selected?.vehicle.vehicleNumber} fleet={fleet} selectedVehicleId={selected?.vehicle.id} onSelectFleetVehicle={openCard} focusCoordinate={mapFocus} previewRoute={draftRoute?.geometry} previewStops={draftRoute?.stops} previewTraffic={draftRoute?.trafficSegments} previewAlternatives={draftRoute?.alternatives} onSelectPreviewAlternative={draftRoute?.onSelectAlternative} previewKey={draftRoute?.key} height="100%" fill />
+        <LazyMapPanel tour={selected?.tour} position={position.data} vehicleNumber={selected?.vehicle.vehicleNumber} fleet={fleet} selectedVehicleId={selected?.vehicle.id} onSelectFleetVehicle={openCard} track={cardId ? track : null} focusCoordinate={mapFocus} previewRoute={draftRoute?.geometry} previewStops={draftRoute?.stops} previewTraffic={draftRoute?.trafficSegments} previewAlternatives={draftRoute?.alternatives} onSelectPreviewAlternative={draftRoute?.onSelectAlternative} previewKey={draftRoute?.key} height="100%" fill />
         {draftRoute ? <div className="map-draft-banner"><span>{draftRoute.label} · черновик</span><button type="button" aria-label="Убрать черновой маршрут с карты" onClick={() => setRoutePreview(null)}><X size={16} /></button></div> : null}
         {selected ? <><VehicleMapHud row={selected} open={hudOpen} onToggle={() => setHudOpen((value) => !value)} /><RouteStopsDrawer row={selected} position={position.data} open={drawerOpen} onToggle={() => setDrawerOpen((value) => !value)} /></> : null}
         <QuickOrderPanel row={selected} vehicles={vehicles.map((item) => item.vehicle)} onAddressFound={setMapFocus} onRoutePreview={setRoutePreview} onCreated={async (vehicleId) => { selectVehicle(vehicleId); await refetch() }} />
-        {cardId ? <TruckCard vehicleId={cardId} row={cardRow} onClose={closeCard} onShowOnMap={setMapFocus} /> : null}
+        {cardId ? <TruckCard vehicleId={cardId} row={cardRow} onClose={closeCard} onTrack={setTrack} /> : null}
         {position.error ? <button type="button" className="map-error" onClick={() => void position.refetch()}>Позиция временно недоступна · повторить</button> : null}
         {error ? <div className="dashboard-sync-warning">Данные автопарка не обновлены. Повторим автоматически.</div> : null}
       </section>
     </div>
   )
+}
+
+/** Truck icon with a dot for the position source, like a telematics list: green fresh GPS, amber stale, grey calculated. */
+function VehicleRowIcon({ row }: { row: DashboardVehicle }) {
+  const telemetry = row.telemetry
+  const source = telemetry?.source === 'WEBFLEET' ? (telemetry.stale ? 'stale' : 'live') : 'calculated'
+  return <span className="vehicle-row-icon" aria-hidden="true"><Truck className="h-4 w-4" /><span className={`vehicle-row-dot vehicle-row-dot-${source}`} /></span>
+}
+
+/** "(32 км/ч) 10:25, Halberstädter Straße, 39365 Harbke" — speed, GPS time and address; calculated trucks show status and next stop. */
+function vehicleRowLine(row: DashboardVehicle) {
+  const telemetry = row.telemetry
+  if (telemetry?.source === 'WEBFLEET' && telemetry.checkedAt) {
+    const time = formatTime(telemetry.checkedAt)
+    const moving = telemetry.standstill === false
+    const arrow = moving && typeof telemetry.courseDeg === 'number'
+      ? <span className="vehicle-row-arrow" style={{ transform: `rotate(${telemetry.courseDeg}deg)` }} aria-hidden="true" /> : null
+    const motion = moving ? `(${Math.round(telemetry.speedKmh ?? 0)} км/ч)` : telemetry.standstill ? 'стоит' : ''
+    return <>{arrow}<span className="truncate">{[motion, time].filter(Boolean).join(' ')}{telemetry.address ? `, ${telemetry.address}` : ''}{telemetry.stale ? ' · устарело' : ''}</span></>
+  }
+  return <span className="truncate">{statusLabel(row.statusText)} · расчёт{row.to ? ` · ${shortAddress(row.to)}, ${stopTypeLabel(row.to.type)}` : ''}</span>
 }
 
 function VehicleActionButton({ row, busy, onClick }: { row: DashboardVehicle; busy: boolean; onClick: () => void }) {
@@ -178,7 +202,7 @@ function VehicleActionButton({ row, busy, onClick }: { row: DashboardVehicle; bu
       : action.type === 'RESUME' ? PlayCircle : PauseCircle
   return (
     <button type="button" className={classNames('icon-button vehicle-action-button', action.type === 'CONFIRM_ARRIVAL' && 'vehicle-arrival-button')} onClick={onClick} disabled={busy} aria-label={action.label} title={action.label}>
-      <Icon className={classNames('h-4 w-4', busy && 'animate-spin')} aria-hidden="true" />{action.type === 'CONFIRM_ARRIVAL' ? <span>Прибытие</span> : null}
+      <Icon className={classNames('h-4 w-4', busy && 'animate-spin')} aria-hidden="true" /><span>{action.type === 'CONFIRM_ARRIVAL' ? 'Прибытие' : action.label}</span>
     </button>
   )
 }
@@ -289,36 +313,7 @@ function StopCard({ stop, current = false }: { stop: Stop; current?: boolean }) 
 
 function parseStopReferences(value?: string | null): string[] { if (!value) return []; try { const parsed = JSON.parse(value) as unknown; return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [] } catch { return [] } }
 
-function RailMetric({ label, value, accent = false }: { label: string; value: string; accent?: boolean }) { return <div className="min-w-0"><span className="metric-label">{label}</span><span className={classNames('block truncate font-bold', accent ? 'text-red-700' : 'text-slate-800')}>{value}</span></div> }
 function HudMetric({ label, value, alert = false }: { label: string; value: string; alert?: boolean }) { return <span className="hud-metric"><span>{label}</span><strong className={alert ? 'text-rose-300' : ''}>{value}</strong></span> }
-
-function statusLine(row: DashboardVehicle) {
-  const dwell = getDwellMinutes(row)
-  if (dwell > 0) return `${statusLabel(row.statusText)} · ${formatDurationMinutes(dwell)}`
-  if (row.statusDurationSeconds && row.statusDurationSeconds >= 60) return `${statusLabel(row.statusText)} · ${formatDurationMinutes(row.statusDurationSeconds / 60)}`
-  return statusLabel(row.statusText)
-}
-
-function clockLine(row: DashboardVehicle) {
-  const clock = row.clockSummary
-  if (!clock || clock.preliminary) return 'Не задано'
-  const driving = clock.remainingDrivingMinutes
-  const duty = clock.remainingDutyMinutes
-  if (typeof driving === 'number' && typeof duty === 'number') return `${formatDurationMinutes(driving)} / ${formatDurationMinutes(duty)}`
-  if (typeof driving === 'number') return formatDurationMinutes(driving)
-  return '–'
-}
-
-function telemetryLine(row: DashboardVehicle) {
-  const telemetry = row.telemetry
-  if (!telemetry) return 'Расчёт'
-  if (telemetry.source === 'WEBFLEET') {
-    const age = typeof telemetry.ageSeconds === 'number' ? formatDurationMinutes(telemetry.ageSeconds / 60) : '–'
-    const motion = telemetry.standstill === true ? ' · стоит' : telemetry.standstill === false ? ' · движется' : ''
-    return telemetry.stale ? `старые ${age}` : `live ${age}${motion}`
-  }
-  return 'Расчёт'
-}
 
 function localDateTime(date = new Date()) {
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000)

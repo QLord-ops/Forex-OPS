@@ -42,6 +42,36 @@ export function formatFuel(percent?: number | null, liters?: number | null): str
   return liters ? `${Math.round(percent)} % · ~${liters.toLocaleString('ru-RU')} л` : `${Math.round(percent)} %`
 }
 
+const BERLIN_DAY = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit' })
+const BERLIN_TIME = new Intl.DateTimeFormat('ru-RU', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit' })
+const BERLIN_DATE = new Intl.DateTimeFormat('ru-RU', { timeZone: 'Europe/Berlin', day: '2-digit', month: '2-digit' })
+
+/** Clock time in Berlin, with the date when it is not today: "11:06" or "08.11, 06:08". */
+export function berlinClock(value?: string | null, now = new Date()): string {
+  if (!value) return '–'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '–'
+  const time = BERLIN_TIME.format(date)
+  return BERLIN_DAY.format(date) === BERLIN_DAY.format(now) ? time : `${BERLIN_DATE.format(date)}, ${time}`
+}
+
+/** "1 ч 6 мин" between two moments; used for "since" and parking gaps. */
+export function durationBetween(from?: string | null, to?: string | Date | null): string {
+  if (!from || !to) return '–'
+  const ms = (to instanceof Date ? to.getTime() : Date.parse(to)) - Date.parse(from)
+  return Number.isFinite(ms) && ms >= 0 ? formatDurationMs(ms) : '–'
+}
+
+/** Trips newest first, with the parking time before each trip (gap to the previous trip's end). */
+export function tripsWithParking<T extends { startAt: string; endAt: string | null }>(trips: T[]) {
+  const ordered = trips.slice().sort((a, b) => b.startAt.localeCompare(a.startAt))
+  return ordered.map((trip, index) => {
+    const previous = ordered[index + 1]
+    const parkedMs = previous?.endAt ? Date.parse(trip.startAt) - Date.parse(previous.endAt) : null
+    return { trip, parkedMs: parkedMs !== null && parkedMs > 0 ? parkedMs : null }
+  })
+}
+
 /** Share of a limit for progress bars, clamped to 0..1. */
 export function share(part?: number | null, whole?: number | null): number {
   if (!part || !whole || whole <= 0) return 0
