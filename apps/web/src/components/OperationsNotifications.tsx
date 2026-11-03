@@ -80,6 +80,21 @@ export function OperationsNotifications() {
   async function enableAlerts() {
     setPermission(await requestAlertPermission())
   }
+  /** The truck left the stop without BELADEN/ENTLADEN: the dispatcher records it, keeps the arrival, or undoes it. */
+  async function answerDeparture(answer: 'done' | 'keep' | 'revert') {
+    if (!current?.stopId || !departure) return
+    const label = departure.stopType === 'LOAD' ? 'BELADEN' : 'ENTLADEN'
+    if (answer === 'done' && !window.confirm(`Записать ${label} на ${departure.time}? Это попадёт в историю тура.`)) return
+    if (answer === 'revert' && !window.confirm('Прибытие было ошибкой? Точка снова станет «в пути».')) return
+    setBusy(true); setError('')
+    try {
+      if (answer === 'done') await operationsRequest(`/stops/${current.stopId}/${departure.stopType === 'LOAD' ? 'loaded' : 'unloaded'}`, 'POST', { timestamp: departure.leftAt })
+      else if (answer === 'keep') await operationsRequest(`/stops/${current.stopId}/departure/keep`, 'POST', {})
+      else await operationsRequest(`/stops/${current.stopId}/arrival/revert`, 'POST', { reason: 'Уехала с точки: прибытие было ошибкой' })
+      await notifications.refetch()
+      window.dispatchEvent(new CustomEvent('ops:data-changed'))
+    } catch (e) { setError((e as Error).message) } finally { setBusy(false) }
+  }
   async function resolve(action: 'ack' | 'revert') {
     if (!current) return
     setBusy(true); setError('')
@@ -104,6 +119,7 @@ export function OperationsNotifications() {
   if (!current && !askPermission) return null
   // AUTO_ARRIVAL is an already recorded GPS arrival: the dispatcher only acknowledges it or undoes a wrong one.
   const isAuto = current?.type === 'AUTO_ARRIVAL'
+  const departure = current?.type === 'STOP_DEPARTED' ? departureOf(current.payloadJson) : null
   return <aside role="dialog" aria-labelledby="operations-notification-heading" className="operations-toast fixed bottom-4 left-4 z-50 max-h-[80vh] w-[calc(100%-2rem)] max-w-lg overflow-auto rounded-xl border border-sky-300 bg-white p-5 shadow-xl text-balance-safe">
     {askPermission ? <div className={current ? 'mb-3 border-b border-slate-200 pb-3' : ''}>
       <h2 id={current ? undefined : 'operations-notification-heading'} className="font-semibold">Включите уведомления, чтобы не пропустить прибытие</h2>
@@ -117,7 +133,12 @@ export function OperationsNotifications() {
       <h2 id="operations-notification-heading" className="font-semibold">{current.message}</h2>
       {isAuto && <p className="my-2 text-sm text-slate-600">Прибытие отмечено автоматически: машина стоит в зоне точки по GPS Webfleet. BELADEN/ENTLADEN подтверждаете вы.</p>}
       {error && <p role="alert" className="my-2 text-red-700">{error}</p>}
-      <div className="mt-3 flex flex-wrap gap-2">{isAuto
+      {departure && <p className="my-2 text-sm text-slate-600">Машина выехала из зоны точки по GPS Webfleet. Если {departure.stopType === 'LOAD' ? 'загрузка' : 'выгрузка'} была, подтвердите её — время возьмётся по выезду.</p>}
+      <div className="mt-3 flex flex-wrap gap-2">{departure
+        ? <><button className="primary-button" disabled={busy} onClick={() => void answerDeparture('done')}>{departure.stopType === 'LOAD' ? 'BELADEN' : 'ENTLADEN'} {departure.time}</button>
+          <button className="secondary-button" disabled={busy} onClick={() => void answerDeparture('keep')}>{departure.stopType === 'LOAD' ? 'Ещё не загружена' : 'Ещё не выгружена'}</button>
+          <button className="secondary-button" disabled={busy} onClick={() => void answerDeparture('revert')}>Прибытие было ошибкой</button></>
+        : isAuto
         ? <><button className="primary-button" disabled={busy} onClick={() => void resolve('ack')}>Понятно</button>{current.stopId ? <button className="secondary-button" disabled={busy} onClick={() => void resolve('revert')}>Отменить прибытие</button> : null}</>
         : current.type === 'APPOINTMENT_MATCH'
           ? <><button className="primary-button" disabled={busy} onClick={() => void openTermin()}>Проверить термин</button><button className="secondary-button" disabled={busy} onClick={() => void resolve('ack')}>Позже</button></>
@@ -125,4 +146,13 @@ export function OperationsNotifications() {
         <Link className="secondary-button" to={`/vehicles/${current.vehicleId}`} onClick={() => setHidden(previous => [...previous, current.id])}>Открыть грузовик</Link></div>
     </> : null}
   </aside>
+}
+
+function departureOf(payloadJson?: string | null) {
+  try {
+    const payload = JSON.parse(payloadJson ?? '{}') as { stopType?: string; leftAt?: string }
+    if (!payload.leftAt || (payload.stopType !== 'LOAD' && payload.stopType !== 'UNLOAD')) return null
+    const time = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit' }).format(new Date(payload.leftAt))
+    return { stopType: payload.stopType, leftAt: payload.leftAt, time }
+  } catch { return null }
 }

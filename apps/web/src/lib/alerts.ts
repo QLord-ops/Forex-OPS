@@ -70,6 +70,7 @@ export function alertHeading(type: string) {
   if (type === 'TRAFFIC_DELAY') return 'Пробка на маршруте'
   if (type === 'LONG_DWELL') return 'Долгая стоянка'
   if (type === 'APPOINTMENT_MATCH') return 'Термин нашёл свой тур'
+  if (type === 'STOP_DEPARTED') return 'Машина уехала с точки'
   return 'Уведомление OPS'
 }
 
@@ -110,7 +111,7 @@ export function playAlertSound(type: string) {
   if (!soundEnabled()) return
   unlockSound()
   if (!audio) return
-  const tones = type === 'AUTO_ARRIVAL' ? [880, 1175] : [660, 660, 520]
+  const tones = type === 'AUTO_ARRIVAL' ? [880, 1175] : type === 'STOP_DEPARTED' ? [1175, 880, 1175] : [660, 660, 520]
   const start = audio.currentTime + 0.02
   tones.forEach((frequency, index) => {
     const oscillator = audio!.createOscillator()

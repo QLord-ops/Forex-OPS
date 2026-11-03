@@ -20,3 +20,23 @@ export function sortedStops(tour: Pick<Tour, 'stops'>): Stop[] {
 export function currentStopOf(tour: Pick<Tour, 'stops'>): Stop | null {
   return sortedStops(tour).find((stop) => !stop.completedAt) ?? null
 }
+
+/**
+ * The slot attached to the stop the truck is heading to or standing at, as a short label.
+ * Null when that stop has no exact time and no window.
+ */
+export function terminOf(tour: Pick<Tour, 'stops'> | null | undefined): { label: string; at: string } | null {
+  const stop = tour ? currentStopOf(tour) : null
+  if (!stop) return null
+  if (stop.appointmentAt) return { label: `Термин ${clock(stop.appointmentAt, true)}`, at: stop.appointmentAt }
+  if (stop.appointmentWindowStartAt && stop.appointmentWindowEndAt) {
+    return { label: `Термин ${clock(stop.appointmentWindowStartAt, true)}–${clock(stop.appointmentWindowEndAt, false)}`, at: stop.appointmentWindowStartAt }
+  }
+  return null
+}
+
+function clock(value: string, withDate: boolean) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', hourCycle: 'h23', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+    .formatToParts(new Date(value)).map((part) => [part.type, part.value]))
+  return `${withDate ? `${parts.day}.${parts.month} ` : ''}${parts.hour}:${parts.minute}`
+}

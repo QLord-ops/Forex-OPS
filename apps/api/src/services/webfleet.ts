@@ -9,6 +9,9 @@ const STOPPED_SPEED_KMH = 5;
 const FRESH_SECONDS = 120;
 // Webfleet keeps pos_time while a truck stands still; the unit's last contact (msgtime) proves the position is current.
 const CONTACT_FRESH_SECONDS = 300;
+// Leaving the stop needs a clear margin past the zone, so GPS jitter at its edge is not a departure.
+const DEPARTURE_MARGIN_METERS = 150;
+const DEPARTURE_FAST_KMH = 20;
 const FALLBACK_SECONDS = 30 * 60;
 const SNAPSHOT_INTERVAL_MS = 60_000;
 const SYNC_LEASE_MS = 45_000;
@@ -128,13 +131,63 @@ export class WebfleetTelemetryService {
     });
 
     const arrival = await this.detectArrival(match.vehicleId, input, receivedAt);
+    const departed = await this.detectDeparture(match.vehicleId, input, receivedAt);
     if (messageId) {
       await this.db.integrationReceipt.create({ data: {
         provider: PROVIDER, messageId, externalId: input.objectUid, acknowledgedAt: receivedAt,
         payloadJson: JSON.stringify({ matchedBy: match.matchedBy, vehicleId: match.vehicleId, arrivalSuggested: arrival.suggested, arrivalConfirmed: arrival.confirmed })
       } });
     }
-    return { duplicate: false, matched: true, vehicleId: match.vehicleId, arrivalConfirmed: arrival.confirmed, arrivalSuggested: arrival.suggested };
+    return { duplicate: false, matched: true, vehicleId: match.vehicleId, arrivalConfirmed: arrival.confirmed, arrivalSuggested: arrival.suggested, departed };
+  }
+
+  /**
+   * The truck left a stop it had arrived at without BELADEN/ENTLADEN. Only the dispatcher records the
+   * event: this asks whether it is loaded, at the time it left the zone. Real, fresh GPS only.
+   */
+  private async detectDeparture(vehicleId: string, current: WebfleetPosition, now: Date): Promise<boolean> {
+    const stopped = isStopped(current.standstill, current.speedKmh);
+    if (!positionFreshness(current.recordedAt, current.lastContactAt ?? null, stopped, now).fresh) return false;
+    const tour = await this.db.tour.findFirst({
+      where: { vehicleId, status: 'ACTIVE' },
+      include: { stops: { orderBy: { sequence: 'asc' } }, vehicle: true },
+      orderBy: [{ queueIndex: 'asc' }, { createdAt: 'asc' }]
+    });
+    const stop = tour?.stops.find((item) => !item.completedAt);
+    if (!tour || !stop?.arrivedAt) return false;
+    const limit = (stop.arrivalRadiusMeters ?? DEFAULT_ARRIVAL_RADIUS_METERS) + DEPARTURE_MARGIN_METERS;
+    const outside = (point: { latitude: number; longitude: number }) => distanceMeters(point.latitude, point.longitude, stop.latitude, stop.longitude) > limit;
+    if (!outside(current)) return false;
+
+    const history = await this.db.vehicleTelemetry.findMany({
+      where: { vehicleId, provider: PROVIDER, recordedAt: { gte: stop.arrivedAt, lte: current.recordedAt } },
+      orderBy: { recordedAt: 'desc' }, take: 120
+    });
+    const previous = history.find((row) => row.recordedAt < current.recordedAt);
+    // One far point could be a GPS jump: a second one outside, or real speed, confirms it.
+    if (!((current.speedKmh ?? 0) > DEPARTURE_FAST_KMH || (previous && outside(previous)))) return false;
+    const lastInside = history.find((row) => !outside(row));
+    const leftAt = lastInside?.recordedAt ?? history.filter(outside).at(-1)?.recordedAt ?? current.recordedAt;
+
+    // After «ещё не загружена — вернётся» only a new exit after coming back counts.
+    const kept = await this.db.operationEvent.findFirst({ where: { stopId: stop.id, type: 'DEPARTURE_NOT_COMPLETED' }, orderBy: { createdAt: 'desc' } });
+    if (kept && (!lastInside || lastInside.recordedAt <= kept.createdAt)) return false;
+    const open = await this.db.notification.findFirst({ where: { stopId: stop.id, type: 'STOP_DEPARTED', acknowledgedAt: null } });
+    if (open) return false;
+
+    const done = stop.type === 'LOAD' ? 'BELADEN' : 'ENTLADEN';
+    const time = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit' }).format(leftAt);
+    const dedupKey = `departure:${stop.id}:${leftAt.toISOString()}`;
+    await this.db.notification.upsert({
+      where: { dedupKey },
+      create: {
+        dedupKey, vehicleId, stopId: stop.id, type: 'STOP_DEPARTED',
+        message: `LKW ${tour.vehicle.vehicleNumber} уехала ${stop.type === 'LOAD' ? 'с загрузки' : 'с выгрузки'} ${stop.city || stop.address} в ${time} без ${done}. ${stop.type === 'LOAD' ? 'Загружена' : 'Выгружена'}?`,
+        payloadJson: JSON.stringify({ stopId: stop.id, stopType: stop.type, leftAt: leftAt.toISOString(), source: 'WEBFLEET_GEOFENCE' })
+      },
+      update: {}
+    });
+    return true;
   }
 
   async latest(vehicleId: string, now = new Date()) {

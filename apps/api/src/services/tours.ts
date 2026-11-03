@@ -476,6 +476,8 @@ export class TourService {
       }
 
       await tx.stop.update({ where: { id: stop.id }, data: { completedAt: now } });
+      // The question «loaded after leaving?» is answered once the event is recorded.
+      await tx.notification.updateMany({ where: { stopId: stop.id, type: 'STOP_DEPARTED', acknowledgedAt: null }, data: { acknowledgedAt: now } });
       await tx.event.create({
         data: {
           vehicleId: stop.tour.vehicleId,

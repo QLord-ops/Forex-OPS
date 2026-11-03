@@ -450,6 +450,10 @@ export async function buildApp(options: BuildAppOptions = {}) {
     await refreshAlertsForVehicle(stop.tour.vehicleId);
     return result;
   });
+  app.post('/stops/:id/departure/keep', { preHandler: requireDispatcherRoles('admin', 'dispatcher') }, async request => {
+    const { id } = idParams.parse(request.params);
+    return operationsService.keepAfterDeparture(id, new Date(), auditActor(request));
+  });
   app.put('/stops/:id/arrival-radius', { preHandler: requireDispatcherRoles('admin', 'dispatcher') }, async request => {
     const input = z.object({ radiusMeters: z.number().int().min(100).max(5000).nullable() }).parse(request.body ?? {});
     return operationsService.setArrivalRadius(idParams.parse(request.params).id, input.radiusMeters, new Date(), auditActor(request));

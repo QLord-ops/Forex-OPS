@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { PrismaClient as PostgresPrismaClient } from '@prisma/client';
-import { afterAll, beforeAll, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { PrismaClient } from '../src/generated/sqlite-client/index.js';
 import { MockRoutingProvider } from '../src/services/routing.js';
 import { OperationsService, SYSTEM_WEBFLEET_ACTOR } from '../src/services/operations.js';
@@ -231,6 +231,77 @@ it('keeps the arrival pending when either point is faster than 20 km/h', async (
   const result = await service.applyPosition({ objectUid: 'wf-fast', objectNo: 'FAST', latitude: 52.5202, longitude: 13.4052, speedKmh: 5, recordedAt: at(4) }, at(5));
   expect(result.arrivalConfirmed).toBe(false);
   expect((await db.stop.findUniqueOrThrow({ where: { id: tour.stops[0].id } })).arrivedAt).toBeNull();
+});
+
+describe('leaving a stop without BELADEN/ENTLADEN', () => {
+  async function arrived(name: string) {
+    const scenario = await arrivalScenario(name);
+    for (const minute of [0, 1, 2, 3]) await scenario.feed(minute, north(100), true);
+    expect((await db.stop.findUniqueOrThrow({ where: { id: scenario.stopId } })).arrivedAt).toEqual(at(0));
+    const departures = () => db.notification.findMany({ where: { stopId: scenario.stopId, type: 'STOP_DEPARTED' }, orderBy: { createdAt: 'asc' } });
+    return { ...scenario, departures };
+  }
+
+  it('asks once, timed at the last point inside the zone', async () => {
+    const { feed, departures } = await arrived('DEP-1');
+    for (const minute of [4, 5, 6]) await feed(minute, north(120), true);
+    await feed(7, north(1200), false);
+    expect(await departures()).toHaveLength(0);
+    await feed(8, north(2500), false);
+    const found = await departures();
+    expect(found).toHaveLength(1);
+    expect(JSON.parse(found[0].payloadJson!)).toMatchObject({ stopType: 'LOAD', leftAt: at(6).toISOString() });
+    expect(found[0].message).toContain('без BELADEN');
+    await feed(9, north(4000), false);
+    expect(await departures()).toHaveLength(1);
+  });
+
+  it('ignores GPS jitter at the edge of the zone and stale positions', async () => {
+    const { feed, departures } = await arrived('DEP-2');
+    for (const minute of [4, 5, 6]) await feed(minute, north(600), false);
+    expect(await departures()).toHaveLength(0);
+    for (const minute of [7, 8]) await feed(minute, north(3000), false, 10 * 60);
+    expect(await departures()).toHaveLength(0);
+  });
+
+  it('after «will come back» stays quiet until the truck re-enters and leaves again', async () => {
+    const { feed, departures, operations, stopId } = await arrived('DEP-3');
+    await feed(4, north(2000), false);
+    await feed(5, north(3000), false);
+    expect(await departures()).toHaveLength(1);
+    await operations.keepAfterDeparture(stopId, new Date(at(5).getTime() + 40_000), { role: 'dispatcher', sessionId: 's1' });
+    expect((await departures())[0].acknowledgedAt).not.toBeNull();
+    for (const minute of [6, 7]) await feed(minute, north(3500), false);
+    expect(await departures()).toHaveLength(1);
+    await feed(10, north(100), true);
+    await feed(11, north(2000), false);
+    await feed(12, north(3000), false);
+    expect(await departures()).toHaveLength(2);
+  });
+
+  it('closes the question once BELADEN is recorded at the departure time, or the arrival is reverted', async () => {
+    const one = await arrived('DEP-4');
+    await one.feed(4, north(2000), false);
+    await one.feed(5, north(3000), false);
+    const [question] = await one.departures();
+    await one.tours.recordLoaded(one.stopId, new Date(JSON.parse(question.payloadJson!).leftAt));
+    expect((await db.stop.findUniqueOrThrow({ where: { id: one.stopId } })).completedAt).toEqual(at(3));
+    expect((await one.departures())[0].acknowledgedAt).not.toBeNull();
+
+    const two = await arrived('DEP-5');
+    await two.feed(4, north(2000), false);
+    await two.feed(5, north(3000), false);
+    await two.operations.revertArrival(two.stopId, new Date(at(5).getTime() + 40_000), { role: 'dispatcher', sessionId: 's1' });
+    expect((await two.departures())[0].acknowledgedAt).not.toBeNull();
+  });
+
+  it('a fast first point outside is enough', async () => {
+    const { departures, stopId } = await arrived('DEP-6');
+    const service = new WebfleetTelemetryService(db as unknown as PostgresPrismaClient);
+    await service.applyPosition({ objectUid: 'wf-DEP-6', objectNo: 'DEP-6', ...north(1500), standstill: false, speedKmh: 55, recordedAt: at(4) }, new Date(at(4).getTime() + 20_000));
+    expect(await departures()).toHaveLength(1);
+    expect(stopId).toBeTruthy();
+  });
 });
 
 it('uses a geodesic radius close to one kilometre', () => {
