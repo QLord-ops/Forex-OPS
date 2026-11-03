@@ -14,8 +14,11 @@ export function isCurrentPollingRequest(
   return mounted && snapshot.requestId === latestRequestId && Object.is(snapshot.key, activeKey)
 }
 
-/** `intervalMs` 0 loads once (forms, history) and refreshes only on refetch or when the tab is shown again. */
-export function usePolling<T>(fetcher: () => Promise<T>, intervalMs: number, enabled = true, key: string | number = 'default') {
+/**
+ * `intervalMs` 0 loads once (forms, history) and refreshes only on refetch or when the tab is shown again.
+ * `background` keeps polling in a hidden tab (notifications must arrive while the dispatcher works elsewhere).
+ */
+export function usePolling<T>(fetcher: () => Promise<T>, intervalMs: number, enabled = true, key: string | number = 'default', background = false) {
   const [data, setData] = useState<T | null>(null)
   const [error, setError] = useState<Error | null>(null)
   const [loading, setLoading] = useState(true)
@@ -88,7 +91,7 @@ export function usePolling<T>(fetcher: () => Promise<T>, intervalMs: number, ena
       setLoading(true)
     }
     shownKeyRef.current = key
-    const visible = () => typeof document === 'undefined' || document.visibilityState !== 'hidden'
+    const visible = () => background || typeof document === 'undefined' || document.visibilityState !== 'hidden'
     // refetch() queues behind a request for the previous key, so the new subject always loads.
     if (visible()) void refetch()
     const timer = intervalMs > 0 ? window.setInterval(() => {
@@ -103,7 +106,7 @@ export function usePolling<T>(fetcher: () => Promise<T>, intervalMs: number, ena
       if (timer !== undefined) window.clearInterval(timer)
       document.removeEventListener('visibilitychange', handleVisibility)
     }
-  }, [enabled, intervalMs, refetch, key])
+  }, [enabled, intervalMs, refetch, key, background])
 
   return { data, error, loading, refetch }
 }

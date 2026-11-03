@@ -906,6 +906,9 @@ aside > .dispatcher-logout-error { position: absolute; bottom: 4.25rem; left: .5
 .dashboard-stage:has(.route-stops-drawer-open) .map-draft-banner { bottom: calc(min(44%, 25rem) + .75rem); }
 @container stage (min-width: 56rem) {
   .vehicle-map-hud { left: 3.5rem; right: calc(min(25rem, 100cqw - 4.5rem) + 1.25rem); width: auto; max-width: 760px; margin-inline: auto; transform: none; }
+  /* An open truck card covers the left of the map: the ETA panel and the stops drawer move to its right. */
+  .dashboard-stage:has(.truck-card) .vehicle-map-hud { left: calc(min(380px, 100cqw - 24px) + 24px); right: 13rem; max-width: 760px; margin-inline: 0; }
+  .dashboard-stage:has(.truck-card) .route-stops-drawer { left: calc(min(380px, 100cqw - 24px) + 24px); }
   .map-action-dock { top: .75rem; }
 }
 @media (max-width: 640px) {
@@ -1054,7 +1057,70 @@ aside > .dispatcher-logout-error { position: absolute; bottom: 4.25rem; left: .5
 .vehicle-card .vehicle-arrival-button { width: auto; min-height: 30px; height: 30px; flex-direction: row; gap: 4px; padding: 0 8px; }
 .vehicle-card .vehicle-action-button span,
 .vehicle-card .vehicle-arrival-button span { font-size: .6875rem; font-weight: 600; line-height: 1; }
-.vehicle-card .vehicle-card-actions .icon-button { width: 28px; height: 28px; }
+.vehicle-card .vehicle-card-actions .icon-button:not(.vehicle-action-button) { width: 28px; height: 28px; }
+/* The labelled action keeps its text: an icon-button is a grid of fixed width, which hid BELADEN under the pin. */
+.vehicle-card .vehicle-card-actions .vehicle-action-button { display: inline-flex; width: auto; flex: 0 0 auto; align-items: center; white-space: nowrap; }
+
+@container stage (min-width: 56rem) and (max-width: 82rem) {
+  /* Narrow space beside the card: keep the truck, ETA and delay; the remaining distance is in the card. */
+  .dashboard-stage:has(.truck-card) .vehicle-map-hud-trigger .hud-metric:nth-of-type(3) { display: none; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .vehicle-map-hud, .route-stops-drawer { transition: left 160ms ease-out; }
+}
+
+/* Sound and Windows notifications for this browser. */
+.alert-toggle { display: flex; align-items: center; justify-content: center; gap: .75rem; border-radius: .375rem; color: #cbd5e1; font-size: .875rem; font-weight: 500; }
+.alert-toggle:hover { background: #0f172a; color: white; }
+.alert-toggle:focus-visible { outline: 2px solid #38bdf8; outline-offset: 2px; }
+.alert-toggle-icon { position: relative; display: inline-flex; }
+.alert-toggle-dot { position: absolute; top: -2px; right: -2px; width: 8px; height: 8px; border-radius: 50%; background: #f59e0b; box-shadow: 0 0 0 2px #020617; }
+/* Above the assistant launcher (bottom 76px) and the logout button. */
+aside > .alert-toggle { position: absolute; right: .5rem; bottom: 8.25rem; left: .5rem; min-height: 3rem; }
+aside > .alert-toggle .alert-toggle-label { display: none; }
+aside > .dispatcher-logout-error { bottom: 11.5rem; }
+@media (min-width: 1536px) {
+  aside > .alert-toggle { justify-content: flex-start; padding-inline: .75rem; right: .75rem; left: .75rem; text-align: left; }
+  aside > .alert-toggle .alert-toggle-label { display: inline; }
+}
+.alert-toggle-mobile { flex: 0 0 auto; min-height: 2.5rem; margin-left: auto; padding: .5rem .75rem; color: #334155; }
+.alert-toggle-mobile:hover { background: #f1f5f9; color: #0f172a; }
+.alert-toggle-mobile .alert-toggle-label { display: none; }
+.alert-toggle-mobile .alert-toggle-dot { box-shadow: 0 0 0 2px #fff; }
+.alert-toggle-mobile ~ .dispatcher-logout-mobile { margin-left: 0; }
+
+/* Termin review: the same quiet card as the Auftrag check, with the chosen stop and the ETA risk. */
+.appointment-review-vehicle { align-self: end; color: #475569; font-size: .75rem; }
+.appointment-review-time { margin-top: .75rem; border: 0; padding: 0; }
+.appointment-review-modes { display: flex; gap: 1rem; margin: .25rem 0 .5rem; font-size: .8125rem; }
+.appointment-review-modes label { display: inline-flex; align-items: center; gap: .375rem; }
+.appointment-review-stops { margin-top: .75rem; display: grid; gap: .5rem; font-size: .8125rem; }
+.appointment-review-stops ul { display: grid; gap: .5rem; }
+.appointment-review-stop { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: .5rem; border: 1px solid #e2e8f0; border-radius: .625rem; padding: .625rem; cursor: pointer; }
+.appointment-review-stop > span > * { display: block; }
+.appointment-review-stop-selected { border-color: #0f766e; background: #f0fdfa; }
+.appointment-review-reasons { color: #0f766e; font-size: .75rem; }
+.appointment-review-risk { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin-top: .75rem; border-left: 3px solid #94a3b8; background: #f8fafc; padding: .5rem .75rem; font-size: .8125rem; }
+.appointment-review-risk-on_time { border-color: #0f766e; }
+.appointment-review-risk-risk { border-color: #d97706; background: #fffbeb; }
+.appointment-review-risk-late { border-color: #dc2626; background: #fef2f2; }
+.appointment-review-overlay { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; background: rgb(15 23 42 / .35); padding: 1rem; }
+.appointment-review-overlay > .appointment-review { width: min(40rem, 100%); max-height: 90dvh; overflow: auto; margin: 0; border-radius: .875rem; background: #fff; padding: 1rem; box-shadow: 0 20px 60px rgb(15 23 42 / .25); }
+.appointment-review-overlay .appointment-review section > header { display: flex; align-items: center; justify-content: space-between; gap: .75rem; margin-bottom: .75rem; }
+.appointment-review-overlay .appointment-review footer { display: flex; justify-content: flex-end; gap: .5rem; margin-top: .75rem; padding-top: .625rem; border-top: 1px solid #e1eaf2; }
+.pending-appointments { margin-top: 1rem; border-top: 1px solid #e2e8f0; padding-top: .75rem; font-size: .8125rem; }
+.pending-appointments h3 { display: flex; align-items: center; gap: .375rem; margin-bottom: .5rem; font-weight: 600; }
+.pending-appointments ul { display: grid; gap: .5rem; }
+.pending-appointments li { display: flex; align-items: center; justify-content: space-between; gap: .75rem; border: 1px solid #e2e8f0; border-radius: .625rem; padding: .5rem .625rem; }
+.pending-appointments li span { display: block; color: #64748b; font-size: .75rem; }
+.pending-appointments .pending-appointments-found { color: #0f766e; }
+.pending-appointments-actions { display: flex; flex-shrink: 0; gap: .375rem; }
+
+/* Slot attached (Termin): indigo, apart from the violet of a long stop and of the track; always with its text. */
+.vehicle-card-termin { border-left-color: #4338ca; background: #f5f6ff; }
+.vehicle-row-termin { display: inline-flex; align-items: center; gap: 4px; margin-top: 3px; border-radius: 6px; background: #4338ca; padding: 1px 6px; color: #fff; font-size: .6875rem; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.5; white-space: nowrap; }
+.truck-card-termin { margin-left: 8px; vertical-align: middle; }
+.fleet-marker-termin .fleet-marker-dot, .fleet-marker-termin .fleet-marker-arrow { box-shadow: 0 0 0 3px #4338ca; }
 
 /* Signed-in dispatcher in the sidebar; the narrow sidebar shows initials only. */
 .account-menu { display: flex; width: calc(100% - 16px); min-height: 44px; align-items: center; justify-content: center; gap: 10px; margin: 0 8px 8px; border-radius: 8px; padding: 6px; color: #e2e8f0; font-size: .8125rem; text-align: left; }

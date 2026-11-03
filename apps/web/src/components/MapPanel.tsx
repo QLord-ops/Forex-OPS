@@ -55,6 +55,8 @@ export type FleetMapVehicle = {
   stale: boolean | null
   courseDeg: number | null
   standstill: boolean | null
+  /** The truck's next stop has an attached slot (Termin). */
+  termin?: boolean
 }
 
 const FLEET_LABEL_MIN_ZOOM = 7
@@ -611,11 +613,11 @@ function drawFleetMarker(element: HTMLButtonElement, vehicle: FleetMapVehicle) {
   const moving = vehicle.source === 'WEBFLEET' && vehicle.standstill === false && vehicle.courseDeg !== null
   const sourceText = vehicle.source === 'WEBFLEET' && vehicle.stale ? 'GPS устарел' : FLEET_SOURCE_TEXT[vehicle.source]
   const motion = vehicle.source !== 'WEBFLEET' ? '' : vehicle.standstill === true ? ', стоит' : vehicle.standstill === false ? ', едет' : ''
-  const key = `${source}|${moving ? Math.round(vehicle.courseDeg!) : 'dot'}|${vehicle.label}`
+  const key = `${source}|${moving ? Math.round(vehicle.courseDeg!) : 'dot'}|${vehicle.label}|${vehicle.termin ? 't' : ''}`
   if (element.dataset.key === key) return
   element.dataset.key = key
-  element.className = `fleet-marker fleet-marker-${source}`
-  element.setAttribute('aria-label', `LKW ${vehicle.label}: ${sourceText}${motion}. Открыть карточку`)
+  element.className = `fleet-marker fleet-marker-${source}${vehicle.termin ? ' fleet-marker-termin' : ''}`
+  element.setAttribute('aria-label', `LKW ${vehicle.label}: ${sourceText}${motion}${vehicle.termin ? ', есть термин' : ''}. Открыть карточку`)
   element.title = `LKW ${vehicle.label} · ${sourceText}${motion}`
   element.replaceChildren()
   const icon = document.createElement('span')

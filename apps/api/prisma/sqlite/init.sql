@@ -265,6 +265,30 @@ CREATE TABLE "AuditLog" (
 CREATE INDEX "AuditLog_createdAt_idx" ON "AuditLog"("createdAt");
 CREATE INDEX "AuditLog_entityType_entityId_createdAt_idx" ON "AuditLog"("entityType", "entityId", "createdAt");
 CREATE INDEX "AuditLog_actorSessionId_createdAt_idx" ON "AuditLog"("actorSessionId", "createdAt");
+CREATE TABLE "PendingAppointment" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "documentKind" TEXT NOT NULL,
+    "fingerprint" TEXT NOT NULL,
+    "vehiclePlate" TEXT,
+    "vehicleId" TEXT,
+    "company" TEXT,
+    "site" TEXT,
+    "city" TEXT,
+    "stopType" TEXT,
+    "appointmentAt" DATETIME,
+    "windowStartAt" DATETIME,
+    "windowEndAt" DATETIME,
+    "referencesJson" TEXT,
+    "sourceExcerpt" TEXT,
+    "status" TEXT NOT NULL DEFAULT 'PENDING',
+    "attachedStopId" TEXT,
+    "createdByDispatcherId" TEXT,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL
+);
+CREATE UNIQUE INDEX "PendingAppointment_fingerprint_key" ON "PendingAppointment"("fingerprint");
+CREATE INDEX "PendingAppointment_status_createdAt_idx" ON "PendingAppointment"("status", "createdAt");
+CREATE INDEX "PendingAppointment_vehicleId_status_idx" ON "PendingAppointment"("vehicleId", "status");
 CREATE INDEX "AuditLog_actorDispatcherId_createdAt_idx" ON "AuditLog"("actorDispatcherId", "createdAt");
 CREATE UNIQUE INDEX "Dispatcher_login_key" ON "Dispatcher"("login");
 CREATE INDEX "Vehicle_assignedDispatcherId_idx" ON "Vehicle"("assignedDispatcherId");
