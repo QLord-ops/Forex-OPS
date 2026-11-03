@@ -5,12 +5,15 @@ import {
   LayoutDashboard,
   MapPinned,
   PlusCircle,
-  Truck
+  Truck,
+  Users
 } from 'lucide-react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { OperationsNotifications } from './OperationsNotifications'
 import { DispatcherLogout } from './AuthGate'
 import { DispatcherAssistant } from './DispatcherAssistant'
+import { AccountMenu } from './AccountMenu'
+import { currentDispatcherRole } from '../lib/auth'
 
 const navItems = [
   { to: '/', label: 'Панель управления', icon: LayoutDashboard },
@@ -20,10 +23,12 @@ const navItems = [
   { to: '/alerts', label: 'Предупреждения', icon: AlertTriangle },
   { to: '/history', label: 'История', icon: History }
 ]
+const adminItems = [{ to: '/dispatchers', label: 'Диспетчеры', icon: Users }]
 
 export function AppShell() {
   const location = useLocation()
   const isDashboard = location.pathname === '/'
+  const items = currentDispatcherRole() === 'admin' ? [...navItems, ...adminItems] : navItems
 
   return (
     <div className={isDashboard ? 'h-dvh overflow-hidden text-slate-950' : 'min-h-screen text-slate-950'}>
@@ -36,7 +41,7 @@ export function AppShell() {
           </div>
         </div>
         <nav className="space-y-1 px-2 py-4 2xl:px-3" aria-label="Основная навигация">
-          {navItems.map((item) => (
+          {items.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
@@ -56,13 +61,14 @@ export function AppShell() {
             </NavLink>
           ))}
         </nav>
+        <AccountMenu />
         <DispatcherLogout />
       </aside>
 
       <div className={isDashboard ? 'h-dvh lg:pl-20 2xl:pl-64' : 'lg:pl-20 2xl:pl-64'}>
         <header className="sticky top-0 z-40 border-b border-slate-200 bg-white lg:hidden">
           <nav className="mobile-nav flex gap-1 overflow-x-auto px-3 py-2" aria-label="Мобильная навигация">
-            {navItems.map((item) => (
+            {items.map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}
@@ -78,6 +84,7 @@ export function AppShell() {
                 {item.label}
               </NavLink>
             ))}
+            <AccountMenu compact />
             <DispatcherLogout className="dispatcher-logout dispatcher-logout-mobile" />
           </nav>
         </header>

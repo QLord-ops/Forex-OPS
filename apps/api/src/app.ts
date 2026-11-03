@@ -39,12 +39,13 @@ import { RouteScenarioService, routeScenarioInputSchema } from './services/route
 import { registerRouteScenarioRoutes } from './routes/route-scenario.js';
 import { AssistantError, DispatcherAssistantService } from './services/dispatcher-assistant.js';
 import { assistantSessionKey, registerDispatcherAssistantRoutes } from './routes/dispatcher-assistant.js';
+import { registerDispatcherRoutes } from './routes/dispatchers.js';
 import { createDispatcherDependencies } from './services/dispatcher-adapters.js';
 import { writeAuditLog, type AuditActor } from './services/audit-log.js';
 
 function auditActor(request: FastifyRequest): AuditActor | undefined {
   return request.dispatcherSession
-    ? { role: request.dispatcherSession.role, sessionId: request.dispatcherSession.sessionId }
+    ? { role: request.dispatcherSession.role, sessionId: request.dispatcherSession.sessionId, dispatcherId: request.dispatcherSession.dispatcherId }
     : undefined;
 }
 
@@ -208,6 +209,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     }
   });
   registerDispatcherAssistantRoutes(app, assistantService);
+  registerDispatcherRoutes(app, prisma);
   await registerRouteScenarioRoutes(app, { service: scenarioService });
 
   let activeOrderImports = 0;

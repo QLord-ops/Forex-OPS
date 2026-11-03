@@ -72,6 +72,27 @@ export async function readErrorMessage(response: Response): Promise<string> {
   return `Не удалось выполнить запрос (код ${response.status}).`
 }
 
+export interface DispatcherAccount {
+  id: string
+  login: string
+  displayName: string
+  role: 'admin' | 'dispatcher'
+  active: boolean
+  lastLoginAt: string | null
+  createdAt: string
+}
+
+const json = (method: string, body: unknown): RequestInit => ({ method, body: JSON.stringify(body) })
+
+export const accountsApi = {
+  list: () => request<DispatcherAccount[]>('/dispatchers'),
+  directory: () => request<Array<{ id: string; displayName: string }>>('/dispatchers/directory'),
+  create: (input: { login: string; displayName: string; role: 'admin' | 'dispatcher'; password: string }) => request<DispatcherAccount>('/dispatchers', json('POST', input)),
+  update: (id: string, input: Partial<Pick<DispatcherAccount, 'displayName' | 'role' | 'active'>>) => request<DispatcherAccount>(`/dispatchers/${encodeURIComponent(id)}`, json('PATCH', input)),
+  resetPassword: (id: string, password: string) => request<{ ok: true }>(`/dispatchers/${encodeURIComponent(id)}/password`, json('POST', { password })),
+  changeOwnPassword: (currentPassword: string, newPassword: string) => request<{ ok: true }>('/auth/password', json('POST', { currentPassword, newPassword }))
+}
+
 export const api = {
   dashboard: () => request<DashboardResponse>('/dashboard'),
   vehicles: () => request<Vehicle[]>('/vehicles'),
