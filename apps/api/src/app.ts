@@ -41,6 +41,10 @@ import { AssistantError, DispatcherAssistantService } from './services/dispatche
 import { assistantSessionKey, registerDispatcherAssistantRoutes } from './routes/dispatcher-assistant.js';
 import { createDispatcherDependencies } from './services/dispatcher-adapters.js';
 import { writeAuditLog, type AuditActor } from './services/audit-log.js';
+import { matchAppointment } from './services/appointment-match.js';
+import { documentFingerprint, PendingAppointmentService } from './services/pending-appointments.js';
+import { registerAppointmentDocumentRoutes } from './routes/appointments.js';
+import type { DocumentImportPreview } from './services/pdf-order-import.js';
 
 function auditActor(request: FastifyRequest): AuditActor | undefined {
   return request.dispatcherSession
@@ -64,6 +68,15 @@ const alertService = new AlertService(prisma);
 const vehicleService = new VehicleService(prisma);
 const notificationService = new NotificationService(prisma, tourService);
 const operationsService = new OperationsService(prisma, tourService);
+const pendingAppointments = new PendingAppointmentService(prisma);
+
+/** A Termin slip gets its truck and stop match and tells whether the same file was used before. */
+async function withAppointmentMatch<T extends DocumentImportPreview>(preview: T, buffer: Buffer) {
+  if (preview.documentKind !== 'APPOINTMENT' || !preview.appointment) return preview;
+  const fingerprint = documentFingerprint(buffer);
+  const [match, previous] = await Promise.all([matchAppointment(prisma, preview.appointment), pendingAppointments.findByFingerprint(fingerprint)]);
+  return { ...preview, appointment: { ...preview.appointment, fingerprint }, match, previous: previous ? { id: previous.id, status: previous.status, attachedStopId: previous.attachedStopId } : null };
+}
 // Automatic arrival from fresh Webfleet GPS (zone + standstill); AUTO_ARRIVAL_ENABLED=false keeps it a suggestion.
 const autoArrival: AutoArrivalHandler | undefined = process.env.AUTO_ARRIVAL_ENABLED === 'false' ? undefined
   : (input) => operationsService.confirmArrival(input.stopId, input.arrivedAt, input.now, SYSTEM_WEBFLEET_ACTOR, { source: 'WEBFLEET_AUTO', meta: input.meta });
@@ -208,6 +221,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     }
   });
   registerDispatcherAssistantRoutes(app, assistantService);
+  registerAppointmentDocumentRoutes(app, { prisma, appointments: appointmentService, pending: pendingAppointments, audit, refreshAlertsForVehicle: (vehicleId) => refreshAlertsForVehicle(vehicleId) });
   await registerRouteScenarioRoutes(app, { service: scenarioService });
 
   let activeOrderImports = 0;
@@ -249,6 +263,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
       await webfleetSync.refreshIfDue().catch(() => undefined);
       await webfleetDetails.refreshIfDue().catch(() => undefined);
       await notificationService.refresh();
+      await pendingAppointments.scan((input) => notificationService.publish(input)).catch((error) => app.log.error(error));
       await refreshAllAlerts();
       await trafficService.tick();
       lastNotificationRefreshAt = Date.now();
@@ -441,7 +456,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   });
   app.post('/stops/:id/appointment/preview', async request => {
     const stopId = idParams.parse(request.params).id;
-    const input = z.object({ appointmentAt: z.string().datetime() }).parse(request.body);
+    const input = z.object({ appointmentAt: z.string().datetime().nullable().optional(), windowStartAt: z.string().datetime().nullable().optional(), windowEndAt: z.string().datetime().nullable().optional() }).parse(request.body);
     return appointmentService.preview(stopId, input);
   });
   app.put('/stops/:id/appointment', async request => {
@@ -572,7 +587,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
 
       if (!options.auth?.disabled) await assistantService.consumeUsage(assistantSessionKey(request));
       try {
-        return await pdfImport(buffer, filename);
+        return await withAppointmentMatch(await pdfImport(buffer, filename), buffer);
       } catch (error) {
         if (error instanceof Error && error.message.includes("OPENAI_API_KEY")) {
           return reply.status(503).send({ error: "OpenAI ещё не настроен для импорта PDF." });
@@ -617,7 +632,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
 
       if (!options.auth?.disabled) await assistantService.consumeUsage(assistantSessionKey(request));
       try {
-        return await imageImport(buffer, filename, file.mimetype);
+        return await withAppointmentMatch(await imageImport(buffer, filename, file.mimetype), buffer);
       } catch (error) {
         if (error instanceof Error && error.message.includes("OPENAI_API_KEY")) {
           return reply.status(503).send({ error: "OpenAI ещё не настроен для импорта скриншотов." });

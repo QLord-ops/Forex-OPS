@@ -1,6 +1,9 @@
 import type {
   Alert,
   AppointmentAnalysis,
+  AppointmentDocument,
+  AppointmentMatch,
+  PendingAppointment,
   AddressResolution,
   CreateTourInput,
   CurrentPosition,
@@ -143,6 +146,16 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ appointmentAt })
     }),
+  previewAppointmentSlot: (stopId: string, slot: { appointmentAt?: string | null; windowStartAt?: string | null; windowEndAt?: string | null }) =>
+    request<AppointmentAnalysis>(`/stops/${stopId}/appointment/preview`, { method: 'POST', body: JSON.stringify(slot) }),
+  matchAppointment: (document: AppointmentDocument) =>
+    request<AppointmentMatch>('/appointments/match', { method: 'POST', body: JSON.stringify(document) }),
+  applyAppointmentDocument: (payload: { stopId: string; version: number; fingerprint: string; pendingId?: string | null; document: AppointmentDocument }) =>
+    request<AppointmentAnalysis>('/appointments/from-document', { method: 'POST', body: JSON.stringify(payload) }),
+  savePendingAppointment: (payload: { fingerprint: string; document: AppointmentDocument }) =>
+    request<{ id: string; status: string }>('/appointments/pending', { method: 'POST', body: JSON.stringify(payload) }),
+  pendingAppointments: () => request<{ items: PendingAppointment[] }>('/appointments/pending'),
+  dismissPendingAppointment: (id: string) => request<{ ok: true }>(`/appointments/pending/${encodeURIComponent(id)}/dismiss`, { method: 'POST', body: '{}' }),
   applyAppointment: (stopId: string, payload: { appointmentAt: string; version: number }) =>
     request<AppointmentAnalysis>(`/stops/${stopId}/appointment`, {
       method: 'PUT',

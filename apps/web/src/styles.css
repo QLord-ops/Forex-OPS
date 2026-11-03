@@ -1088,3 +1088,30 @@ aside > .dispatcher-logout-error { bottom: 11.5rem; }
 .alert-toggle-mobile .alert-toggle-label { display: none; }
 .alert-toggle-mobile .alert-toggle-dot { box-shadow: 0 0 0 2px #fff; }
 .alert-toggle-mobile + .dispatcher-logout-mobile { margin-left: 0; }
+
+/* Termin review: the same quiet card as the Auftrag check, with the chosen stop and the ETA risk. */
+.appointment-review-vehicle { align-self: end; color: #475569; font-size: .75rem; }
+.appointment-review-time { margin-top: .75rem; border: 0; padding: 0; }
+.appointment-review-modes { display: flex; gap: 1rem; margin: .25rem 0 .5rem; font-size: .8125rem; }
+.appointment-review-modes label { display: inline-flex; align-items: center; gap: .375rem; }
+.appointment-review-stops { margin-top: .75rem; display: grid; gap: .5rem; font-size: .8125rem; }
+.appointment-review-stops ul { display: grid; gap: .5rem; }
+.appointment-review-stop { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: .5rem; border: 1px solid #e2e8f0; border-radius: .625rem; padding: .625rem; cursor: pointer; }
+.appointment-review-stop > span > * { display: block; }
+.appointment-review-stop-selected { border-color: #0f766e; background: #f0fdfa; }
+.appointment-review-reasons { color: #0f766e; font-size: .75rem; }
+.appointment-review-risk { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin-top: .75rem; border-left: 3px solid #94a3b8; background: #f8fafc; padding: .5rem .75rem; font-size: .8125rem; }
+.appointment-review-risk-on_time { border-color: #0f766e; }
+.appointment-review-risk-risk { border-color: #d97706; background: #fffbeb; }
+.appointment-review-risk-late { border-color: #dc2626; background: #fef2f2; }
+.appointment-review-overlay { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; background: rgb(15 23 42 / .35); padding: 1rem; }
+.appointment-review-overlay > .appointment-review { width: min(40rem, 100%); max-height: 90dvh; overflow: auto; margin: 0; border-radius: .875rem; background: #fff; padding: 1rem; box-shadow: 0 20px 60px rgb(15 23 42 / .25); }
+.appointment-review-overlay .appointment-review section > header { display: flex; align-items: center; justify-content: space-between; gap: .75rem; margin-bottom: .75rem; }
+.appointment-review-overlay .appointment-review footer { display: flex; justify-content: flex-end; gap: .5rem; margin-top: .75rem; padding-top: .625rem; border-top: 1px solid #e1eaf2; }
+.pending-appointments { margin-top: 1rem; border-top: 1px solid #e2e8f0; padding-top: .75rem; font-size: .8125rem; }
+.pending-appointments h3 { display: flex; align-items: center; gap: .375rem; margin-bottom: .5rem; font-weight: 600; }
+.pending-appointments ul { display: grid; gap: .5rem; }
+.pending-appointments li { display: flex; align-items: center; justify-content: space-between; gap: .75rem; border: 1px solid #e2e8f0; border-radius: .625rem; padding: .5rem .625rem; }
+.pending-appointments li span { display: block; color: #64748b; font-size: .75rem; }
+.pending-appointments .pending-appointments-found { color: #0f766e; }
+.pending-appointments-actions { display: flex; flex-shrink: 0; gap: .375rem; }
