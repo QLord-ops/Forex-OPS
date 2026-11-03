@@ -12,7 +12,10 @@ export interface AppointmentAnalysis {
   vehicleId: string;
   version: number;
   generatedAt: string;
+  /** The deadline the ETA is checked against: the exact time, or the end of the window. */
   appointmentAt: string;
+  windowStartAt: string | null;
+  windowEndAt: string | null;
   previousAppointmentAt: string | null;
   earliestArrival: string | null;
   latestArrival: string | null;
@@ -24,7 +27,14 @@ export interface AppointmentAnalysis {
   preliminary: boolean;
 }
 
-type AppointmentInput = { appointmentAt: string; version?: number };
+/** Either an exact time or a window; the other form is cleared when it is applied. */
+type AppointmentInput = { appointmentAt?: string | null; windowStartAt?: string | null; windowEndAt?: string | null; version?: number };
+export type AppointmentApplyOptions = {
+  /** References printed on the slip (Fahrt-ID, Borderonummer); added to the stop without duplicates. */
+  references?: string[];
+  source?: "DISPATCHER" | "DOCUMENT";
+  document?: { kind: string; label: string | null };
+};
 
 export class AppointmentService {
   constructor(
@@ -34,14 +44,17 @@ export class AppointmentService {
   ) {}
 
   async preview(stopId: string, input: AppointmentInput, now = new Date()): Promise<AppointmentAnalysis> {
-    const appointmentAt = parseAppointment(input.appointmentAt);
+    const slot = parseSlot(input);
+    const appointmentAt = slot.deadline;
     const context = await this.readContext(stopId);
     assertEditableStop(context.stop.completedAt, context.stop.tour.status);
 
     const tours = context.vehicle.tours.map((tour) => ({
       ...tour,
       vehicle: context.vehicle,
-      stops: tour.stops.map((stop) => stop.id === stopId ? { ...stop, appointmentAt } : stop)
+      stops: tour.stops.map((stop) => stop.id === stopId
+        ? { ...stop, appointmentAt: slot.appointmentAt, appointmentWindowStartAt: slot.windowStartAt, appointmentWindowEndAt: slot.windowEndAt }
+        : stop)
     }));
     const schedule = this.eta.calculateVehicleSchedule(tours, now);
     const target = schedule.find((item) => item.stopId === stopId);
@@ -109,7 +122,9 @@ export class AppointmentService {
       version: context.stop.tour.planVersion,
       generatedAt: now.toISOString(),
       appointmentAt: appointmentAt.toISOString(),
-      previousAppointmentAt: context.stop.appointmentAt?.toISOString() ?? null,
+      windowStartAt: slot.windowStartAt?.toISOString() ?? null,
+      windowEndAt: slot.windowEndAt?.toISOString() ?? null,
+      previousAppointmentAt: (context.stop.appointmentAt ?? context.stop.appointmentWindowEndAt)?.toISOString() ?? null,
       earliestArrival: earliestArrival?.toISOString() ?? null,
       latestArrival: latestArrival?.toISOString() ?? null,
       recommendedStartAt: recommendedStartAt?.toISOString() ?? null,
@@ -121,9 +136,10 @@ export class AppointmentService {
     };
   }
 
-  async apply(stopId: string, input: Required<AppointmentInput>, now = new Date()): Promise<AppointmentAnalysis> {
-    const appointmentAt = parseAppointment(input.appointmentAt);
-    const decision = await this.preview(stopId, { appointmentAt: appointmentAt.toISOString() }, now);
+  async apply(stopId: string, input: AppointmentInput & { version: number }, now = new Date(), options: AppointmentApplyOptions = {}): Promise<AppointmentAnalysis> {
+    const slot = parseSlot(input);
+    const slotInput = { appointmentAt: slot.appointmentAt?.toISOString() ?? null, windowStartAt: slot.windowStartAt?.toISOString() ?? null, windowEndAt: slot.windowEndAt?.toISOString() ?? null };
+    const decision = await this.preview(stopId, slotInput, now);
     if (decision.version !== input.version) {
       throw new TourPlanConflictError("Маршрут изменился. Обновите данные и рассчитайте термин повторно.");
     }
@@ -143,9 +159,12 @@ export class AppointmentService {
       });
       if (!changedTour.count) throw new TourPlanConflictError("Маршрут изменился. Обновите данные и рассчитайте термин повторно.");
 
+      const references = mergeReferences(context.stop.referenceNumbersJson, options.references ?? []);
       const changedStop = await tx.stop.updateMany({
         where: { id: stopId, completedAt: null },
-        data: { appointmentAt }
+        // One form only: an exact time clears the window and a window clears the exact time.
+        data: { appointmentAt: slot.appointmentAt, appointmentWindowStartAt: slot.windowStartAt, appointmentWindowEndAt: slot.windowEndAt,
+          ...(references !== null ? { referenceNumbersJson: references } : {}) }
       });
       if (!changedStop.count) throw new TourPlanConflictError("Точка уже завершена или была изменена.");
 
@@ -160,7 +179,13 @@ export class AppointmentService {
             : `Термин прикреплён. ${decision.message}`,
           payloadJson: JSON.stringify({
             previousAppointmentAt: context.stop.appointmentAt?.toISOString() ?? null,
-            appointmentAt: appointmentAt.toISOString(),
+            previousWindow: context.stop.appointmentWindowStartAt ? [context.stop.appointmentWindowStartAt.toISOString(), context.stop.appointmentWindowEndAt?.toISOString() ?? null] : null,
+            appointmentAt: slotInput.appointmentAt,
+            windowStartAt: slotInput.windowStartAt,
+            windowEndAt: slotInput.windowEndAt,
+            source: options.source ?? "DISPATCHER",
+            document: options.document ?? null,
+            addedReferences: options.references ?? [],
             appliedAt: now.toISOString(),
             earliestArrival: decision.earliestArrival,
             latestArrival: decision.latestArrival,
@@ -174,7 +199,7 @@ export class AppointmentService {
       });
     });
 
-    return this.preview(stopId, { appointmentAt: appointmentAt.toISOString() }, now);
+    return this.preview(stopId, slotInput, now);
   }
 
   private async readContext(stopId: string) {
@@ -194,6 +219,28 @@ export class AppointmentService {
     });
     return { stop, vehicle };
   }
+}
+
+function parseSlot(input: AppointmentInput) {
+  if (input.appointmentAt) {
+    const appointmentAt = parseAppointment(input.appointmentAt);
+    return { appointmentAt, windowStartAt: null, windowEndAt: null, deadline: appointmentAt };
+  }
+  if (input.windowStartAt && input.windowEndAt) {
+    const windowStartAt = parseAppointment(input.windowStartAt);
+    const windowEndAt = parseAppointment(input.windowEndAt);
+    if (windowEndAt < windowStartAt) throw new TourPlanConflictError("Конец окна раньше начала.");
+    return { appointmentAt: null, windowStartAt, windowEndAt, deadline: windowEndAt };
+  }
+  throw new TourPlanConflictError("Укажите время термина или окно.");
+}
+
+/** Null when nothing new is added, so the stored list is left as it is. */
+function mergeReferences(json: string | null, added: string[]): string | null {
+  let current: string[] = [];
+  try { const value: unknown = JSON.parse(json ?? "[]"); if (Array.isArray(value)) current = value.filter((item): item is string => typeof item === "string"); } catch { /* legacy text */ }
+  const fresh = added.map((item) => item.trim()).filter((item) => item && !current.includes(item));
+  return fresh.length ? JSON.stringify([...current, ...fresh].slice(0, 40)) : null;
 }
 
 function parseAppointment(value: string): Date {

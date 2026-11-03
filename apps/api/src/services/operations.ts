@@ -9,7 +9,7 @@ import { writeAuditLog, type AuditActor } from './audit-log.js';
 import { DEFAULT_ARRIVAL_RADIUS_METERS } from './webfleet.js';
 
 export type ExceptionKind = 'EXTENDED_DRIVING' | 'REDUCED_REST' | 'BOTH';
-export type ArrivalSource = 'DISPATCHER' | 'WEBFLEET_AUTO' | 'ASSISTANT';
+export type ArrivalSource = 'DISPATCHER' | 'WEBFLEET_AUTO' | 'ASSISTANT' | 'WITH_STOP_EVENT';
 export type ArrivalOptions = { source?: ArrivalSource; meta?: Record<string, unknown> };
 export const SYSTEM_WEBFLEET_ACTOR: AuditActor = { role: 'system', sessionId: 'webfleet-auto' };
 
@@ -230,11 +230,27 @@ export class OperationsService {
       await rebaseActiveLeg(tx, stop.tour.vehicleId, null, now);
       await tx.vehicle.update({ where: { id: stop.tour.vehicleId }, data: { operationVersion: { increment: 1 } } });
       await tx.tour.update({ where: { id: stop.tourId }, data: { planVersion: { increment: 1 } } });
-      await tx.notification.updateMany({ where: { stopId, type: 'AUTO_ARRIVAL', acknowledgedAt: null }, data: { acknowledgedAt: now } });
+      await tx.notification.updateMany({ where: { stopId, type: { in: ['AUTO_ARRIVAL', 'STOP_DEPARTED'] }, acknowledgedAt: null }, data: { acknowledgedAt: now } });
       await tx.operationEvent.create({ data: { vehicleId: stop.tour.vehicleId, tourId: stop.tourId, stopId, type: 'ARRIVAL_REVERTED', reason: reason ?? null,
         payloadJson: JSON.stringify({ previousArrivedAt: stop.arrivedAt, previousSource: previous.source }), createdAt: now } });
       await writeAuditLog(tx, actor, { action: 'ARRIVAL_REVERTED', entityType: 'Stop', entityId: stopId, vehicleId: stop.tour.vehicleId, tourId: stop.tourId, stopId,
         metadata: { previousArrivedAt: stop.arrivedAt.toISOString(), previousSource: previous.source, reason: reason ?? null }, createdAt: now });
+    });
+    return { ok: true };
+  }
+
+  /**
+   * The truck left the zone without BELADEN/ENTLADEN and the dispatcher says it will come back:
+   * the arrival stays, and only a new exit after re-entering the zone asks again.
+   */
+  async keepAfterDeparture(stopId: string, now = new Date(), actor?: AuditActor) {
+    await this.db.$transaction(async tx => {
+      const stop = await tx.stop.findUniqueOrThrow({ where: { id: stopId }, include: { tour: true } });
+      if (!stop.arrivedAt || stop.completedAt || stop.tour.status !== 'ACTIVE') throw new TourPlanConflictError('Точка уже завершена или прибытие снято.');
+      await tx.notification.updateMany({ where: { stopId, type: 'STOP_DEPARTED', acknowledgedAt: null }, data: { acknowledgedAt: now } });
+      await tx.operationEvent.create({ data: { vehicleId: stop.tour.vehicleId, tourId: stop.tourId, stopId, type: 'DEPARTURE_NOT_COMPLETED',
+        reason: stop.type === 'LOAD' ? 'Уехала без загрузки, вернётся' : 'Уехала без выгрузки, вернётся', payloadJson: JSON.stringify({ keptAt: now.toISOString() }), createdAt: now } });
+      await writeAuditLog(tx, actor, { action: 'DEPARTURE_NOT_COMPLETED', entityType: 'Stop', entityId: stopId, vehicleId: stop.tour.vehicleId, tourId: stop.tourId, stopId, createdAt: now });
     });
     return { ok: true };
   }

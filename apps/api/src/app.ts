@@ -29,7 +29,7 @@ import { ReplanningService } from "./services/replanning.js";
 import { PrismaTrafficQuotaStore, TomTomRoutingProvider, TrafficRoutingService } from './services/traffic-routing.js';
 import { TrafficOperationsService } from './services/traffic-operations.js';
 import { VEHICLE_CLOCK_LIMITS } from './services/vehicle-clock.js';
-import { bindWebfleetObject, listWebfleetBindings, unbindWebfleetVehicle, WebfleetSyncService, WebfleetTelemetryService, type AutoArrivalHandler } from './services/webfleet.js';
+import { bindWebfleetObject, listWebfleetBindings, unbindWebfleetVehicle, WebfleetSyncService, WebfleetTelemetryService, distanceMeters, DEFAULT_ARRIVAL_RADIUS_METERS, type AutoArrivalHandler } from './services/webfleet.js';
 import { buildVehicleCard, suggestWebfleetBindings, vehicleObjectUid, WebfleetDetailsSync, WebfleetLiveStore, WebfleetTrackService } from './services/webfleet-live.js';
 import { calculateRiskColor, calculateSimulatedDuration } from './services/simulation.js';
 import { forecastDrive } from './services/vehicle-clock.js';
@@ -41,6 +41,10 @@ import { AssistantError, DispatcherAssistantService } from './services/dispatche
 import { assistantSessionKey, registerDispatcherAssistantRoutes } from './routes/dispatcher-assistant.js';
 import { createDispatcherDependencies } from './services/dispatcher-adapters.js';
 import { writeAuditLog, type AuditActor } from './services/audit-log.js';
+import { matchAppointment } from './services/appointment-match.js';
+import { documentFingerprint, PendingAppointmentService } from './services/pending-appointments.js';
+import { registerAppointmentDocumentRoutes } from './routes/appointments.js';
+import type { DocumentImportPreview } from './services/pdf-order-import.js';
 
 function auditActor(request: FastifyRequest): AuditActor | undefined {
   return request.dispatcherSession
@@ -64,6 +68,15 @@ const alertService = new AlertService(prisma);
 const vehicleService = new VehicleService(prisma);
 const notificationService = new NotificationService(prisma, tourService);
 const operationsService = new OperationsService(prisma, tourService);
+const pendingAppointments = new PendingAppointmentService(prisma);
+
+/** A Termin slip gets its truck and stop match and tells whether the same file was used before. */
+async function withAppointmentMatch<T extends DocumentImportPreview>(preview: T, buffer: Buffer) {
+  if (preview.documentKind !== 'APPOINTMENT' || !preview.appointment) return preview;
+  const fingerprint = documentFingerprint(buffer);
+  const [match, previous] = await Promise.all([matchAppointment(prisma, preview.appointment), pendingAppointments.findByFingerprint(fingerprint)]);
+  return { ...preview, appointment: { ...preview.appointment, fingerprint }, match, previous: previous ? { id: previous.id, status: previous.status, attachedStopId: previous.attachedStopId } : null };
+}
 // Automatic arrival from fresh Webfleet GPS (zone + standstill); AUTO_ARRIVAL_ENABLED=false keeps it a suggestion.
 const autoArrival: AutoArrivalHandler | undefined = process.env.AUTO_ARRIVAL_ENABLED === 'false' ? undefined
   : (input) => operationsService.confirmArrival(input.stopId, input.arrivedAt, input.now, SYSTEM_WEBFLEET_ACTOR, { source: 'WEBFLEET_AUTO', meta: input.meta });
@@ -130,7 +143,7 @@ const confirmImportedTourSchema = createTourSchema.extend({
 });
 
 const patchTourSchema = z.union([
-  z.object({ status: z.literal("CANCELLED") }),
+  z.object({ status: z.literal("CANCELLED"), version: z.number().int().nonnegative().optional() }),
   createTourSchema.extend({ version: z.number().int().nonnegative().optional() })
 ]);
 
@@ -208,6 +221,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     }
   });
   registerDispatcherAssistantRoutes(app, assistantService);
+  registerAppointmentDocumentRoutes(app, { prisma, appointments: appointmentService, pending: pendingAppointments, audit, refreshAlertsForVehicle: (vehicleId) => refreshAlertsForVehicle(vehicleId) });
   await registerRouteScenarioRoutes(app, { service: scenarioService });
 
   let activeOrderImports = 0;
@@ -249,6 +263,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
       await webfleetSync.refreshIfDue().catch(() => undefined);
       await webfleetDetails.refreshIfDue().catch(() => undefined);
       await notificationService.refresh();
+      await pendingAppointments.scan((input) => notificationService.publish(input)).catch((error) => app.log.error(error));
       await refreshAllAlerts();
       await trafficService.tick();
       lastNotificationRefreshAt = Date.now();
@@ -427,10 +442,6 @@ export async function buildApp(options: BuildAppOptions = {}) {
     await audit(request, 'DRIVING_EXCEPTIONS_CANCELLED', 'Vehicle', id, { vehicleId: id });
     return result;
   });
-  app.post('/stops/:id/arrival', async request => {
-    const input = z.object({ arrivedAt: z.string().datetime().optional() }).parse(request.body ?? {});
-    return operationsService.confirmArrival(idParams.parse(request.params).id, input.arrivedAt ? new Date(input.arrivedAt) : new Date(), new Date(), auditActor(request));
-  });
   app.post('/stops/:id/arrival/revert', { preHandler: requireDispatcherRoles('admin', 'dispatcher') }, async request => {
     const input = z.object({ reason: z.string().trim().max(300).optional() }).parse(request.body ?? {});
     const { id } = idParams.parse(request.params);
@@ -439,23 +450,17 @@ export async function buildApp(options: BuildAppOptions = {}) {
     await refreshAlertsForVehicle(stop.tour.vehicleId);
     return result;
   });
+  app.post('/stops/:id/departure/keep', { preHandler: requireDispatcherRoles('admin', 'dispatcher') }, async request => {
+    const { id } = idParams.parse(request.params);
+    return operationsService.keepAfterDeparture(id, new Date(), auditActor(request));
+  });
   app.put('/stops/:id/arrival-radius', { preHandler: requireDispatcherRoles('admin', 'dispatcher') }, async request => {
     const input = z.object({ radiusMeters: z.number().int().min(100).max(5000).nullable() }).parse(request.body ?? {});
     return operationsService.setArrivalRadius(idParams.parse(request.params).id, input.radiusMeters, new Date(), auditActor(request));
   });
-  app.post('/stops/:id/not-arrived', async request => {
-    const input = z.object({ latitude: z.number().min(-90).max(90), longitude: z.number().min(-180).max(180) }).parse(request.body);
-    const stop = await prisma.stop.findUniqueOrThrow({ where: { id: idParams.parse(request.params).id }, include: { tour: { include: { stops: { orderBy: { sequence: 'asc' } } } } } });
-    if (stop.arrivedAt || stop.completedAt || stop.tour.stops.find(item => !item.completedAt)?.id !== stop.id) throw Object.assign(new Error('Требуется текущая неподтверждённая точка.'), { statusCode: 409 });
-    const preview = await replanningService.preview(stop.tourId, { version: stop.tour.planVersion, origin: input,
-      futureStops: stop.tour.stops.filter(item => !item.completedAt).map(item => ({ ...item, type: item.type as 'LOAD' | 'UNLOAD', appointmentAt: item.appointmentAt?.toISOString() ?? null })) });
-    await replanningService.apply(stop.tourId, { previewId: preview.id, version: preview.version }, new Date(), auditActor(request));
-    await prisma.notification.updateMany({ where: { stopId: stop.id, type: 'PREDICTED_ARRIVAL', acknowledgedAt: null }, data: { acknowledgedAt: new Date() } });
-    return { ok: true };
-  });
   app.post('/stops/:id/appointment/preview', async request => {
     const stopId = idParams.parse(request.params).id;
-    const input = z.object({ appointmentAt: z.string().datetime() }).parse(request.body);
+    const input = z.object({ appointmentAt: z.string().datetime().nullable().optional(), windowStartAt: z.string().datetime().nullable().optional(), windowEndAt: z.string().datetime().nullable().optional() }).parse(request.body);
     return appointmentService.preview(stopId, input);
   });
   app.put('/stops/:id/appointment', async request => {
@@ -586,7 +591,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
 
       if (!options.auth?.disabled) await assistantService.consumeUsage(assistantSessionKey(request));
       try {
-        return await pdfImport(buffer, filename);
+        return await withAppointmentMatch(await pdfImport(buffer, filename), buffer);
       } catch (error) {
         if (error instanceof Error && error.message.includes("OPENAI_API_KEY")) {
           return reply.status(503).send({ error: "OpenAI ещё не настроен для импорта PDF." });
@@ -631,7 +636,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
 
       if (!options.auth?.disabled) await assistantService.consumeUsage(assistantSessionKey(request));
       try {
-        return await imageImport(buffer, filename, file.mimetype);
+        return await withAppointmentMatch(await imageImport(buffer, filename, file.mimetype), buffer);
       } catch (error) {
         if (error instanceof Error && error.message.includes("OPENAI_API_KEY")) {
           return reply.status(503).send({ error: "OpenAI ещё не настроен для импорта скриншотов." });
@@ -831,16 +836,32 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const { id } = z.object({ id: z.string() }).parse(request.params);
     const body = patchTourSchema.parse(request.body);
     const tour = "status" in body
-      ? await tourService.cancelFutureTour(id, new Date(), auditActor(request))
+      ? await tourService.cancelTour(id, body.version, new Date(), auditActor(request))
       : await tourService.updateFutureTour(id, body, auditActor(request));
     await refreshAlertsForVehicle(tour.vehicleId);
     return enrichTour(tour);
   });
 
+  /**
+   * Arrival comes from the GPS zone. Without fresh GPS the dispatcher's BELADEN/ENTLADEN records it too;
+   * with fresh GPS outside the zone the event waits for the truck.
+   */
+  async function stopEventArrival(stopId: string) {
+    const stop = await prisma.stop.findUniqueOrThrow({ where: { id: stopId }, include: { tour: { select: { vehicleId: true } } } });
+    if (stop.arrivedAt) return { arriveWithEvent: false };
+    const gps = await webfleetTelemetry.latest(stop.tour.vehicleId);
+    if (gps && !gps.stale) {
+      const distance = distanceMeters(gps.latitude, gps.longitude, stop.latitude, stop.longitude);
+      const radius = stop.arrivalRadiusMeters ?? DEFAULT_ARRIVAL_RADIUS_METERS;
+      if (distance > radius) throw Object.assign(new Error(`По GPS машина ещё не в зоне точки (${(distance / 1000).toFixed(1)} км). Прибытие поставится само.`), { statusCode: 409 });
+    }
+    return { arriveWithEvent: true };
+  }
+
   app.post("/stops/:id/loaded", async (request) => {
     const { id } = z.object({ id: z.string() }).parse(request.params);
     const body = z.object({ timestamp: z.string().datetime().optional(), note: z.string().optional() }).parse(request.body ?? {});
-    const tour = await tourService.recordLoaded(id, body.timestamp ? new Date(body.timestamp) : new Date(), body.note, auditActor(request));
+    const tour = await tourService.recordLoaded(id, body.timestamp ? new Date(body.timestamp) : new Date(), body.note, auditActor(request), await stopEventArrival(id));
     await refreshAlertsForVehicle(tour.vehicleId);
     return enrichTour(tour);
   });
@@ -848,7 +869,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   app.post("/stops/:id/unloaded", async (request) => {
     const { id } = z.object({ id: z.string() }).parse(request.params);
     const body = z.object({ timestamp: z.string().datetime().optional(), note: z.string().optional() }).parse(request.body ?? {});
-    const tour = await tourService.recordUnloaded(id, body.timestamp ? new Date(body.timestamp) : new Date(), body.note, auditActor(request));
+    const tour = await tourService.recordUnloaded(id, body.timestamp ? new Date(body.timestamp) : new Date(), body.note, auditActor(request), await stopEventArrival(id));
     await refreshAlertsForVehicle(tour.vehicleId);
     return enrichTour(tour);
   });
@@ -1044,8 +1065,14 @@ export async function buildApp(options: BuildAppOptions = {}) {
               label: currentStop.type === "LOAD" ? "BELADEN" : "ENTLADEN",
               stopId: currentStop.id
             }
-          : currentStop && position.status === "ARRIVED"
-            ? { type: "CONFIRM_ARRIVAL", label: "Прибыла", stopId: currentStop.id }
+          // Without fresh GPS nothing can set the arrival: BELADEN/ENTLADEN records it together with the event.
+          : currentStop && position.status === "ARRIVED" && !(latestTelemetry && !latestTelemetry.stale)
+            ? {
+                type: currentStop.type === "LOAD" ? "MARK_LOADED" : "MARK_UNLOADED",
+                label: currentStop.type === "LOAD" ? "BELADEN" : "ENTLADEN",
+                stopId: currentStop.id,
+                withoutGpsArrival: true
+              }
             : position.status === "MOVING"
               ? { type: "MANUAL_STOP", label: "Стоп", stopId: null }
               : null;
@@ -1101,6 +1128,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
           address: latestTelemetry.address,
           objectNo: latestTelemetry.objectNo,
           objectName: latestTelemetry.objectName,
+          lastContactAt: latestTelemetry.lastContactAt?.toISOString() ?? null,
           usable: latestTelemetry.usable
         } : { source: "CALCULATED", checkedAt: generatedAt.toISOString(), stale: false, ageSeconds: 0, usable: true },
         // Every truck on the fleet map: where it is and where that position comes from.
