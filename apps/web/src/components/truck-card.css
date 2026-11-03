@@ -27,7 +27,13 @@
 .truck-card-chip-stale { background: #fffbeb; color: #92400e; }
 .truck-card-chip-calculated { background: #f1f5f9; color: #475569; }
 
-.truck-card-tabs { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); border-bottom: 1px solid rgb(15 23 42 / .08); padding: 0 8px; }
+.truck-card-tabbar { display: flex; align-items: stretch; border-bottom: 1px solid rgb(15 23 42 / .08); padding: 0 8px; }
+.truck-card-tabs { display: grid; flex: 1; min-width: 0; grid-template-columns: repeat(6, minmax(0, 1fr)); }
+/* The track is a map layer, so it sits apart from the tabs behind a hairline. */
+.truck-card-track { flex: 0 0 52px; margin-left: 4px; border-left: 1px solid rgb(15 23 42 / .08); }
+.truck-card-track[aria-pressed='true'] { color: #6d28d9; border-bottom-color: #7c3aed; }
+.truck-card-track:disabled { cursor: not-allowed; opacity: .45; }
+.truck-card-track-note { margin: 0; border-bottom: 1px solid rgb(15 23 42 / .08); padding: 6px 16px; color: #92400e; font-size: .75rem; }
 .truck-card-tab { display: grid; justify-items: center; gap: 2px; border-bottom: 2px solid transparent; padding: 8px 2px 6px; color: #64748b; font-size: .6875rem; font-weight: 500; line-height: 1.2; }
 .truck-card-tab:hover { color: #0f172a; }
 .truck-card-tab[aria-selected='true'] { border-bottom-color: #0f766e; color: #0f172a; }
@@ -115,14 +121,22 @@
 .truck-card-stop-seq { display: grid; width: 22px; height: 22px; place-items: center; border: 1px solid #94a3b8; border-radius: 50%; font-size: .6875rem; font-weight: 600; }
 .truck-card-stop-done .truck-card-stop-seq { border-color: #0f766e; background: #0f766e; color: #fff; }
 
-.truck-card-footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; border-top: 1px solid rgb(15 23 42 / .08); padding: 12px 16px; }
-.truck-card-footer-note { width: 100%; color: #92400e; font-size: .75rem; }
+.truck-card-stop-current .truck-card-stop-seq { border-color: #0f766e; color: #0f766e; box-shadow: 0 0 0 2px rgb(15 118 110 / .15); }
+.truck-card-tour-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.truck-card-tours { display: grid; gap: 8px; }
+.truck-card-tours > li { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: start; gap: 8px; border-top: 1px solid rgb(15 23 42 / .06); padding-top: 8px; font-size: .8125rem; line-height: 1.4; }
+.truck-card-tours > li:first-child { border-top: 0; padding-top: 0; }
+.truck-card-tours strong { display: block; font-weight: 500; font-variant-numeric: tabular-nums; }
+.truck-card-tours .truck-card-muted { display: block; }
+.truck-card-remove { display: inline-flex; align-items: center; gap: 4px; min-height: 28px; border: 1px solid #fecaca; border-radius: 8px; background: #fff; padding: 0 8px; color: #b91c1c; font-size: .75rem; font-weight: 500; }
+.truck-card-remove:hover { background: #fef2f2; }
+.truck-card-remove:focus-visible { outline: 2px solid #0ea5e9; outline-offset: 1px; }
+.truck-card-remove:disabled { opacity: .6; }
 
 .vehicle-card-info { color: #475569; }
 
 @media (max-width: 640px) {
   .truck-card { top: auto; right: 8px; left: 8px; width: auto; max-height: 80%; }
-  .truck-card-footer .secondary-button span, .truck-card-footer .primary-button { font-size: .8125rem; }
 }
 
 .assignment-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 8px; border-top: 1px solid rgb(15 23 42 / .06); padding: 8px 16px; }

@@ -10,6 +10,7 @@ import { statusLabel } from '../lib/format'
 import type { CreateTourStopInput, GeocodeResult, ImportedOrderDraft, OrderImportPreview, StopType } from '../types/domain'
 import { importFingerprint } from '../lib/import-fingerprint'
 import { berlinLocalToIso } from '../lib/berlin-time'
+import { AppointmentReview } from '../components/AppointmentReview'
 
 interface StopDraft {
   id: string
@@ -32,7 +33,7 @@ interface StopDraft {
 }
 
 type ImportFileKind = 'PDF' | 'EXCEL' | 'IMAGE' | 'UNSUPPORTED'
-type ImportFileStatus = 'queued' | 'processing' | 'ready' | 'error'
+type ImportFileStatus = 'queued' | 'processing' | 'ready' | 'error' | 'termin'
 
 interface ImportQueueItem {
   id: string
@@ -128,6 +129,7 @@ export function NewOrderPage() {
   const [importing, setImporting] = useState(false)
   const [isImportDragging, setIsImportDragging] = useState(false)
   const [importItems, setImportItems] = useState<ImportQueueItem[]>([])
+  const [termins, setTermins] = useState<Array<{ preview: OrderImportPreview; fileName: string }>>([])
   const [importSelection, setImportSelection] = useState<ImportSelection | null>(null)
   const [appliedImportSelection, setAppliedImportSelection] = useState<ImportSelection | null>(null)
   const [geocodingStopIds, setGeocodingStopIds] = useState<string[]>([])
@@ -213,6 +215,13 @@ export function NewOrderPage() {
           validateImportFile(file)
           const kind = classifyImportFile(file)
           const preview = kind === 'PDF' ? await api.importPdf(file) : kind === 'EXCEL' ? await api.importExcel(file) : kind === 'IMAGE' ? await api.importImage(file) : null
+          // A Termin slip is not an order: it opens its own review and creates no tour.
+          if (preview?.documentKind === 'APPOINTMENT' && preview.appointment?.fingerprint && preview.match) {
+            const termin = { preview, fileName: file.name }
+            setTermins((current) => [...current, termin])
+            setImportItems((current) => current.map((candidate) => candidate.id === item.id ? { ...candidate, status: 'termin' } : candidate))
+            continue
+          }
           if (!preview?.drafts.length) throw new Error('В файле не найдены адреса загрузки или выгрузки.')
           setImportItems((current) => current.map((candidate) => candidate.id === item.id ? { ...candidate, status: 'ready', preview } : candidate))
           if (!selectionClaimed) { selectionClaimed = true; hydrateDraft({ itemId: item.id, draftIndex: 0 }, preview.drafts[0]) }
@@ -300,7 +309,14 @@ export function NewOrderPage() {
   if (vehicles.loading && !vehicles.data) return <LoadingState label="Грузовики загружаются" />
   if (vehicles.error && !vehicles.data) return <ErrorState error={vehicles.error} onRetry={vehicles.refetch} />
 
-  return (
+  const termin = termins[0]
+  return (<>
+    {termin?.preview.appointment?.fingerprint && termin.preview.match ? <div className="appointment-review-overlay" role="dialog" aria-modal="true" aria-label="Проверка термина">
+      <AppointmentReview key={termin.preview.appointment.fingerprint} document={termin.preview.appointment} fingerprint={termin.preview.appointment.fingerprint} match={termin.preview.match}
+        pendingId={termin.preview.previous?.status === 'PENDING' ? termin.preview.previous.id : null} alreadyApplied={termin.preview.previous?.status === 'ATTACHED'} fileName={termin.fileName}
+        onApplied={(vehicleId) => { setTermins((current) => current.slice(1)); navigate(`/vehicles/${vehicleId}`) }}
+        onSaved={() => setTermins((current) => current.slice(1))} onSkip={() => setTermins((current) => current.slice(1))} />
+    </div> : null}
     <form className="mx-auto max-w-[1480px] space-y-5 pb-8" onSubmit={handleSubmit}>
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div><p className="mb-1 text-xs font-bold uppercase tracking-[0.18em] text-sky-700">Auftrag intake</p><h2 className="page-title">Новый заказ</h2><p className="page-subtitle">Загрузите документ, проверьте маршрут и назначьте машину.</p></div>
@@ -314,7 +330,7 @@ export function NewOrderPage() {
           </div>
         </div>
         {importItems.length ? <div className="border-t border-slate-200 bg-slate-50/60 px-4 py-3"><div className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-700"><Sparkles className="h-4 w-4 text-sky-600" />Очередь · {remainingImportDrafts} к подтверждению</div><div className="flex gap-2 overflow-x-auto pb-1">
-          {importItems.flatMap((item) => item.status === 'ready' && item.preview ? item.preview.drafts.map((draft, index) => { const selected = importSelection?.itemId === item.id && importSelection.draftIndex === index; const completed = isDraftCompleted(item, index); return <button key={`${item.id}-${index}`} type="button" disabled={completed} onClick={() => selectImportedDraft({ itemId: item.id, draftIndex: index })} className={`min-w-[190px] rounded-lg border px-3 py-2 text-left transition ${selected ? 'border-sky-500 bg-white ring-2 ring-sky-100' : 'border-slate-200 bg-white hover:border-slate-300'} disabled:opacity-50`}><span className="block truncate text-sm font-bold">{completed ? 'Сохранён' : draft.orderNumber || `Запись ${index + 1}`}</span><span className="block truncate text-xs text-slate-500">{item.fileName} · {draft.stops.length} точек</span></button> }) : [<div key={item.id} className="min-w-[220px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"><span className="block truncate font-semibold">{item.fileName}</span><span className={item.status === 'error' ? 'text-red-700' : 'text-slate-500'}>{item.status === 'error' ? item.error : 'Распознаётся…'}</span></div>])}
+          {importItems.flatMap((item) => item.status === 'ready' && item.preview ? item.preview.drafts.map((draft, index) => { const selected = importSelection?.itemId === item.id && importSelection.draftIndex === index; const completed = isDraftCompleted(item, index); return <button key={`${item.id}-${index}`} type="button" disabled={completed} onClick={() => selectImportedDraft({ itemId: item.id, draftIndex: index })} className={`min-w-[190px] rounded-lg border px-3 py-2 text-left transition ${selected ? 'border-sky-500 bg-white ring-2 ring-sky-100' : 'border-slate-200 bg-white hover:border-slate-300'} disabled:opacity-50`}><span className="block truncate text-sm font-bold">{completed ? 'Сохранён' : draft.orderNumber || `Запись ${index + 1}`}</span><span className="block truncate text-xs text-slate-500">{item.fileName} · {draft.stops.length} точек</span></button> }) : [<div key={item.id} className="min-w-[220px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"><span className="block truncate font-semibold">{item.fileName}</span><span className={item.status === 'error' ? 'text-red-700' : 'text-slate-500'}>{item.status === 'error' ? item.error : item.status === 'termin' ? 'Термин — открыта проверка' : 'Распознаётся…'}</span></div>])}
         </div></div> : null}
       </section> : null}
 
@@ -336,5 +352,5 @@ export function NewOrderPage() {
         </aside>
       </section> : <EmptyState label="Добавьте PDF, Excel или скриншот Auftrag — либо выберите ручное создание." />}
     </form>
-  )
+  </>)
 }

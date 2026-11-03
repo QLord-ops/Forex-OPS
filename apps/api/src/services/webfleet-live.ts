@@ -384,7 +384,7 @@ type LatestTelemetry = {
   recordedAt: Date; ageSeconds: number; stale: boolean; usable: boolean; latitude: number; longitude: number;
   speedKmh: number | null; ignitionOn: boolean | null; standstill: boolean | null; courseDeg: number | null; address: string | null;
   fuelPercent: number | null; odometerKm: number | null; engineHours: number | null; ignitionChangedAt: string | null; objectType: string | null;
-  objectName?: string | null; tripMode?: number | null;
+  objectName?: string | null; tripMode?: number | null; lastContactAt?: Date | null;
 };
 
 function feedStatus(state: FeedState) {
@@ -431,6 +431,7 @@ export async function buildVehicleCard(
     } : null,
     current: telemetry ? {
       recordedAt: telemetry.recordedAt.toISOString(),
+      lastContactAt: telemetry.lastContactAt?.toISOString() ?? null,
       ageSeconds: telemetry.ageSeconds,
       stale: telemetry.stale,
       usable: telemetry.usable,

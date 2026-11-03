@@ -21,4 +21,12 @@ it('requires a dispatcher session for revert and zone changes', async () => {
   const headers = { origin: 'http://localhost:5173' };
   expect((await app.inject({ method: 'POST', url: '/stops/s1/arrival/revert', headers, payload: {} })).statusCode).toBe(401);
   expect((await app.inject({ method: 'PUT', url: '/stops/s1/arrival-radius', headers, payload: { radiusMeters: 500 } })).statusCode).toBe(401);
+  expect((await app.inject({ method: 'POST', url: '/stops/s1/departure/keep', headers, payload: {} })).statusCode).toBe(401);
+});
+
+it('has no manual arrival route any more: the arrival comes from the GPS zone', async () => {
+  const app = await buildApp({ auth: { disabled: true } });
+  apps.push(app);
+  expect((await app.inject({ method: 'POST', url: '/stops/s1/arrival', payload: {} })).statusCode).toBe(404);
+  expect((await app.inject({ method: 'POST', url: '/stops/s1/not-arrived', payload: { latitude: 1, longitude: 1 } })).statusCode).toBe(404);
 });

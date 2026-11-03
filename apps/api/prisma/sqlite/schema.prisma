@@ -373,3 +373,29 @@ model Dispatcher {
 
   vehicles Vehicle[]
 }
+
+/// Appointment slip (Termin) recognised from a document before a matching stop exists. Never deleted: only the status changes.
+model PendingAppointment {
+  id                    String    @id @default(cuid())
+  documentKind          String
+  fingerprint           String    @unique
+  vehiclePlate          String?
+  vehicleId             String?
+  company               String?
+  site                  String?
+  city                  String?
+  stopType              String?
+  appointmentAt         DateTime?
+  windowStartAt         DateTime?
+  windowEndAt           DateTime?
+  referencesJson        String?
+  sourceExcerpt         String?
+  status                String    @default("PENDING")
+  attachedStopId        String?
+  createdByDispatcherId String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([status, createdAt])
+  @@index([vehicleId, status])
+}

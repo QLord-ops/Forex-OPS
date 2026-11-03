@@ -35,6 +35,8 @@ export interface Stop {
   latitude: number
   longitude: number
   appointmentAt?: string | null
+  appointmentWindowStartAt?: string | null
+  appointmentWindowEndAt?: string | null
   loadingMeters?: number | null
   referenceNumbers?: string[] | null
   referenceNumbersJson?: string | null
@@ -83,6 +85,7 @@ export interface Tour {
   vehicle?: Vehicle
   stops?: Stop[]
   legs?: Leg[]
+  events?: unknown[]
   predictedEta?: string | null
   currentEta?: string | null
   eta?: string | null
@@ -115,7 +118,9 @@ export interface DashboardVehicle {
   dwellMinutes?: number | null
   dwellSeverity?: 'NONE' | 'WARNING' | 'CRITICAL'
   currentAction?: {
-    type: 'CONFIRM_ARRIVAL' | 'MARK_LOADED' | 'MARK_UNLOADED' | 'MANUAL_STOP' | 'RESUME'
+    type: 'MARK_LOADED' | 'MARK_UNLOADED' | 'MANUAL_STOP' | 'RESUME'
+    /** No GPS arrival yet: BELADEN/ENTLADEN records the arrival at the same moment. */
+    withoutGpsArrival?: boolean
     label: string
     stopId?: string | null
   } | null
@@ -198,6 +203,8 @@ export interface VehicleCardData {
   webfleet: { objectNo: string | null; objectName: string | null; plate: string | null; vin: string | null; tankLiters: number | null; objectType: string | null } | null
   current: {
     recordedAt: string
+    /** Last unit contact; newer than recordedAt while the truck stands. */
+    lastContactAt?: string | null
     ageSeconds: number
     stale: boolean
     usable: boolean
@@ -390,6 +397,8 @@ export interface AppointmentAnalysis {
   version: number
   generatedAt: string
   appointmentAt: string
+  windowStartAt?: string | null
+  windowEndAt?: string | null
   previousAppointmentAt?: string | null
   earliestArrival: string | null
   latestArrival: string | null
@@ -484,9 +493,58 @@ export interface ImportedOrderDraft {
 export interface OrderImportPreview {
   source: OrderImportSource
   detectedLayout: OrderImportLayout
+  /** PDF and screenshots: an Auftrag or a Termin slip. */
+  documentKind?: 'ORDER' | 'APPOINTMENT'
+  appointment?: AppointmentDocument | null
+  match?: AppointmentMatch
+  previous?: { id: string; status: string; attachedStopId: string | null } | null
   drafts: ImportedOrderDraft[]
   warnings: ImportWarning[]
   aiAvailable: boolean
+}
+
+/** A recognised Termin slip; times are Berlin wall-clock "YYYY-MM-DDTHH:mm". */
+export interface AppointmentDocument {
+  kind: 'VW_FAHRTENSCHEIN' | 'DECKBLATT' | 'OTHER'
+  documentType: string | null
+  plate: string | null
+  trailerPlate: string | null
+  company: string | null
+  site: string | null
+  city: string | null
+  stopType: 'LOAD' | 'UNLOAD' | null
+  appointmentLocal: string | null
+  windowStartLocal: string | null
+  windowEndLocal: string | null
+  standgeldFromLocal?: string | null
+  references: Array<{ label: string; value: string }>
+  positions?: string[]
+  sourceExcerpt: string | null
+  confidence?: number
+  warnings?: ImportWarning[]
+  fingerprint?: string
+}
+
+export interface AppointmentCandidate {
+  stopId: string; tourId: string; vehicleId: string; vehicleNumber: string; licensePlate: string | null
+  orderNumber: string; tourStatus: string; planVersion: number; sequence: number; type: StopType
+  company: string | null; address: string; city: string | null
+  appointmentAt: string | null; windowStartAt: string | null; windowEndAt: string | null
+  score: number; reasons: string[]
+}
+
+export interface AppointmentMatch {
+  status: 'MATCHED' | 'AMBIGUOUS' | 'NONE'
+  vehicle: { status: 'MATCHED'; vehicleId: string; vehicleNumber: string; plate: string } | { status: 'NOT_FOUND'; plate: string } | { status: 'NO_PLATE' }
+  candidates: AppointmentCandidate[]
+}
+
+export interface PendingAppointment {
+  id: string; fingerprint: string; documentKind: AppointmentDocument['kind']; vehiclePlate: string | null
+  company: string | null; site: string | null; city: string | null; stopType: StopType | null
+  appointmentAt: string | null; windowStartAt: string | null; windowEndAt: string | null
+  references: Array<{ label: string; value: string }>; sourceExcerpt: string | null; createdAt: string
+  match: AppointmentMatch
 }
 
 export type ExcelImportPreview = OrderImportPreview

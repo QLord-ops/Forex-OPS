@@ -1,4 +1,4 @@
-import { ArrowUpRight, Check, CheckCircle2, ChevronDown, AlertTriangle, Clock3, Loader2, MapPin, PackageCheck, PauseCircle, Pin, PinOff, PlayCircle, Search, Truck, X } from 'lucide-react'
+import { CalendarClock, ArrowUpRight, Check, ChevronDown, AlertTriangle, Clock3, Loader2, MapPin, PackageCheck, PauseCircle, Pin, PinOff, PlayCircle, Search, Truck, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 
@@ -11,11 +11,12 @@ import { useVehiclePosition } from '../hooks/useVehiclePosition'
 import { api } from '../lib/api'
 import { getRoutePreview, setRoutePreview, subscribeRoutePreview } from '../lib/route-preview'
 import { etaText, routeProgress, type StopState } from '../lib/route-progress'
+import { terminOf } from '../lib/tours'
 import { classNames, formatAppointment, formatDateTime, formatDelay, formatDurationMinutes, formatKm, formatTime, shortAddress, statusLabel, stopTypeLabel } from '../lib/format'
 import type { Coordinate, CurrentPosition, DashboardVehicle, Stop } from '../types/domain'
 
 const PIN_STORAGE_KEY = 'ops-dashboard-pinned-vehicles'
-type FleetFilter = 'ALL' | 'ATTENTION' | 'MOVING' | 'AT_STOP' | 'IDLE'
+type FleetFilter = 'ALL' | 'ATTENTION' | 'MOVING' | 'AT_STOP' | 'TERMIN' | 'IDLE'
 type FleetScope = 'MINE' | 'FLEET' | 'FREE'
 const scopes: Array<{ value: FleetScope; label: string }> = [
   { value: 'MINE', label: 'Мои' }, { value: 'FLEET', label: 'Весь парк' }, { value: 'FREE', label: 'Свободные' }
@@ -23,7 +24,7 @@ const scopes: Array<{ value: FleetScope; label: string }> = [
 type AttentionTone = 'dwell' | 'critical' | 'action' | 'watch' | 'moving' | 'ok' | 'idle'
 const filters: Array<{ value: FleetFilter; label: string }> = [
   { value: 'ALL', label: 'Все' }, { value: 'ATTENTION', label: 'Контроль' },
-  { value: 'MOVING', label: 'В пути' }, { value: 'AT_STOP', label: 'На точке' },
+  { value: 'MOVING', label: 'В пути' }, { value: 'AT_STOP', label: 'На точке' }, { value: 'TERMIN', label: 'Термин' },
   { value: 'IDLE', label: 'Без тура' }
 ]
 
@@ -56,7 +57,7 @@ export function DashboardPage() {
   const selected = vehicles.find((row) => row.vehicle.id === selectedId) ?? orderedVehicles[0] ?? null
   const cardId = searchParams.get('card')
   const cardRow = cardId ? vehicles.find((row) => row.vehicle.id === cardId) ?? null : null
-  const fleet = useMemo(() => vehicles.flatMap((row) => row.mapPosition ? [{ id: row.vehicle.id, label: row.vehicle.vehicleNumber, ...row.mapPosition }] : []), [vehicles])
+  const fleet = useMemo(() => vehicles.flatMap((row) => row.mapPosition ? [{ id: row.vehicle.id, label: row.vehicle.vehicleNumber, ...row.mapPosition, termin: Boolean(terminOf(row.tour)) }] : []), [vehicles])
   const position = useVehiclePosition(selected?.vehicle.id ?? '')
   const refetchPosition = position.refetch
 
@@ -98,7 +99,6 @@ export function DashboardPage() {
     try {
       const action = row.currentAction
       const timestamp = new Date(actionTime).toISOString()
-      if (action.type === 'CONFIRM_ARRIVAL' && action.stopId) await api.confirmArrival(action.stopId, timestamp)
       if (action.type === 'MARK_LOADED' && action.stopId) await api.markLoaded(action.stopId, timestamp)
       if (action.type === 'MARK_UNLOADED' && action.stopId) await api.markUnloaded(action.stopId, timestamp)
       if (action.type === 'MANUAL_STOP') await api.manualStop(row.vehicle.id, row.operationVersion ?? 0)
@@ -147,8 +147,11 @@ export function DashboardPage() {
             const attention = getAttention(row)
             const isSelected = selected?.vehicle.id === row.vehicle.id
             const isPinned = pinned.includes(row.vehicle.id)
+            const termin = terminOf(row.tour)
+            // A calm row takes the slot colour; an alarm keeps its own colour and the slot label stays visible.
+            const calm = attention.tone === 'ok' || attention.tone === 'moving' || attention.tone === 'idle'
             return (
-              <article key={row.vehicle.id} className={classNames('vehicle-card', `vehicle-card-${attention.tone}`, isSelected && 'vehicle-card-selected', cardId === row.vehicle.id && 'vehicle-card-open')}>
+              <article key={row.vehicle.id} className={classNames('vehicle-card', termin && calm ? 'vehicle-card-termin' : `vehicle-card-${attention.tone}`, isSelected && 'vehicle-card-selected', cardId === row.vehicle.id && 'vehicle-card-open')}>
                 <button type="button" className="vehicle-row-main" aria-current={isSelected ? 'true' : undefined} aria-expanded={cardId === row.vehicle.id}
                   onClick={() => {
                     if (cardId === row.vehicle.id) { closeCard(); return }
@@ -164,6 +167,7 @@ export function DashboardPage() {
                       {row.telemetry?.objectNo ? <span className="vehicle-row-muted">LKW {row.vehicle.vehicleNumber}</span> : row.vehicle.licensePlate ? <span className="vehicle-row-muted">{row.vehicle.licensePlate}</span> : null}
                     </span>
                     <span className={classNames('vehicle-row-line', row.telemetry?.stale && 'vehicle-row-stale')}>{vehicleRowLine(row)}</span>
+                    {termin ? <span className="vehicle-row-termin"><CalendarClock className="h-3 w-3" aria-hidden="true" />{termin.label}</span> : null}
                     {me && activeScope !== 'MINE' && !row.mine ? <span className="vehicle-row-owner">{row.assignedTo ? `ведёт ${row.assignedTo.name}` : 'свободна'}</span> : null}
                   </span>
                   {attention.tone === 'critical' || attention.tone === 'dwell' || attention.tone === 'action' || attention.tone === 'watch'
@@ -217,12 +221,12 @@ function vehicleRowLine(row: DashboardVehicle) {
 function VehicleActionButton({ row, busy, onClick }: { row: DashboardVehicle; busy: boolean; onClick: () => void }) {
   const action = row.currentAction
   if (!action) return null
-  const Icon = busy ? Loader2 : action.type === 'CONFIRM_ARRIVAL' ? CheckCircle2
+  const Icon = busy ? Loader2
     : action.type === 'MARK_LOADED' || action.type === 'MARK_UNLOADED' ? PackageCheck
       : action.type === 'RESUME' ? PlayCircle : PauseCircle
   return (
-    <button type="button" className={classNames('icon-button vehicle-action-button', action.type === 'CONFIRM_ARRIVAL' && 'vehicle-arrival-button')} onClick={onClick} disabled={busy} aria-label={action.label} title={action.label}>
-      <Icon className={classNames('h-4 w-4', busy && 'animate-spin')} aria-hidden="true" /><span>{action.type === 'CONFIRM_ARRIVAL' ? 'Прибытие' : action.label}</span>
+    <button type="button" className="icon-button vehicle-action-button" onClick={onClick} disabled={busy} aria-label={action.label} title={action.withoutGpsArrival ? `${action.label}: прибытия по GPS нет` : action.label}>
+      <Icon className={classNames('h-4 w-4', busy && 'animate-spin')} aria-hidden="true" /><span>{action.label}</span>
     </button>
   )
 }
@@ -246,7 +250,7 @@ function ActionPopover({
 }) {
   const action = row.currentAction
   if (!action) return null
-  const needsTime = action.type === 'CONFIRM_ARRIVAL' || action.type === 'MARK_LOADED' || action.type === 'MARK_UNLOADED'
+  const needsTime = action.type === 'MARK_LOADED' || action.type === 'MARK_UNLOADED'
   return (
     <div className="vehicle-action-popover" role="dialog" aria-label={`${action.label} LKW ${row.vehicle.vehicleNumber}`} onKeyDown={(event) => { if (event.key === 'Escape') onClose() }}>
       <div className="flex items-start justify-between gap-2">
@@ -256,6 +260,7 @@ function ActionPopover({
         </div>
         <button type="button" className="icon-button icon-button-compact" onClick={onClose} aria-label="Закрыть"><X className="h-3.5 w-3.5" /></button>
       </div>
+      {action.withoutGpsArrival ? <p className="mt-2 text-xs font-semibold text-amber-800">Прибытие по GPS не зафиксировано: время прибытия будет равно времени {action.type === 'MARK_LOADED' ? 'загрузки' : 'выгрузки'}.</p> : null}
       {needsTime ? <label className="mt-2 block text-xs font-bold text-slate-600">Фактическое время<input className="field-input mt-1 h-9" type="datetime-local" value={value} onChange={(event) => onChange(event.target.value)} /></label> : null}
       {error ? <p role="alert" className="mt-2 text-xs font-semibold text-red-700">{error}</p> : null}
       <div className="mt-3 flex justify-end gap-2">
@@ -376,6 +381,7 @@ function matchesFleetFilter(row: DashboardVehicle, filter: FleetFilter) {
   if (filter === 'ALL') return true
   if (filter === 'ATTENTION') return attention.rank <= 3
   if (filter === 'MOVING') return row.statusText === 'MOVING'
+  if (filter === 'TERMIN') return Boolean(terminOf(row.tour))
   if (filter === 'AT_STOP') return ['ARRIVED', 'WAITING', 'MANUAL_STOP'].includes(row.statusText) || getDwellMinutes(row) > 0
   return !row.tour || ['IDLE', 'NO_ACTIVE_ROUTE'].includes(row.statusText)
 }

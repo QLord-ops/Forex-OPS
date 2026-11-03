@@ -257,35 +257,55 @@ export class TourService {
     });
   }
 
-  async cancelFutureTour(tourId: string, now = new Date(), actor?: AuditActor): Promise<TourAggregate> {
+  /**
+   * Cancels a tour that has not begun: any tour in the queue, or the current one before the first arrival.
+   * Nothing is erased: the tour keeps its stops and gets the CANCELLED status; the queue closes the gap.
+   */
+  async cancelTour(tourId: string, version?: number, now = new Date(), actor?: AuditActor): Promise<TourAggregate> {
+    const read = (db: Prisma.TransactionClient) => db.tour.findUniqueOrThrow({
+      where: { id: tourId },
+      include: { vehicle: true, stops: { orderBy: { sequence: "asc" } }, legs: true, events: { take: 1 }, nextTours: { where: { status: "QUEUED" }, include: { stops: { orderBy: { sequence: "asc" }, take: 1 } } } }
+    });
+    const current = await read(this.db);
+    assertTourCancellable(current, version);
+    const next = current.nextTours[0] ?? null;
+    // The following tour now drives from the stop before the gap; at the front of the queue it starts without a transfer.
+    const predecessor = current.status === "QUEUED" && current.previousTourId
+      ? await this.db.tour.findUnique({ where: { id: current.previousTourId }, include: { stops: { orderBy: { sequence: "desc" }, take: 1 } } })
+      : null;
+    const fromStop = predecessor?.stops[0] ?? null;
+    const transfer = next?.stops[0] && fromStop
+      ? await prepareTransferLeg(this.routingProvider, fromStop, next.stops[0], current.vehicle.maxSpeedKmh)
+      : null;
+
     return this.db.$transaction(async (tx) => {
-      const current = await tx.tour.findUniqueOrThrow({
-        where: { id: tourId },
-        include: { stops: true, events: true, nextTours: true }
-      });
-      assertFutureTourEditable(current);
-
-      if (current.nextTours.length > 0) {
-        throw new TourPlanConflictError("Отменить можно только последний маршрут в очереди.");
+      const fresh = await read(tx);
+      assertTourCancellable(fresh, version);
+      if (fresh.planVersion !== current.planVersion || fresh.nextTours[0]?.id !== next?.id) throw new TourPlanConflictError("Тур изменился. Обновите страницу.");
+      const stopIds = fresh.stops.map((stop) => stop.id);
+      if (next) {
+        const ownStopIds = (await tx.stop.findMany({ where: { tourId: next.id }, select: { id: true } })).map((stop) => stop.id);
+        await tx.leg.deleteMany({ where: { tourId: next.id, fromStopId: { notIn: ownStopIds }, status: { not: "COMPLETED" } } });
+        if (transfer && fromStop && next.stops[0]) await tx.leg.create({ data: { ...transfer, tourId: next.id, fromStopId: fromStop.id, toStopId: next.stops[0].id } });
+        await tx.tour.update({ where: { id: next.id }, data: { previousTourId: fresh.previousTourId, planVersion: { increment: 1 } } });
       }
-
       await tx.alert.updateMany({ where: { tourId, resolvedAt: null }, data: { resolvedAt: now } });
-      await tx.tour.update({
-        where: { id: tourId },
-        data: { status: "CANCELLED", completedAt: now }
-      });
-      await writeAuditLog(tx, actor, { action: "TOUR_CANCELLED", entityType: "Tour", entityId: tourId,
-        vehicleId: current.vehicleId, tourId, createdAt: now });
+      await tx.notification.updateMany({ where: { stopId: { in: stopIds }, acknowledgedAt: null }, data: { acknowledgedAt: now } });
+      await tx.tour.update({ where: { id: tourId }, data: { status: "CANCELLED", completedAt: now, planVersion: { increment: 1 } } });
+      if (fresh.status === "ACTIVE") await activateNextQueuedTour(tx, fresh.vehicleId, now);
+      await tx.vehicle.update({ where: { id: fresh.vehicleId }, data: { operationVersion: { increment: 1 } } });
+      await writeAuditLog(tx, actor, { action: "TOUR_CANCELLED", entityType: "Tour", entityId: tourId, vehicleId: fresh.vehicleId, tourId,
+        metadata: { orderNumber: fresh.orderNumber, status: fresh.status, version: fresh.planVersion, nextTourId: next?.id ?? null }, createdAt: now });
       return tx.tour.findUniqueOrThrow({ where: { id: tourId }, include: tourInclude });
     });
   }
 
-  async recordLoaded(stopId: string, now = new Date(), note?: string, actor?: AuditActor): Promise<TourAggregate> {
-    return this.recordStopEvent(stopId, "LOADED", now, note, actor);
+  async recordLoaded(stopId: string, now = new Date(), note?: string, actor?: AuditActor, options: StopEventOptions = {}): Promise<TourAggregate> {
+    return this.recordStopEvent(stopId, "LOADED", now, note, actor, options);
   }
 
-  async recordUnloaded(stopId: string, now = new Date(), note?: string, actor?: AuditActor): Promise<TourAggregate> {
-    return this.recordStopEvent(stopId, "UNLOADED", now, note, actor);
+  async recordUnloaded(stopId: string, now = new Date(), note?: string, actor?: AuditActor, options: StopEventOptions = {}): Promise<TourAggregate> {
+    return this.recordStopEvent(stopId, "UNLOADED", now, note, actor, options);
   }
 
   async getCurrentPosition(vehicleId: string, now = new Date()): Promise<CurrentPosition> {
@@ -394,9 +414,12 @@ export class TourService {
     now: Date,
     note?: string,
     actor?: AuditActor,
+    options: StopEventOptions = {},
   ): Promise<TourAggregate> {
     const context = await readDepartureContext(this.db, stopId);
-    assertStopActionAllowed(context.stop.completedAt, context.stop.tour.status, context.stop.arrivedAt);
+    // Without a GPS arrival the dispatcher's BELADEN/ENTLADEN also records the arrival at the same moment.
+    const arriveNow = Boolean(options.arriveWithEvent && !context.stop.arrivedAt);
+    assertStopActionAllowed(context.stop.completedAt, context.stop.tour.status, arriveNow ? now : context.stop.arrivedAt);
     assertStopEventTime(now, context.stop.arrivedAt);
     let refreshed: RouteResult | null = null;
     if (context.departureLeg) {
@@ -427,9 +450,17 @@ export class TourService {
       if ((eventType === "LOADED" && stop.type !== "LOAD") || (eventType === "UNLOADED" && stop.type !== "UNLOAD")) {
         throw new TourPlanConflictError("Событие не соответствует типу точки.");
       }
-      assertStopActionAllowed(stop.completedAt, stop.tour.status, stop.arrivedAt);
+      assertStopActionAllowed(stop.completedAt, stop.tour.status, arriveNow ? now : stop.arrivedAt);
       if (stop.tour.stops.some((candidate) => candidate.sequence < stop.sequence && !candidate.completedAt)) {
         throw new TourPlanConflictError("Сначала необходимо завершить предыдущие точки.");
+      }
+      if (arriveNow) {
+        const arrived = await tx.stop.updateMany({ where: { id: stop.id, arrivedAt: null }, data: { arrivedAt: now } });
+        if (!arrived.count) throw new TourPlanConflictError("Прибытие уже зафиксировано. Обновите страницу.");
+        await tx.operationEvent.create({ data: { vehicleId: stop.tour.vehicleId, tourId: stop.tourId, stopId: stop.id, type: "ARRIVAL_CONFIRMED",
+          payloadJson: JSON.stringify({ arrivedAt: now, source: "WITH_STOP_EVENT", event: eventType }), createdAt: now } });
+        await writeAuditLog(tx, actor, { action: "ARRIVAL_CONFIRMED", entityType: "Stop", entityId: stop.id, vehicleId: stop.tour.vehicleId,
+          tourId: stop.tourId, stopId: stop.id, metadata: { arrivedAt: now.toISOString(), source: "WITH_STOP_EVENT", event: eventType }, createdAt: now });
       }
       const clock = snapshotVehicleClock(stop.tour.vehicle, null, now).clockState;
       await tx.vehicle.update({ where: { id: stop.tour.vehicleId }, data: { clockState: JSON.stringify(clock), operationVersion: { increment: 1 } } });
@@ -445,6 +476,8 @@ export class TourService {
       }
 
       await tx.stop.update({ where: { id: stop.id }, data: { completedAt: now } });
+      // The question «loaded after leaving?» is answered once the event is recorded.
+      await tx.notification.updateMany({ where: { stopId: stop.id, type: 'STOP_DEPARTED', acknowledgedAt: null }, data: { acknowledgedAt: now } });
       await tx.event.create({
         data: {
           vehicleId: stop.tour.vehicleId,
@@ -485,6 +518,8 @@ export class TourService {
     });
   }
 }
+
+export type StopEventOptions = { arriveWithEvent?: boolean };
 
 async function readDepartureContext(db: Prisma.TransactionClient, stopId: string) {
   const stop = await db.stop.findUniqueOrThrow({ where: { id: stopId }, include: {
@@ -696,6 +731,17 @@ async function persistTourPlan(
       data: { ...leg, tourId, fromStopId: previousStopId ?? stopIds[fromIndex], toStopId: stopIds[toIndex] }
     });
   }
+}
+
+/** A tour has begun once there is an arrival, a completed stop or a BELADEN/ENTLADEN event. */
+export function tourHasBegun(tour: { events: unknown[]; stops: Array<{ arrivedAt: Date | null; completedAt: Date | null }> }) {
+  return tour.events.length > 0 || tour.stops.some((stop) => stop.arrivedAt || stop.completedAt);
+}
+
+function assertTourCancellable(tour: { status: string; planVersion: number; events: unknown[]; stops: Array<{ arrivedAt: Date | null; completedAt: Date | null }> }, version?: number) {
+  if (version !== undefined && tour.planVersion !== version) throw new TourPlanConflictError("Тур изменился. Обновите страницу.");
+  if (tour.status !== "QUEUED" && tour.status !== "ACTIVE") throw new TourPlanConflictError("Этот тур уже завершён или отменён.");
+  if (tourHasBegun(tour)) throw new TourPlanConflictError("Тур начат: есть прибытие или BELADEN/ENTLADEN. Удалить нельзя.");
 }
 
 function assertFutureTourEditable(tour: {

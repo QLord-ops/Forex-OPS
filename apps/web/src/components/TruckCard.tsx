@@ -1,4 +1,4 @@
-import { ArrowUpRight, Bell, ClipboardList, History, Route, Truck, UserRound, Wrench, X, type LucideIcon } from 'lucide-react'
+import { Bell, ClipboardList, History, Loader2, Route, Trash2, Truck, UserRound, Wrench, X, type LucideIcon } from 'lucide-react'
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 
@@ -6,8 +6,9 @@ import { usePolling } from '../hooks/usePolling'
 import { AssignmentBar } from './AssignmentBar'
 import { api } from '../lib/api'
 import { classNames, formatDateTime, formatDelay, shortAddress, statusLabel, stopTypeLabel } from '../lib/format'
+import { currentStopOf, followingTours, sortedStops, terminOf, tourCancellable } from '../lib/tours'
 import { berlinClock, courseText, durationBetween, formatDurationMs, formatFuel, formatWholeKm, share, tripsWithParking, workState } from '../lib/telemetry-format'
-import type { CardFeedStatus, Coordinate, DashboardVehicle, DrivingTimes, VehicleCardData } from '../types/domain'
+import type { CardFeedStatus, Coordinate, DashboardVehicle, DrivingTimes, Stop, Tour, VehicleCardData } from '../types/domain'
 import './truck-card.css'
 
 const TACHO_STALE_MS = 15 * 60_000
@@ -97,20 +98,29 @@ export function TruckCard({ vehicleId, row, onClose, onTrack }: Props) {
       </header>
       {row ? <AssignmentBar row={row} /> : null}
 
-      <div className="truck-card-tabs" role="tablist" aria-label="Разделы карточки" onKeyDown={onTabKey}>
-        {TABS.map(({ id, label, icon: Icon }) => (
-          <button key={id} ref={(node) => { tabRefs.current[id] = node }} type="button" role="tab" id={`truck-tab-${id}`} aria-controls="truck-card-panel"
-            aria-selected={tab === id} tabIndex={tab === id ? 0 : -1} className="truck-card-tab" onClick={() => selectTab(id)}>
-            <span className="truck-card-tab-icon"><Icon className="h-4 w-4" aria-hidden="true" />{id === 'events' && unresolved > 0 ? <span className="truck-card-badge" aria-label={`${unresolved} открытых`}>{unresolved > 99 ? '99+' : unresolved}</span> : null}</span>
-            <span>{label}</span>
-          </button>
-        ))}
+      <div className="truck-card-tabbar">
+        <div className="truck-card-tabs" role="tablist" aria-label="Разделы карточки" onKeyDown={onTabKey}>
+          {TABS.map(({ id, label, icon: Icon }) => (
+            <button key={id} ref={(node) => { tabRefs.current[id] = node }} type="button" role="tab" id={`truck-tab-${id}`} aria-controls="truck-card-panel"
+              aria-selected={tab === id} tabIndex={tab === id ? 0 : -1} className="truck-card-tab" onClick={() => selectTab(id)}>
+              <span className="truck-card-tab-icon"><Icon className="h-4 w-4" aria-hidden="true" />{id === 'events' && unresolved > 0 ? <span className="truck-card-badge" aria-label={`${unresolved} открытых`}>{unresolved > 99 ? '99+' : unresolved}</span> : null}</span>
+              <span>{label}</span>
+            </button>
+          ))}
+        </div>
+        {/* A map layer, not a tab: it stays on while the dispatcher switches tabs. */}
+        <button type="button" className="truck-card-tab truck-card-track" disabled={!data?.webfleet || track === 'loading'} aria-pressed={track === 'on'}
+          title={track === 'on' ? 'Скрыть трек за сегодня' : 'Показать на карте путь машины за сегодня'} onClick={() => void toggleTrack()}>
+          <span className="truck-card-tab-icon">{track === 'loading' ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Route className="h-4 w-4" aria-hidden="true" />}</span>
+          <span>Трек</span>
+        </button>
       </div>
+      {trackError ? <p className="truck-card-track-note" role="status">{trackError}</p> : null}
 
       <div className="truck-card-body" id="truck-card-panel" role="tabpanel" aria-labelledby={`truck-tab-${tab}`} tabIndex={0}>
         {!data && loading ? <p className="truck-card-note truck-card-pad">Загружаем данные машины…</p> : null}
         {error && !data ? <p className="truck-card-note truck-card-note-error" role="alert">Карточка не загрузилась. <button type="button" className="underline" onClick={() => void refetch()}>Повторить</button></p> : null}
-        {data && tab === 'tour' ? <TourTab row={row} /> : null}
+        {data && tab === 'tour' ? <TourTab vehicleId={vehicleId} row={row} /> : null}
         {data && tab !== 'tour' && !data.webfleet ? <Unbound /> : null}
         {data?.webfleet && tab === 'vehicle' ? <VehicleTab data={data} onDriver={() => selectTab('driver')} /> : null}
         {data?.webfleet && tab === 'driver' ? <DriverTab driver={data.driver} /> : null}
@@ -119,13 +129,6 @@ export function TruckCard({ vehicleId, row, onClose, onTrack }: Props) {
         {data?.webfleet && tab === 'trips' ? <TripsTab trips={data.trips} /> : null}
       </div>
 
-      <footer className="truck-card-footer">
-        {trackError ? <p className="truck-card-footer-note" role="status">{trackError}</p> : null}
-        <button type="button" className="secondary-button" disabled={!data?.webfleet || track === 'loading'} aria-pressed={track === 'on'} onClick={() => void toggleTrack()}>
-          <Route className="h-4 w-4" aria-hidden="true" />{track === 'on' ? 'Скрыть трек' : track === 'loading' ? 'Загружаем…' : 'Трек за сегодня'}
-        </button>
-        <Link className="primary-button" to={`/vehicles/${vehicleId}`}>Открыть LKW <ArrowUpRight className="h-4 w-4" aria-hidden="true" /></Link>
-      </footer>
     </aside>
   )
 }
@@ -142,6 +145,11 @@ function SourceChip({ data }: { data: VehicleCardData | null }) {
   if (!data) return null
   if (!current) return <span className="truck-card-chip truck-card-chip-calculated">Без GPS</span>
   const minutes = Math.max(0, Math.round(current.ageSeconds / 60))
+  // Webfleet keeps the position time while a truck stands; the unit's last contact shows the data is current.
+  const contact = current.lastContactAt ?? null
+  if (!current.stale && contact && Date.parse(contact) - Date.parse(current.recordedAt) > 120_000) {
+    return <span className="truck-card-chip truck-card-chip-live" title={`Позиция с ${formatDateTime(current.recordedAt)}, блок на связи ${formatDateTime(contact)}`}>GPS · стоит с {berlinClock(current.recordedAt)} · связь {berlinClock(contact)}</span>
+  }
   return current.stale
     ? <span className="truck-card-chip truck-card-chip-stale" title={`Последняя позиция ${formatDateTime(current.recordedAt)}`}>GPS устарел · {minutes} мин</span>
     : <span className="truck-card-chip truck-card-chip-live">GPS · {minutes < 1 ? 'сейчас' : `${minutes} мин`}</span>
@@ -271,28 +279,97 @@ function Allowance({ label, hint, chip, max, used }: { label: string; hint: stri
   </div>
 }
 
-function TourTab({ row }: { row: DashboardVehicle | null }) {
-  if (!row?.tour) return <Section title="Тур"><p className="truck-card-note">Нет активного тура.</p></Section>
-  const stops = (row.tour.stops ?? []).slice().sort((a, b) => a.sequence - b.sequence)
+function TourTab({ vehicleId, row }: { vehicleId: string; row: DashboardVehicle | null }) {
+  const tours = usePolling(() => api.vehicleTours(vehicleId), 30_000, true, vehicleId)
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const [error, setError] = useState('')
+  const current = row?.tour ?? null
+  const next = followingTours(tours.data ?? [], current?.id)
+
+  async function remove(tour: Pick<Tour, 'id' | 'orderNumber' | 'planVersion'>) {
+    if (!window.confirm(`Удалить тур ${tour.orderNumber}? Он пропадёт из цепочки, запись останется в журнале.`)) return
+    setBusyId(tour.id)
+    setError('')
+    try {
+      await api.updateTour(tour.id, { status: 'CANCELLED', version: tour.planVersion })
+      await tours.refetch()
+      window.dispatchEvent(new CustomEvent('ops:data-changed'))
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Тур не удалён.')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  return <>
+    {error ? <p className="truck-card-alert" role="alert">{error}</p> : null}
+    {current && row ? <CurrentTour tour={current} row={row} busy={busyId === current.id} onRemove={() => void remove(current)} /> : <Section title="Тур"><p className="truck-card-note">Нет активного тура.</p></Section>}
+    <Section title={`Следующие туры${next.length ? ` · ${next.length}` : ''}`}>
+      {tours.error && !tours.data ? <p className="truck-card-note">Цепочка туров не загрузилась.</p>
+        : !tours.data ? <p className="truck-card-note">Загружаем цепочку туров…</p>
+          : !next.length ? <p className="truck-card-note">После этого тура ничего не запланировано.</p>
+            : <ol className="truck-card-tours">
+              {next.map((tour, index) => {
+                const stops = sortedStops(tour)
+                const first = stops[0]
+                const last = stops.at(-1)
+                return <li key={tour.id}>
+                  <span className="truck-card-stop-seq">{index + 1}</span>
+                  <span className="min-w-0">
+                    <strong>{tour.orderNumber}</strong>
+                    <span className="truck-card-muted">{first ? shortAddress(first) : '–'} → {last && last !== first ? shortAddress(last) : '–'}</span>
+                    <span className="truck-card-muted">{tour.plannedStartAt ? `старт ${formatDateTime(tour.plannedStartAt)}` : 'без даты'}</span>
+                  </span>
+                  {tourCancellable(tour) ? <RemoveButton busy={busyId === tour.id} orderNumber={tour.orderNumber} onClick={() => void remove(tour)} /> : null}
+                </li>
+              })}
+            </ol>}
+    </Section>
+  </>
+}
+
+function CurrentTour({ tour, row, busy, onRemove }: { tour: Tour; row: DashboardVehicle; busy: boolean; onRemove: () => void }) {
+  const stops = sortedStops(tour)
+  const target = currentStopOf(tour)
+  const removable = tourCancellable(tour)
+  const termin = terminOf(tour)
   return <>
     <Section title="Auftrag">
-      <p className="truck-card-lead">{row.tour.orderNumber ?? 'Без номера'}</p>
+      <div className="truck-card-tour-head">
+        <p className="truck-card-lead">{tour.orderNumber ?? 'Без номера'}{termin ? <span className="vehicle-row-termin truck-card-termin">{termin.label}</span> : null}</p>
+        {removable ? <RemoveButton busy={busy} orderNumber={tour.orderNumber} onClick={onRemove} /> : <span className="truck-card-muted">Тур начат — удалить нельзя</span>}
+      </div>
       <div className="truck-card-grid">
-        <Cell label="Следующая точка" value={row.to ? shortAddress(row.to) : '–'} />
-        <Cell label="ETA" value={formatDateTime(row.eta)} />
-        <Cell label="Срок" value={formatDateTime(row.appointmentAt)} />
+        <Cell label="Следующая точка" value={target ? `${stopTypeLabel(target.type)} · ${shortAddress(target)}` : '–'} />
+        <Cell label="ETA" value={target?.arrivedAt ? `на месте с ${formatDateTime(target.arrivedAt)}` : formatDateTime(row.eta)} />
+        <Cell label="Срок" value={target?.appointmentAt ? formatDateTime(target.appointmentAt) : 'без срока'} />
         <Cell label="Отклонение" value={formatDelay(row.delayMinutes)} warn={(row.delayMinutes ?? 0) > 0} />
       </div>
     </Section>
     {stops.length ? <Section title="Точки">
       <ol className="truck-card-stops">
-        {stops.map((stop) => <li key={stop.id} className={classNames(stop.completedAt && 'truck-card-stop-done')}>
+        {stops.map((stop) => <li key={stop.id} className={classNames(stop.completedAt && 'truck-card-stop-done', stop.id === target?.id && 'truck-card-stop-current')}>
           <span className="truck-card-stop-seq">{stop.sequence}</span>
-          <span className="min-w-0"><strong>{stopTypeLabel(stop.type)} · {shortAddress(stop)}</strong><span className="truck-card-muted">{stop.completedAt ? `готово ${formatDateTime(stop.completedAt)}` : stop.appointmentAt ? `срок ${formatDateTime(stop.appointmentAt)}` : 'без срока'}</span></span>
+          <span className="min-w-0"><strong>{stopTypeLabel(stop.type)} · {shortAddress(stop)}</strong><span className="truck-card-muted">{stopState(stop)}</span></span>
         </li>)}
       </ol>
     </Section> : null}
   </>
+}
+
+function stopState(stop: Stop) {
+  const done = stop.type === 'LOAD' ? 'BELADEN' : 'ENTLADEN'
+  if (stop.completedAt) return `${done} ${formatDateTime(stop.completedAt)}`
+  if (stop.arrivedAt) return `прибыл ${formatDateTime(stop.arrivedAt)} · ждёт ${done}`
+  if (stop.appointmentAt) return `впереди · срок ${formatDateTime(stop.appointmentAt)}`
+  if (stop.appointmentWindowStartAt) return `впереди · окно ${formatDateTime(stop.appointmentWindowStartAt)}–${formatDateTime(stop.appointmentWindowEndAt)}`
+  return 'впереди · без срока'
+}
+
+function RemoveButton({ busy, orderNumber, onClick }: { busy: boolean; orderNumber: string; onClick: () => void }) {
+  return <button type="button" className="truck-card-remove" disabled={busy} onClick={onClick} aria-label={`Удалить тур ${orderNumber}`}>
+    {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Trash2 className="h-4 w-4" aria-hidden="true" />}<span>Удалить</span>
+  </button>
 }
 
 const EVENT_LEVELS = { ALARM: 'Тревога', WARNING: 'Предупреждение', INFO: 'Информация' } as const
