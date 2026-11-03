@@ -16,6 +16,10 @@ import type { Coordinate, CurrentPosition, DashboardVehicle, Stop } from '../typ
 
 const PIN_STORAGE_KEY = 'ops-dashboard-pinned-vehicles'
 type FleetFilter = 'ALL' | 'ATTENTION' | 'MOVING' | 'AT_STOP' | 'IDLE'
+type FleetScope = 'MINE' | 'FLEET' | 'FREE'
+const scopes: Array<{ value: FleetScope; label: string }> = [
+  { value: 'MINE', label: 'Мои' }, { value: 'FLEET', label: 'Весь парк' }, { value: 'FREE', label: 'Свободные' }
+]
 type AttentionTone = 'dwell' | 'critical' | 'action' | 'watch' | 'moving' | 'ok' | 'idle'
 const filters: Array<{ value: FleetFilter; label: string }> = [
   { value: 'ALL', label: 'Все' }, { value: 'ATTENTION', label: 'Контроль' },
@@ -28,9 +32,10 @@ export function DashboardPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<FleetFilter>('ALL')
+  const [scope, setScope] = useState<FleetScope | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [hudOpen, setHudOpen] = useState(false)
-  const [pinned, setPinned] = useState<string[]>(readPinnedVehicles)
+  const [pinned, setPinned] = useState<string[]>(() => readPinnedVehicles())
   const [actingId, setActingId] = useState<string | null>(null)
   const [actionVehicleId, setActionVehicleId] = useState<string | null>(null)
   const [actionTime, setActionTime] = useState(localDateTime())
@@ -39,6 +44,13 @@ export function DashboardPage() {
   const [track, setTrack] = useState<Coordinate[] | null>(null)
   const draftRoute = useSyncExternalStore(subscribeRoutePreview, getRoutePreview)
   const vehicles = useMemo(() => data?.vehicles ?? [], [data?.vehicles])
+  const me = data?.me ?? null
+  // Pins belong to the person: each dispatcher keeps their own.
+  const pinKey = me ? `${PIN_STORAGE_KEY}:${me}` : PIN_STORAGE_KEY
+  useEffect(() => { setPinned(readPinnedVehicles(pinKey)) }, [pinKey])
+  // First view: own trucks when the dispatcher has some, otherwise the whole fleet.
+  const hasMine = vehicles.some((row) => row.mine)
+  const activeScope: FleetScope = !me ? 'FLEET' : scope ?? (hasMine ? 'MINE' : 'FLEET')
   const orderedVehicles = useMemo(() => vehicles.slice().sort((a, b) => compareVehicles(a, b, pinned)), [pinned, vehicles])
   const selectedId = searchParams.get('vehicleId') ?? ''
   const selected = vehicles.find((row) => row.vehicle.id === selectedId) ?? orderedVehicles[0] ?? null
@@ -66,7 +78,8 @@ export function DashboardPage() {
     const needle = query.trim().toLocaleLowerCase('ru-RU')
     const matchesQuery = !needle || [row.vehicle.vehicleNumber, row.vehicle.licensePlate, row.tour?.orderNumber, shortAddress(row.from), shortAddress(row.to)]
       .some((value) => value?.toLocaleLowerCase('ru-RU').includes(needle))
-    return matchesQuery && matchesFleetFilter(row, filter)
+    const inScope = activeScope === 'FLEET' || (activeScope === 'MINE' ? row.mine : !row.assignedTo)
+    return matchesQuery && inScope && matchesFleetFilter(row, filter)
   })
 
   // With the card open, picking another truck switches the card to it.
@@ -102,7 +115,7 @@ export function DashboardPage() {
   function togglePin(vehicleId: string) {
     setPinned((current) => {
       const next = current.includes(vehicleId) ? current.filter((id) => id !== vehicleId) : [...current, vehicleId]
-      window.localStorage.setItem(PIN_STORAGE_KEY, JSON.stringify(next))
+      try { window.localStorage.setItem(pinKey, JSON.stringify(next)) } catch { /* convenience only */ }
       return next
     })
   }
@@ -119,6 +132,12 @@ export function DashboardPage() {
             <span className="sr-only">Найти грузовик</span>
             <input className="field-input pl-9" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="LKW, Auftrag или город" />
           </label>
+          {me ? <div className="fleet-scope" role="group" aria-label="Чьи машины показать">
+            {scopes.map((item) => <button key={item.value} type="button" aria-pressed={activeScope === item.value} className={classNames('fleet-scope-button', activeScope === item.value && 'fleet-scope-button-active')} onClick={() => setScope(item.value)}>
+              {item.label}<span className="fleet-scope-count">{item.value === 'MINE' ? vehicles.filter((row) => row.mine).length : item.value === 'FREE' ? vehicles.filter((row) => !row.assignedTo).length : vehicles.length}</span>
+            </button>)}
+          </div> : null}
+          {me && activeScope === 'MINE' && !hasMine ? <p className="fleet-scope-hint">У вас пока нет машин. Откройте «Весь парк» или «Свободные» и нажмите «Взять себе» в карточке машины.</p> : null}
           <div className="mt-2 flex gap-1 overflow-x-auto pb-1" aria-label="Фильтр автопарка">
             {filters.map((item) => <button key={item.value} type="button" aria-pressed={filter === item.value} className={classNames('filter-chip', filter === item.value && 'filter-chip-active')} onClick={() => setFilter(item.value)}>{item.label}</button>)}
           </div>
@@ -145,6 +164,7 @@ export function DashboardPage() {
                       {row.telemetry?.objectNo ? <span className="vehicle-row-muted">LKW {row.vehicle.vehicleNumber}</span> : row.vehicle.licensePlate ? <span className="vehicle-row-muted">{row.vehicle.licensePlate}</span> : null}
                     </span>
                     <span className={classNames('vehicle-row-line', row.telemetry?.stale && 'vehicle-row-stale')}>{vehicleRowLine(row)}</span>
+                    {me && activeScope !== 'MINE' && !row.mine ? <span className="vehicle-row-owner">{row.assignedTo ? `ведёт ${row.assignedTo.name}` : 'свободна'}</span> : null}
                   </span>
                   {attention.tone === 'critical' || attention.tone === 'dwell' || attention.tone === 'action' || attention.tone === 'watch'
                     ? <span className={classNames('vehicle-row-alert', `vehicle-row-alert-${attention.tone}`)} title={`${attention.label}: ${attention.reason}`}><AlertTriangle className="h-4 w-4" aria-hidden="true" /><span className="sr-only">{attention.label}: {attention.reason}</span></span>
@@ -360,4 +380,4 @@ function matchesFleetFilter(row: DashboardVehicle, filter: FleetFilter) {
   return !row.tour || ['IDLE', 'NO_ACTIVE_ROUTE'].includes(row.statusText)
 }
 
-function readPinnedVehicles(): string[] { try { const parsed = JSON.parse(window.localStorage.getItem(PIN_STORAGE_KEY) ?? '[]'); return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === 'string') : [] } catch { return [] } }
+function readPinnedVehicles(key = PIN_STORAGE_KEY): string[] { try { const parsed = JSON.parse(window.localStorage.getItem(key) ?? '[]'); return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === 'string') : [] } catch { return [] } }

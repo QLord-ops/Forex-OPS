@@ -104,6 +104,8 @@ export const api = {
   vehicle: (id: string) => request<Vehicle>(`/vehicles/${id}`),
   vehicleTours: (id: string) => request<Tour[]>(`/vehicles/${id}/tours`),
   vehicleTimeline: (id: string) => request<VehicleTimeline>(`/vehicles/${id}/timeline`),
+  assignVehicle: (id: string, input: { action: 'take' | 'release' | 'handover' | 'reassign'; expectedDispatcherId: string | null; toDispatcherId?: string | null }) =>
+    request<{ vehicleId: string; assignedTo: { id: string; name: string } | null }>(`/vehicles/${encodeURIComponent(id)}/assignment`, { method: 'POST', body: JSON.stringify(input) }),
   vehicleCard: (id: string) => request<VehicleCardData>(`/vehicles/${encodeURIComponent(id)}/card`),
   vehicleTrack: (id: string) => request<VehicleTrack>(`/vehicles/${encodeURIComponent(id)}/track`),
   currentPosition: (id: string, includeGeometry = true) => request<CurrentPosition>(`/vehicles/${id}/current-position${includeGeometry ? '' : '?geometry=0'}`),

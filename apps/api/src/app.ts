@@ -40,6 +40,7 @@ import { registerRouteScenarioRoutes } from './routes/route-scenario.js';
 import { AssistantError, DispatcherAssistantService } from './services/dispatcher-assistant.js';
 import { assistantSessionKey, registerDispatcherAssistantRoutes } from './routes/dispatcher-assistant.js';
 import { registerDispatcherRoutes } from './routes/dispatchers.js';
+import { registerVehicleAssignmentRoutes } from './routes/vehicle-assignment.js';
 import { createDispatcherDependencies } from './services/dispatcher-adapters.js';
 import { writeAuditLog, type AuditActor } from './services/audit-log.js';
 
@@ -210,6 +211,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   });
   registerDispatcherAssistantRoutes(app, assistantService);
   registerDispatcherRoutes(app, prisma);
+  registerVehicleAssignmentRoutes(app, prisma);
   await registerRouteScenarioRoutes(app, { service: scenarioService });
 
   let activeOrderImports = 0;
@@ -279,9 +281,14 @@ export async function buildApp(options: BuildAppOptions = {}) {
     subscriberSessions.clear();
   });
 
-  app.get('/notifications', async () => {
+  app.get('/notifications', async (request) => {
     if (isServerless && Date.now() - lastNotificationRefreshAt >= 25_000) await refreshNotifications();
-    return { notifications: await notificationService.list() };
+    const notifications = await notificationService.list();
+    // Pop-ups follow the dispatcher's own and free trucks; the alerts page still lists everything.
+    const me = request.dispatcherSession?.dispatcherId;
+    if (!me) return { notifications };
+    const others = new Set((await prisma.vehicle.findMany({ where: { assignedDispatcherId: { not: null, notIn: [me] } }, select: { id: true } })).map((vehicle) => vehicle.id));
+    return { notifications: notifications.filter((notification) => !others.has(notification.vehicleId)) };
   });
   app.post('/notifications/:id/ack', async (request) => {
     const { id } = z.object({ id: z.string() }).parse(request.params);
@@ -998,10 +1005,12 @@ export async function buildApp(options: BuildAppOptions = {}) {
     return alerts.map(toIsoObject);
   });
 
-  app.get("/dashboard", async () => {
+  app.get("/dashboard", async (request) => {
     const generatedAt = new Date();
+    const me = request.dispatcherSession?.dispatcherId ?? null;
     const vehicles = await prisma.vehicle.findMany({
       include: {
+        assignedDispatcher: { select: { id: true, displayName: true } },
         issues: { where: { resolvedAt: null }, orderBy: { createdAt: 'desc' } },
         tours: {
           where: { status: { in: ["ACTIVE", "QUEUED"] } },
@@ -1070,6 +1079,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
           updatedAt: vehicle.updatedAt
         }),
         operationVersion: vehicle.operationVersion,
+        assignedTo: vehicle.assignedDispatcher ? { id: vehicle.assignedDispatcher.id, name: vehicle.assignedDispatcher.displayName } : null,
+        mine: Boolean(me && vehicle.assignedDispatcherId === me),
         tour: activeTour ? toDashboardTourSummary(activeTour) : null,
         statusText: position.status,
         from: fromStop ? toIsoObject(fromStop) : null,
@@ -1118,6 +1129,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
 
     return {
       generatedAt: generatedAt.toISOString(),
+      me,
       vehicles: frontendVehicles,
       disclaimer: CALCULATED_POSITION_DISCLAIMER
     };

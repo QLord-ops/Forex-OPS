@@ -1067,3 +1067,13 @@ aside > .dispatcher-logout-error { position: absolute; bottom: 4.25rem; left: .5
 .account-menu-compact .account-menu-name { display: block; }
 .account-dialog-backdrop { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; background: rgb(15 23 42 / .45); padding: 16px; }
 .account-dialog { display: grid; width: min(420px, 100%); gap: 12px; border-radius: 12px; background: #fff; padding: 20px; color: #0f172a; box-shadow: 0 20px 50px rgb(15 23 42 / .3); }
+
+/* Whose trucks: own, the whole fleet or free ones. */
+.fleet-scope { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px; margin-top: 8px; border-radius: 8px; background: #e2e8f0; padding: 2px; }
+.fleet-scope-button { display: inline-flex; min-height: 30px; align-items: center; justify-content: center; gap: 6px; border-radius: 6px; color: #475569; font-size: .8125rem; font-weight: 500; }
+.fleet-scope-button:hover { color: #0f172a; }
+.fleet-scope-button-active { background: #fff; color: #0f172a; box-shadow: 0 1px 2px rgb(15 23 42 / .12); }
+.fleet-scope-button:focus-visible { outline: 2px solid #0ea5e9; outline-offset: 1px; }
+.fleet-scope-count { color: #64748b; font-size: .75rem; font-variant-numeric: tabular-nums; }
+.fleet-scope-hint { margin-top: 8px; color: #475569; font-size: .75rem; line-height: 1.4; }
+.vehicle-row-owner { display: block; margin-top: 2px; color: #64748b; font-size: .6875rem; }

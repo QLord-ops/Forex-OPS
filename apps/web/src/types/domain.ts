@@ -97,6 +97,9 @@ export interface DashboardVehicle {
   tour?: Tour | null
   statusText: string
   operationVersion?: number
+  /** Dispatcher who looks after the truck; null = free. */
+  assignedTo?: { id: string; name: string } | null
+  mine?: boolean
   from?: Stop | null
   to?: Stop | null
   appointmentAt?: string | null
@@ -244,6 +247,8 @@ export interface RiskAppointment {
 
 export interface DashboardResponse {
   generatedAt?: string
+  /** Personal account of the session; null for shared-password sessions. */
+  me?: string | null
   vehicles: DashboardVehicle[]
   riskyAppointments?: RiskAppointment[]
 }

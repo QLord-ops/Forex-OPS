@@ -124,3 +124,14 @@
   .truck-card { top: auto; right: 8px; left: 8px; width: auto; max-height: 80%; }
   .truck-card-footer .secondary-button span, .truck-card-footer .primary-button { font-size: .8125rem; }
 }
+
+.assignment-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 8px; border-top: 1px solid rgb(15 23 42 / .06); padding: 8px 16px; }
+.assignment-owner { display: inline-flex; align-items: center; gap: 6px; color: #334155; font-size: .8125rem; font-weight: 500; }
+.assignment-actions { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.assignment-button { display: inline-flex; min-height: 30px; align-items: center; gap: 6px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; padding: 0 10px; color: #0f172a; font-size: .75rem; font-weight: 500; }
+.assignment-button:hover:not(:disabled) { background: #f1f5f9; }
+.assignment-button:focus-visible, .assignment-select:focus-visible { outline: 2px solid #0ea5e9; outline-offset: 2px; }
+.assignment-button-primary { border-color: #0f766e; background: #0f766e; color: #fff; }
+.assignment-button-primary:hover:not(:disabled) { background: #115e59; }
+.assignment-select { min-height: 30px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; padding: 0 8px; font-size: .75rem; }
+.assignment-error { width: 100%; color: #b91c1c; font-size: .75rem; }
