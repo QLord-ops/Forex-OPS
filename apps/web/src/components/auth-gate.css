@@ -170,6 +170,10 @@
 }
 
 .auth-field__control { position: relative; }
+.auth-field + .auth-field { margin-top: 1rem; }
+.auth-field__hint { display: block; margin-top: .45rem; color: #8fa3c2; font-size: .74rem; }
+/* The login is not a secret: normal letter spacing keeps it readable. */
+#dispatcher-login { letter-spacing: .02em; }
 .auth-field__control input {
   box-sizing: border-box;
   width: 100%;

@@ -4,6 +4,8 @@ export type AuditActor = {
   // "system" marks automatic actions such as a GPS arrival from Webfleet.
   role: "admin" | "dispatcher" | "system";
   sessionId: string;
+  /** Personal account behind the action; absent for system actions and shared-password sessions. */
+  dispatcherId?: string | null;
 };
 
 type AuditDatabase = PrismaClient | Prisma.TransactionClient;
@@ -27,6 +29,7 @@ export async function writeAuditLog(
     data: {
       actorRole: actor.role,
       actorSessionId: actor.sessionId,
+      actorDispatcherId: actor.dispatcherId ?? null,
       action: input.action,
       entityType: input.entityType,
       entityId: input.entityId,

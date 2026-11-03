@@ -1,4 +1,4 @@
-import { LogOut, ArrowRight, Cog, Eye, EyeOff, LockKeyhole } from 'lucide-react'
+import { LogOut, ArrowRight, Cog, Eye, EyeOff, LockKeyhole, UserRound } from 'lucide-react'
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { DispatcherAuthError, dispatcherAuth } from '../lib/auth'
 import './auth-gate.css'
@@ -17,7 +17,7 @@ function AuthBrand() {
 
 function loginErrorMessage(cause: unknown): string {
   if (cause instanceof DispatcherAuthError) {
-    if (cause.status === 401) return 'Incorrect password'
+    if (cause.status === 401) return 'Incorrect login or password'
     if (cause.status === 429) return cause.retryAfter
       ? `Too many attempts. Try again in ${Math.ceil(cause.retryAfter / 60)} min.`
       : 'Too many attempts. Please try again later.'
@@ -40,6 +40,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const [authenticated, setAuthenticated] = useState(false)
   const [phase, setPhase] = useState<AuthPhase>('checking')
   const [password, setPassword] = useState('')
+  const [login, setLogin] = useState('')
   const [passwordVisible, setPasswordVisible] = useState(false)
   const [error, setError] = useState('')
   const [passwordError, setPasswordError] = useState(false)
@@ -102,7 +103,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
     setPasswordError(false)
     setError('')
     try {
-      const session = await dispatcherAuth.login(password)
+      const session = await dispatcherAuth.login(login, password)
       if (!session.authenticated) throw new Error('Unauthenticated response')
       setPassword('')
       if (reauthRef.current) {
@@ -161,6 +162,27 @@ export function AuthGate({ children }: { children: ReactNode }) {
           </div>
 
           <div className="auth-field">
+            <label htmlFor="dispatcher-login">Login</label>
+            <div className="auth-field__control">
+              <UserRound className="auth-field__lock" aria-hidden="true" />
+              <input
+                id="dispatcher-login"
+                type="text"
+                autoComplete="username"
+                autoFocus
+                autoCapitalize="none"
+                spellCheck={false}
+                maxLength={40}
+                disabled={busy}
+                aria-describedby="dispatcher-login-hint"
+                value={login}
+                onChange={event => { setLogin(event.target.value); if (error) setError('') }}
+              />
+            </div>
+            <small id="dispatcher-login-hint" className="auth-field__hint">Your personal login. Leave empty for the shared admin password.</small>
+          </div>
+
+          <div className="auth-field">
             <label htmlFor="dispatcher-password">Password</label>
             <div className="auth-field__control">
               <LockKeyhole className="auth-field__lock" aria-hidden="true" />
@@ -170,7 +192,6 @@ export function AuthGate({ children }: { children: ReactNode }) {
                 autoComplete="current-password"
                 required
                 maxLength={1024}
-                autoFocus
                 disabled={busy}
                 aria-invalid={passwordError}
                 aria-describedby={error ? 'dispatcher-password-error' : undefined}
