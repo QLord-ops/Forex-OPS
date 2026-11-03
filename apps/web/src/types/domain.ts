@@ -83,6 +83,7 @@ export interface Tour {
   vehicle?: Vehicle
   stops?: Stop[]
   legs?: Leg[]
+  events?: unknown[]
   predictedEta?: string | null
   currentEta?: string | null
   eta?: string | null
@@ -112,7 +113,9 @@ export interface DashboardVehicle {
   dwellMinutes?: number | null
   dwellSeverity?: 'NONE' | 'WARNING' | 'CRITICAL'
   currentAction?: {
-    type: 'CONFIRM_ARRIVAL' | 'MARK_LOADED' | 'MARK_UNLOADED' | 'MANUAL_STOP' | 'RESUME'
+    type: 'MARK_LOADED' | 'MARK_UNLOADED' | 'MANUAL_STOP' | 'RESUME'
+    /** No GPS arrival yet: BELADEN/ENTLADEN records the arrival at the same moment. */
+    withoutGpsArrival?: boolean
     label: string
     stopId?: string | null
   } | null
@@ -195,6 +198,8 @@ export interface VehicleCardData {
   webfleet: { objectNo: string | null; objectName: string | null; plate: string | null; vin: string | null; tankLiters: number | null; objectType: string | null } | null
   current: {
     recordedAt: string
+    /** Last unit contact; newer than recordedAt while the truck stands. */
+    lastContactAt?: string | null
     ageSeconds: number
     stale: boolean
     usable: boolean

@@ -7,6 +7,8 @@ export const ARRIVAL_MIN_STANDSTILL_SECONDS = 180;
 const ARRIVAL_HISTORY_SECONDS = 30 * 60;
 const STOPPED_SPEED_KMH = 5;
 const FRESH_SECONDS = 120;
+// Webfleet keeps pos_time while a truck stands still; the unit's last contact (msgtime) proves the position is current.
+const CONTACT_FRESH_SECONDS = 300;
 const FALLBACK_SECONDS = 30 * 60;
 const SNAPSHOT_INTERVAL_MS = 60_000;
 const SYNC_LEASE_MS = 45_000;
@@ -47,6 +49,8 @@ export type WebfleetPosition = WebfleetObject & WebfleetVehicleState & {
   ignitionOn?: boolean | null;
   standstill?: boolean | null;
   recordedAt: Date;
+  /** Last time the unit reported to Webfleet (msgtime); newer than recordedAt while the truck stands. */
+  lastContactAt?: Date | null;
   driver?: WebfleetDriverOnObject | null;
   raw?: unknown;
 };
@@ -120,7 +124,7 @@ export class WebfleetTelemetryService {
         ignitionOn: input.ignitionOn ?? null, recordedAt: input.recordedAt, receivedAt,
         rawJson: JSON.stringify(toSafeTelemetryPayload(input))
       },
-      update: { receivedAt, speedKmh: input.speedKmh ?? null, rawJson: JSON.stringify(toSafeTelemetryPayload(input)) }
+      update: { receivedAt, speedKmh: input.speedKmh ?? null, ignitionOn: input.ignitionOn ?? null, rawJson: JSON.stringify(toSafeTelemetryPayload(input)) }
     });
 
     const arrival = await this.detectArrival(match.vehicleId, input, receivedAt);
@@ -136,16 +140,19 @@ export class WebfleetTelemetryService {
   async latest(vehicleId: string, now = new Date()) {
     const telemetry = await this.db.vehicleTelemetry.findFirst({ where: { vehicleId, provider: PROVIDER, recordedAt: { lte: now } }, orderBy: { recordedAt: 'desc' } });
     if (!telemetry) return null;
-    const ageSeconds = Math.max(0, Math.floor((now.getTime() - telemetry.recordedAt.getTime()) / 1000));
     const payload = telemetry.rawJson ? safeJson(telemetry.rawJson) : null;
+    const standstill = isRecord(payload) && typeof payload.standstill === 'boolean' ? payload.standstill : null;
+    const lastContactAt = isRecord(payload) && typeof payload.lastContactAt === 'string' ? validDate(payload.lastContactAt) : null;
+    const freshness = positionFreshness(telemetry.recordedAt, lastContactAt, isStopped(standstill, telemetry.speedKmh), now);
     return {
       ...telemetry,
-      standstill: isRecord(payload) && typeof payload.standstill === 'boolean' ? payload.standstill : null,
+      standstill,
       ...vehicleStateFromPayload(payload),
       objectNo: isRecord(payload) && typeof payload.objectNo === 'string' ? payload.objectNo : null,
-      ageSeconds,
-      stale: ageSeconds > FRESH_SECONDS,
-      usable: ageSeconds <= FALLBACK_SECONDS
+      lastContactAt,
+      ageSeconds: freshness.ageSeconds,
+      stale: !freshness.fresh,
+      usable: freshness.ageSeconds <= FALLBACK_SECONDS
     };
   }
 
@@ -155,7 +162,10 @@ export class WebfleetTelemetryService {
    */
   private async detectArrival(vehicleId: string, current: WebfleetPosition, now: Date): Promise<ArrivalDecision> {
     const none: ArrivalDecision = { suggested: false, confirmed: false };
-    if (freshAgeSeconds(current.recordedAt, now) > FRESH_SECONDS || !isStopped(current.standstill, current.speedKmh)) return none;
+    const stopped = isStopped(current.standstill, current.speedKmh);
+    if (!stopped || !positionFreshness(current.recordedAt, current.lastContactAt ?? null, stopped, now).fresh) return none;
+    // A standing truck keeps its pos_time, so the standstill lasts until the last contact.
+    const observedAt = current.lastContactAt && current.lastContactAt > current.recordedAt && current.lastContactAt <= now ? current.lastContactAt : current.recordedAt;
     const tour = await this.db.tour.findFirst({
       where: { vehicleId, status: 'ACTIVE' },
       include: { stops: { orderBy: { sequence: 'asc' } }, legs: true },
@@ -184,7 +194,7 @@ export class WebfleetTelemetryService {
       else stoppedRun = false;
     }
     if (!enteredAt || !stoppedSince) return none;
-    if ((current.recordedAt.getTime() - stoppedSince.getTime()) / 1000 < ARRIVAL_MIN_STANDSTILL_SECONDS) return none;
+    if ((observedAt.getTime() - stoppedSince.getTime()) / 1000 < ARRIVAL_MIN_STANDSTILL_SECONDS) return none;
 
     // After a dispatcher reverted an arrival here, wait until the truck has left the zone and come back.
     const reverted = await this.db.operationEvent.findFirst({ where: { stopId: stop.id, type: 'ARRIVAL_REVERTED' }, orderBy: { createdAt: 'desc' } });
@@ -207,7 +217,7 @@ export class WebfleetTelemetryService {
       where: { dedupKey: `webfleet-arrival:${stop.id}` },
       create: {
         dedupKey: `webfleet-arrival:${stop.id}`, vehicleId, stopId: stop.id, type: 'PREDICTED_ARRIVAL',
-        message: `Webfleet: машина стоит ${stop.type === 'LOAD' ? 'на загрузке' : 'на выгрузке'}, ${stop.city || stop.address}. Подтвердите прибытие.`,
+        message: `Webfleet: машина стоит ${stop.type === 'LOAD' ? 'на загрузке' : 'на выгрузке'}, ${stop.city || stop.address}. Автоприбытие выключено.`,
         payloadJson: JSON.stringify({ source: 'WEBFLEET_GEOFENCE', stopId: stop.id, recordedAt: current.recordedAt, ...meta })
       },
       update: {}
@@ -267,7 +277,7 @@ export class WebfleetSyncService {
       let failed = 0;
       const unmatched: Array<WebfleetObject & { ambiguous: boolean; isTrailer: boolean }> = [];
       for (const position of positions) {
-        if (position.recordedAt > now || freshAgeSeconds(position.recordedAt, now) > FALLBACK_SECONDS) { rejected += 1; continue; }
+        if (position.recordedAt > now || positionFreshness(position.recordedAt, position.lastContactAt ?? null, isStopped(position.standstill, position.speedKmh), now).ageSeconds > FALLBACK_SECONDS) { rejected += 1; continue; }
         // One bad object must not stop positions for the rest of the fleet.
         let result: Awaited<ReturnType<typeof this.telemetry.applyPosition>>;
         try { result = await this.telemetry.applyPosition(position, now); }
@@ -493,6 +503,7 @@ export function parseWebfleetObjectRow(value: unknown): WebfleetPosition | null 
     ignitionOn: booleanField(value, ['ignition', 'ignitionOn']),
     standstill: booleanField(value, ['standstill']),
     recordedAt,
+    lastContactAt: validDate(stringField(value, ['msgtime'])),
     driver: stringField(value, ['driveruid', 'drivername']) ? {
       driverUid: stringField(value, ['driveruid']),
       name: stringField(value, ['drivername'])?.trim().slice(0, 80) || null,
@@ -544,6 +555,7 @@ function toSafeTelemetryPayload(input: WebfleetPosition) {
     speedKmh: input.speedKmh ?? null,
     ignitionOn: input.ignitionOn ?? null,
     standstill: input.standstill ?? null,
+    lastContactAt: input.lastContactAt && input.lastContactAt >= input.recordedAt ? input.lastContactAt.toISOString() : null,
     ...Object.fromEntries(STORED_VEHICLE_FIELDS.map((key) => [key, input[key] ?? null])),
     recordedAt: input.recordedAt.toISOString()
   };
@@ -586,6 +598,27 @@ function safeJson(value: string) {
 
 function freshAgeSeconds(recordedAt: Date, now: Date) {
   return Math.max(0, Math.floor((now.getTime() - recordedAt.getTime()) / 1000));
+}
+
+function validDate(value: string | null) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+/**
+ * A moving truck is current only with a new pos_time. A standing truck keeps its pos_time,
+ * so a recent unit contact (msgtime) shows that it is still there.
+ */
+export function positionFreshness(recordedAt: Date, lastContactAt: Date | null, stopped: boolean, now: Date) {
+  const positionAge = freshAgeSeconds(recordedAt, now);
+  if (positionAge <= FRESH_SECONDS) return { fresh: true, ageSeconds: positionAge };
+  if (stopped && lastContactAt && lastContactAt >= recordedAt && lastContactAt <= now) {
+    const contactAge = freshAgeSeconds(lastContactAt, now);
+    if (contactAge <= CONTACT_FRESH_SECONDS) return { fresh: true, ageSeconds: contactAge };
+    return { fresh: false, ageSeconds: contactAge };
+  }
+  return { fresh: false, ageSeconds: positionAge };
 }
 
 export function distanceMeters(aLat: number, aLon: number, bLat: number, bLon: number) {

@@ -53,21 +53,17 @@ it('keeps existing unknown machine clocks preliminary and refuses undated except
   expect((await known.service.get(known.vehicle.id, start)).clockProposals).toEqual([]);
 });
 
-it('persists and deduplicates predicted arrival without recording an actual arrival', async () => {
+it('raises no arrival prompt from a calculated position and never records an arrival by itself', async () => {
   const f = await fixture('ARRIVAL');
   await f.notices.refresh(at(121));
   await new NotificationService(asAppDatabase(db), new TourService(asAppDatabase(db), new MockRoutingProvider())).refresh(at(125));
-  const rows = await db.notification.findMany({ where: { vehicleId: f.vehicle.id, type: 'PREDICTED_ARRIVAL' } });
-  expect(rows).toHaveLength(1);
-  expect(rows[0].message).toContain('ARRIVAL');
-  expect(rows[0].message).toContain('Hamburg');
+  expect(await db.notification.count({ where: { vehicleId: f.vehicle.id, type: 'PREDICTED_ARRIVAL' } })).toBe(0);
   expect((await db.stop.findUniqueOrThrow({ where: { id: f.stop.id } })).arrivedAt).toBeNull();
   await expect(f.tours.recordUnloaded(f.stop.id, at(125))).rejects.toThrow('подтвердить прибытие');
   const actor = { role: 'dispatcher' as const, sessionId: 'session-audit-test' };
   await f.service.confirmArrival(f.stop.id, at(122), at(125), actor);
   await f.service.confirmArrival(f.stop.id, at(122), at(125), actor);
   expect(await db.operationEvent.count({ where: { stopId: f.stop.id, type: 'ARRIVAL_CONFIRMED' } })).toBe(1);
-  expect((await db.notification.findUniqueOrThrow({ where: { id: rows[0].id } })).acknowledgedAt).not.toBeNull();
   expect((await f.service.get(f.vehicle.id, at(132))).dwellMinutes).toBe(10);
   await f.notices.refresh(at(250));
   await f.notices.refresh(at(260));

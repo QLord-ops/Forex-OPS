@@ -113,15 +113,10 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ address })
     }),
-  updateTour: (id: string, payload: (CreateTourInput & { version?: number }) | { status: 'CANCELLED' }) =>
+  updateTour: (id: string, payload: (CreateTourInput & { version?: number }) | { status: 'CANCELLED'; version?: number }) =>
     request<Tour>(`/tours/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(payload)
-    }),
-  confirmArrival: (stopId: string, arrivedAt: string) =>
-    request(`/stops/${stopId}/arrival`, {
-      method: 'POST',
-      body: JSON.stringify({ arrivedAt })
     }),
   markLoaded: (stopId: string, timestamp?: string) =>
     request<Tour>(`/stops/${stopId}/loaded`, {

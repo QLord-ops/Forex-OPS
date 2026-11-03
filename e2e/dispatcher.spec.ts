@@ -67,8 +67,7 @@ test('создаёт Auftrag из импортированного PDF', async (
   expect(createdPayload).toMatchObject({ vehicleId: 'veh-1', orderNumber: 'A-200', importAttemptId: expect.stringMatching(/:0$/), importFingerprint: expect.stringMatching(/^auftrag-/) })
 })
 
-test('подтверждает фактическое прибытие', async ({ page }) => {
-  let arrivalBody: unknown = null
+test('прибытие ставит только GPS: ручной кнопки прибытия нет', async ({ page }) => {
   const activeTour = tour()
   await authenticated(page, async (route, path) => {
     if (path === '/vehicles/veh-1') { await json(route, vehicle); return true }
@@ -76,12 +75,11 @@ test('подтверждает фактическое прибытие', async (
     if (path === '/vehicles/veh-1/timeline') { await json(route, { vehicle, tours: [activeTour], items: [] }); return true }
     if (path === '/vehicles/veh-1/current-position') { await json(route, { vehicleId: vehicle.id, tourId: activeTour.id, status: 'ARRIVED', coordinate: [13.405, 52.52] }); return true }
     if (path === '/vehicles/veh-1/operations') { await json(route, { vehicleId: vehicle.id, version: 1, clock: null, preliminary: true, manualStoppedAt: null, position: { status: 'ARRIVED' }, currentStop: loadStop, dwellMinutes: null, clockProposals: [], traffic: null }); return true }
-    if (path === '/stops/stop-load/arrival') { arrivalBody = route.request().postDataJSON(); await json(route, { ok: true }); return true }
     return false
   })
   await page.goto('/vehicles/veh-1')
-  await page.getByRole('button', { name: 'Подтвердить прибытие', exact: true }).click()
-  await expect.poll(() => arrivalBody).not.toBeNull()
+  await expect(page.getByText('отметится само по GPS Webfleet')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Подтвердить прибытие' })).toHaveCount(0)
 })
 
 test('фиксирует BELADEN после прибытия', async ({ page }) => {
@@ -463,8 +461,10 @@ test('карточка машины: компактная строка, вкла
   await expect(dialog).toContainText('поездка продолжается')
   await expect(dialog).toContainText('99 км · служебная')
 
-  await dialog.getByRole('button', { name: 'Трек за сегодня' }).click()
-  await expect(dialog.getByRole('button', { name: 'Скрыть трек' })).toHaveAttribute('aria-pressed', 'true')
+  // The track sits in the tab row; the card has no footer and no «Открыть LKW» any more.
+  await expect(dialog.getByRole('link', { name: /Открыть LKW/ })).toHaveCount(0)
+  await dialog.getByRole('button', { name: 'Трек', exact: true }).click()
+  await expect(dialog.getByRole('button', { name: 'Трек', exact: true })).toHaveAttribute('aria-pressed', 'true')
 
   await page.keyboard.press('Escape')
   await expect(page.getByRole('dialog')).toHaveCount(0)
