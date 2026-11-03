@@ -1,3 +1,14 @@
+CREATE TABLE "Dispatcher" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "login" TEXT NOT NULL,
+    "displayName" TEXT NOT NULL,
+    "role" TEXT NOT NULL DEFAULT 'dispatcher',
+    "passwordHash" TEXT NOT NULL,
+    "active" BOOLEAN NOT NULL DEFAULT true,
+    "lastLoginAt" DATETIME,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL
+);
 CREATE TABLE "Vehicle" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "vehicleNumber" TEXT NOT NULL,
@@ -12,8 +23,11 @@ CREATE TABLE "Vehicle" (
     "manualStoppedAt" DATETIME,
     "operationVersion" INTEGER NOT NULL DEFAULT 0,
     "truckProfile" TEXT,
+    "assignedDispatcherId" TEXT,
+    "assignedAt" DATETIME,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL
+    "updatedAt" DATETIME NOT NULL,
+    CONSTRAINT "Vehicle_assignedDispatcherId_fkey" FOREIGN KEY ("assignedDispatcherId") REFERENCES "Dispatcher" ("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
 CREATE TABLE "Tour" (
     "id" TEXT NOT NULL PRIMARY KEY,
@@ -238,6 +252,7 @@ CREATE TABLE "AuditLog" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "actorRole" TEXT NOT NULL,
     "actorSessionId" TEXT NOT NULL,
+    "actorDispatcherId" TEXT,
     "action" TEXT NOT NULL,
     "entityType" TEXT NOT NULL,
     "entityId" TEXT NOT NULL,
@@ -250,3 +265,6 @@ CREATE TABLE "AuditLog" (
 CREATE INDEX "AuditLog_createdAt_idx" ON "AuditLog"("createdAt");
 CREATE INDEX "AuditLog_entityType_entityId_createdAt_idx" ON "AuditLog"("entityType", "entityId", "createdAt");
 CREATE INDEX "AuditLog_actorSessionId_createdAt_idx" ON "AuditLog"("actorSessionId", "createdAt");
+CREATE INDEX "AuditLog_actorDispatcherId_createdAt_idx" ON "AuditLog"("actorDispatcherId", "createdAt");
+CREATE UNIQUE INDEX "Dispatcher_login_key" ON "Dispatcher"("login");
+CREATE INDEX "Vehicle_assignedDispatcherId_idx" ON "Vehicle"("assignedDispatcherId");
