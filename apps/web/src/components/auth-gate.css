@@ -1,7 +1,7 @@
 .auth-shell {
-  --auth-blue: #086cff;
-  --auth-blue-bright: #2a8cff;
-  --auth-navy: #061127;
+  --auth-blue: #c8a96a;
+  --auth-blue-bright: #d6ba80;
+  --auth-navy: #0b1a2e;
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 64%) minmax(420px, 36%);
@@ -9,7 +9,7 @@
   min-height: 100dvh;
   overflow: hidden;
   color: #f8fbff;
-  background: #030918;
+  background: #07121f;
   isolation: isolate;
 }
 
@@ -49,9 +49,9 @@
   min-height: 100dvh;
   overflow: hidden;
   background:
-    radial-gradient(circle at 85% 15%, rgba(22, 95, 220, .16), transparent 34%),
-    linear-gradient(145deg, #07162f 0%, #061127 45%, #030b1b 100%);
-  border-left: 1px solid rgba(109, 160, 235, .18);
+    radial-gradient(circle at 85% 15%, rgba(200, 169, 106, .07), transparent 34%),
+    linear-gradient(145deg, #10233c 0%, #0b1a2e 45%, #07121f 100%);
+  border-left: 1px solid rgba(200, 169, 106, .22);
   transition: opacity 800ms cubic-bezier(.4, 0, .2, 1), transform 1000ms cubic-bezier(.2, .72, .2, 1);
 }
 
@@ -68,8 +68,8 @@
   width: clamp(14rem, 25vw, 29rem);
   aspect-ratio: 1;
   border-radius: 50%;
-  border: 1px solid rgba(47, 123, 246, .08);
-  background: rgba(31, 91, 183, .035);
+  border: 1px solid rgba(200, 169, 106, .07);
+  background: rgba(200, 169, 106, .02);
   pointer-events: none;
 }
 
@@ -189,7 +189,7 @@
 .auth-field__control input:focus {
   background: rgba(12, 33, 69, .9);
   border-color: var(--auth-blue-bright);
-  box-shadow: 0 0 0 3px rgba(17, 111, 255, .18), 0 14px 38px rgba(0, 0, 0, .12);
+  box-shadow: 0 0 0 3px rgba(200, 169, 106, .2), 0 14px 38px rgba(0, 0, 0, .12);
 }
 .auth-field__control input[aria-invalid='true'] { border-color: #ff6474; }
 .auth-field__control input:disabled { cursor: wait; opacity: .76; }
@@ -246,15 +246,15 @@
   min-height: 3.45rem;
   padding: .85rem 1.25rem;
   overflow: hidden;
-  color: #fff;
+  color: #0b1a2e;
   font: inherit;
   font-size: .9rem;
   font-weight: 700;
   letter-spacing: .19em;
-  background: linear-gradient(115deg, #0566f5, #0878ff 58%, #136cff);
-  border: 1px solid rgba(95, 166, 255, .8);
+  background: linear-gradient(115deg, #c8a96a, #d6ba80 58%, #c8a96a);
+  border: 1px solid rgba(243, 234, 216, .55);
   border-radius: .55rem;
-  box-shadow: 0 14px 32px rgba(0, 88, 255, .22), inset 0 1px 0 rgba(255, 255, 255, .2);
+  box-shadow: 0 14px 32px rgba(0, 0, 0, .28), inset 0 1px 0 rgba(255, 255, 255, .3);
   cursor: pointer;
   transition: transform 180ms ease, box-shadow 180ms ease, filter 180ms ease, opacity 180ms ease;
 }
@@ -266,10 +266,10 @@
   transform: translateX(-120%);
   transition: transform 600ms ease;
 }
-.auth-submit:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 18px 40px rgba(0, 91, 255, .32), inset 0 1px 0 rgba(255, 255, 255, .25); }
+.auth-submit:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 18px 40px rgba(0, 0, 0, .36), inset 0 1px 0 rgba(255, 255, 255, .35); }
 .auth-submit:hover:not(:disabled)::before { transform: translateX(120%); }
 .auth-submit:active:not(:disabled) { transform: translateY(0); }
-.auth-submit:focus-visible { outline: 3px solid rgba(87, 163, 255, .55); outline-offset: 3px; }
+.auth-submit:focus-visible { outline: 3px solid rgba(243, 234, 216, .7); outline-offset: 3px; }
 .auth-submit:disabled { cursor: not-allowed; opacity: .6; filter: saturate(.7); }
 .auth-shell--submitting .auth-submit,
 .auth-shell--success .auth-submit { opacity: 1; cursor: wait; filter: none; }
@@ -294,7 +294,7 @@
   width: 1.25rem;
   height: 1.25rem;
   border: 2px solid rgba(151, 191, 255, .24);
-  border-top-color: #4c9bff;
+  border-top-color: #c8a96a;
   border-radius: 50%;
   animation: auth-spin 750ms linear infinite;
 }
@@ -321,7 +321,7 @@
   left: -24vw;
   width: 18vw;
   opacity: 0;
-  background: linear-gradient(90deg, transparent, rgba(36, 134, 255, .12), rgba(100, 181, 255, .92), rgba(24, 117, 255, .16), transparent);
+  background: linear-gradient(90deg, transparent, rgba(200, 169, 106, .12), rgba(243, 234, 216, .85), rgba(200, 169, 106, .16), transparent);
   filter: blur(8px);
   transform: skewX(-12deg);
   pointer-events: none;
@@ -418,3 +418,8 @@
 
 .auth-app { display: contents; }
 .auth-reauth-overlay { position: fixed; inset: 0; z-index: 1000; overflow: auto; }
+
+/* OPS FOREX brand block: the rail's mark and wordmark, larger. */
+.auth-brand__mark { margin-bottom: 1.1rem; color: #c8a96a; }
+.auth-brand .brand-wordmark { font-size: clamp(1.9rem, 2.6vw, 2.75rem); letter-spacing: .14em; }
+.auth-brand__name { font-family: inherit; text-shadow: none; }

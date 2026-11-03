@@ -16,6 +16,13 @@
   --border-soft: #dbe4ef;
   --text-main: #0f172a;
   --text-muted: #64748b;
+  /* OPS FOREX: midnight blue and brass. Brass is for the brand and the selection, never for a status. */
+  --brand-navy: #0b1a2e;
+  --brand-navy-raised: #13243d;
+  --brand-navy-line: #1e3350;
+  --brand-brass: #c8a96a;
+  --brand-brass-ink: #8a6a2c;
+  --brand-ivory: #f3ead8;
 }
 
 * {
@@ -171,12 +178,12 @@ button:disabled {
 }
 
 .primary-button {
-  background: #0369a1;
-  color: white;
+  background: var(--brand-navy);
+  color: var(--brand-ivory);
 }
 
 .primary-button:hover {
-  background: #075985;
+  background: var(--brand-navy-raised);
 }
 
 .secondary-button {
@@ -459,9 +466,9 @@ button:disabled {
 }
 
 .filter-chip-active {
-  border-color: #0f172a;
-  background: #0f172a;
-  color: white;
+  border-color: var(--brand-navy);
+  background: var(--brand-navy);
+  color: var(--brand-ivory);
 }
 
 .icon-button {
@@ -873,8 +880,8 @@ main a:focus-visible { outline: 2px solid #0ea5e9; outline-offset: 2px; }
 
 /* Logout: icon in the narrow rail, label on wide screens and in the phone menu. */
 .dispatcher-logout { display: flex; align-items: center; justify-content: center; gap: .75rem; border-radius: .375rem; color: #cbd5e1; font-size: .875rem; font-weight: 500; }
-.dispatcher-logout:hover { background: #0f172a; color: white; }
-.dispatcher-logout:focus-visible { outline: 2px solid #38bdf8; outline-offset: 2px; }
+.dispatcher-logout:hover { background: var(--brand-navy-raised); color: white; }
+.dispatcher-logout:focus-visible { outline: 2px solid var(--brand-brass); outline-offset: 2px; }
 aside > .dispatcher-logout { position: absolute; right: .5rem; bottom: 1rem; left: .5rem; min-height: 3rem; }
 aside > .dispatcher-logout span { display: none; }
 aside > .dispatcher-logout-error { position: absolute; bottom: 4.25rem; left: .5rem; right: .5rem; color: #fecaca; font-size: .7rem; }
@@ -1071,10 +1078,10 @@ aside > .dispatcher-logout-error { position: absolute; bottom: 4.25rem; left: .5
 
 /* Sound and Windows notifications for this browser. */
 .alert-toggle { display: flex; align-items: center; justify-content: center; gap: .75rem; border-radius: .375rem; color: #cbd5e1; font-size: .875rem; font-weight: 500; }
-.alert-toggle:hover { background: #0f172a; color: white; }
-.alert-toggle:focus-visible { outline: 2px solid #38bdf8; outline-offset: 2px; }
+.alert-toggle:hover { background: var(--brand-navy-raised); color: white; }
+.alert-toggle:focus-visible { outline: 2px solid var(--brand-brass); outline-offset: 2px; }
 .alert-toggle-icon { position: relative; display: inline-flex; }
-.alert-toggle-dot { position: absolute; top: -2px; right: -2px; width: 8px; height: 8px; border-radius: 50%; background: #f59e0b; box-shadow: 0 0 0 2px #020617; }
+.alert-toggle-dot { position: absolute; top: -2px; right: -2px; width: 8px; height: 8px; border-radius: 50%; background: #f59e0b; box-shadow: 0 0 0 2px var(--brand-navy); }
 /* Above the assistant launcher (bottom 76px) and the logout button. */
 aside > .alert-toggle { position: absolute; right: .5rem; bottom: 8.25rem; left: .5rem; min-height: 3rem; }
 aside > .alert-toggle .alert-toggle-label { display: none; }
@@ -1121,3 +1128,17 @@ aside > .dispatcher-logout-error { bottom: 11.5rem; }
 .vehicle-row-termin { display: inline-flex; align-items: center; gap: 4px; margin-top: 3px; border-radius: 6px; background: #4338ca; padding: 1px 6px; color: #fff; font-size: .6875rem; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.5; white-space: nowrap; }
 .truck-card-termin { margin-left: 8px; vertical-align: middle; }
 .fleet-marker-termin .fleet-marker-dot, .fleet-marker-termin .fleet-marker-arrow { box-shadow: 0 0 0 3px #4338ca; }
+
+/* ---- OPS FOREX brand: rail, logo, selection ---- */
+.app-rail { border-right: 1px solid var(--brand-navy-line); background: var(--brand-navy); }
+.app-rail-brand { border-bottom: 1px solid var(--brand-navy-line); color: var(--brand-brass); }
+.brand-wordmark { display: block; color: var(--brand-ivory); font-size: 1rem; line-height: 1.1; letter-spacing: .14em; white-space: nowrap; }
+.brand-wordmark b { font-weight: 700; }
+.brand-wordmark span { margin-left: .28em; color: var(--brand-brass); font-weight: 300; }
+.app-rail-tagline { margin-top: 4px; color: #7d8aa0; font-size: .625rem; font-weight: 500; letter-spacing: .3em; text-transform: uppercase; }
+.app-rail-link { color: #c3cad6; }
+.app-rail-link:hover, .app-rail-link:focus { background: var(--brand-navy-raised); color: #fff; }
+.app-rail-link-active { background: rgb(200 169 106 / .14); box-shadow: inset 3px 0 var(--brand-brass); color: var(--brand-ivory); }
+.app-rail-link-active svg { color: var(--brand-brass); }
+.app-rail a:focus-visible { outline: 2px solid var(--brand-brass); outline-offset: 2px; }
+.mobile-nav-active { background: var(--brand-navy); color: var(--brand-ivory); }
