@@ -185,6 +185,7 @@ test('показывает причину ошибки Webfleet и привяз�
     if (path === '/vehicles' && route.request().method() === 'GET') { await json(route, [vehicle]); return true }
     if (path === '/integrations/webfleet/status') { await json(route, status(bound ? [] : [{ objectUid: 'wf-125', objectNo: 'LKW 125', licensePlate: '', ambiguous: false }])); return true }
     if (path === '/integrations/webfleet/bindings' && route.request().method() === 'GET') { await json(route, bound ? [binding] : []); return true }
+    if (path === '/integrations/webfleet/suggestions') { await json(route, []); return true }
     if (path === '/integrations/webfleet/bindings' && route.request().method() === 'POST') {
       bound = route.request().postDataJSON() as Record<string, unknown>
       await json(route, [binding]); return true
@@ -372,6 +373,70 @@ test('показывает пробки на маршруте выбранной
   await expect(details).toContainText('До пробки')
   await page.keyboard.press('Escape')
   await expect(details).toHaveCount(0)
+})
+
+test('карточка машины: тахограф, топливо, открытие из списка, двойным кликом и с карты', async ({ page }) => {
+  const other = { id: 'veh-2', vehicleNumber: '7448', licensePlate: 'B-CY7448', maxSpeedKmh: 85 }
+  const now = Date.now()
+  const shiftStart = new Date(now - 3 * 3_600_000).toISOString()
+  const card = (id: string, number: string, plate: string) => ({
+    vehicleId: id, vehicleNumber: number, licensePlate: plate, currentTrailerPlate: 'B-TR 1', generatedAt: new Date(now).toISOString(),
+    webfleet: { objectNo: plate, plate, vin: 'W1T96340710771379', tankLiters: 890, objectType: 'truck_with_trailer' },
+    current: { recordedAt: new Date(now - 60_000).toISOString(), ageSeconds: 60, stale: false, usable: true, coordinate: [9.95, 51.6],
+      address: 'Kurt-Nagel-Straße, 33829 Borgholzhausen, DE', speedKmh: 84, courseDeg: 45, standstill: false, ignitionOn: true,
+      ignitionChangedAt: shiftStart, fuelPercent: 82.4, fuelLiters: 733, odometerKm: 196186.7, engineHours: 3410.9 },
+    driver: { status: 'SIGNED_ON', name: 'Max Mustermann', workState: 5, checkedAt: new Date(now).toISOString(), drivingTimesStatus: 'OK',
+      drivingTimes: { referenceTime: new Date(now - 60_000).toISOString(), remainDrivingTodayMs: 22_980_000, totalDrivingTodayMs: 13_020_000, maxDrivingTodayMs: 36_000_000,
+        remainDrivingWeekMs: 177_480_000, maxDrivingWeekMs: 201_600_000, shiftStartedAt: shiftStart, latestShiftEndAt: new Date(Date.parse(shiftStart) + 15 * 3_600_000).toISOString(),
+        nextBreakInMs: 8_100_000, nextBreakMinMs: 2_700_000, nextRestInMs: 40_140_000, nextRestMinMs: 32_400_000, earliestNextShiftAt: null,
+        extendedShiftsLeft: 1, maxExtendedShifts: 2, reducedRestsLeft: 3, maxReducedRests: 3, infringements: false, lastCardActivityAt: null } }
+  })
+  const cardRequests: string[] = []
+  await authenticated(page, async (route, path) => {
+    if (path === '/dashboard') {
+      await json(route, { vehicles: [
+        { vehicle, tour: tour(), statusText: 'MOVING', operationVersion: 1, mapPosition: { coordinate: [13.4, 52.5], source: 'WEBFLEET', stale: false, courseDeg: 90, standstill: false } },
+        { vehicle: other, tour: null, statusText: 'IDLE', operationVersion: 1, mapPosition: { coordinate: [9.95, 51.6], source: 'WEBFLEET', stale: false, courseDeg: 45, standstill: false } }
+      ] }); return true
+    }
+    if (path === '/vehicles') { await json(route, [vehicle, other]); return true }
+    if (path.endsWith('/card')) {
+      cardRequests.push(path)
+      await json(route, path.includes('veh-2') ? card('veh-2', '7448', 'B CY 7448') : card('veh-1', '125', 'B OPS 125')); return true
+    }
+    if (path.endsWith('/current-position')) {
+      const [longitude, latitude] = path.includes('veh-2') ? [9.95, 51.6] : [13.4, 52.5]
+      await json(route, { status: 'MOVING', positionSource: 'WEBFLEET', coordinate: [longitude, latitude], position: { latitude, longitude } }); return true
+    }
+    if (path.startsWith('/vehicles/')) { await json(route, []); return true }
+    return false
+  })
+  await page.goto('/?vehicleId=veh-1')
+
+  await page.getByRole('button', { name: 'Карточка LKW 125' }).click()
+  const dialog = page.getByRole('dialog', { name: 'B OPS 125' })
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByRole('heading', { name: 'B OPS 125' })).toBeFocused()
+  await expect(dialog).toContainText('Едет 84 км/ч, на северо-восток')
+  await expect(dialog).toContainText('Max Mustermann')
+  await expect(dialog).toContainText('За рулём')
+  await expect(dialog.getByRole('meter', { name: 'Вождение сегодня' })).toHaveAttribute('aria-valuetext', 'Осталось 6 ч 23 мин из 10 ч')
+  await expect(dialog).toContainText(/начало .*\d\d:\d\d · закончить до .*\d\d:\d\d \(15 ч\)/)
+  await expect(dialog).toContainText('через 2 ч 15 мин, не меньше 45 мин')
+  await expect(dialog.getByRole('meter', { name: 'Топливо' })).toHaveAttribute('aria-valuetext', '82 % · ~733 л')
+  await expect(dialog).toContainText('GPS · 1 мин')
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Карточка LKW 125' })).toBeFocused()
+
+  await page.locator('.vehicle-card').filter({ hasText: 'LKW 7448' }).getByRole('button', { name: /LKW 7448/ }).first().dblclick()
+  await expect(page.getByRole('dialog', { name: 'B CY 7448' })).toBeVisible()
+  await page.getByRole('button', { name: 'Закрыть карточку' }).click()
+
+  // veh-2 is selected now, so the fleet layer shows truck 125 as a small marker.
+  await page.getByRole('button', { name: /LKW 125: GPS, едет\. Открыть карточку/ }).click()
+  await expect(page.getByRole('dialog', { name: 'B OPS 125' })).toBeVisible()
+  expect(cardRequests).toEqual(expect.arrayContaining(['/vehicles/veh-1/card', '/vehicles/veh-2/card']))
 })
 
 test.describe('этап машины в точках маршрута', () => {

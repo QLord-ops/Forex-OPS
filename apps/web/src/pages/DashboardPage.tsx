@@ -1,9 +1,10 @@
-import { ArrowUpRight, Check, CheckCircle2, ChevronDown, CircleDot, Clock3, Loader2, MapPin, PackageCheck, PauseCircle, Pin, PinOff, PlayCircle, Search, Truck, X } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { ArrowUpRight, Check, CheckCircle2, ChevronDown, CircleDot, Clock3, Info, Loader2, MapPin, PackageCheck, PauseCircle, Pin, PinOff, PlayCircle, Search, Truck, X } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 
 import { LazyMapPanel } from '../components/LazyMapPanel'
 import { QuickOrderPanel } from '../components/QuickOrderPanel'
+import { TruckCard } from '../components/TruckCard'
 import { EmptyState, ErrorState, LoadingState } from '../components/States'
 import { usePolling } from '../hooks/usePolling'
 import { useVehiclePosition } from '../hooks/useVehiclePosition'
@@ -40,6 +41,9 @@ export function DashboardPage() {
   const orderedVehicles = useMemo(() => vehicles.slice().sort((a, b) => compareVehicles(a, b, pinned)), [pinned, vehicles])
   const selectedId = searchParams.get('vehicleId') ?? ''
   const selected = vehicles.find((row) => row.vehicle.id === selectedId) ?? orderedVehicles[0] ?? null
+  const cardId = searchParams.get('card')
+  const cardRow = cardId ? vehicles.find((row) => row.vehicle.id === cardId) ?? null : null
+  const fleet = useMemo(() => vehicles.flatMap((row) => row.mapPosition ? [{ id: row.vehicle.id, label: row.vehicle.vehicleNumber, ...row.mapPosition }] : []), [vehicles])
   const position = useVehiclePosition(selected?.vehicle.id ?? '')
   const refetchPosition = position.refetch
 
@@ -64,7 +68,10 @@ export function DashboardPage() {
     return matchesQuery && matchesFleetFilter(row, filter)
   })
 
-  function selectVehicle(vehicleId: string) { setSearchParams({ vehicleId }, { replace: true }) }
+  // With the card open, picking another truck switches the card to it.
+  function selectVehicle(vehicleId: string) { setSearchParams(cardId ? { vehicleId, card: vehicleId } : { vehicleId }, { replace: true }) }
+  const openCard = useCallback((vehicleId: string) => setSearchParams({ vehicleId, card: vehicleId }, { replace: true }), [setSearchParams])
+  const closeCard = useCallback(() => setSearchParams(selectedId ? { vehicleId: selectedId } : {}, { replace: true }), [selectedId, setSearchParams])
   function openAction(vehicleId: string) {
     setActionVehicleId((current) => current === vehicleId ? null : vehicleId)
     setActionTime(localDateTime())
@@ -122,7 +129,7 @@ export function DashboardPage() {
             const isPinned = pinned.includes(row.vehicle.id)
             return (
               <article key={row.vehicle.id} className={classNames('vehicle-card', `vehicle-card-${attention.tone}`, isSelected && 'vehicle-card-selected')}>
-                <button type="button" className="min-w-0 flex-1 text-left" aria-current={isSelected ? 'true' : undefined} onClick={() => selectVehicle(row.vehicle.id)}>
+                <button type="button" className="min-w-0 flex-1 text-left" aria-current={isSelected ? 'true' : undefined} onClick={() => selectVehicle(row.vehicle.id)} onDoubleClick={() => openCard(row.vehicle.id)}>
                   <div className="flex min-w-0 items-start justify-between gap-2">
                     <div className="min-w-0">
                       <div className="flex min-w-0 items-center gap-2"><span className="text-lg font-black tabular-nums">LKW {row.vehicle.vehicleNumber}</span>{row.vehicle.licensePlate ? <span className="truncate text-xs font-semibold text-slate-500">{row.vehicle.licensePlate}</span> : null}</div>
@@ -141,6 +148,7 @@ export function DashboardPage() {
                 </button>
                 <div className="vehicle-card-actions">
                   <VehicleActionButton row={row} busy={actingId === row.vehicle.id} onClick={() => openAction(row.vehicle.id)} />
+                  <button type="button" className="icon-button vehicle-card-info" onClick={() => openCard(row.vehicle.id)} aria-label={`Карточка LKW ${row.vehicle.vehicleNumber}`} aria-expanded={cardId === row.vehicle.id} title="Карточка машины"><Info className="h-4 w-4" /></button>
                   <button type="button" className="icon-button" onClick={() => togglePin(row.vehicle.id)} aria-label={isPinned ? `Открепить LKW ${row.vehicle.vehicleNumber}` : `Закрепить LKW ${row.vehicle.vehicleNumber}`} title={isPinned ? 'Открепить' : 'Закрепить'}>{isPinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}</button>
                 </div>
                 {actionVehicleId === row.vehicle.id && row.currentAction ? <ActionPopover row={row} value={actionTime} onChange={setActionTime} busy={actingId === row.vehicle.id} error={actionError} onClose={() => setActionVehicleId(null)} onConfirm={() => void handleVehicleAction(row)} /> : null}
@@ -150,10 +158,11 @@ export function DashboardPage() {
         </div>
       </aside>
       <section className="dashboard-stage" aria-label="Карта выбранного грузовика">
-        <LazyMapPanel tour={selected?.tour} position={position.data} vehicleNumber={selected?.vehicle.vehicleNumber} focusCoordinate={mapFocus} previewRoute={draftRoute?.geometry} previewStops={draftRoute?.stops} previewTraffic={draftRoute?.trafficSegments} previewAlternatives={draftRoute?.alternatives} onSelectPreviewAlternative={draftRoute?.onSelectAlternative} previewKey={draftRoute?.key} height="100%" fill />
+        <LazyMapPanel tour={selected?.tour} position={position.data} vehicleNumber={selected?.vehicle.vehicleNumber} fleet={fleet} selectedVehicleId={selected?.vehicle.id} onSelectFleetVehicle={openCard} focusCoordinate={mapFocus} previewRoute={draftRoute?.geometry} previewStops={draftRoute?.stops} previewTraffic={draftRoute?.trafficSegments} previewAlternatives={draftRoute?.alternatives} onSelectPreviewAlternative={draftRoute?.onSelectAlternative} previewKey={draftRoute?.key} height="100%" fill />
         {draftRoute ? <div className="map-draft-banner"><span>{draftRoute.label} · черновик</span><button type="button" aria-label="Убрать черновой маршрут с карты" onClick={() => setRoutePreview(null)}><X size={16} /></button></div> : null}
         {selected ? <><VehicleMapHud row={selected} open={hudOpen} onToggle={() => setHudOpen((value) => !value)} /><RouteStopsDrawer row={selected} position={position.data} open={drawerOpen} onToggle={() => setDrawerOpen((value) => !value)} /></> : null}
         <QuickOrderPanel row={selected} vehicles={vehicles.map((item) => item.vehicle)} onAddressFound={setMapFocus} onRoutePreview={setRoutePreview} onCreated={async (vehicleId) => { selectVehicle(vehicleId); await refetch() }} />
+        {cardId ? <TruckCard vehicleId={cardId} row={cardRow} onClose={closeCard} onShowOnMap={setMapFocus} /> : null}
         {position.error ? <button type="button" className="map-error" onClick={() => void position.refetch()}>Позиция временно недоступна · повторить</button> : null}
         {error ? <div className="dashboard-sync-warning">Данные автопарка не обновлены. Повторим автоматически.</div> : null}
       </section>

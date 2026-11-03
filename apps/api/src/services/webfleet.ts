@@ -17,7 +17,26 @@ export type WebfleetObject = {
   licensePlate?: string | null;
 };
 
-export type WebfleetPosition = WebfleetObject & {
+/** Facts about the truck from the object report. They are not personal data, so they may be stored. */
+export type WebfleetVehicleState = {
+  courseDeg?: number | null;
+  address?: string | null;
+  fuelPercent?: number | null;
+  odometerKm?: number | null;
+  engineHours?: number | null;
+  ignitionChangedAt?: string | null;
+  objectType?: string | null;
+  isTrailer?: boolean;
+};
+
+/** Driver signed on to the object. Personal data: kept in memory only, never stored or logged. */
+export type WebfleetDriverOnObject = {
+  driverUid: string | null;
+  name: string | null;
+  workState: number | null;
+};
+
+export type WebfleetPosition = WebfleetObject & WebfleetVehicleState & {
   messageId?: string | null;
   latitude: number;
   longitude: number;
@@ -25,6 +44,7 @@ export type WebfleetPosition = WebfleetObject & {
   ignitionOn?: boolean | null;
   standstill?: boolean | null;
   recordedAt: Date;
+  driver?: WebfleetDriverOnObject | null;
   raw?: unknown;
 };
 
@@ -118,6 +138,7 @@ export class WebfleetTelemetryService {
     return {
       ...telemetry,
       standstill: isRecord(payload) && typeof payload.standstill === 'boolean' ? payload.standstill : null,
+      ...vehicleStateFromPayload(payload),
       ageSeconds,
       stale: ageSeconds > FRESH_SECONDS,
       usable: ageSeconds <= FALLBACK_SECONDS
@@ -199,7 +220,8 @@ export class WebfleetSyncService {
     private readonly db: PrismaClient,
     private readonly config: WebfleetConfig | null = readWebfleetConfig(),
     private readonly fetchReport: (config: WebfleetConfig) => Promise<WebfleetPosition[]> = fetchObjectReport,
-    onAutoArrival?: AutoArrivalHandler
+    onAutoArrival?: AutoArrivalHandler,
+    private readonly onSnapshot?: (positions: WebfleetPosition[], now: Date) => void
   ) {
     this.telemetry = new WebfleetTelemetryService(db, onAutoArrival);
   }
@@ -235,10 +257,11 @@ export class WebfleetSyncService {
 
     try {
       const positions = await this.fetchReport(this.config);
+      this.onSnapshot?.(positions, now);
       let matched = 0;
       let rejected = 0;
       let failed = 0;
-      const unmatched: Array<WebfleetObject & { ambiguous: boolean }> = [];
+      const unmatched: Array<WebfleetObject & { ambiguous: boolean; isTrailer: boolean }> = [];
       for (const position of positions) {
         if (position.recordedAt > now || freshAgeSeconds(position.recordedAt, now) > FALLBACK_SECONDS) { rejected += 1; continue; }
         // One bad object must not stop positions for the rest of the fleet.
@@ -246,7 +269,7 @@ export class WebfleetSyncService {
         try { result = await this.telemetry.applyPosition(position, now); }
         catch { failed += 1; continue; }
         if (result.matched) matched += 1;
-        else if (!result.duplicate && unmatched.length < 500) unmatched.push({ objectUid: position.objectUid, objectNo: position.objectNo, licensePlate: position.licensePlate, ambiguous: 'ambiguous' in result && Boolean(result.ambiguous) });
+        else if (!result.duplicate && unmatched.length < 500) unmatched.push({ objectUid: position.objectUid, objectNo: position.objectNo, licensePlate: position.licensePlate, ambiguous: 'ambiguous' in result && Boolean(result.ambiguous), isTrailer: position.isTrailer === true });
       }
       await this.db.integrationSyncState.update({
         where: { id: stateId },
@@ -385,12 +408,20 @@ export function readWebfleetConfig(env = process.env): WebfleetConfig | null {
   };
 }
 
+/** Only reporting actions are allowed: Webfleet stays read-only. */
+export type WebfleetReadAction = 'showObjectReportExtern' | 'showVehicleReportExtern' | 'getRemainingDrivingTimesEU';
+
 export async function fetchObjectReport(config: WebfleetConfig, fetchImpl: typeof fetch = fetch): Promise<WebfleetPosition[]> {
+  const rows = await webfleetRequest(config, 'showObjectReportExtern', fetchImpl);
+  return rows.map(parseWebfleetObjectRow).filter((row): row is WebfleetPosition => row !== null);
+}
+
+export async function webfleetRequest(config: WebfleetConfig, action: WebfleetReadAction, fetchImpl: typeof fetch = fetch): Promise<unknown[]> {
   const url = new URL(config.baseUrl);
   if (url.protocol !== 'https:' || url.hostname !== 'csv.webfleet.com' || url.pathname !== '/extern' || url.username || url.password) throw new WebfleetError('CONFIG');
   url.searchParams.set('account', config.account);
   url.searchParams.set('apikey', config.apiKey);
-  url.searchParams.set('action', 'showObjectReportExtern');
+  url.searchParams.set('action', action);
   // Required by WEBFLEET.connect; without it every request fails with 8105.
   url.searchParams.set('lang', 'de');
   url.searchParams.set('outputformat', 'json');
@@ -416,7 +447,7 @@ export async function fetchObjectReport(config: WebfleetConfig, fetchImpl: typeo
     throw new WebfleetError(code === null && message === null ? 'INVALID_RESPONSE' : classifyWebfleetError(code, message), code);
   }
   if (!Array.isArray(payload)) throw new WebfleetError('INVALID_RESPONSE');
-  return payload.map(parseWebfleetObjectRow).filter((row): row is WebfleetPosition => row !== null);
+  return payload;
 }
 
 function parseErrorCode(value: unknown) {
@@ -441,13 +472,57 @@ export function parseWebfleetObjectRow(value: unknown): WebfleetPosition | null 
     licensePlate: stringField(value, ['licenseplate', 'licensePlate', 'numberplate']),
     latitude,
     longitude,
-    // Units for this report are not yet verified; never infer km/h from an untyped value.
-    speedKmh: null,
+    // Units per WEBFLEET.connect: speed km/h, fuellevel per mill, odometer_long metres (odometer 100 m), engine time seconds.
+    speedKmh: inRange(numberField(value, ['speed']), 0, 200),
+    courseDeg: inRange(numberField(value, ['course']), 0, 360),
+    address: stringField(value, ['postext', 'postext_short'])?.trim().slice(0, 200) || null,
+    fuelPercent: round1(divide(inRange(numberField(value, ['fuellevel']), 0, 1000), 10)),
+    odometerKm: round1(divide(numberField(value, ['odometer_long']), 1000) ?? divide(numberField(value, ['odometer']), 10)),
+    engineHours: round1(divide(numberField(value, ['engine_operating_time', 'engine_operation_time']), 3600)),
+    ignitionChangedAt: isoOrNull(stringField(value, ['ignition_time'])),
+    objectType: stringField(value, ['objecttype'])?.slice(0, 40) ?? null,
+    isTrailer: stringField(value, ['objectclassname']) === 'Anhänger' || stringField(value, ['objecttype']) === 'trailer',
     ignitionOn: booleanField(value, ['ignition', 'ignitionOn']),
     standstill: booleanField(value, ['standstill']),
     recordedAt,
+    driver: stringField(value, ['driveruid', 'drivername']) ? {
+      driverUid: stringField(value, ['driveruid']),
+      name: stringField(value, ['drivername'])?.trim().slice(0, 80) || null,
+      workState: numberField(value, ['driver_currentworkstate'])
+    } : null,
     raw: undefined
   };
+}
+
+/** Driver fields are deliberately absent: only facts about the truck go into stored history. */
+const STORED_VEHICLE_FIELDS = ['courseDeg', 'address', 'fuelPercent', 'odometerKm', 'engineHours', 'ignitionChangedAt', 'objectType', 'isTrailer'] as const;
+
+export function vehicleStateFromPayload(payload: unknown): Required<WebfleetVehicleState> {
+  const record = isRecord(payload) ? payload : {};
+  const num = (key: string) => typeof record[key] === 'number' && Number.isFinite(record[key]) ? record[key] as number : null;
+  const str = (key: string) => typeof record[key] === 'string' ? record[key] as string : null;
+  return {
+    courseDeg: num('courseDeg'), address: str('address'), fuelPercent: num('fuelPercent'), odometerKm: num('odometerKm'),
+    engineHours: num('engineHours'), ignitionChangedAt: str('ignitionChangedAt'), objectType: str('objectType'), isTrailer: record.isTrailer === true
+  };
+}
+
+function inRange(value: number | null, min: number, max: number) {
+  return value !== null && value >= min && value <= max ? value : null;
+}
+
+function divide(value: number | null, by: number) {
+  return value === null ? null : value / by;
+}
+
+function round1(value: number | null) {
+  return value === null ? null : Math.round(value * 10) / 10;
+}
+
+function isoOrNull(value: string | null) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
 function toSafeTelemetryPayload(input: WebfleetPosition) {
@@ -460,6 +535,7 @@ function toSafeTelemetryPayload(input: WebfleetPosition) {
     speedKmh: input.speedKmh ?? null,
     ignitionOn: input.ignitionOn ?? null,
     standstill: input.standstill ?? null,
+    ...Object.fromEntries(STORED_VEHICLE_FIELDS.map((key) => [key, input[key] ?? null])),
     recordedAt: input.recordedAt.toISOString()
   };
 }

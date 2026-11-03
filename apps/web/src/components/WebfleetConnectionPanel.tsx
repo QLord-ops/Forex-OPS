@@ -26,9 +26,15 @@ function readSummary(value: unknown) {
   }
 }
 
+function feedText(feed: { checkedAt: string | null; errorCategory: string | null; providerErrorCode: number | null }) {
+  if (feed.errorCategory) return `ошибка${feed.providerErrorCode != null ? ` (код ${feed.providerErrorCode})` : ''}`
+  return feed.checkedAt ? new Date(feed.checkedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : 'ещё не получены'
+}
+
 export function WebfleetConnectionPanel({ vehicles = [] }: { vehicles?: Vehicle[] }) {
   const { data, error, loading, refetch } = usePolling(webfleetApi.status, 30_000)
   const bindings = usePolling(webfleetApi.bindings, 60_000)
+  const suggestions = usePolling(webfleetApi.suggestions, 60_000)
   const isAdmin = currentDispatcherRole() === 'admin'
   const [selection, setSelection] = useState<Record<string, string>>({})
   const [bindingBusy, setBindingBusy] = useState<string | null>(null)
@@ -39,7 +45,7 @@ export function WebfleetConnectionPanel({ vehicles = [] }: { vehicles?: Vehicle[
     setBindingError(null)
     try {
       await action()
-      await Promise.all([refetch(), bindings.refetch()])
+      await Promise.all([refetch(), bindings.refetch(), suggestions.refetch()])
       window.dispatchEvent(new CustomEvent('ops:data-changed'))
     } catch (cause) {
       setBindingError(cause instanceof Error ? cause.message : 'Не удалось изменить привязку.')
@@ -120,12 +126,37 @@ export function WebfleetConnectionPanel({ vehicles = [] }: { vehicles?: Vehicle[
             {stale ? <p className="mt-1 text-amber-800">Актуальная позиция не подтверждена. Сохранённые координаты могут быть устаревшими.</p> : null}
             {providerFailed ? <p className="mt-1 text-rose-700">{failureText}{validRetryAfter ? ` Следующая автоматическая попытка после ${validRetryAfter.toLocaleTimeString('ru-RU')}.` : ''}</p> : null}
             <p className="mt-1 text-xs text-slate-500">Режим: только чтение · общий снимок не чаще раза в {data.pollingIntervalSeconds} сек.</p>
+            {data.details ? <p className="mt-1 text-xs text-slate-500">Тахограф: {feedText(data.details.drivingTimes)} · данные машин: {feedText(data.details.vehicles)}</p> : null}
           </div>
           <button type="button" className="secondary-button" onClick={() => void sync()} disabled={syncing}>
             <RefreshCw className={`h-4 w-4 ${syncing ? 'animate-spin' : ''}`} aria-hidden="true" />
             {syncing ? 'Проверяем…' : 'Проверить подключение'}
           </button>
         </div>
+      ) : null}
+
+      {suggestions.data && suggestions.data.length > 0 ? (
+        <details className="rounded-xl border border-sky-200 p-3 text-sm" open={isAdmin}>
+          <summary className="cursor-pointer font-semibold text-sky-900">Предложенные привязки: {suggestions.data.length}</summary>
+          <p className="mt-2 text-slate-600">{isAdmin ? 'Совпадение найдено по номеру. Проверьте пару и подтвердите: автоматически ничего не привязывается.' : 'Подтвердить привязку может администратор.'}</p>
+          <ul className="mt-2 max-h-64 space-y-2 overflow-y-auto">
+            {suggestions.data.map(item => {
+              const key = `suggest-${item.objectUid}`
+              return (
+                <li key={key} className="flex flex-wrap items-center justify-between gap-2 text-slate-700">
+                  <span className="min-w-0 break-words">Webfleet {item.objectNo || item.objectUid} → LKW {item.vehicleNumber}{item.licensePlate ? ` · ${item.licensePlate}` : ''} <span className="text-xs text-slate-500">{item.reason === 'EXACT' ? 'госномер совпадает' : 'совпадают цифры номера'}</span></span>
+                  {isAdmin ? (
+                    <button type="button" className="secondary-button" disabled={bindingBusy !== null}
+                      onClick={() => void changeBinding(key, () => webfleetApi.bind({ objectUid: item.objectUid, vehicleId: item.vehicleId, objectNo: item.objectNo || undefined }))}>
+                      <Link2 className="h-4 w-4" aria-hidden="true" />
+                      {bindingBusy === key ? 'Привязываем…' : 'Привязать'}
+                    </button>
+                  ) : null}
+                </li>
+              )
+            })}
+          </ul>
+        </details>
       ) : null}
 
       {summary.unmatched.length > 0 ? (

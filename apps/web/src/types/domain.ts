@@ -139,8 +139,78 @@ export interface DashboardVehicle {
     speedKmh?: number | null
     ignitionOn?: boolean | null
     standstill?: boolean | null
+    courseDeg?: number | null
+    fuelPercent?: number | null
+    address?: string | null
     usable?: boolean
   } | null
+  mapPosition?: {
+    coordinate: Coordinate
+    source: 'WEBFLEET' | 'CALCULATED' | 'MANUAL'
+    stale: boolean | null
+    courseDeg: number | null
+    standstill: boolean | null
+  } | null
+}
+
+export interface DrivingTimes {
+  referenceTime: string | null
+  remainDrivingTodayMs: number | null
+  totalDrivingTodayMs: number | null
+  maxDrivingTodayMs: number | null
+  remainDrivingWeekMs: number | null
+  maxDrivingWeekMs: number | null
+  shiftStartedAt: string | null
+  latestShiftEndAt: string | null
+  nextBreakInMs: number | null
+  nextBreakMinMs: number | null
+  nextRestInMs: number | null
+  nextRestMinMs: number | null
+  earliestNextShiftAt: string | null
+  extendedShiftsLeft: number | null
+  maxExtendedShifts: number | null
+  reducedRestsLeft: number | null
+  maxReducedRests: number | null
+  infringements: boolean
+  lastCardActivityAt: string | null
+}
+
+export interface VehicleCardData {
+  vehicleId: string
+  vehicleNumber: string
+  licensePlate: string | null
+  currentTrailerPlate: string | null
+  generatedAt: string
+  webfleet: { objectNo: string | null; plate: string | null; vin: string | null; tankLiters: number | null; objectType: string | null } | null
+  current: {
+    recordedAt: string
+    ageSeconds: number
+    stale: boolean
+    usable: boolean
+    coordinate: Coordinate
+    address: string | null
+    speedKmh: number | null
+    courseDeg: number | null
+    standstill: boolean | null
+    ignitionOn: boolean | null
+    ignitionChangedAt: string | null
+    fuelPercent: number | null
+    fuelLiters: number | null
+    odometerKm: number | null
+    engineHours: number | null
+  } | null
+  driver:
+    | null
+    | { status: 'WAITING' }
+    | { status: 'NONE' }
+    | {
+        status: 'SIGNED_ON'
+        name: string | null
+        workState: number | null
+        checkedAt: string
+        drivingTimes: DrivingTimes | null
+        drivingTimesStatus: 'OK' | 'NO_DATA' | 'UNAVAILABLE' | 'WAITING'
+      }
 }
 
 export interface RiskAppointment {

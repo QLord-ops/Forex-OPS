@@ -214,6 +214,22 @@ button:disabled {
   position: relative;
 }
 
+.truck-marker { cursor: pointer; }
+
+/* Fleet: every other truck, colour and caption say where its position comes from. */
+.fleet-marker { position: relative; display: grid; width: 20px; height: 20px; place-items: center; border: 0; background: transparent; padding: 0; cursor: pointer; }
+.fleet-marker:focus-visible { outline: 2px solid #0ea5e9; outline-offset: 2px; border-radius: 50%; }
+.fleet-marker-dot { width: 12px; height: 12px; border: 2px solid #fff; border-radius: 50%; background: var(--fleet-color); box-shadow: 0 1px 4px rgb(15 23 42 / .35); }
+.fleet-marker-arrow { width: 16px; height: 16px; background: var(--fleet-color); clip-path: polygon(50% 0, 100% 100%, 50% 76%, 0 100%); filter: drop-shadow(0 0 1px #fff) drop-shadow(0 1px 2px rgb(15 23 42 / .4)); }
+.fleet-marker-label { position: absolute; top: 50%; left: 20px; transform: translateY(-50%); border-radius: 4px; background: rgb(255 255 255 / .92); padding: 0 4px; color: #0f172a; font-size: .6875rem; font-weight: 600; line-height: 16px; white-space: nowrap; font-variant-numeric: tabular-nums; box-shadow: 0 1px 3px rgb(15 23 42 / .2); }
+.fleet-marker-live { --fleet-color: #0f766e; }
+.fleet-marker-stale { --fleet-color: #b45309; }
+.fleet-marker-calculated { --fleet-color: #64748b; }
+.fleet-marker-calculated .fleet-marker-dot { border-style: dashed; }
+.fleet-labels-hidden .fleet-marker-label { display: none; }
+.fleet-marker:hover .fleet-marker-label,
+.fleet-marker:focus-visible .fleet-marker-label { display: block; }
+
 .truck-marker-label { position: absolute; top: -0.5rem; left: 1.65rem; width: max-content; max-width: 12rem; border: 1px solid rgb(15 23 42 / .14); border-radius: .45rem; background: rgb(255 255 255 / .96); padding: .22rem .42rem; color: #0f172a; font-size: .7rem; font-weight: 850; line-height: 1.1; box-shadow: 0 5px 16px rgb(15 23 42 / .22); white-space: nowrap; }
 
 .stop-marker {
