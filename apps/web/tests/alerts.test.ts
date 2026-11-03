@@ -43,3 +43,14 @@ describe('tours', () => {
     expect(followingTours([current, tour('QUEUED', []), tour('CANCELLED', [])], 'ACTIVE').map((item) => item.status)).toEqual(['QUEUED'])
   })
 })
+
+describe('termin label', () => {
+  const stop = (extra = {}) => ({ id: 's', tourId: 't', sequence: 1, type: 'UNLOAD', address: 'x', latitude: 0, longitude: 0, ...extra }) as NonNullable<Tour['stops']>[number]
+  it('shows the slot of the next open stop, exact or window, in Berlin time', async () => {
+    const { terminOf } = await import('../src/lib/tours')
+    expect(terminOf({ stops: [stop({ appointmentAt: '2026-11-04T10:00:00Z' })] })?.label).toBe('Термин 04.11 11:00')
+    expect(terminOf({ stops: [stop({ appointmentWindowStartAt: '2026-11-04T08:00:00Z', appointmentWindowEndAt: '2026-11-04T08:30:00Z' })] })?.label).toBe('Термин 04.11 09:00–09:30')
+    expect(terminOf({ stops: [stop({ appointmentAt: '2026-11-04T10:00:00Z', completedAt: '2026-11-04T10:30:00Z' }), stop({ id: 's2', sequence: 2 })] })).toBeNull()
+    expect(terminOf(null)).toBeNull()
+  })
+})

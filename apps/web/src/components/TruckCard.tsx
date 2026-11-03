@@ -5,7 +5,7 @@ import { Link } from 'react-router-dom'
 import { usePolling } from '../hooks/usePolling'
 import { api } from '../lib/api'
 import { classNames, formatDateTime, formatDelay, shortAddress, statusLabel, stopTypeLabel } from '../lib/format'
-import { currentStopOf, followingTours, sortedStops, tourCancellable } from '../lib/tours'
+import { currentStopOf, followingTours, sortedStops, terminOf, tourCancellable } from '../lib/tours'
 import { berlinClock, courseText, durationBetween, formatDurationMs, formatFuel, formatWholeKm, share, tripsWithParking, workState } from '../lib/telemetry-format'
 import type { CardFeedStatus, Coordinate, DashboardVehicle, DrivingTimes, Stop, Tour, VehicleCardData } from '../types/domain'
 import './truck-card.css'
@@ -330,10 +330,11 @@ function CurrentTour({ tour, row, busy, onRemove }: { tour: Tour; row: Dashboard
   const stops = sortedStops(tour)
   const target = currentStopOf(tour)
   const removable = tourCancellable(tour)
+  const termin = terminOf(tour)
   return <>
     <Section title="Auftrag">
       <div className="truck-card-tour-head">
-        <p className="truck-card-lead">{tour.orderNumber ?? 'Без номера'}</p>
+        <p className="truck-card-lead">{tour.orderNumber ?? 'Без номера'}{termin ? <span className="vehicle-row-termin truck-card-termin">{termin.label}</span> : null}</p>
         {removable ? <RemoveButton busy={busy} orderNumber={tour.orderNumber} onClick={onRemove} /> : <span className="truck-card-muted">Тур начат — удалить нельзя</span>}
       </div>
       <div className="truck-card-grid">

@@ -1115,3 +1115,9 @@ aside > .dispatcher-logout-error { bottom: 11.5rem; }
 .pending-appointments li span { display: block; color: #64748b; font-size: .75rem; }
 .pending-appointments .pending-appointments-found { color: #0f766e; }
 .pending-appointments-actions { display: flex; flex-shrink: 0; gap: .375rem; }
+
+/* Slot attached (Termin): indigo, apart from the violet of a long stop and of the track; always with its text. */
+.vehicle-card-termin { border-left-color: #4338ca; background: #f5f6ff; }
+.vehicle-row-termin { display: inline-flex; align-items: center; gap: 4px; margin-top: 3px; border-radius: 6px; background: #4338ca; padding: 1px 6px; color: #fff; font-size: .6875rem; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.5; white-space: nowrap; }
+.truck-card-termin { margin-left: 8px; vertical-align: middle; }
+.fleet-marker-termin .fleet-marker-dot, .fleet-marker-termin .fleet-marker-arrow { box-shadow: 0 0 0 3px #4338ca; }

@@ -1,4 +1,4 @@
-import { ArrowUpRight, Check, ChevronDown, AlertTriangle, Clock3, Loader2, MapPin, PackageCheck, PauseCircle, Pin, PinOff, PlayCircle, Search, Truck, X } from 'lucide-react'
+import { CalendarClock, ArrowUpRight, Check, ChevronDown, AlertTriangle, Clock3, Loader2, MapPin, PackageCheck, PauseCircle, Pin, PinOff, PlayCircle, Search, Truck, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 
@@ -11,15 +11,16 @@ import { useVehiclePosition } from '../hooks/useVehiclePosition'
 import { api } from '../lib/api'
 import { getRoutePreview, setRoutePreview, subscribeRoutePreview } from '../lib/route-preview'
 import { etaText, routeProgress, type StopState } from '../lib/route-progress'
+import { terminOf } from '../lib/tours'
 import { classNames, formatAppointment, formatDateTime, formatDelay, formatDurationMinutes, formatKm, formatTime, shortAddress, statusLabel, stopTypeLabel } from '../lib/format'
 import type { Coordinate, CurrentPosition, DashboardVehicle, Stop } from '../types/domain'
 
 const PIN_STORAGE_KEY = 'ops-dashboard-pinned-vehicles'
-type FleetFilter = 'ALL' | 'ATTENTION' | 'MOVING' | 'AT_STOP' | 'IDLE'
+type FleetFilter = 'ALL' | 'ATTENTION' | 'MOVING' | 'AT_STOP' | 'TERMIN' | 'IDLE'
 type AttentionTone = 'dwell' | 'critical' | 'action' | 'watch' | 'moving' | 'ok' | 'idle'
 const filters: Array<{ value: FleetFilter; label: string }> = [
   { value: 'ALL', label: 'Все' }, { value: 'ATTENTION', label: 'Контроль' },
-  { value: 'MOVING', label: 'В пути' }, { value: 'AT_STOP', label: 'На точке' },
+  { value: 'MOVING', label: 'В пути' }, { value: 'AT_STOP', label: 'На точке' }, { value: 'TERMIN', label: 'Термин' },
   { value: 'IDLE', label: 'Без тура' }
 ]
 
@@ -44,7 +45,7 @@ export function DashboardPage() {
   const selected = vehicles.find((row) => row.vehicle.id === selectedId) ?? orderedVehicles[0] ?? null
   const cardId = searchParams.get('card')
   const cardRow = cardId ? vehicles.find((row) => row.vehicle.id === cardId) ?? null : null
-  const fleet = useMemo(() => vehicles.flatMap((row) => row.mapPosition ? [{ id: row.vehicle.id, label: row.vehicle.vehicleNumber, ...row.mapPosition }] : []), [vehicles])
+  const fleet = useMemo(() => vehicles.flatMap((row) => row.mapPosition ? [{ id: row.vehicle.id, label: row.vehicle.vehicleNumber, ...row.mapPosition, termin: Boolean(terminOf(row.tour)) }] : []), [vehicles])
   const position = useVehiclePosition(selected?.vehicle.id ?? '')
   const refetchPosition = position.refetch
 
@@ -127,8 +128,11 @@ export function DashboardPage() {
             const attention = getAttention(row)
             const isSelected = selected?.vehicle.id === row.vehicle.id
             const isPinned = pinned.includes(row.vehicle.id)
+            const termin = terminOf(row.tour)
+            // A calm row takes the slot colour; an alarm keeps its own colour and the slot label stays visible.
+            const calm = attention.tone === 'ok' || attention.tone === 'moving' || attention.tone === 'idle'
             return (
-              <article key={row.vehicle.id} className={classNames('vehicle-card', `vehicle-card-${attention.tone}`, isSelected && 'vehicle-card-selected', cardId === row.vehicle.id && 'vehicle-card-open')}>
+              <article key={row.vehicle.id} className={classNames('vehicle-card', termin && calm ? 'vehicle-card-termin' : `vehicle-card-${attention.tone}`, isSelected && 'vehicle-card-selected', cardId === row.vehicle.id && 'vehicle-card-open')}>
                 <button type="button" className="vehicle-row-main" aria-current={isSelected ? 'true' : undefined} aria-expanded={cardId === row.vehicle.id}
                   onClick={() => {
                     if (cardId === row.vehicle.id) { closeCard(); return }
@@ -144,6 +148,7 @@ export function DashboardPage() {
                       {row.telemetry?.objectNo ? <span className="vehicle-row-muted">LKW {row.vehicle.vehicleNumber}</span> : row.vehicle.licensePlate ? <span className="vehicle-row-muted">{row.vehicle.licensePlate}</span> : null}
                     </span>
                     <span className={classNames('vehicle-row-line', row.telemetry?.stale && 'vehicle-row-stale')}>{vehicleRowLine(row)}</span>
+                    {termin ? <span className="vehicle-row-termin"><CalendarClock className="h-3 w-3" aria-hidden="true" />{termin.label}</span> : null}
                   </span>
                   {attention.tone === 'critical' || attention.tone === 'dwell' || attention.tone === 'action' || attention.tone === 'watch'
                     ? <span className={classNames('vehicle-row-alert', `vehicle-row-alert-${attention.tone}`)} title={`${attention.label}: ${attention.reason}`}><AlertTriangle className="h-4 w-4" aria-hidden="true" /><span className="sr-only">{attention.label}: {attention.reason}</span></span>
@@ -356,6 +361,7 @@ function matchesFleetFilter(row: DashboardVehicle, filter: FleetFilter) {
   if (filter === 'ALL') return true
   if (filter === 'ATTENTION') return attention.rank <= 3
   if (filter === 'MOVING') return row.statusText === 'MOVING'
+  if (filter === 'TERMIN') return Boolean(terminOf(row.tour))
   if (filter === 'AT_STOP') return ['ARRIVED', 'WAITING', 'MANUAL_STOP'].includes(row.statusText) || getDwellMinutes(row) > 0
   return !row.tour || ['IDLE', 'NO_ACTIVE_ROUTE'].includes(row.statusText)
 }
