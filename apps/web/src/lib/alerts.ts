@@ -2,7 +2,7 @@
  * Alerts that reach the dispatcher outside the OPS tab: a sound, a Windows notification and a count in the tab title.
  * They work while OPS is open in a browser tab, also in the background.
  */
-export interface AlertNotification { id: string; vehicleId: string; stopId?: string | null; type: string; message: string; createdAt: string }
+export interface AlertNotification { id: string; vehicleId: string; stopId?: string | null; type: string; message: string; createdAt: string; payloadJson?: string | null }
 
 const SEEN_KEY = 'ops-alerted-notifications'
 const SOUND_KEY = 'ops-alert-sound'
@@ -69,6 +69,7 @@ export function alertHeading(type: string) {
   if (type === 'AUTO_ARRIVAL') return 'Прибытие по GPS'
   if (type === 'TRAFFIC_DELAY') return 'Пробка на маршруте'
   if (type === 'LONG_DWELL') return 'Долгая стоянка'
+  if (type === 'APPOINTMENT_MATCH') return 'Термин нашёл свой тур'
   return 'Уведомление OPS'
 }
 

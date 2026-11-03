@@ -5,6 +5,10 @@ import {
   alertPermission, bannerDismissed, dismissBanner, pickNewAlerts, playAlertSound, readSeen, requestAlertPermission,
   showSummaryAlert, showSystemAlert, titleWithCount, writeSeen, type AlertNotification, type AlertPermission
 } from '../lib/alerts'
+import { api } from '../lib/api'
+import { pendingToDocument } from '../lib/appointments'
+import type { PendingAppointment } from '../types/domain'
+import { AppointmentReview } from './AppointmentReview'
 import { operationsBase, operationsRequest } from './VehicleOperationsPanel'
 
 const HIDDEN_KEY = 'ops-hidden-notifications'
@@ -23,6 +27,7 @@ export function OperationsNotifications() {
   const [error, setError] = useState('')
   const [permission, setPermission] = useState<AlertPermission>(alertPermission)
   const [banner, setBanner] = useState(() => !bannerDismissed())
+  const [termin, setTermin] = useState<PendingAppointment | null>(null)
   // Notifications set aside with «Открыть грузовик» stay aside after a reload in this tab.
   const [hidden, setHidden] = useState<string[]>(readHiddenNotifications)
   useEffect(() => { try { sessionStorage.setItem(HIDDEN_KEY, JSON.stringify(hidden.slice(-200))) } catch { /* Storage may be unavailable. */ } }, [hidden])
@@ -56,6 +61,22 @@ export function OperationsNotifications() {
   const current = items?.find(item => !hidden.includes(item.id))
   useEffect(() => { setError('') }, [current?.id])
 
+  /** A waiting slip found its stop: the same review card as for a fresh document. */
+  async function openTermin() {
+    if (!current) return
+    setBusy(true); setError('')
+    try {
+      const pendingId = (JSON.parse(current.payloadJson ?? '{}') as { pendingId?: string }).pendingId
+      const item = (await api.pendingAppointments()).items.find((entry) => entry.id === pendingId)
+      if (!item) { await operationsRequest(`/notifications/${current.id}/ack`, 'POST'); await notifications.refetch(); setError('Термин уже привязан или отклонён.'); return }
+      setTermin(item)
+    } catch (e) { setError((e as Error).message) } finally { setBusy(false) }
+  }
+  async function closeTermin(applied: boolean) {
+    setTermin(null)
+    if (applied && current) { await operationsRequest(`/notifications/${current.id}/ack`, 'POST').catch(() => undefined); window.dispatchEvent(new CustomEvent('ops:data-changed')) }
+    await notifications.refetch()
+  }
   async function enableAlerts() {
     setPermission(await requestAlertPermission())
   }
@@ -76,6 +97,10 @@ export function OperationsNotifications() {
   }
 
   const askPermission = permission === 'default' && banner
+  if (termin) return <div className="appointment-review-overlay" role="dialog" aria-modal="true" aria-label="Проверка термина">
+    <AppointmentReview document={pendingToDocument(termin)} fingerprint={termin.fingerprint} match={termin.match} pendingId={termin.id} fileName="Ожидающий термин"
+      onApplied={() => void closeTermin(true)} onSaved={() => void closeTermin(false)} onSkip={() => void closeTermin(false)} />
+  </div>
   if (!current && !askPermission) return null
   // AUTO_ARRIVAL is an already recorded GPS arrival: the dispatcher only acknowledges it or undoes a wrong one.
   const isAuto = current?.type === 'AUTO_ARRIVAL'
@@ -94,7 +119,9 @@ export function OperationsNotifications() {
       {error && <p role="alert" className="my-2 text-red-700">{error}</p>}
       <div className="mt-3 flex flex-wrap gap-2">{isAuto
         ? <><button className="primary-button" disabled={busy} onClick={() => void resolve('ack')}>Понятно</button>{current.stopId ? <button className="secondary-button" disabled={busy} onClick={() => void resolve('revert')}>Отменить прибытие</button> : null}</>
-        : <button className="secondary-button" disabled={busy} onClick={() => void resolve('ack')}>Прочитано</button>}
+        : current.type === 'APPOINTMENT_MATCH'
+          ? <><button className="primary-button" disabled={busy} onClick={() => void openTermin()}>Проверить термин</button><button className="secondary-button" disabled={busy} onClick={() => void resolve('ack')}>Позже</button></>
+          : <button className="secondary-button" disabled={busy} onClick={() => void resolve('ack')}>Прочитано</button>}
         <Link className="secondary-button" to={`/vehicles/${current.vehicleId}`} onClick={() => setHidden(previous => [...previous, current.id])}>Открыть грузовик</Link></div>
     </> : null}
   </aside>

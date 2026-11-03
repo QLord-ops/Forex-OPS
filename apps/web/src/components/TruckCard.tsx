@@ -358,7 +358,9 @@ function stopState(stop: Stop) {
   const done = stop.type === 'LOAD' ? 'BELADEN' : 'ENTLADEN'
   if (stop.completedAt) return `${done} ${formatDateTime(stop.completedAt)}`
   if (stop.arrivedAt) return `прибыл ${formatDateTime(stop.arrivedAt)} · ждёт ${done}`
-  return stop.appointmentAt ? `впереди · срок ${formatDateTime(stop.appointmentAt)}` : 'впереди · без срока'
+  if (stop.appointmentAt) return `впереди · срок ${formatDateTime(stop.appointmentAt)}`
+  if (stop.appointmentWindowStartAt) return `впереди · окно ${formatDateTime(stop.appointmentWindowStartAt)}–${formatDateTime(stop.appointmentWindowEndAt)}`
+  return 'впереди · без срока'
 }
 
 function RemoveButton({ busy, orderNumber, onClick }: { busy: boolean; orderNumber: string; onClick: () => void }) {
