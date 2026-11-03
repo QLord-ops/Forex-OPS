@@ -22,15 +22,20 @@ model Vehicle {
   clockState       String?
   manualStoppedAt  DateTime?
   operationVersion Int       @default(0)
-  truckProfile     String?
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  truckProfile   String?
+  assignedDispatcherId String?
+  assignedAt     DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
+  assignedDispatcher Dispatcher? @relation(fields: [assignedDispatcherId], references: [id], onDelete: SetNull)
   tours  Tour[]
   events Event[]
   alerts Alert[]
   integrations VehicleIntegration[]
   telemetry VehicleTelemetry[]
+
+  @@index([assignedDispatcherId])
 }
 
 model Tour {
@@ -338,6 +343,7 @@ model AuditLog {
   id String @id @default(cuid())
   actorRole String
   actorSessionId String
+  actorDispatcherId String?
   action String
   entityType String
   entityId String
@@ -350,6 +356,22 @@ model AuditLog {
   @@index([createdAt])
   @@index([entityType, entityId, createdAt])
   @@index([actorSessionId, createdAt])
+  @@index([actorDispatcherId, createdAt])
+}
+
+/// Personal dispatcher account. Only what login needs: no e-mail or phone (DSGVO).
+model Dispatcher {
+  id String @id @default(cuid())
+  login String @unique
+  displayName String
+  role String @default("dispatcher")
+  passwordHash String
+  active Boolean @default(true)
+  lastLoginAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  vehicles Vehicle[]
 }
 
 /// Appointment slip (Termin) recognised from a document before a matching stop exists. Never deleted: only the status changes.
