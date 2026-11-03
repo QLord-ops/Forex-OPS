@@ -11,6 +11,7 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { OperationsNotifications } from './OperationsNotifications'
 import { DispatcherLogout } from './AuthGate'
 import { DispatcherAssistant } from './DispatcherAssistant'
+import { AlertToggle } from './AlertToggle'
 
 const navItems = [
   { to: '/', label: 'Панель управления', icon: LayoutDashboard },
@@ -56,6 +57,7 @@ export function AppShell() {
             </NavLink>
           ))}
         </nav>
+        <AlertToggle />
         <DispatcherLogout />
       </aside>
 
@@ -78,6 +80,7 @@ export function AppShell() {
                 {item.label}
               </NavLink>
             ))}
+            <AlertToggle className="alert-toggle-mobile" />
             <DispatcherLogout className="dispatcher-logout dispatcher-logout-mobile" />
           </nav>
         </header>

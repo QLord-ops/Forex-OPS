@@ -1,4 +1,4 @@
-import { ArrowUpRight, Check, CheckCircle2, ChevronDown, AlertTriangle, Clock3, Loader2, MapPin, PackageCheck, PauseCircle, Pin, PinOff, PlayCircle, Search, Truck, X } from 'lucide-react'
+import { ArrowUpRight, Check, ChevronDown, AlertTriangle, Clock3, Loader2, MapPin, PackageCheck, PauseCircle, Pin, PinOff, PlayCircle, Search, Truck, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 
@@ -85,7 +85,6 @@ export function DashboardPage() {
     try {
       const action = row.currentAction
       const timestamp = new Date(actionTime).toISOString()
-      if (action.type === 'CONFIRM_ARRIVAL' && action.stopId) await api.confirmArrival(action.stopId, timestamp)
       if (action.type === 'MARK_LOADED' && action.stopId) await api.markLoaded(action.stopId, timestamp)
       if (action.type === 'MARK_UNLOADED' && action.stopId) await api.markUnloaded(action.stopId, timestamp)
       if (action.type === 'MANUAL_STOP') await api.manualStop(row.vehicle.id, row.operationVersion ?? 0)
@@ -197,12 +196,12 @@ function vehicleRowLine(row: DashboardVehicle) {
 function VehicleActionButton({ row, busy, onClick }: { row: DashboardVehicle; busy: boolean; onClick: () => void }) {
   const action = row.currentAction
   if (!action) return null
-  const Icon = busy ? Loader2 : action.type === 'CONFIRM_ARRIVAL' ? CheckCircle2
+  const Icon = busy ? Loader2
     : action.type === 'MARK_LOADED' || action.type === 'MARK_UNLOADED' ? PackageCheck
       : action.type === 'RESUME' ? PlayCircle : PauseCircle
   return (
-    <button type="button" className={classNames('icon-button vehicle-action-button', action.type === 'CONFIRM_ARRIVAL' && 'vehicle-arrival-button')} onClick={onClick} disabled={busy} aria-label={action.label} title={action.label}>
-      <Icon className={classNames('h-4 w-4', busy && 'animate-spin')} aria-hidden="true" /><span>{action.type === 'CONFIRM_ARRIVAL' ? 'Прибытие' : action.label}</span>
+    <button type="button" className="icon-button vehicle-action-button" onClick={onClick} disabled={busy} aria-label={action.label} title={action.withoutGpsArrival ? `${action.label}: прибытия по GPS нет` : action.label}>
+      <Icon className={classNames('h-4 w-4', busy && 'animate-spin')} aria-hidden="true" /><span>{action.label}</span>
     </button>
   )
 }
@@ -226,7 +225,7 @@ function ActionPopover({
 }) {
   const action = row.currentAction
   if (!action) return null
-  const needsTime = action.type === 'CONFIRM_ARRIVAL' || action.type === 'MARK_LOADED' || action.type === 'MARK_UNLOADED'
+  const needsTime = action.type === 'MARK_LOADED' || action.type === 'MARK_UNLOADED'
   return (
     <div className="vehicle-action-popover" role="dialog" aria-label={`${action.label} LKW ${row.vehicle.vehicleNumber}`} onKeyDown={(event) => { if (event.key === 'Escape') onClose() }}>
       <div className="flex items-start justify-between gap-2">
@@ -236,6 +235,7 @@ function ActionPopover({
         </div>
         <button type="button" className="icon-button icon-button-compact" onClick={onClose} aria-label="Закрыть"><X className="h-3.5 w-3.5" /></button>
       </div>
+      {action.withoutGpsArrival ? <p className="mt-2 text-xs font-semibold text-amber-800">Прибытие по GPS не зафиксировано: время прибытия будет равно времени {action.type === 'MARK_LOADED' ? 'загрузки' : 'выгрузки'}.</p> : null}
       {needsTime ? <label className="mt-2 block text-xs font-bold text-slate-600">Фактическое время<input className="field-input mt-1 h-9" type="datetime-local" value={value} onChange={(event) => onChange(event.target.value)} /></label> : null}
       {error ? <p role="alert" className="mt-2 text-xs font-semibold text-red-700">{error}</p> : null}
       <div className="mt-3 flex justify-end gap-2">

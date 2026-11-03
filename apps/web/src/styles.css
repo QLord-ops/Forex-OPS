@@ -906,6 +906,9 @@ aside > .dispatcher-logout-error { position: absolute; bottom: 4.25rem; left: .5
 .dashboard-stage:has(.route-stops-drawer-open) .map-draft-banner { bottom: calc(min(44%, 25rem) + .75rem); }
 @container stage (min-width: 56rem) {
   .vehicle-map-hud { left: 3.5rem; right: calc(min(25rem, 100cqw - 4.5rem) + 1.25rem); width: auto; max-width: 760px; margin-inline: auto; transform: none; }
+  /* An open truck card covers the left of the map: the ETA panel and the stops drawer move to its right. */
+  .dashboard-stage:has(.truck-card) .vehicle-map-hud { left: calc(min(380px, 100cqw - 24px) + 24px); right: 13rem; max-width: 760px; margin-inline: 0; }
+  .dashboard-stage:has(.truck-card) .route-stops-drawer { left: calc(min(380px, 100cqw - 24px) + 24px); }
   .map-action-dock { top: .75rem; }
 }
 @media (max-width: 640px) {
@@ -1054,4 +1057,34 @@ aside > .dispatcher-logout-error { position: absolute; bottom: 4.25rem; left: .5
 .vehicle-card .vehicle-arrival-button { width: auto; min-height: 30px; height: 30px; flex-direction: row; gap: 4px; padding: 0 8px; }
 .vehicle-card .vehicle-action-button span,
 .vehicle-card .vehicle-arrival-button span { font-size: .6875rem; font-weight: 600; line-height: 1; }
-.vehicle-card .vehicle-card-actions .icon-button { width: 28px; height: 28px; }
+.vehicle-card .vehicle-card-actions .icon-button:not(.vehicle-action-button) { width: 28px; height: 28px; }
+/* The labelled action keeps its text: an icon-button is a grid of fixed width, which hid BELADEN under the pin. */
+.vehicle-card .vehicle-card-actions .vehicle-action-button { display: inline-flex; width: auto; flex: 0 0 auto; align-items: center; white-space: nowrap; }
+
+@container stage (min-width: 56rem) and (max-width: 82rem) {
+  /* Narrow space beside the card: keep the truck, ETA and delay; the remaining distance is in the card. */
+  .dashboard-stage:has(.truck-card) .vehicle-map-hud-trigger .hud-metric:nth-of-type(3) { display: none; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .vehicle-map-hud, .route-stops-drawer { transition: left 160ms ease-out; }
+}
+
+/* Sound and Windows notifications for this browser. */
+.alert-toggle { display: flex; align-items: center; justify-content: center; gap: .75rem; border-radius: .375rem; color: #cbd5e1; font-size: .875rem; font-weight: 500; }
+.alert-toggle:hover { background: #0f172a; color: white; }
+.alert-toggle:focus-visible { outline: 2px solid #38bdf8; outline-offset: 2px; }
+.alert-toggle-icon { position: relative; display: inline-flex; }
+.alert-toggle-dot { position: absolute; top: -2px; right: -2px; width: 8px; height: 8px; border-radius: 50%; background: #f59e0b; box-shadow: 0 0 0 2px #020617; }
+/* Above the assistant launcher (bottom 76px) and the logout button. */
+aside > .alert-toggle { position: absolute; right: .5rem; bottom: 8.25rem; left: .5rem; min-height: 3rem; }
+aside > .alert-toggle .alert-toggle-label { display: none; }
+aside > .dispatcher-logout-error { bottom: 11.5rem; }
+@media (min-width: 1536px) {
+  aside > .alert-toggle { justify-content: flex-start; padding-inline: .75rem; right: .75rem; left: .75rem; text-align: left; }
+  aside > .alert-toggle .alert-toggle-label { display: inline; }
+}
+.alert-toggle-mobile { flex: 0 0 auto; min-height: 2.5rem; margin-left: auto; padding: .5rem .75rem; color: #334155; }
+.alert-toggle-mobile:hover { background: #f1f5f9; color: #0f172a; }
+.alert-toggle-mobile .alert-toggle-label { display: none; }
+.alert-toggle-mobile .alert-toggle-dot { box-shadow: 0 0 0 2px #fff; }
+.alert-toggle-mobile + .dispatcher-logout-mobile { margin-left: 0; }

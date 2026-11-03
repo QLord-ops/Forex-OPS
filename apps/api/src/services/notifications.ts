@@ -38,15 +38,7 @@ export class NotificationService {
     for (const vehicle of vehicles) {
       const stop = vehicle.tours[0]?.stops.find(item => !item.completedAt);
       if (!stop) continue;
-      const position = await this.tours.getCurrentPosition(vehicle.id, now);
-      if (!stop.arrivedAt && position.status === 'ARRIVED') {
-        await this.publish({
-          dedupKey: `arrival:${stop.id}`, vehicleId: vehicle.id, stopId: stop.id,
-          type: 'PREDICTED_ARRIVAL',
-          message: `Грузовик ${vehicle.vehicleNumber}, вероятно, прибыл ${stop.type === 'LOAD' ? 'на загрузку' : 'на выгрузку'}, ${stop.city || 'город неизвестен'}`,
-          payload: { vehicleNumber: vehicle.vehicleNumber, city: stop.city, stopType: stop.type, address: stop.address }
-        });
-      }
+      // Arrival comes only from the GPS zone; a calculated position never raises an arrival prompt.
       const dwell = calculateDwellState(stop, now);
       if (dwell.dwellSeverity !== 'NONE') {
         const dedupKey = `dwell:${stop.id}`;

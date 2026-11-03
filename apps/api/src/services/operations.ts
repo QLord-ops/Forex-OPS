@@ -9,7 +9,7 @@ import { writeAuditLog, type AuditActor } from './audit-log.js';
 import { DEFAULT_ARRIVAL_RADIUS_METERS } from './webfleet.js';
 
 export type ExceptionKind = 'EXTENDED_DRIVING' | 'REDUCED_REST' | 'BOTH';
-export type ArrivalSource = 'DISPATCHER' | 'WEBFLEET_AUTO' | 'ASSISTANT';
+export type ArrivalSource = 'DISPATCHER' | 'WEBFLEET_AUTO' | 'ASSISTANT' | 'WITH_STOP_EVENT';
 export type ArrivalOptions = { source?: ArrivalSource; meta?: Record<string, unknown> };
 export const SYSTEM_WEBFLEET_ACTOR: AuditActor = { role: 'system', sessionId: 'webfleet-auto' };
 

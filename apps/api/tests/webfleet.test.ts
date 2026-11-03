@@ -122,6 +122,58 @@ it('never sets an arrival from stale GPS', async () => {
   expect((await db.stop.findUniqueOrThrow({ where: { id: stopId } })).arrivedAt).toBeNull();
 });
 
+it('sets the arrival for a parked truck whose pos_time stays put while the unit keeps reporting', async () => {
+  const { stopId, feed } = await arrivalScenario('AUTO-PARKED');
+  await feed(0, north(2000), false);
+  const parked = (contactMinute: number) => ({ ...north(90), standstill: true, recordedAt: at(1), lastContactAt: at(contactMinute) });
+  const telemetry = new WebfleetTelemetryService(db as unknown as PostgresPrismaClient, async (input) =>
+    new OperationsService(asAppDatabase(db), new TourService(asAppDatabase(db), new MockRoutingProvider()))
+      .confirmArrival(input.stopId, input.arrivedAt, input.now, SYSTEM_WEBFLEET_ACTOR, { source: 'WEBFLEET_AUTO', meta: input.meta }));
+  // Webfleet keeps pos_time 10:01 while the truck stands; only msgtime moves on.
+  for (const minute of [2, 3]) await telemetry.applyPosition({ objectUid: 'wf-AUTO-PARKED', objectNo: 'AUTO-PARKED', ...parked(minute) }, new Date(at(minute).getTime() + 20_000));
+  expect((await db.stop.findUniqueOrThrow({ where: { id: stopId } })).arrivedAt).toBeNull();
+  const result = await telemetry.applyPosition({ objectUid: 'wf-AUTO-PARKED', objectNo: 'AUTO-PARKED', ...parked(4) }, new Date(at(4).getTime() + 20_000));
+  expect(result.arrivalConfirmed).toBe(true);
+  expect((await db.stop.findUniqueOrThrow({ where: { id: stopId } })).arrivedAt).toEqual(at(1));
+  const latest = await telemetry.latest((await db.stop.findUniqueOrThrow({ where: { id: stopId }, include: { tour: true } })).tour.vehicleId, new Date(at(4).getTime() + 20_000));
+  expect(latest).toMatchObject({ stale: false, recordedAt: at(1), lastContactAt: at(4) });
+});
+
+it('does not trust a parked position when the unit has been silent for more than five minutes', async () => {
+  const { stopId } = await arrivalScenario('AUTO-SILENT');
+  const telemetry = new WebfleetTelemetryService(db as unknown as PostgresPrismaClient, async () => ({ applied: true }));
+  for (const minute of [10, 11]) {
+    await telemetry.applyPosition({ objectUid: 'wf-AUTO-SILENT', objectNo: 'AUTO-SILENT', ...north(90), standstill: true, recordedAt: at(0), lastContactAt: at(2) }, at(minute));
+  }
+  expect((await db.stop.findUniqueOrThrow({ where: { id: stopId } })).arrivedAt).toBeNull();
+  const latest = await telemetry.latest((await db.stop.findUniqueOrThrow({ where: { id: stopId }, include: { tour: true } })).tour.vehicleId, at(11));
+  expect(latest?.stale).toBe(true);
+});
+
+it('reads msgtime as the last unit contact', () => {
+  const row = parseWebfleetObjectRow({ status: 'A', objectuid: 'obj-test-9', latitude_mdeg: 52520000, longitude_mdeg: 13405000, pos_time: '2026-10-13T10:01:00Z', msgtime: '2026-10-13T10:09:00Z', standstill: '1' });
+  expect(row?.lastContactAt?.toISOString()).toBe('2026-10-13T10:09:00.000Z');
+});
+
+it('loads and unloads at the same place one after another without leaving the zone', async () => {
+  const vehicle = await db.vehicle.create({ data: { vehicleNumber: 'SAME-PLACE', licensePlate: 'B-SAME 1' } });
+  const tours = new TourService(asAppDatabase(db), new MockRoutingProvider());
+  const tour = await tours.createTour({ vehicleId: vehicle.id, orderNumber: 'ORD-SAME', stops: [
+    { sequence: 1, type: 'LOAD', address: 'Werk Zwickau', city: 'Zwickau', ...BERLIN },
+    { sequence: 2, type: 'UNLOAD', address: 'Werk Zwickau Halle 2', city: 'Zwickau', ...north(200) }
+  ] });
+  const operations = new OperationsService(asAppDatabase(db), tours);
+  const auto = new WebfleetTelemetryService(db as unknown as PostgresPrismaClient, (input) =>
+    operations.confirmArrival(input.stopId, input.arrivedAt, input.now, SYSTEM_WEBFLEET_ACTOR, { source: 'WEBFLEET_AUTO', meta: input.meta }));
+  const feed = (minute: number) => auto.applyPosition({ objectUid: 'wf-same', objectNo: 'SAME-PLACE', ...north(100), standstill: true, recordedAt: at(minute) }, new Date(at(minute).getTime() + 20_000));
+  for (const minute of [0, 1, 2, 3]) await feed(minute);
+  expect((await db.stop.findUniqueOrThrow({ where: { id: tour.stops[0].id } })).arrivedAt).toEqual(at(0));
+  expect((await db.stop.findUniqueOrThrow({ where: { id: tour.stops[1].id } })).arrivedAt).toBeNull();
+  await tours.recordLoaded(tour.stops[0].id, at(30));
+  for (const minute of [31, 32, 33, 34]) await feed(minute);
+  expect((await db.stop.findUniqueOrThrow({ where: { id: tour.stops[1].id } })).arrivedAt).toEqual(at(30));
+});
+
 it('after a revert waits until the truck has left the zone and come back', async () => {
   const { stopId, feed, operations } = await arrivalScenario('AUTO-REVERT');
   for (const minute of [0, 1, 2, 3]) await feed(minute, north(100), true);

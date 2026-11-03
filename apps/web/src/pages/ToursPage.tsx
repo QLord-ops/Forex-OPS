@@ -8,6 +8,8 @@ import { TourStatusBadge } from '../components/StatusBadge'
 import { usePolling } from '../hooks/usePolling'
 import { api } from '../lib/api'
 import { formatDateTime, formatDelay, routeTitle } from '../lib/format'
+import { tourCancellable } from '../lib/tours'
+import type { Tour } from '../types/domain'
 
 export function ToursPage() {
   const { data, error, loading, refetch } = usePolling(api.tours, 30_000)
@@ -19,12 +21,12 @@ export function ToursPage() {
 
   const tours = data ?? []
 
-  async function cancelTour(id: string, orderNumber: string) {
-    if (!window.confirm(`Действительно отменить заказ ${orderNumber}?`)) return
+  async function cancelTour({ id, orderNumber, planVersion }: Tour) {
+    if (!window.confirm(`Удалить тур ${orderNumber}? Он пропадёт из цепочки, запись останется в журнале.`)) return
     setCancellingId(id)
     setActionError(null)
     try {
-      await api.updateTour(id, { status: 'CANCELLED' })
+      await api.updateTour(id, { status: 'CANCELLED', version: planVersion })
       await refetch()
     } catch (cause) {
       setActionError(cause as Error)
@@ -58,10 +60,10 @@ export function ToursPage() {
               <td className="px-3 py-3 text-sm tabular-nums">{formatDateTime(tour.predictedEta)}</td>
               <td className="px-3 py-3 text-sm font-semibold tabular-nums">{formatDelay(tour.predictedDelayMinutes)}</td>
               <td className="px-3 py-3">
-                {tour.status === 'QUEUED' ? (
+                {tour.status === 'QUEUED' || tourCancellable(tour) ? (
                   <div className="flex justify-end gap-2">
-                    <Link className="secondary-button min-h-9 px-2" to={`/tours/${tour.id}/edit`} aria-label={`Изменить заказ ${tour.orderNumber}`}><Pencil className="h-4 w-4" /></Link>
-                    <button className="danger-button min-h-9 px-2" type="button" disabled={cancellingId === tour.id} onClick={() => void cancelTour(tour.id, tour.orderNumber)} aria-label={`Отменить заказ ${tour.orderNumber}`}><XCircle className="h-4 w-4" /></button>
+                    {tour.status === 'QUEUED' ? <Link className="secondary-button min-h-9 px-2" to={`/tours/${tour.id}/edit`} aria-label={`Изменить заказ ${tour.orderNumber}`}><Pencil className="h-4 w-4" /></Link> : null}
+                    {tourCancellable(tour) ? <button className="danger-button min-h-9 px-2" type="button" disabled={cancellingId === tour.id} onClick={() => void cancelTour(tour)} aria-label={`Удалить тур ${tour.orderNumber}`}><XCircle className="h-4 w-4" /></button> : null}
                   </div>
                 ) : <span className="text-sm text-slate-400">–</span>}
               </td>
