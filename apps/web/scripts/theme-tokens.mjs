@@ -7,7 +7,7 @@ import colors from 'tailwindcss/colors.js'
 import { TAILWIND_PALETTES, darkOf, normalize, triplet } from './theme-palette.mjs'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
-const sources = ['src/styles.css', 'src/components/truck-card.css', 'src/components/dispatcher-assistant.css']
+const sources = ['src/styles.css', 'src/dispatch.css', 'src/components/truck-card.css', 'src/components/dispatcher-assistant.css']
 const used = new Set()
 for (const file of sources) for (const m of readFileSync(root + file, 'utf8').matchAll(/--(bg|tx|ln)-([0-9a-f]{6})\b/g)) used.add(`${m[1]}-${m[2]}`)
 for (const palette of TAILWIND_PALETTES) for (const value of Object.values(colors[palette])) for (const role of ['bg', 'tx', 'ln']) used.add(`${role}-${normalize(value).slice(1)}`)

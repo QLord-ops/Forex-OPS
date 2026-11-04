@@ -1,101 +1,90 @@
-import {
-  AlertTriangle,
-  ClipboardList,
-  History,
-  LayoutDashboard,
-  PlusCircle,
-  Truck,
-  Users
-} from 'lucide-react'
+import { Bell, ChartColumn, FileText, Map as MapIcon, Menu, Route, Settings, Truck } from 'lucide-react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
-import { OperationsNotifications } from './OperationsNotifications'
-import { DispatcherLogout } from './AuthGate'
-import { DispatcherAssistant } from './DispatcherAssistant'
-import { AlertToggle } from './AlertToggle'
+
+import { NotificationsProvider, useNotifications } from '../context/notifications'
+import { usePopover } from '../hooks/usePopover'
 import { AccountMenu } from './AccountMenu'
 import { BrandMark, BrandWordmark } from './Brand'
-import { ThemeToggle } from './ThemeToggle'
-import { currentDispatcherRole } from '../lib/auth'
+import { DispatcherAssistant } from './DispatcherAssistant'
+import { DecisionCard, OperationsNotifications } from './OperationsNotifications'
 
+/** `also` keeps a section lit on the pages that belong to it. */
 const navItems = [
-  { to: '/', label: 'Панель управления', icon: LayoutDashboard },
-  { to: '/vehicles', label: 'Грузовики', icon: Truck },
-  { to: '/tours', label: 'Маршруты', icon: ClipboardList },
-  { to: '/orders/new', label: 'Новый заказ', icon: PlusCircle },
-  { to: '/alerts', label: 'Предупреждения', icon: AlertTriangle },
-  { to: '/history', label: 'История', icon: History }
+  { to: '/', label: 'Диспозиция', icon: MapIcon, also: [] as string[] },
+  { to: '/orders/new', label: 'Auftrag', icon: FileText, also: [] },
+  { to: '/vehicles', label: 'Машины', icon: Truck, also: [] },
+  { to: '/tours', label: 'Туры', icon: Route, also: [] },
+  { to: '/analytics', label: 'Аналитика', icon: ChartColumn, also: ['/history', '/alerts'] },
+  { to: '/settings', label: 'Настройки', icon: Settings, also: ['/dispatchers'] }
 ]
-const adminItems = [{ to: '/dispatchers', label: 'Диспетчеры', icon: Users }]
 
 export function AppShell() {
+  return <NotificationsProvider><Shell /></NotificationsProvider>
+}
+
+function Shell() {
   const location = useLocation()
   const isDashboard = location.pathname === '/'
-  const items = currentDispatcherRole() === 'admin' ? [...navItems, ...adminItems] : navItems
-
   return (
-    <div className={isDashboard ? 'h-dvh overflow-hidden text-slate-950' : 'min-h-screen text-slate-950'}>
-      {/* The rail is dark in both themes, so it keeps the light palette inside. Replaced by the top bar next. */}
-      <aside data-theme="light" className="app-rail fixed inset-y-0 left-0 z-30 hidden w-20 text-white transition-[width] 2xl:w-64 lg:block">
-        <div className="app-rail-brand flex h-16 items-center justify-center gap-3 px-3 2xl:justify-start 2xl:px-5" aria-label="OPS FOREX Disponent">
-          <BrandMark size={34} />
-          <BrandWordmark className="hidden 2xl:flex" />
-        </div>
-        <nav className="space-y-1 px-2 py-4 2xl:px-3" aria-label="Основная навигация">
-          {items.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.to === '/'}
-              title={item.label}
-              className={({ isActive }) =>
-                [
-                  'flex min-h-12 items-center justify-center gap-3 rounded-md px-2 py-2 text-sm font-medium outline-none transition 2xl:justify-start 2xl:px-3',
-                  isActive ? 'app-rail-link-active' : 'app-rail-link'
-                ].join(' ')
-              }
-            >
-              <item.icon className="h-5 w-5 shrink-0" aria-hidden="true" />
-              <span className="hidden min-w-0 text-balance-safe 2xl:block">{item.label}</span>
-            </NavLink>
-          ))}
-        </nav>
-        <ThemeToggle />
-        <AlertToggle />
-        <AccountMenu />
-        <DispatcherLogout />
-      </aside>
-
-      <div className={isDashboard ? 'h-dvh lg:pl-20 2xl:pl-64' : 'lg:pl-20 2xl:pl-64'}>
-        <header className="sticky top-0 z-40 border-b border-slate-200 bg-white lg:hidden">
-          <nav className="mobile-nav flex gap-1 overflow-x-auto px-3 py-2" aria-label="Мобильная навигация">
-            {items.map((item) => (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                end={item.to === '/'}
-                className={({ isActive }) =>
-                  [
-                    'inline-flex min-h-10 shrink-0 items-center gap-2 rounded-md px-3 py-2 text-sm font-medium',
-                    isActive ? 'mobile-nav-active' : 'text-slate-700'
-                  ].join(' ')
-                }
-              >
-                <item.icon className="h-4 w-4 shrink-0" aria-hidden="true" />
-                {item.label}
-              </NavLink>
-            ))}
-            <ThemeToggle className="theme-toggle theme-toggle-mobile" />
-            <AlertToggle className="alert-toggle-mobile" />
-            <AccountMenu compact />
-            <DispatcherLogout className="dispatcher-logout dispatcher-logout-mobile" />
-          </nav>
-        </header>
-        <main className={isDashboard ? 'dashboard-main' : 'px-4 py-5 lg:px-6'}>
-          <Outlet />
-          <OperationsNotifications />
-        </main>
-        <DispatcherAssistant />
-      </div>
+    <div className={isDashboard ? 'app-shell app-shell-dashboard' : 'app-shell'}>
+      <TopBar />
+      <main className={isDashboard ? 'dashboard-main' : 'page-main'}>
+        <Outlet />
+        <OperationsNotifications />
+      </main>
+      <DispatcherAssistant />
     </div>
   )
+}
+
+function TopBar() {
+  const location = useLocation()
+  const { pending } = useNotifications()
+  const menu = usePopover()
+  const termin = pending.length
+  const isActive = (item: (typeof navItems)[number]) => item.to === '/'
+    ? location.pathname === '/'
+    : location.pathname.startsWith(item.to) || item.also.some((path) => location.pathname.startsWith(path))
+  const links = (className: string, onClick?: () => void) => navItems.map((item) => (
+    <NavLink key={item.to} to={item.to} end={item.to === '/'} onClick={onClick} className={isActive(item) ? `${className} ${className}-active` : className} aria-current={isActive(item) ? 'page' : undefined}>
+      <item.icon className="topbar-link-icon" aria-hidden="true" />
+      <span>{item.label}</span>
+      {item.to === '/orders/new' && termin ? <span className="topbar-count" aria-label={`${termin} Termin ждут проверки`}>{termin}</span> : null}
+    </NavLink>
+  ))
+  return (
+    <header className="topbar">
+      <NavLink to="/" className="topbar-brand" aria-label="OPS FOREX Disponent, Диспозиция">
+        <BrandMark size={36} />
+        <BrandWordmark />
+      </NavLink>
+      <nav className="topbar-nav" aria-label="Основная навигация">{links('topbar-link')}</nav>
+      <div className="topbar-popover-anchor topbar-menu" ref={menu.ref}>
+        <button type="button" className="topbar-icon-button topbar-menu-button" aria-expanded={menu.open} onClick={menu.toggle}><Menu className="h-5 w-5" aria-hidden="true" /><span>Меню</span></button>
+        {menu.open ? <nav className="topbar-popover topbar-menu-popover" aria-label="Мобильная навигация">{links('topbar-menu-link', menu.close)}</nav> : null}
+      </div>
+      <div className="topbar-tools">
+        <BellMenu />
+        <AccountMenu />
+      </div>
+    </header>
+  )
+}
+
+/** The bell counts the open questions; the list itself sits on the dashboard, the bell shows it on every page. */
+function BellMenu() {
+  const { open } = useNotifications()
+  const popover = usePopover()
+  const count = open.length
+  return <div className="topbar-popover-anchor" ref={popover.ref}>
+    <button type="button" className="topbar-icon-button topbar-bell" aria-expanded={popover.open} onClick={popover.toggle} aria-label={count ? `Требует решения: ${count}` : 'Уведомления'} title={count ? `Требует решения: ${count}` : 'Нет открытых вопросов'}>
+      <Bell className="h-5 w-5" aria-hidden="true" />
+      {count ? <span className="topbar-bell-count" aria-hidden="true">{count}</span> : null}
+    </button>
+    {popover.open ? <div className="topbar-popover bell-popover" aria-label="Требует решения">
+      <p className="bell-popover-title">Требует решения <span>{count}</span></p>
+      {count ? <div className="bell-popover-list">{open.map((item) => <DecisionCard key={item.id} item={item} openLink />)}</div> : <p className="bell-popover-empty">Открытых вопросов нет.</p>}
+      <NavLink to="/alerts" className="bell-popover-link" onClick={popover.close}>Все предупреждения по срокам</NavLink>
+    </div> : null}
+  </div>
 }

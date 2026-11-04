@@ -79,7 +79,7 @@ export function DispatcherAssistant() {
     finally { setBusy(false) }
   }
   return <>
-    <button type="button" className="dispatcher-launcher" onClick={() => setOpen((value) => !value)} aria-expanded={open}><Bot size={19} /><span>ИИ-диспетчер</span></button>
+    {/* Opened from the dispatcher menu in the top bar (ops:assistant-context). */}
     {/* Keep the import form mounted when minimized: selected files and review edits survive. */}
     <div style={{ display: open ? 'contents' : 'none' }}>
       <FloatingWindow open={open} title="ИИ-диспетчер" onMinimize={() => setOpen(false)}>

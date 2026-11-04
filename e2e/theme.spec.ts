@@ -22,6 +22,9 @@ test('ночная смена: переключение, выбор пережи
 
   const html = page.locator('html')
   await expect(html).toHaveAttribute('data-theme', 'light')
+  // The theme lives in the dispatcher menu of the top bar.
+  const menu = page.getByRole('button', { name: /меню$/ })
+  await menu.click()
   const toggle = page.getByRole('button', { name: 'Ночная смена' })
   await expect(toggle).toHaveAttribute('aria-pressed', 'false')
   await toggle.click()
@@ -29,14 +32,15 @@ test('ночная смена: переключение, выбор пережи
   await expect(toggle).toHaveAttribute('aria-pressed', 'true')
   await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute('content', '#08101b')
   // Night surfaces really change: the list background is no longer white.
-  const background = await page.locator('body').evaluate((el) => getComputedStyle(el).backgroundImage)
-  expect(background).not.toContain('255, 255, 255')
+  const background = await page.locator('.fleet-rail').evaluate((el) => getComputedStyle(el).backgroundColor)
+  expect(background).not.toBe('rgb(255, 255, 255)')
 
   await page.reload()
   await expect(html).toHaveAttribute('data-theme', 'dark')
   await expect(page.locator('.maplibregl-canvas')).toBeVisible()
   await expect(page.locator('.vehicle-card').filter({ hasText: 'LKW 997' })).toBeVisible()
 
+  await menu.click()
   await page.getByRole('button', { name: 'Ночная смена' }).click()
   await expect(html).toHaveAttribute('data-theme', 'light')
 })

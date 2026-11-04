@@ -1,0 +1,191 @@
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useNavigate } from 'react-router-dom'
+
+import { usePolling } from '../hooks/usePolling'
+import { pickNewAlerts, playAlertSound, readSeen, showSummaryAlert, showSystemAlert, titleWithCount, writeSeen, type AlertNotification } from '../lib/alerts'
+import { api } from '../lib/api'
+import { pendingToDocument } from '../lib/appointments'
+import type { PendingAppointment } from '../types/domain'
+import { operationsBase, operationsRequest } from '../components/VehicleOperationsPanel'
+
+const HIDDEN_KEY = 'ops-hidden-notifications'
+function readHiddenNotifications(): string[] {
+  try {
+    const value: unknown = JSON.parse(sessionStorage.getItem(HIDDEN_KEY) ?? '[]')
+    return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+  } catch { return [] }
+}
+
+export type DepartureAnswer = 'done' | 'keep' | 'revert'
+export interface Departure { stopType: 'LOAD' | 'UNLOAD'; leftAt: string; time: string }
+
+interface NotificationsState {
+  items: AlertNotification[]
+  /** Open items the dispatcher has not set aside in this tab. */
+  open: AlertNotification[]
+  pending: PendingAppointment[]
+  busyId: string | null
+  errors: Record<string, string>
+  termin: PendingAppointment | null
+  hide: (id: string) => void
+  answerDeparture: (item: AlertNotification, answer: DepartureAnswer) => Promise<void>
+  resolve: (item: AlertNotification, action: 'ack' | 'revert') => Promise<void>
+  reviewTermin: (item: AlertNotification) => Promise<void>
+  acceptTermin: (item: AlertNotification) => Promise<void>
+  closeTermin: (applied: boolean) => Promise<void>
+  pendingOf: (item: AlertNotification) => PendingAppointment | null
+}
+
+const Context = createContext<NotificationsState | null>(null)
+
+/** One poll for the whole app: the dashboard list, the bell and the toast on other pages read the same items. */
+export function NotificationsProvider({ children }: { children: ReactNode }) {
+  // Keeps polling in a hidden tab so the sound and the Windows notification arrive while the dispatcher is in Outlook or Excel.
+  const notifications = usePolling(() => operationsRequest<{ notifications: AlertNotification[] }>('/notifications'), 30000, true, 'notifications', true)
+  const pendingPoll = usePolling(api.pendingAppointments, 60_000)
+  const navigate = useNavigate()
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const [errors, setErrors] = useState<Record<string, string>>({})
+  const [termin, setTermin] = useState<{ notification: AlertNotification; item: PendingAppointment } | null>(null)
+  // Notifications set aside with «Открыть грузовик» stay aside after a reload in this tab.
+  const [hidden, setHidden] = useState<string[]>(readHiddenNotifications)
+  useEffect(() => { try { sessionStorage.setItem(HIDDEN_KEY, JSON.stringify(hidden.slice(-200))) } catch { /* Storage may be unavailable. */ } }, [hidden])
+  const refetch = notifications.refetch
+  const refetchPending = pendingPoll.refetch
+  useEffect(() => {
+    // Vercel Functions are request-bound; production uses the durable polling path.
+    if (!import.meta.env.DEV) return
+    const stream = new EventSource(`${operationsBase}/events/stream`)
+    stream.addEventListener('operations', refetch)
+    stream.addEventListener('open', refetch)
+    return () => stream.close()
+  }, [refetch])
+
+  const items = useMemo(() => notifications.data?.notifications ?? [], [notifications.data])
+  const loaded = notifications.data !== null
+  useEffect(() => {
+    if (!loaded) return
+    document.title = titleWithCount(items.length)
+    const { fresh, summary, seen } = pickNewAlerts(items, readSeen())
+    writeSeen(seen)
+    const away = document.visibilityState === 'hidden' || !document.hasFocus()
+    if (summary > 0) {
+      playAlertSound('SUMMARY')
+      if (away) showSummaryAlert(summary)
+    }
+    for (const item of fresh) {
+      playAlertSound(item.type)
+      if (away) showSystemAlert(item, (path) => navigate(path))
+    }
+  }, [items, loaded, navigate])
+  useEffect(() => () => { document.title = titleWithCount(0) }, [])
+
+  const pending = useMemo(() => (Array.isArray(pendingPoll.data?.items) ? pendingPoll.data.items : []), [pendingPoll.data])
+  const open = useMemo(() => items.filter((item) => !hidden.includes(item.id)), [hidden, items])
+
+  const run = useCallback(async (item: AlertNotification, work: () => Promise<void>) => {
+    setBusyId(item.id)
+    setErrors((current) => ({ ...current, [item.id]: '' }))
+    try { await work() } catch (cause) { setErrors((current) => ({ ...current, [item.id]: cause instanceof Error ? cause.message : 'Не удалось выполнить действие' })) } finally { setBusyId(null) }
+  }, [])
+  const changed = useCallback(async () => {
+    await refetch()
+    window.dispatchEvent(new CustomEvent('ops:data-changed'))
+  }, [refetch])
+
+  /** The truck left the stop without BELADEN/ENTLADEN: the dispatcher records it, keeps the arrival, or undoes it. */
+  const answerDeparture = useCallback(async (item: AlertNotification, answer: DepartureAnswer) => {
+    const departure = departureOf(item.payloadJson)
+    if (!item.stopId || !departure) return
+    const label = departure.stopType === 'LOAD' ? 'BELADEN' : 'ENTLADEN'
+    if (answer === 'done' && !window.confirm(`Записать ${label} на ${departure.time}? Это попадёт в историю тура.`)) return
+    if (answer === 'revert' && !window.confirm('Прибытие было ошибкой? Точка снова станет «в пути».')) return
+    await run(item, async () => {
+      if (answer === 'done') await operationsRequest(`/stops/${item.stopId}/${departure.stopType === 'LOAD' ? 'loaded' : 'unloaded'}`, 'POST', { timestamp: departure.leftAt })
+      else if (answer === 'keep') await operationsRequest(`/stops/${item.stopId}/departure/keep`, 'POST', {})
+      else await operationsRequest(`/stops/${item.stopId}/arrival/revert`, 'POST', { reason: 'Уехала с точки: прибытие было ошибкой' })
+      await changed()
+    })
+  }, [changed, run])
+
+  const resolve = useCallback(async (item: AlertNotification, action: 'ack' | 'revert') => {
+    if (action === 'revert' && (!item.stopId || !window.confirm('Отменить автоматическое прибытие? Точка снова станет «в пути».'))) return
+    await run(item, async () => {
+      if (action === 'revert') {
+        await operationsRequest(`/stops/${item.stopId}/arrival/revert`, 'POST', { reason: 'Отменено из уведомления об автоприбытии' })
+        await changed()
+        return
+      }
+      await operationsRequest(`/notifications/${item.id}/ack`, 'POST')
+      await refetch()
+    })
+  }, [changed, refetch, run])
+
+  const findPending = useCallback(async (item: AlertNotification) => {
+    const pendingId = pendingIdOf(item)
+    const found = (await api.pendingAppointments()).items.find((entry) => entry.id === pendingId)
+    if (!found) {
+      await operationsRequest(`/notifications/${item.id}/ack`, 'POST')
+      await refetch()
+      throw new Error('Termin уже привязан или отклонён.')
+    }
+    return found
+  }, [refetch])
+
+  /** A waiting slip found its stop: the same review card as for a fresh document. */
+  const reviewTermin = useCallback(async (item: AlertNotification) => {
+    await run(item, async () => setTermin({ notification: item, item: await findPending(item) }))
+  }, [findPending, run])
+
+  /** «Принять»: attach the slip to the stop the server matched, without opening the review card. */
+  const acceptTermin = useCallback(async (item: AlertNotification) => {
+    await run(item, async () => {
+      const found = await findPending(item)
+      const candidate = found.match.status === 'MATCHED' ? found.match.candidates[0] : null
+      if (!candidate) { setTermin({ notification: item, item: found }); return }
+      if (!window.confirm(`Привязать Termin к LKW ${candidate.vehicleNumber}, Auftrag ${candidate.orderNumber}? ETA и предупреждения пересчитаются.`)) return
+      await api.applyAppointmentDocument({ stopId: candidate.stopId, version: candidate.planVersion, fingerprint: found.fingerprint, pendingId: found.id, document: pendingToDocument(found) })
+      await operationsRequest(`/notifications/${item.id}/ack`, 'POST').catch(() => undefined)
+      await Promise.all([changed(), refetchPending()])
+    })
+  }, [changed, findPending, refetchPending, run])
+
+  const closeTermin = useCallback(async (applied: boolean) => {
+    const current = termin
+    setTermin(null)
+    if (applied && current) {
+      await operationsRequest(`/notifications/${current.notification.id}/ack`, 'POST').catch(() => undefined)
+      window.dispatchEvent(new CustomEvent('ops:data-changed'))
+    }
+    await Promise.all([refetch(), refetchPending()])
+  }, [refetch, refetchPending, termin])
+
+  const hide = useCallback((id: string) => setHidden((previous) => [...previous, id]), [])
+  const pendingOf = useCallback((item: AlertNotification) => pending.find((entry) => entry.id === pendingIdOf(item)) ?? null, [pending])
+
+  const value = useMemo<NotificationsState>(() => ({
+    items, open, pending, busyId, errors, termin: termin?.item ?? null, hide, answerDeparture, resolve, reviewTermin, acceptTermin, closeTermin, pendingOf
+  }), [acceptTermin, answerDeparture, busyId, closeTermin, errors, hide, items, open, pending, pendingOf, resolve, reviewTermin, termin])
+  return <Context.Provider value={value}>{children}</Context.Provider>
+}
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function useNotifications() {
+  const value = useContext(Context)
+  if (!value) throw new Error('useNotifications needs NotificationsProvider')
+  return value
+}
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function departureOf(payloadJson?: string | null): Departure | null {
+  try {
+    const payload = JSON.parse(payloadJson ?? '{}') as { stopType?: string; leftAt?: string }
+    if (!payload.leftAt || (payload.stopType !== 'LOAD' && payload.stopType !== 'UNLOAD')) return null
+    const time = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit' }).format(new Date(payload.leftAt))
+    return { stopType: payload.stopType, leftAt: payload.leftAt, time }
+  } catch { return null }
+}
+
+function pendingIdOf(item: AlertNotification) {
+  try { return (JSON.parse(item.payloadJson ?? '{}') as { pendingId?: string }).pendingId ?? null } catch { return null }
+}

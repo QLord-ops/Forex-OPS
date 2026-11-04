@@ -9,7 +9,7 @@ const tokens = read('src/theme-tokens.css')
 describe('theme tokens', () => {
   it('defines every colour variable the styles use, in both themes', () => {
     const [light, dark] = tokens.split('[data-theme="dark"]')
-    for (const file of ['src/styles.css', 'src/components/truck-card.css', 'src/components/dispatcher-assistant.css']) {
+    for (const file of ['src/styles.css', 'src/dispatch.css', 'src/components/truck-card.css', 'src/components/dispatcher-assistant.css']) {
       for (const [, name] of read(file).matchAll(/var\(--((?:bg|tx|ln)-[0-9a-f]{6})\)/g)) {
         expect(light, `${name} in ${file}`).toContain(`--${name}:`)
         expect(dark, `${name} in ${file}`).toContain(`--${name}:`)

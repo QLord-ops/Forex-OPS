@@ -1,24 +1,41 @@
-import { KeyRound, UserRound, X } from 'lucide-react'
+import { Bot, ChevronDown, KeyRound, UserRound, X } from 'lucide-react'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 
 import { accountsApi } from '../lib/api'
-import { currentDispatcher } from '../lib/auth'
+import { usePopover } from '../hooks/usePopover'
+import { currentDispatcher, currentDispatcherRole } from '../lib/auth'
+import { AlertToggle } from './AlertToggle'
+import { DispatcherLogout } from './AuthGate'
+import { ThemeToggle } from './ThemeToggle'
 
 const MIN_PASSWORD = 12
 
-/** Who is signed in, plus changing one's own password. Shared-password sessions show nothing here. */
-export function AccountMenu({ compact = false }: { compact?: boolean }) {
+/** Who is signed in, with the theme, sound, the assistant, one's own password and logout. */
+export function AccountMenu() {
   const person = currentDispatcher()
-  const [open, setOpen] = useState(false)
-  if (!person) return null
-  const initials = person.name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join('') || '?'
-  return <>
-    <button type="button" className={compact ? 'account-menu account-menu-compact' : 'account-menu'} onClick={() => setOpen(true)} title={`${person.name} · сменить пароль`}>
+  const role = currentDispatcherRole()
+  const name = person?.name ?? (role === 'admin' ? 'Администратор' : 'Диспетчер')
+  const initials = person
+    ? person.name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join('') || '?'
+    : role === 'admin' ? 'АД' : 'ДС'
+  const menu = usePopover()
+  const [passwordOpen, setPasswordOpen] = useState(false)
+  return <div className="topbar-popover-anchor" ref={menu.ref}>
+    <button type="button" className="account-menu" aria-expanded={menu.open} aria-haspopup="true" onClick={menu.toggle} title={name} aria-label={`${name}: меню`}>
       <span className="account-menu-avatar" aria-hidden="true">{initials}</span>
-      <span className="account-menu-name">{person.name}</span>
+      <span className="account-menu-name">{name}</span>
+      <ChevronDown className="account-menu-chevron" aria-hidden="true" />
     </button>
-    {open ? <PasswordDialog name={person.name} onClose={() => setOpen(false)} /> : null}
-  </>
+    {menu.open ? <div className="topbar-popover account-menu-popover" aria-label="Меню диспетчера">
+      <p className="account-menu-who"><strong>{name}</strong><span>{role === 'admin' ? 'администратор' : 'диспетчер'}{person ? '' : ' · общий вход'}</span></p>
+      <ThemeToggle className="account-menu-item" />
+      <AlertToggle className="account-menu-item" />
+      <button type="button" className="account-menu-item" onClick={() => { menu.close(); window.dispatchEvent(new CustomEvent('ops:assistant-context', { detail: { open: true } })) }}><Bot className="h-5 w-5" aria-hidden="true" /><span>ИИ-диспетчер</span></button>
+      {person ? <button type="button" className="account-menu-item" onClick={() => { menu.close(); setPasswordOpen(true) }}><KeyRound className="h-5 w-5" aria-hidden="true" /><span>Сменить пароль</span></button> : null}
+      <DispatcherLogout className="account-menu-item account-menu-logout" />
+    </div> : null}
+    {passwordOpen ? <PasswordDialog name={name} onClose={() => setPasswordOpen(false)} /> : null}
+  </div>
 }
 
 function PasswordDialog({ name, onClose }: { name: string; onClose: () => void }) {

@@ -423,10 +423,11 @@ test('карточка машины: компактная строка, вкла
   await page.goto('/?vehicleId=veh-1')
   await page.evaluate(() => window.localStorage.removeItem('ops-truck-card-tab'))
 
-  // Compact row like a telematics list: plate and make, speed, GPS time, address, and the dispatcher's action.
+  // Three-line row: number and plate, status and place, the position source as a tag, and the dispatcher's action.
   const row125 = page.locator('.vehicle-card').filter({ hasText: 'LKW 125' })
-  await expect(row125.locator('.vehicle-row-title')).toHaveText(/B CY 2803 – MB\s*LKW 125/)
-  await expect(row125.locator('.vehicle-row-line')).toHaveText(/\(84 км\/ч\) \d\d:\d\d, 06268 Obhausen, DE/)
+  await expect(row125.locator('.vehicle-row-title')).toHaveText(/LKW 125\s*B CY 2803/)
+  await expect(row125.locator('.vehicle-row-line')).toContainText('06268 Obhausen')
+  await expect(row125.locator('.source-tag')).toHaveText(/^GPS/)
   await expect(row125.getByRole('button', { name: 'BELADEN' })).toBeVisible()
   await row125.locator('.vehicle-row-main').click()
   const dialog = page.getByRole('dialog', { name: 'B CY 2803' })
@@ -478,7 +479,7 @@ test('карточка машины: компактная строка, вкла
 
   // veh-2 is selected now, so the fleet layer shows truck 125 as a small marker; it is a button, so the keyboard works too.
   // The map is still fitted to the track, so the marker may be off screen: open it from the keyboard.
-  await page.getByRole('button', { name: /LKW 125: GPS, едет\. Открыть карточку/ }).focus()
+  await page.getByRole('button', { name: /LKW 125: .*GPS, едет\. Открыть карточку/ }).focus()
   await page.keyboard.press('Enter')
   await expect(page.getByRole('dialog', { name: 'B CY 2803' })).toBeVisible()
   expect(cardRequests).toEqual(expect.arrayContaining(['/vehicles/veh-1/card', '/vehicles/veh-2/card']))

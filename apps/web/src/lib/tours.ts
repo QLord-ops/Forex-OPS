@@ -28,11 +28,18 @@ export function currentStopOf(tour: Pick<Tour, 'stops'>): Stop | null {
 export function terminOf(tour: Pick<Tour, 'stops'> | null | undefined): { label: string; at: string } | null {
   const stop = tour ? currentStopOf(tour) : null
   if (!stop) return null
-  if (stop.appointmentAt) return { label: `Термин ${clock(stop.appointmentAt, true)}`, at: stop.appointmentAt }
+  if (stop.appointmentAt) return { label: `Termin ${clock(stop.appointmentAt, true)}`, at: stop.appointmentAt }
   if (stop.appointmentWindowStartAt && stop.appointmentWindowEndAt) {
-    return { label: `Термин ${clock(stop.appointmentWindowStartAt, true)}–${clock(stop.appointmentWindowEndAt, false)}`, at: stop.appointmentWindowStartAt }
+    return { label: `Termin ${clock(stop.appointmentWindowStartAt, true)}–${clock(stop.appointmentWindowEndAt, false)}`, at: stop.appointmentWindowStartAt }
   }
   return null
+}
+
+/** "04.11 08:00–10:00" for a slot or a window, empty when there is no time. */
+export function terminText(slot: { appointmentAt?: string | null; windowStartAt?: string | null; windowEndAt?: string | null }) {
+  if (slot.appointmentAt) return clock(slot.appointmentAt, true)
+  if (slot.windowStartAt && slot.windowEndAt) return `${clock(slot.windowStartAt, true)}–${clock(slot.windowEndAt, false)}`
+  return ''
 }
 
 function clock(value: string, withDate: boolean) {

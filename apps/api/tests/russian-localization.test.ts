@@ -27,10 +27,8 @@ describe("Russian localization", () => {
   it("keeps the main navigation fully Russian", () => {
     const appShell = readFileSync(new URL("../../web/src/components/AppShell.tsx", import.meta.url), "utf8");
 
-    expect(appShell).toContain("Панель управления");
-    expect(appShell).toContain("Грузовики");
-    expect(appShell).toContain("Маршруты");
-    expect(appShell).toContain("Новый заказ");
+    // Auftrag stays German on purpose: it is the dispatchers' own word for the order.
+    for (const label of ["Диспозиция", "Auftrag", "Машины", "Туры", "Аналитика", "Настройки"]) expect(appShell).toContain(`label: '${label}'`);
     expect(appShell).not.toMatch(/label: ['"](?:Dashboard|Fahrzeuge|Touren|Neuer Auftrag|Warnungen|Historie)['"]/);
   });
 });

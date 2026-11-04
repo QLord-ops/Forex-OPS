@@ -1,7 +1,7 @@
 import 'maplibre-gl/dist/maplibre-gl.css'
-import { GeoJSONSource, Map, Marker, NavigationControl, Popup, setWorkerUrl, type StyleSpecification } from 'maplibre-gl'
+import { GeoJSONSource, LngLatBounds, Map, Marker, Popup, setWorkerUrl, type StyleSpecification } from 'maplibre-gl'
 import mapLibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
-import { LocateFixed, Route, Satellite, TrafficCone } from 'lucide-react'
+import { Layers, LocateFixed, Minus, Plus, TriangleAlert } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { boundsFor, geometryToCoordinates, stopCoordinates, toLineString, trafficFeatures } from '../lib/geometry'
@@ -45,7 +45,9 @@ const CAMERA_STORAGE_KEY = 'ops-dashboard-map-camera'
 const FIT_MAX_ZOOM = 13
 const MIN_RESTORED_ZOOM = 4
 const MAX_RESTORED_ZOOM = 12
-type MapMode = 'traffic' | 'satellite'
+type MapMode = 'map' | 'satellite'
+/** Status colour of a truck on the map and in the list. */
+export type FleetTone = 'ok' | 'stop' | 'late' | 'plan' | 'idle'
 
 /** One truck of the fleet layer; the selected truck is drawn by the main marker instead. */
 export type FleetMapVehicle = {
@@ -58,6 +60,7 @@ export type FleetMapVehicle = {
   standstill: boolean | null
   /** The truck's next stop has an attached slot (Termin). */
   termin?: boolean
+  tone?: FleetTone
 }
 
 const FLEET_LABEL_MIN_ZOOM = 7
@@ -80,6 +83,10 @@ export type MapPanelProps = {
   previewKey?: string
   height?: number | string
   fill?: boolean
+  /** A new value fits the camera to the selected truck's route. */
+  fitRouteRequest?: number
+  /** "TomTom · пробки …" in the corner; only the dashboard shows it. */
+  sourceNote?: boolean
 }
 
 export function MapPanel({
@@ -98,7 +105,9 @@ export function MapPanel({
   onSelectPreviewAlternative,
   previewKey,
   height = 520,
-  fill = false
+  fill = false,
+  fitRouteRequest = 0,
+  sourceNote = false
 }: MapPanelProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<Map | null>(null)
@@ -120,8 +129,15 @@ export function MapPanel({
   const [styleVersion, setStyleVersion] = useState(0)
   const fittedTourRef = useRef<string | null>(null)
   const [mode, setMode] = useState<MapMode>(() => readMapMode())
+  const [traffic, setTraffic] = useState(() => readTraffic())
+  const [labels, setLabels] = useState(() => readLabels())
   const [cameraRequest, setCameraRequest] = useState<'vehicle' | 'route' | null>(null)
   const initialModeRef = useRef(mode)
+  const initialTrafficRef = useRef(traffic)
+  const clusterMarkersRef = useRef<Marker[]>([])
+  // On the dashboard the controls sit on top and the selected-truck panel at the bottom: keep routes clear of both.
+  const fitPaddingRef = useRef<Padding>(fill ? { top: 96, right: 80, bottom: 220, left: 88 } : 64)
+  const reclusterRef = useRef<() => void>(() => undefined)
   const [theme, setThemeState] = useState<Theme>(() => currentTheme())
   const initialThemeRef = useRef(theme)
   const modeEffectReadyRef = useRef(false)
@@ -147,14 +163,14 @@ export function MapPanel({
     if (!containerRef.current || mapRef.current) return
     const trafficMarkers = trafficMarkersRef.current
     const fleetMarkers = fleetMarkersRef.current
+    const clusterMarkers = clusterMarkersRef
 
     mapRef.current = new Map({
       container: containerRef.current,
-      style: styleFor(initialModeRef.current, initialThemeRef.current),
+      style: styleFor(initialModeRef.current, initialTrafficRef.current, initialThemeRef.current),
       center: readCamera()?.center ?? [10.4515, 51.1657],
       zoom: readCamera()?.zoom ?? 5.2
     })
-    mapRef.current.addControl(new NavigationControl({ visualizePitch: false }), 'top-left')
     // Grey route variants: a wide invisible line makes them easy to hit with a finger.
     mapRef.current.on('click', 'preview-alt-hit', (event) => {
       const id = event.features?.[0]?.properties?.id
@@ -173,6 +189,7 @@ export function MapPanel({
     mapRef.current.on('moveend', () => {
       const map = mapRef.current
       if (!map) return
+      reclusterRef.current()
       const center = map.getCenter()
       window.localStorage.setItem(CAMERA_STORAGE_KEY, JSON.stringify({
         center: [center.lng, center.lat],
@@ -190,6 +207,7 @@ export function MapPanel({
       trafficMarkers.clear()
       fleetMarkers.forEach((marker) => marker.remove())
       fleetMarkers.clear()
+      clusterMarkers.current.forEach((marker) => marker.remove())
       mapRef.current?.remove()
       mapRef.current = null
       markerRef.current = null
@@ -199,7 +217,10 @@ export function MapPanel({
   }, [])
 
   useEffect(() => {
-    window.localStorage.setItem('ops-dashboard-map-mode', mode)
+    try {
+      window.localStorage.setItem('ops-dashboard-map-mode', mode)
+      window.localStorage.setItem('ops-dashboard-map-traffic', traffic ? '1' : '0')
+    } catch { /* convenience only */ }
     if (!modeEffectReadyRef.current) {
       modeEffectReadyRef.current = true
       return
@@ -212,9 +233,17 @@ export function MapPanel({
     styleReadyRef.current = false
     map.once('style.load', restore)
     // A full reload, not a diff: a diff silently drops our runtime route layers.
-    map.setStyle(styleFor(mode, theme), { diff: false })
+    map.setStyle(styleFor(mode, traffic, theme), { diff: false })
     return () => { map.off('style.load', restore) }
-  }, [mode, theme])
+  }, [mode, theme, traffic])
+
+  useEffect(() => {
+    try { window.localStorage.setItem('ops-dashboard-map-labels', labels ? '1' : '0') } catch { /* convenience only */ }
+  }, [labels])
+
+  useEffect(() => {
+    if (fitRouteRequest) setCameraRequest('route')
+  }, [fitRouteRequest])
 
   useEffect(() => {
     const onTheme = (event: Event) => setThemeState((event as CustomEvent<Theme>).detail)
@@ -255,7 +284,7 @@ export function MapPanel({
       if (fitKey && fittedTourRef.current !== fitKey && !previewRoute?.length) {
         fittedTourRef.current = fitKey
         const points = [...(position?.coordinate ? [position.coordinate] : []), ...fullRoute, ...stopCoordinates(stops)]
-        if (points.length) fitRoute(map, points, FIT_MAX_ZOOM - 1, 0)
+        if (points.length) fitRoute(map, points, FIT_MAX_ZOOM - 1, 0, fitPaddingRef.current)
       }
     }
     render()
@@ -356,7 +385,7 @@ export function MapPanel({
   const previewFitKey = previewKey ?? previewRoute
   useEffect(() => {
     const map = mapRef.current
-    if (map && previewRoute?.length) fitRoute(map, [...previewRoute, ...(previewAlternatives ?? []).flatMap((item) => item.geometry), ...(previewStops ?? []).map((stop) => stop.coordinate)], FIT_MAX_ZOOM, 350)
+    if (map && previewRoute?.length) fitRoute(map, [...previewRoute, ...(previewAlternatives ?? []).flatMap((item) => item.geometry), ...(previewStops ?? []).map((stop) => stop.coordinate)], FIT_MAX_ZOOM, 350, fitPaddingRef.current)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [previewFitKey, previewStops])
 
@@ -368,7 +397,7 @@ export function MapPanel({
       setCameraRequest(null)
       return
     }
-    fitRoute(map, previewRoute?.length ? previewRoute : [...fullRoute, ...stopCoordinates(stops)], FIT_MAX_ZOOM, 260)
+    fitRoute(map, previewRoute?.length ? previewRoute : [...fullRoute, ...stopCoordinates(stops)], FIT_MAX_ZOOM, 260, fitPaddingRef.current)
     setCameraRequest(null)
   }, [cameraRequest, fullRoute, position?.coordinate, previewRoute, stops])
 
@@ -384,7 +413,7 @@ export function MapPanel({
     }
     if (track && track.length > 1) {
       const bounds = boundsFor(track)
-      if (bounds) map.fitBounds([bounds[0], bounds[1]], { padding: 60, maxZoom: FIT_MAX_ZOOM, duration: 400 })
+      if (bounds) map.fitBounds([bounds[0], bounds[1]], { padding: fitPaddingRef.current, maxZoom: FIT_MAX_ZOOM, duration: 400 })
     }
   }, [track, styleVersion])
 
@@ -416,6 +445,8 @@ export function MapPanel({
       marker.remove()
       markers.delete(id)
     }
+    reclusterRef.current = () => clusterFleet(map, markers, clusterMarkersRef)
+    reclusterRef.current()
   }, [fleet, selectedVehicleId])
 
   useEffect(() => {
@@ -445,19 +476,33 @@ export function MapPanel({
     element.innerHTML = ''
     const label = document.createElement('span')
     label.className = 'truck-marker-label'
-    label.textContent = `${vehicleNumber ? `LKW ${vehicleNumber}` : 'LKW'} · ${position?.positionSource === 'WEBFLEET' ? 'GPS' : position?.positionSource === 'MANUAL' ? 'Вручную' : 'Расчёт'}`
+    label.innerHTML = TRUCK_ICON
+    label.append(document.createTextNode(vehicleNumber ? `LKW ${vehicleNumber}` : 'LKW'))
+    if (position?.positionSource !== 'WEBFLEET') {
+      const source = document.createElement('small')
+      source.textContent = position?.positionSource === 'MANUAL' ? 'вручную' : 'расчёт'
+      label.append(source)
+    }
     element.append(label)
   }, [position?.coordinate, position?.positionSource, vehicleNumber])
 
   return (
-    <section className={fill ? 'map-panel-fill' : 'map-panel-card work-surface relative min-w-0 overflow-hidden'}>
+    <section className={[fill ? 'map-panel-fill' : 'map-panel-card work-surface relative min-w-0 overflow-hidden', labels ? '' : 'fleet-labels-off'].join(' ')}>
       <div ref={containerRef} style={{ height }} className={fill ? 'h-full w-full' : 'rounded-lg'} />
-      <div className="map-controls" aria-label="Управление картой">
-        <button type="button" className="map-mode-switch" onClick={() => setMode((current) => current === 'traffic' ? 'satellite' : 'traffic')} aria-label={mode === 'traffic' ? 'Переключить на спутник' : 'Переключить на карту пробок'} title={mode === 'traffic' ? 'Показать спутник' : 'Показать пробки'}>{mode === 'traffic' ? <Satellite className="h-4 w-4" /> : <TrafficCone className="h-4 w-4" />}<span>{mode === 'traffic' ? 'Спутник' : 'Пробки'}</span></button>
-        <button type="button" onClick={() => setCameraRequest('vehicle')} disabled={!position?.coordinate} title="Показать выбранную машину"><LocateFixed className="h-4 w-4" /><span>К машине</span></button>
-        <button type="button" onClick={() => setCameraRequest('route')} disabled={!fullRoute.length && !stops.length && !previewRoute?.length} title="Показать весь маршрут"><Route className="h-4 w-4" /><span>Маршрут</span></button>
+      <div className="map-zoom" role="group" aria-label="Масштаб карты">
+        <button type="button" onClick={() => mapRef.current?.zoomIn()} aria-label="Приблизить" title="Приблизить"><Plus className="h-4 w-4" aria-hidden="true" /></button>
+        <button type="button" onClick={() => mapRef.current?.zoomOut()} aria-label="Отдалить" title="Отдалить"><Minus className="h-4 w-4" aria-hidden="true" /></button>
+        <button type="button" onClick={() => setCameraRequest('vehicle')} disabled={!position?.coordinate} aria-label="К машине" title="Показать выбранную машину"><LocateFixed className="h-4 w-4" aria-hidden="true" /></button>
       </div>
-      {!tomTomMapKey() && mode === 'traffic' ? <div className="map-provider-note">OSM · без live-пробок</div> : null}
+      <div className="map-layers" aria-label="Слои карты">
+        <button type="button" className="map-layer-button" aria-pressed={traffic} onClick={() => setTraffic((value) => !value)} title={tomTomMapKey() ? 'Пробки TomTom на карте' : 'Пробки на карте нужны с ключом TomTom'}><TriangleAlert className="h-4 w-4" aria-hidden="true" />Пробки</button>
+        <div className="map-segment" role="group" aria-label="Подложка">
+          <button type="button" aria-pressed={mode === 'map'} onClick={() => setMode('map')}>Карта</button>
+          <button type="button" aria-pressed={mode === 'satellite'} onClick={() => setMode('satellite')}>Спутник</button>
+        </div>
+        <button type="button" className="map-layer-button map-layer-icon" aria-pressed={labels} onClick={() => setLabels((value) => !value)} aria-label="Номера машин на карте" title="Номера машин на карте"><Layers className="h-4 w-4" aria-hidden="true" /></button>
+      </div>
+      {sourceNote ? <div className="map-provider-note">{tomTomMapKey() ? (traffic ? 'TomTom · пробки онлайн' : 'TomTom · без пробок') : 'OSM · без live-пробок'}</div> : null}
       <TrafficLegend segments={previewRoute?.length ? previewTraffic : position?.trafficSegments} checkedAt={previewRoute?.length ? null : position?.trafficCheckedAt} />
     </section>
   )
@@ -569,7 +614,7 @@ function TrafficLegend({ segments, checkedAt }: { segments?: TrafficSegment[] | 
 // OSM has no night tiles: invert the brightness and turn the hues back, so water stays blue and forests green.
 const OSM_NIGHT_PAINT = { 'raster-brightness-min': 0.94, 'raster-brightness-max': 0.06, 'raster-hue-rotate': 180, 'raster-saturation': -0.55, 'raster-contrast': 0.12 } as const
 
-function styleFor(mode: MapMode, theme: Theme): StyleSpecification {
+function styleFor(mode: MapMode, traffic: boolean, theme: Theme): StyleSpecification {
   const key = tomTomMapKey()
   const night = theme === 'dark' && mode !== 'satellite'
   if (!key) {
@@ -583,7 +628,7 @@ function styleFor(mode: MapMode, theme: Theme): StyleSpecification {
     base: { type: 'raster', tiles: [baseTile], tileSize: 256, attribution: '© TomTom, © OpenStreetMap contributors' }
   }
   const layers: StyleSpecification['layers'] = [{ id: 'base', type: 'raster', source: 'base' }]
-  if (mode === 'traffic') {
+  if (traffic) {
     sources.traffic = {
       type: 'raster',
       tiles: [`https://api.tomtom.com/traffic/map/4/tile/flow/relative0/{z}/{x}/{y}.png?key=${key}`],
@@ -598,11 +643,13 @@ function tomTomMapKey(): string | undefined {
   return (import.meta.env.VITE_TOMTOM_MAPS_KEY || import.meta.env.VITE_TOMTOM_MAP_KEY) as string | undefined
 }
 
-function fitRoute(map: Map | null, coordinates: Coordinate[], maxZoom: number, duration: number) {
+type Padding = number | { top: number; right: number; bottom: number; left: number }
+
+function fitRoute(map: Map | null, coordinates: Coordinate[], maxZoom: number, duration: number, padding: Padding = 64) {
   if (!map) return
   const bounds = boundsFor(coordinates)
   if (bounds) {
-    map.fitBounds([bounds[0], bounds[1]], { padding: 64, maxZoom, duration })
+    map.fitBounds([bounds[0], bounds[1]], { padding, maxZoom, duration })
   }
 }
 
@@ -618,32 +665,89 @@ function readCamera(): { center: Coordinate; zoom: number } | null {
   }
 }
 
-function readMapMode(): MapMode {
-  return window.localStorage.getItem('ops-dashboard-map-mode') === 'satellite' ? 'satellite' : 'traffic'
+function readStored(key: string) { try { return window.localStorage.getItem(key) } catch { return null } }
+function readMapMode(): MapMode { return readStored('ops-dashboard-map-mode') === 'satellite' ? 'satellite' : 'map' }
+function readTraffic() { return readStored('ops-dashboard-map-traffic') !== '0' }
+function readLabels() { return readStored('ops-dashboard-map-labels') !== '0' }
+
+const TRUCK_ICON = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14"/><circle cx="17" cy="18" r="2"/><circle cx="7" cy="18" r="2"/></svg>'
+const CLUSTER_CELL_PX = 64
+const CLUSTER_MAX_ZOOM = 9
+
+/** Trucks that would overlap at this zoom become one grey circle with their count; a click zooms into them. */
+function clusterFleet(map: Map, markers: globalThis.Map<string, Marker>, clusterRef: { current: Marker[] }) {
+  clusterRef.current.forEach((marker) => marker.remove())
+  clusterRef.current = []
+  const cells = new globalThis.Map<string, Marker[]>()
+  const clustering = map.getZoom() < CLUSTER_MAX_ZOOM
+  for (const marker of markers.values()) {
+    marker.getElement().hidden = false
+    if (!clustering) continue
+    const point = map.project(marker.getLngLat())
+    const key = `${Math.floor(point.x / CLUSTER_CELL_PX)}:${Math.floor(point.y / CLUSTER_CELL_PX)}`
+    cells.set(key, [...(cells.get(key) ?? []), marker])
+  }
+  for (const group of cells.values()) {
+    if (group.length < 2) continue
+    const bounds = new LngLatBounds()
+    let lng = 0
+    let lat = 0
+    for (const marker of group) {
+      marker.getElement().hidden = true
+      const at = marker.getLngLat()
+      bounds.extend(at)
+      lng += at.lng
+      lat += at.lat
+    }
+    const element = document.createElement('button')
+    element.type = 'button'
+    element.className = 'fleet-cluster'
+    element.textContent = String(group.length)
+    element.setAttribute('aria-label', `${group.length} машин рядом. Приблизить`)
+    element.addEventListener('click', (event) => {
+      event.stopPropagation()
+      map.fitBounds(bounds, { padding: 80, maxZoom: CLUSTER_MAX_ZOOM + 1, duration: 300 })
+    })
+    clusterRef.current.push(new Marker({ element, anchor: 'center' }).setLngLat([lng / group.length, lat / group.length]).addTo(map))
+  }
 }
 
 const FLEET_SOURCE_TEXT: Record<FleetMapVehicle['source'], string> = { WEBFLEET: 'GPS', MANUAL: 'указана вручную', CALCULATED: 'расчёт' }
 
+const TONE_TEXT: Record<FleetTone, string> = { ok: 'в пути', stop: 'на точке', late: 'опоздание', plan: 'план', idle: 'без тура' }
+
 function drawFleetMarker(element: HTMLButtonElement, vehicle: FleetMapVehicle) {
   const source = vehicle.source === 'WEBFLEET' ? (vehicle.stale ? 'stale' : 'live') : 'calculated'
-  const moving = vehicle.source === 'WEBFLEET' && vehicle.standstill === false && vehicle.courseDeg !== null
+  const tone = vehicle.tone ?? 'idle'
   const sourceText = vehicle.source === 'WEBFLEET' && vehicle.stale ? 'GPS устарел' : FLEET_SOURCE_TEXT[vehicle.source]
   const motion = vehicle.source !== 'WEBFLEET' ? '' : vehicle.standstill === true ? ', стоит' : vehicle.standstill === false ? ', едет' : ''
-  const key = `${source}|${moving ? Math.round(vehicle.courseDeg!) : 'dot'}|${vehicle.label}|${vehicle.termin ? 't' : ''}`
+  const key = `${source}|${tone}|${vehicle.label}|${vehicle.termin ? 't' : ''}`
   if (element.dataset.key === key) return
   element.dataset.key = key
-  element.className = `fleet-marker fleet-marker-${source}${vehicle.termin ? ' fleet-marker-termin' : ''}`
-  element.setAttribute('aria-label', `LKW ${vehicle.label}: ${sourceText}${motion}${vehicle.termin ? ', есть термин' : ''}. Открыть карточку`)
-  element.title = `LKW ${vehicle.label} · ${sourceText}${motion}`
+  element.className = `fleet-marker fleet-marker-${source} fleet-marker-tone-${tone}${vehicle.termin ? ' fleet-marker-termin' : ''}`
+  element.setAttribute('aria-label', `LKW ${vehicle.label}: ${TONE_TEXT[tone]}, ${sourceText}${motion}${vehicle.termin ? ', есть Termin' : ''}. Открыть карточку`)
+  element.title = `LKW ${vehicle.label} · ${TONE_TEXT[tone]} · ${sourceText}${motion}`
   element.replaceChildren()
-  const icon = document.createElement('span')
-  icon.className = moving ? 'fleet-marker-arrow' : 'fleet-marker-dot'
-  if (moving) icon.style.transform = `rotate(${vehicle.courseDeg}deg)`
-  icon.setAttribute('aria-hidden', 'true')
+  const dot = document.createElement('span')
+  dot.className = 'fleet-marker-dot'
+  dot.setAttribute('aria-hidden', 'true')
   const label = document.createElement('span')
   label.className = 'fleet-marker-label'
-  label.textContent = vehicle.label
-  element.append(icon, label)
+  label.textContent = `LKW ${vehicle.label}`
+  element.append(dot, label)
+  if (tone === 'late') {
+    const warn = document.createElement('span')
+    warn.className = 'fleet-marker-warn'
+    warn.setAttribute('aria-hidden', 'true')
+    warn.textContent = '!'
+    element.append(warn)
+  }
+  if (source !== 'live') {
+    const tag = document.createElement('small')
+    tag.className = 'fleet-marker-source'
+    tag.textContent = source === 'stale' ? 'GPS устар.' : 'расчёт'
+    element.append(tag)
+  }
 }
 
 function markerDescription(vehicleNumber?: string | null, source?: CurrentPosition['positionSource']): string {

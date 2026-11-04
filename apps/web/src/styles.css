@@ -11,6 +11,7 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   --map-height: 520px;
+  --topbar-h: 64px;
 }
 :root, [data-theme="light"] {
   color-scheme: light;
@@ -20,17 +21,17 @@
   --border-soft: rgb(var(--ln-dbe4ef));
   --text-main: rgb(var(--tx-0f172a));
   --text-muted: rgb(var(--tx-64748b));
-  /* OPS FOREX accent: deep navy by day; ivory and brass at night. Brass marks the brand and the selection, never a status. */
-  --acc: #13295b;
-  --acc-hover: #0d1f47;
-  --acc-ink: #f3ead8;
-  --acc-soft: #eef1f7;
-  --brand-mark: #13295b;
-  --brand-mark-2: #5b78b8;
-  --brand-word: #13295b;
-  --brand-word-2: #3d5a9c;
-  --brand-sub: #6b7280;
-  --focus: #13295b;
+  /* OPS FOREX accent: blue by day; ivory and brass at night. The accent marks the action and the selection, never a status. */
+  --acc: #1d4ed8;
+  --acc-hover: #1e40af;
+  --acc-ink: #ffffff;
+  --acc-soft: #eef3ff;
+  --brand-mark: #1d4ed8;
+  --brand-mark-2: #0f2a6b;
+  --brand-word: #0f172a;
+  --brand-word-2: #1d4ed8;
+  --brand-sub: #64748b;
+  --focus: #1d4ed8;
 }
 [data-theme="dark"] {
   color-scheme: dark;
@@ -54,8 +55,7 @@
 body {
   margin: 0;
   min-width: 320px;
-  background:
-    linear-gradient(180deg, rgb(var(--bg-eef4f8)) 0%, rgb(var(--bg-f8fafc)) 34%, rgb(var(--bg-edf2f7)) 100%);
+  background: rgb(var(--bg-f3f5f8));
 }
 
 main,
@@ -233,34 +233,6 @@ button:disabled {
   color: rgb(var(--tx-be123c));
 }
 
-.truck-marker {
-  width: 24px;
-  height: 24px;
-  border: 3px solid rgb(var(--ln-ffffff));
-  border-radius: 50%;
-  background: rgb(var(--bg-0f766e));
-  box-shadow: 0 0 0 3px rgb(var(--bg-0f766e) / 0.35), 0 8px 18px rgb(var(--shadow-rgb) / 0.35);
-  position: relative;
-}
-
-.truck-marker { cursor: pointer; }
-
-/* Fleet: every other truck, colour and caption say where its position comes from. */
-.fleet-marker { position: relative; display: grid; width: 20px; height: 20px; place-items: center; border: 0; background: transparent; padding: 0; cursor: pointer; }
-.fleet-marker:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 50%; }
-.fleet-marker-dot { width: 12px; height: 12px; border: 2px solid rgb(var(--ln-ffffff)); border-radius: 50%; background: var(--fleet-color); box-shadow: 0 1px 4px rgb(var(--shadow-rgb) / 0.35); }
-.fleet-marker-arrow { width: 16px; height: 16px; background: var(--fleet-color); clip-path: polygon(50% 0, 100% 100%, 50% 76%, 0 100%); filter: drop-shadow(0 0 1px #fff) drop-shadow(0 1px 2px rgb(15 23 42 / .4)); }
-.fleet-marker-label { position: absolute; top: 50%; left: 20px; transform: translateY(-50%); border-radius: 4px; background: rgb(var(--bg-ffffff) / 0.92); padding: 0 4px; color: rgb(var(--tx-0f172a)); font-size: .6875rem; font-weight: 600; line-height: 16px; white-space: nowrap; font-variant-numeric: tabular-nums; box-shadow: 0 1px 3px rgb(var(--shadow-rgb) / 0.2); }
-.fleet-marker-live { --fleet-color: #0f766e; }
-.fleet-marker-stale { --fleet-color: #b45309; }
-.fleet-marker-calculated { --fleet-color: #64748b; }
-.fleet-marker-calculated .fleet-marker-dot { border-style: dashed; }
-.fleet-labels-hidden .fleet-marker-label { display: none; }
-.fleet-marker:hover .fleet-marker-label,
-.fleet-marker:focus-visible .fleet-marker-label { display: block; }
-
-.truck-marker-label { position: absolute; top: -0.5rem; left: 1.65rem; width: max-content; max-width: 12rem; border: 1px solid rgb(var(--ln-0f172a) / 0.14); border-radius: .45rem; background: rgb(var(--bg-ffffff) / 0.96); padding: .22rem .42rem; color: rgb(var(--tx-0f172a)); font-size: .7rem; font-weight: 850; line-height: 1.1; box-shadow: 0 5px 16px rgb(var(--shadow-rgb) / 0.22); white-space: nowrap; }
-
 .stop-marker {
   display: grid;
   width: 22px;
@@ -317,98 +289,11 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
-.dashboard-main {
-  height: calc(100dvh - 57px);
-  min-height: 0;
-  overflow: hidden;
-}
-
 .dashboard-loading {
   display: grid;
   height: 100%;
   place-items: center;
   padding: 1rem;
-}
-
-.dashboard-screen {
-  display: grid;
-  width: 100%;
-  height: 100%;
-  min-width: 0;
-  min-height: 0;
-  grid-template-rows: minmax(190px, 34vh) minmax(0, 1fr);
-  overflow: hidden;
-  background: rgb(var(--bg-e2e8f0));
-}
-
-.fleet-rail {
-  z-index: 2;
-  display: flex;
-  min-width: 0;
-  min-height: 0;
-  flex-direction: column;
-  overflow: hidden;
-  border-bottom: 1px solid rgb(var(--ln-cbd5e1));
-  background: rgb(var(--bg-f8fafc) / 0.98);
-}
-
-.fleet-controls {
-  flex: 0 0 auto;
-  border-bottom: 1px solid rgb(var(--ln-e2e8f0));
-  padding: 0.625rem;
-}
-
-.fleet-list {
-  display: grid;
-  min-height: 0;
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(285px, 330px);
-  gap: 0.5rem;
-  overflow-x: auto;
-  overflow-y: hidden;
-  padding: 0.625rem;
-}
-
-.vehicle-card {
-  position: relative;
-  display: flex;
-  min-width: 0;
-  min-height: 10.75rem;
-  border: 1px solid rgb(var(--ln-e2e8f0));
-  border-left-width: 5px;
-  border-radius: 0.625rem;
-  background: rgb(var(--bg-ffffff));
-  padding: 0.65rem;
-  transition: border-color 120ms ease, background-color 120ms ease, box-shadow 120ms ease;
-}
-
-.vehicle-card:hover {
-  background: rgb(var(--bg-f8fafc));
-}
-
-.vehicle-card-selected {
-  box-shadow: 0 0 0 2px rgb(var(--bg-0ea5e9) / 0.22);
-}
-
-.vehicle-card-actions {
-  display: grid;
-  flex: 0 0 2.25rem;
-  gap: 0.35rem;
-  margin-left: 0.45rem;
-  align-self: start;
-}
-
-.vehicle-arrival-button { width: 2.25rem; min-height: 2.5rem; height: auto; flex-direction: column; gap: .1rem; padding: .25rem .1rem; text-align: center; }
-.vehicle-arrival-button span { font-size: .51rem; font-weight: 850; line-height: 1.05; }
-
-.vehicle-action-button {
-  border-color: rgb(var(--ln-bfdbfe));
-  background: rgb(var(--bg-eff6ff));
-  color: rgb(var(--tx-1d4ed8));
-}
-
-.vehicle-action-button:hover {
-  background: rgb(var(--bg-dbeafe));
 }
 
 .vehicle-action-popover {
@@ -442,17 +327,6 @@ button:disabled {
   gap: 0.45rem;
 }
 
-.vehicle-card-critical { border-left-color: rgb(var(--ln-dc2626)); background: rgb(var(--bg-fff7f7)); }
-.vehicle-card-action { border-left-color: rgb(var(--ln-ea580c)); background: rgb(var(--bg-fffaf5)); }
-.vehicle-card-watch { border-left-color: rgb(var(--ln-ca8a04)); background: rgb(var(--bg-fffdf2)); }
-.vehicle-card-moving { border-left-color: rgb(var(--ln-0284c7)); }
-.vehicle-card-ok { border-left-color: rgb(var(--ln-059669)); }
-.vehicle-card-idle { border-left-color: rgb(var(--ln-94a3b8)); }
-.vehicle-card-dwell {
-  border-left-color: rgb(var(--ln-7c3aed));
-  background: linear-gradient(135deg, rgb(var(--bg-faf5ff)) 0%, rgb(var(--bg-f3e8ff)) 100%);
-}
-
 .attention-pill {
   display: inline-flex;
   flex: 0 0 auto;
@@ -474,25 +348,6 @@ button:disabled {
 .attention-pill-idle { border-color: rgb(var(--ln-e2e8f0)); background: rgb(var(--bg-f1f5f9)); color: rgb(var(--tx-475569)); }
 .attention-pill-dwell { border-color: rgb(var(--ln-d8b4fe)); background: rgb(var(--bg-f3e8ff)); color: rgb(var(--tx-6b21a8)); }
 
-.filter-chip {
-  flex: 0 0 auto;
-  min-height: 2rem;
-  border: 1px solid rgb(var(--ln-dbe4ef));
-  border-radius: 999px;
-  background: rgb(var(--bg-ffffff));
-  padding: 0.25rem 0.65rem;
-  color: rgb(var(--tx-475569));
-  font-size: 0.75rem;
-  font-weight: 750;
-  white-space: nowrap;
-}
-
-.filter-chip-active {
-  border-color: var(--acc);
-  background: var(--acc);
-  color: var(--acc-ink);
-}
-
 .icon-button {
   display: inline-grid;
   width: 2.25rem;
@@ -508,18 +363,7 @@ button:disabled {
 .icon-button:hover { background: rgb(var(--bg-f1f5f9)); color: rgb(var(--tx-0f172a)); }
 .icon-button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 /* Keyboard users see where they are in the fleet list, filters and links. */
-.filter-chip:focus-visible,
-.vehicle-card button:focus-visible,
 main a:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-
-.dashboard-stage {
-  position: relative;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  isolation: isolate;
-  background: rgb(var(--bg-cbd5e1));
-}
 
 .map-panel-fill,
 .map-panel-fill .maplibregl-map {
@@ -527,54 +371,6 @@ main a:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
   height: 100%;
   min-height: 0;
 }
-
-.map-controls {
-  position: absolute;
-  z-index: 7;
-  right: 0.75rem;
-  bottom: 5rem;
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 0.45rem;
-}
-
-.map-controls button,
-.map-mode-toggle {
-  min-height: 2.15rem;
-  border: 1px solid rgb(var(--ln-0f172a) / 0.16);
-  border-radius: 0.5rem;
-  background: rgb(var(--bg-ffffff) / 0.92);
-  color: rgb(var(--tx-0f172a));
-  box-shadow: 0 8px 24px rgb(var(--shadow-rgb) / 0.16);
-  backdrop-filter: blur(12px);
-}
-
-.map-controls > button {
-  padding: 0.35rem 0.65rem;
-  font-size: 0.75rem;
-  font-weight: 850;
-}
-
-.map-mode-toggle {
-  display: inline-flex;
-  overflow: hidden;
-}
-
-.map-mode-toggle button {
-  min-height: 2.05rem;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-}
-
-.map-mode-toggle button.active {
-  background: rgb(var(--bg-0f172a));
-  color: white;
-}
-
-.map-controls .map-mode-switch { border-color: rgb(var(--ln-a7f3d0)); background: rgb(var(--bg-f0fdfa) / 0.95); color: rgb(var(--tx-115e59)); }
 
 .map-action-dock { position: absolute; z-index: 8; top: 4.5rem; right: .75rem; width: min(25rem, calc(100% - 4.5rem)); display: grid; justify-items: end; pointer-events: none; }
 .map-action-dock > * { pointer-events: auto; }
@@ -596,133 +392,6 @@ main a:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .quick-create-vehicle { display: inline-flex; align-items: center; gap: .5rem; margin-top: .7rem; color: rgb(var(--tx-0f172a)); font-size: .78rem; font-weight: 750; }
 .quick-order-source { margin-top: .6rem; border-left: 3px solid rgb(var(--ln-93c5fd)); background: rgb(var(--bg-eff6ff)); padding: .4rem .55rem; color: rgb(var(--tx-475569)); font-size: .73rem; line-height: 1.4; overflow-wrap: anywhere; }
 .quick-order-review-title small { margin-left: auto; color: rgb(var(--tx-64748b)); font-size: .68rem; font-weight: 750; }
-
-.map-provider-note {
-  position: absolute;
-  z-index: 7;
-  right: 0.75rem;
-  bottom: 7.55rem;
-  border: 1px solid rgb(var(--ln-fde68a));
-  border-radius: 0.5rem;
-  background: rgb(var(--bg-fffbeb) / 0.94);
-  padding: 0.35rem 0.55rem;
-  color: rgb(var(--tx-92400e));
-  font-size: 0.7rem;
-  font-weight: 850;
-  box-shadow: 0 8px 24px rgb(var(--shadow-rgb) / 0.16);
-}
-
-.vehicle-map-hud {
-  position: absolute;
-  z-index: 5;
-  top: 0;
-  left: 50%;
-  width: min(760px, calc(100% - 2rem));
-  transform: translateX(-50%);
-  color: white;
-}
-
-.vehicle-map-hud::before {
-  position: absolute;
-  z-index: -1;
-  inset: 0;
-  border: 1px solid rgb(var(--ln-ffffff) / 0.22);
-  border-top: 0;
-  border-radius: 0 0 1.1rem 1.1rem;
-  background: rgb(var(--bg-ffffff) / 0.92);
-  box-shadow: 0 18px 48px rgb(var(--shadow-rgb) / 0.2);
-  content: '';
-  opacity: 0;
-  transform: translateY(-35%);
-  transition: opacity 220ms ease, transform 280ms cubic-bezier(.2,.8,.2,1);
-  backdrop-filter: blur(18px);
-}
-
-.vehicle-map-hud:hover::before,
-.vehicle-map-hud:focus-within::before,
-.vehicle-map-hud-open::before { opacity: 1; transform: translateY(0); }
-
-.vehicle-map-hud-trigger {
-  display: flex;
-  width: 100%;
-  min-height: 4rem;
-  align-items: center;
-  justify-content: center;
-  gap: clamp(0.75rem, 2vw, 2rem);
-  padding: 0.65rem 1rem;
-  color: white;
-  filter: drop-shadow(0 2px 4px rgb(15 23 42 / 0.8));
-  text-shadow: 0 2px 5px rgb(var(--shadow-rgb) / 0.9);
-}
-
-.vehicle-map-hud:hover .vehicle-map-hud-trigger,
-.vehicle-map-hud:focus-within .vehicle-map-hud-trigger,
-.vehicle-map-hud-open .vehicle-map-hud-trigger { color: rgb(var(--tx-0f172a)); filter: none; text-shadow: none; }
-
-.hud-vehicle { font-size: clamp(1.05rem, 2vw, 1.35rem); font-weight: 900; white-space: nowrap; }
-.hud-metric { display: grid; gap: 0.05rem; text-align: left; }
-.hud-metric > span { font-size: 0.62rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.78; }
-.hud-metric > strong { font-size: 0.9rem; font-weight: 900; white-space: nowrap; }
-.hud-chevron { transition: transform 220ms ease; }
-.vehicle-map-hud:hover .hud-chevron,
-.vehicle-map-hud:focus-within .hud-chevron,
-.vehicle-map-hud-open .hud-chevron { transform: rotate(180deg); }
-
-.vehicle-map-hud-details {
-  display: flex;
-  max-height: 0;
-  min-width: 0;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  overflow: hidden;
-  padding: 0 1rem;
-  opacity: 0;
-  transform: translateY(-0.75rem);
-  transition: max-height 280ms ease, opacity 180ms ease, padding 280ms ease, transform 280ms ease;
-}
-
-.vehicle-map-hud:hover .vehicle-map-hud-details,
-.vehicle-map-hud:focus-within .vehicle-map-hud-details,
-.vehicle-map-hud-open .vehicle-map-hud-details {
-  max-height: 6rem;
-  padding: 0 1rem 1rem;
-  opacity: 1;
-  transform: translateY(0);
-}
-
-.route-stops-drawer {
-  position: absolute;
-  z-index: 5;
-  right: clamp(0.5rem, 2vw, 1.5rem);
-  bottom: 0;
-  left: clamp(0.5rem, 2vw, 1.5rem);
-  max-height: 4.5rem;
-  overflow: hidden;
-  border: 1px solid rgb(var(--ln-ffffff) / 0.55);
-  border-bottom: 0;
-  border-radius: 1.1rem 1.1rem 0 0;
-  background: rgb(var(--bg-ffffff) / 0.94);
-  box-shadow: 0 -14px 42px rgb(var(--shadow-rgb) / 0.18);
-  transition: max-height 340ms cubic-bezier(.2,.8,.2,1);
-  backdrop-filter: blur(20px);
-}
-
-.route-stops-drawer-open { max-height: min(44%, 25rem); }
-.route-stops-drawer-trigger {
-  position: relative;
-  display: grid;
-  width: 100%;
-  min-height: 4.5rem;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 1rem;
-  padding: 1rem 1.25rem 0.75rem;
-}
-.drawer-handle { position: absolute; top: 0.45rem; left: 50%; width: 2.5rem; height: 0.25rem; border-radius: 99px; background: rgb(var(--bg-cbd5e1)); transform: translateX(-50%); }
-.drawer-chevron { transition: transform 240ms ease; }
-.route-stops-drawer-open .drawer-chevron { transform: rotate(180deg); }
-.route-stops-drawer-body { max-height: calc(min(44vh, 25rem) - 4.5rem); overflow-x: hidden; overflow-y: auto; border-top: 1px solid rgb(var(--ln-e2e8f0)); padding: 0.9rem 1.25rem 1.25rem; }
 .route-stops-grid { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(220px, 1fr); gap: 0.75rem; overflow-x: auto; padding-bottom: 0.35rem; }
 
 .route-stop-card {
@@ -794,10 +463,6 @@ main a:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .quick-cargo { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.55rem; }
 .quick-cargo span { border-radius: 999px; background: rgb(var(--bg-f1f5f9)); padding: 0.2rem 0.45rem; color: rgb(var(--tx-475569)); font-size: 0.67rem; font-weight: 800; }
 .quick-cargo p { width: 100%; color: rgb(var(--tx-475569)); font-size: 0.75rem; line-height: 1.45; }
-.map-error,
-.dashboard-sync-warning { position: absolute; z-index: 8; right: 1rem; border-radius: 0.6rem; padding: 0.55rem 0.75rem; font-size: 0.75rem; font-weight: 800; box-shadow: 0 8px 24px rgb(var(--shadow-rgb) / 0.2); }
-.map-error { top: 8.5rem; left: 1rem; right: auto; border: 1px solid rgb(var(--ln-fecaca)); background: rgb(var(--bg-fff1f2)); color: rgb(var(--tx-9f1239)); }
-.dashboard-sync-warning { top: 8.25rem; border: 1px solid rgb(var(--ln-fde68a)); background: rgb(var(--bg-fffbeb)); color: rgb(var(--tx-92400e)); }
 
 .work-surface table td {
   max-width: 28rem;
@@ -810,33 +475,12 @@ main a:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
   max-width: 100%;
 }
 
-@media (min-width: 768px) {
-  .dashboard-main { height: 100dvh; }
-  .dashboard-screen { grid-template-columns: clamp(290px, 28vw, 370px) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
-  .fleet-rail { border-right: 1px solid rgb(var(--ln-cbd5e1)); border-bottom: 0; }
-  .fleet-list {
-    grid-auto-flow: row;
-    grid-auto-columns: auto;
-    overflow-x: hidden;
-    overflow-y: auto;
-  }
-}
-
 @media (max-width: 640px) {
   .map-action-dock { top: 4.5rem; right: .45rem; width: min(23rem, calc(100% - .9rem)); }
   .map-action-bar { width: 100%; justify-content: stretch; }
   .map-action-bar button { flex: 1; padding-inline: .25rem; font-size: .66rem; }
   .map-action-body { max-height: 60dvh; }
   .quick-order-meta { grid-template-columns: 1fr; }
-  .vehicle-map-hud { width: calc(100% - 1rem); }
-  .vehicle-map-hud-trigger { justify-content: space-between; gap: 0.5rem; padding-inline: 0.75rem; }
-  .hud-metric:nth-of-type(2) { display: none; }
-  .vehicle-map-hud-details { align-items: stretch; flex-direction: column; }
-  .vehicle-map-hud:hover .vehicle-map-hud-details,
-  .vehicle-map-hud:focus-within .vehicle-map-hud-details,
-  .vehicle-map-hud-open .vehicle-map-hud-details { max-height: 10rem; }
-  .route-stops-drawer-open { max-height: 58%; }
-  .route-stops-drawer-body { max-height: calc(58vh - 4.5rem); }
 }
 
 .maplibregl-map {
@@ -892,72 +536,18 @@ main a:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .preview-stop-marker { border-color: rgb(var(--ln-d97706)); background: rgb(var(--bg-fffbeb)); color: rgb(var(--tx-92400e)); }
 @media (prefers-reduced-motion: reduce) { .route-point { transition: none !important; } }
 
-
 /* ---- Visual fixes: overlaps and wrapping (2026-11-01) ---- */
 
 /* Tables: no mid-word breaks ("Актив/е"), dates and numbers on one line; the wrapper scrolls instead. */
 .data-table td { overflow-wrap: normal; word-break: normal; }
 .data-table td.tabular-nums, .data-table td:first-child, .data-table td:nth-child(2), .data-table td:nth-child(3) { white-space: nowrap; }
 
-/* Logout: icon in the narrow rail, label on wide screens and in the phone menu. */
-.dispatcher-logout { display: flex; align-items: center; justify-content: center; gap: .75rem; border-radius: .375rem; color: rgb(var(--tx-cbd5e1)); font-size: .875rem; font-weight: 500; }
-.dispatcher-logout:hover { background: rgb(var(--bg-0f172a)); color: white; }
-.dispatcher-logout:focus-visible { outline: 2px solid rgb(var(--ln-38bdf8)); outline-offset: 2px; }
-aside > .dispatcher-logout { position: absolute; right: .5rem; bottom: 1rem; left: .5rem; min-height: 3rem; }
-aside > .dispatcher-logout span { display: none; }
-aside > .dispatcher-logout-error { position: absolute; bottom: 4.25rem; left: .5rem; right: .5rem; color: rgb(var(--tx-fecaca)); font-size: .7rem; }
-@media (min-width: 1536px) {
-  aside > .dispatcher-logout { justify-content: flex-start; padding-inline: .75rem; right: .75rem; left: .75rem; }
-  aside > .dispatcher-logout span { display: inline; }
-}
-.dispatcher-logout-mobile { flex: 0 0 auto; min-height: 2.5rem; margin-left: auto; padding: .5rem .75rem; color: rgb(var(--tx-334155)); }
-.dispatcher-logout-mobile:hover { background: rgb(var(--bg-f1f5f9)); color: rgb(var(--tx-0f172a)); }
-/* Room for the assistant button at the end of the phone menu. */
-.mobile-nav { padding-right: 3.75rem; }
-
-/* Vehicle page map card: controls sit inside the map above the attribution. */
-.map-panel-card .map-controls { bottom: 2.25rem; }
-.map-panel-card .map-provider-note { bottom: 4.85rem; }
-
-/* Truck label above the marker, so it never hides the stop number at the same spot. */
-.truck-marker { z-index: 3; }
 .stop-marker { z-index: 2; }
-.truck-marker-label { top: auto; bottom: calc(100% + .35rem); left: 50%; transform: translateX(-50%); }
-
-/* Notification toast: bottom-left, clear of the route window and map controls. */
-@media (min-width: 1024px) { .operations-toast { left: 6rem; } }
-@media (min-width: 1536px) { .operations-toast { left: 17rem; } }
-
-/* Dashboard map: the truck card, the route window and the draft label never overlap. */
-.dashboard-stage { container-type: inline-size; container-name: stage; }
-.vehicle-map-hud-open { z-index: 9; }
-.dashboard-stage:has(.route-stops-drawer-open) .map-draft-banner { bottom: calc(min(44%, 25rem) + .75rem); }
 @container stage (min-width: 56rem) {
-  .vehicle-map-hud { left: 3.5rem; right: calc(min(25rem, 100cqw - 4.5rem) + 1.25rem); width: auto; max-width: 760px; margin-inline: auto; transform: none; }
-  /* An open truck card covers the left of the map: the ETA panel and the stops drawer move to its right. */
-  .dashboard-stage:has(.truck-card) .vehicle-map-hud { left: calc(min(380px, 100cqw - 24px) + 24px); right: 13rem; max-width: 760px; margin-inline: 0; }
-  .dashboard-stage:has(.truck-card) .route-stops-drawer { left: calc(min(380px, 100cqw - 24px) + 24px); }
   .map-action-dock { top: .75rem; }
 }
 @media (max-width: 640px) {
   .map-draft-banner { bottom: 8.25rem; max-width: calc(100% - 1rem); }
-  .dashboard-stage:has(.route-stops-drawer-open) .map-draft-banner { bottom: calc(58% + .75rem); }
-}
-@media (min-width: 1024px) { .operations-toast { max-width: 22rem; } }
-
-/* Route traffic legend (Google-style route colouring). */
-.map-traffic-legend { position: absolute; z-index: 7; left: .75rem; bottom: 5rem; display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .65rem; max-width: calc(100% - 1.5rem); border: 1px solid rgb(var(--ln-0f172a) / 0.12); border-radius: .55rem; background: rgb(var(--bg-ffffff) / 0.94); padding: .35rem .6rem; color: rgb(var(--tx-0f172a)); font-size: .7rem; font-weight: 750; box-shadow: 0 8px 24px rgb(var(--shadow-rgb) / 0.14); }
-.map-traffic-legend strong { font-weight: 850; }
-.map-traffic-legend span { display: inline-flex; align-items: center; gap: .3rem; }
-.map-traffic-legend i { display: inline-block; width: .9rem; height: .3rem; border-radius: 999px; }
-.map-traffic-legend small { color: rgb(var(--tx-475569)); font-weight: 700; }
-.map-traffic-legend-stale { color: rgb(var(--tx-b45309)) !important; }
-.map-panel-card .map-traffic-legend { bottom: 2.25rem; max-width: calc(100% - 22rem); }
-.dashboard-stage:has(.map-draft-banner) .map-traffic-legend { bottom: 8.4rem; }
-@media (max-width: 640px) {
-  .map-traffic-legend { bottom: 9.75rem; }
-  .dashboard-stage:has(.map-draft-banner) .map-traffic-legend { bottom: 11.75rem; }
-  .map-panel-card .map-traffic-legend { bottom: 5.25rem; max-width: calc(100% - 1.5rem); }
 }
 
 /* Route stages: where the truck is in its tour. */
@@ -992,16 +582,6 @@ aside > .dispatcher-logout-error { position: absolute; bottom: 4.25rem; left: .5
 /* Stage line on the vehicle page. */
 .vehicle-stage { margin-top: .75rem; border-radius: .6rem; background: rgb(var(--bg-f8fafc)); padding: .55rem .7rem; }
 .vehicle-stage .route-stage-summary { white-space: normal; }
-
-/* Open route drawer: map buttons, provider note and traffic legend move above it. */
-.dashboard-stage:has(.route-stops-drawer-open) .map-controls { bottom: calc(min(44%, 25rem) + .75rem); }
-.dashboard-stage:has(.route-stops-drawer-open) .map-provider-note,
-.dashboard-stage:has(.route-stops-drawer-open) .map-traffic-legend { bottom: calc(min(44%, 25rem) + 4.4rem); }
-@media (max-width: 640px) {
-  .dashboard-stage:has(.route-stops-drawer-open) .map-controls { bottom: calc(58% + .75rem); }
-  .dashboard-stage:has(.route-stops-drawer-open) .map-provider-note,
-  .dashboard-stage:has(.route-stops-drawer-open) .map-traffic-legend { bottom: calc(58% + 4.4rem); }
-}
 
 /* Route variants (Webfleet-style), polished with unslop by @heydamir: 4px grid, weights 400-600,
    quiet chrome; the only colour is the chosen route blue and the road shields. */
@@ -1058,65 +638,6 @@ aside > .dispatcher-logout-error { position: absolute; bottom: 4.25rem; left: .5
 .traffic-incident-details small { display: block; margin-top: 8px; color: rgb(var(--tx-64748b)); font-size: 12px; line-height: 16px; }
 .traffic-incident-details small.traffic-incident-stale { color: rgb(var(--tx-b45309)); }
 
-/* Compact fleet rows: two lines like a telematics list, the full card opens next to the list. */
-.fleet-list { gap: 4px; align-content: start; }
-.vehicle-card { min-height: auto; flex-shrink: 0; align-items: center; gap: 8px; border-left-width: 4px; border-radius: 8px; padding: 6px 8px; }
-.vehicle-card-dwell { background: rgb(var(--bg-faf5ff)); }
-.vehicle-card-open { border-color: rgb(var(--ln-0f766e)); box-shadow: inset 0 0 0 1px rgb(var(--bg-0f766e)); }
-.vehicle-row-main { display: flex; min-width: 0; flex: 1; align-items: center; gap: 8px; text-align: left; }
-.vehicle-row-icon { position: relative; display: grid; width: 32px; height: 32px; flex: 0 0 32px; place-items: center; border-radius: 50%; background: rgb(var(--bg-f1f5f9)); color: rgb(var(--tx-334155)); }
-.vehicle-row-dot { position: absolute; right: -1px; bottom: -1px; width: 10px; height: 10px; border: 2px solid rgb(var(--ln-ffffff)); border-radius: 50%; }
-.vehicle-row-dot-live { background: rgb(var(--bg-16a34a)); }
-.vehicle-row-dot-stale { background: rgb(var(--bg-d97706)); }
-.vehicle-row-dot-calculated { background: rgb(var(--bg-94a3b8)); }
-.vehicle-row-title { display: flex; min-width: 0; align-items: baseline; gap: 4px; overflow: hidden; color: rgb(var(--tx-0f172a)); font-size: .875rem; line-height: 1.3; white-space: nowrap; }
-.vehicle-row-title strong { font-weight: 600; font-variant-numeric: tabular-nums; }
-.vehicle-row-muted { margin-left: 4px; color: rgb(var(--tx-64748b)); font-size: .75rem; }
-.vehicle-row-line { display: flex; min-width: 0; align-items: center; gap: 4px; margin-top: 2px; color: rgb(var(--tx-475569)); font-size: .75rem; line-height: 1.35; font-variant-numeric: tabular-nums; }
-.vehicle-row-stale { color: rgb(var(--tx-92400e)); }
-.vehicle-row-arrow { width: 9px; height: 9px; flex: 0 0 9px; background: rgb(var(--bg-334155)); clip-path: polygon(50% 0, 100% 100%, 50% 76%, 0 100%); }
-.vehicle-row-alert { display: inline-flex; flex: 0 0 auto; }
-.vehicle-row-alert-critical { color: rgb(var(--tx-dc2626)); }
-.vehicle-row-alert-dwell { color: rgb(var(--tx-7c3aed)); }
-.vehicle-row-alert-action { color: rgb(var(--tx-ea580c)); }
-.vehicle-row-alert-watch { color: rgb(var(--tx-ca8a04)); }
-.vehicle-card .vehicle-card-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 4px; margin-left: 0; align-self: center; }
-.vehicle-card .vehicle-action-button,
-.vehicle-card .vehicle-arrival-button { width: auto; min-height: 30px; height: 30px; flex-direction: row; gap: 4px; padding: 0 8px; }
-.vehicle-card .vehicle-action-button span,
-.vehicle-card .vehicle-arrival-button span { font-size: .6875rem; font-weight: 600; line-height: 1; }
-.vehicle-card .vehicle-card-actions .icon-button:not(.vehicle-action-button) { width: 28px; height: 28px; }
-/* The labelled action keeps its text: an icon-button is a grid of fixed width, which hid BELADEN under the pin. */
-.vehicle-card .vehicle-card-actions .vehicle-action-button { display: inline-flex; width: auto; flex: 0 0 auto; align-items: center; white-space: nowrap; }
-
-@container stage (min-width: 56rem) and (max-width: 82rem) {
-  /* Narrow space beside the card: keep the truck, ETA and delay; the remaining distance is in the card. */
-  .dashboard-stage:has(.truck-card) .vehicle-map-hud-trigger .hud-metric:nth-of-type(3) { display: none; }
-}
-@media (prefers-reduced-motion: no-preference) {
-  .vehicle-map-hud, .route-stops-drawer { transition: left 160ms ease-out; }
-}
-
-/* Sound and Windows notifications for this browser. */
-.alert-toggle { display: flex; align-items: center; justify-content: center; gap: .75rem; border-radius: .375rem; color: rgb(var(--tx-cbd5e1)); font-size: .875rem; font-weight: 500; }
-.alert-toggle:hover { background: rgb(var(--bg-0f172a)); color: white; }
-.alert-toggle:focus-visible { outline: 2px solid rgb(var(--ln-38bdf8)); outline-offset: 2px; }
-.alert-toggle-icon { position: relative; display: inline-flex; }
-.alert-toggle-dot { position: absolute; top: -2px; right: -2px; width: 8px; height: 8px; border-radius: 50%; background: rgb(var(--bg-f59e0b)); box-shadow: 0 0 0 2px rgb(var(--bg-020617)); }
-/* Above the assistant launcher (bottom 76px) and the logout button. */
-aside > .alert-toggle { position: absolute; right: .5rem; bottom: 8.25rem; left: .5rem; min-height: 3rem; }
-aside > .alert-toggle .alert-toggle-label { display: none; }
-aside > .dispatcher-logout-error { bottom: 11.5rem; }
-@media (min-width: 1536px) {
-  aside > .alert-toggle { justify-content: flex-start; padding-inline: .75rem; right: .75rem; left: .75rem; text-align: left; }
-  aside > .alert-toggle .alert-toggle-label { display: inline; }
-}
-.alert-toggle-mobile { flex: 0 0 auto; min-height: 2.5rem; margin-left: auto; padding: .5rem .75rem; color: rgb(var(--tx-334155)); }
-.alert-toggle-mobile:hover { background: rgb(var(--bg-f1f5f9)); color: rgb(var(--tx-0f172a)); }
-.alert-toggle-mobile .alert-toggle-label { display: none; }
-.alert-toggle-mobile .alert-toggle-dot { box-shadow: 0 0 0 2px rgb(var(--bg-ffffff)); }
-.alert-toggle-mobile ~ .dispatcher-logout-mobile { margin-left: 0; }
-
 /* Termin review: the same quiet card as the Auftrag check, with the chosen stop and the ETA risk. */
 .appointment-review-vehicle { align-self: end; color: rgb(var(--tx-475569)); font-size: .75rem; }
 .appointment-review-time { margin-top: .75rem; border: 0; padding: 0; }
@@ -1143,67 +664,9 @@ aside > .dispatcher-logout-error { bottom: 11.5rem; }
 .pending-appointments li span { display: block; color: rgb(var(--tx-64748b)); font-size: .75rem; }
 .pending-appointments .pending-appointments-found { color: rgb(var(--tx-0f766e)); }
 .pending-appointments-actions { display: flex; flex-shrink: 0; gap: .375rem; }
-
-/* Slot attached (Termin): indigo, apart from the violet of a long stop and of the track; always with its text. */
-.vehicle-card-termin { border-left-color: rgb(var(--ln-4338ca)); background: rgb(var(--bg-f5f6ff)); }
-.vehicle-row-termin { display: inline-flex; align-items: center; gap: 4px; margin-top: 3px; border-radius: 6px; background: rgb(var(--bg-4338ca)); padding: 1px 6px; color: #fff; font-size: .6875rem; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.5; white-space: nowrap; }
 .truck-card-termin { margin-left: 8px; vertical-align: middle; }
-.fleet-marker-termin .fleet-marker-dot, .fleet-marker-termin .fleet-marker-arrow { box-shadow: 0 0 0 3px rgb(var(--bg-4338ca)); }
-
-/* Signed-in dispatcher in the sidebar; the narrow sidebar shows initials only. */
-.account-menu { display: flex; width: calc(100% - 16px); min-height: 44px; align-items: center; justify-content: center; gap: 10px; margin: 0 8px 8px; border-radius: 8px; padding: 6px; color: rgb(var(--tx-e2e8f0)); font-size: .8125rem; text-align: left; }
-.account-menu:hover { background: rgb(var(--bg-ffffff) / 0.06); }
-.account-menu:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-.account-menu-avatar { display: grid; width: 30px; height: 30px; flex: 0 0 30px; place-items: center; border-radius: 50%; background: rgb(var(--bg-0f766e)); color: #fff; font-size: .75rem; font-weight: 600; }
-.account-menu-name { display: none; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-@media (min-width: 1536px) { .account-menu { justify-content: flex-start; } .account-menu-name { display: block; } }
-.account-menu-compact { width: auto; margin: 0; color: rgb(var(--tx-0f172a)); }
-.account-menu-compact .account-menu-name { display: block; }
 .account-dialog-backdrop { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; background: rgb(var(--shadow-rgb) / 0.45); padding: 16px; }
 .account-dialog { display: grid; width: min(420px, 100%); gap: 12px; border-radius: 12px; background: rgb(var(--bg-ffffff)); padding: 20px; color: rgb(var(--tx-0f172a)); box-shadow: 0 20px 50px rgb(var(--shadow-rgb) / 0.3); }
 
-/* Whose trucks: own, the whole fleet or free ones. */
-.fleet-scope { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px; margin-top: 8px; border-radius: 8px; background: rgb(var(--bg-e2e8f0)); padding: 2px; }
-.fleet-scope-button { display: inline-flex; min-height: 30px; align-items: center; justify-content: center; gap: 6px; border-radius: 6px; color: rgb(var(--tx-475569)); font-size: .8125rem; font-weight: 500; }
-.fleet-scope-button:hover { color: rgb(var(--tx-0f172a)); }
-.fleet-scope-button-active { background: rgb(var(--bg-ffffff)); color: rgb(var(--tx-0f172a)); box-shadow: 0 1px 2px rgb(var(--shadow-rgb) / 0.12); }
-.fleet-scope-button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-.fleet-scope-count { color: rgb(var(--tx-64748b)); font-size: .75rem; font-variant-numeric: tabular-nums; }
-.fleet-scope-hint { margin-top: 8px; color: rgb(var(--tx-475569)); font-size: .75rem; line-height: 1.4; }
-.vehicle-row-owner { display: block; margin-top: 2px; color: rgb(var(--tx-64748b)); font-size: .6875rem; }
-
 /* ---- OPS FOREX brand ---- */
 .brand-mark { flex: none; }
-.brand-wordmark { display: flex; flex-direction: column; line-height: 1; white-space: nowrap; }
-.brand-wordmark-name { color: var(--brand-word); font-size: 1.1rem; letter-spacing: -.01em; }
-.brand-wordmark-name b { font-weight: 800; }
-.brand-wordmark-name span { margin-left: .1em; color: var(--brand-word-2); font-weight: 500; }
-.brand-wordmark-sub { margin-top: 5px; color: var(--brand-sub); font-size: .5625rem; font-weight: 600; letter-spacing: .42em; }
-
-/* The rail stays dark in both themes: night colours of the brand on it. */
-.app-rail { --brand-mark: #f3ead8; --brand-mark-2: #c8a96a; --brand-word: #f3ead8; --brand-word-2: #c8a96a; --brand-sub: #8996aa; --brand-hole: #0b1a2e; border-right: 1px solid #1e3350; background: #0b1a2e; }
-.app-rail-brand { border-bottom: 1px solid #1e3350; }
-.app-rail-link { color: #c3cad6; }
-.app-rail-link:hover, .app-rail-link:focus { background: #13243d; color: #fff; }
-.app-rail-link-active { background: rgb(200 169 106 / .14); box-shadow: inset 3px 0 #c8a96a; color: #f3ead8; }
-.app-rail-link-active svg { color: #c8a96a; }
-.app-rail a:focus-visible, .app-rail button:focus-visible { outline: 2px solid #c8a96a; outline-offset: 2px; }
-.mobile-nav-active { background: var(--acc); color: var(--acc-ink); }
-
-/* Day / night switch. */
-.theme-toggle { display: flex; align-items: center; justify-content: center; gap: .75rem; border-radius: .375rem; color: #cbd5e1; font-size: .875rem; font-weight: 500; }
-.theme-toggle:hover { background: #13243d; color: #fff; }
-.theme-toggle[aria-pressed="true"] { color: #c8a96a; }
-aside > .theme-toggle { position: absolute; right: .5rem; bottom: 11.75rem; left: .5rem; min-height: 3rem; }
-aside > .theme-toggle .theme-toggle-label { display: none; }
-aside > .dispatcher-logout-error { bottom: 15rem; }
-@media (min-width: 1536px) {
-  aside > .theme-toggle { justify-content: flex-start; padding-inline: .75rem; right: .75rem; left: .75rem; text-align: left; }
-  aside > .theme-toggle .theme-toggle-label { display: inline; }
-}
-.theme-toggle-mobile { flex: 0 0 auto; min-height: 2.5rem; margin-left: auto; padding: .5rem .75rem; color: rgb(var(--tx-334155)); }
-.theme-toggle-mobile:hover { background: rgb(var(--bg-f1f5f9)); color: rgb(var(--tx-0f172a)); }
-.theme-toggle-mobile[aria-pressed="true"] { color: var(--focus); }
-.theme-toggle-mobile .theme-toggle-label { display: none; }
-.theme-toggle-mobile ~ .alert-toggle-mobile { margin-left: 0; }
-.theme-toggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }

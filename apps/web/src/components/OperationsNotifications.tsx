@@ -1,158 +1,100 @@
-import { useEffect, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
-import { usePolling } from '../hooks/usePolling'
-import {
-  alertPermission, bannerDismissed, dismissBanner, pickNewAlerts, playAlertSound, readSeen, requestAlertPermission,
-  showSummaryAlert, showSystemAlert, titleWithCount, writeSeen, type AlertNotification, type AlertPermission
-} from '../lib/alerts'
-import { api } from '../lib/api'
-import { pendingToDocument } from '../lib/appointments'
-import type { PendingAppointment } from '../types/domain'
-import { AppointmentReview } from './AppointmentReview'
-import { operationsBase, operationsRequest } from './VehicleOperationsPanel'
+import { CalendarDays, LogOut, MapPinCheck, MessageSquareText } from 'lucide-react'
+import { useState } from 'react'
+import { Link, useLocation } from 'react-router-dom'
 
-const HIDDEN_KEY = 'ops-hidden-notifications'
-function readHiddenNotifications(): string[] {
-  try {
-    const value: unknown = JSON.parse(sessionStorage.getItem(HIDDEN_KEY) ?? '[]')
-    return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
-  } catch { return [] }
+import { departureOf, useNotifications } from '../context/notifications'
+import { alertPermission, bannerDismissed, dismissBanner, requestAlertPermission, type AlertNotification, type AlertPermission } from '../lib/alerts'
+import { pendingToDocument } from '../lib/appointments'
+import { formatTime } from '../lib/format'
+import { terminText } from '../lib/tours'
+import type { Stop } from '../types/domain'
+import { AppointmentReview } from './AppointmentReview'
+
+type Tone = 'late' | 'termin' | 'arrival' | 'info'
+
+/** One open question for the dispatcher, with its own buttons. Used in «Требует решения», the bell and the toast. */
+export function DecisionCard({ item, stop, onSelect, openLink = false }: { item: AlertNotification; stop?: Stop | null; onSelect?: (vehicleId: string) => void; openLink?: boolean }) {
+  const state = useNotifications()
+  const busy = state.busyId === item.id
+  const error = state.errors[item.id]
+  const vehicle = /LKW\s+(\S+?)[\s,]/.exec(item.message)?.[1]
+  const place = stop ? stop.city || stop.address : null
+  const departure = item.type === 'STOP_DEPARTED' ? departureOf(item.payloadJson) : null
+  const pending = item.type === 'APPOINTMENT_MATCH' ? state.pendingOf(item) : null
+  const candidate = pending?.match.status === 'MATCHED' ? pending.match.candidates[0] : null
+
+  let tone: Tone = 'info'
+  let Icon = MessageSquareText
+  let title = item.message
+  let detail: string | null = null
+  let actions: Array<{ label: string; primary?: boolean; run: () => void }> = [{ label: 'Прочитано', run: () => void state.resolve(item, 'ack') }]
+  if (departure) {
+    const load = departure.stopType === 'LOAD'
+    tone = 'late'; Icon = LogOut
+    title = `${vehicle ? `LKW ${vehicle} уехала` : 'Машина уехала'} ${load ? 'с загрузки' : 'с выгрузки'} без ${load ? 'BELADEN' : 'ENTLADEN'}`
+    detail = place ? `${place}, выезд ${departure.time} · GPS Webfleet` : item.message
+    actions = [
+      { label: `${load ? 'BELADEN' : 'ENTLADEN'} ${departure.time}`, primary: true, run: () => void state.answerDeparture(item, 'done') },
+      { label: load ? 'Не загружена' : 'Не выгружена', run: () => void state.answerDeparture(item, 'keep') },
+      { label: 'Ошибка прибытия', run: () => void state.answerDeparture(item, 'revert') }
+    ]
+  } else if (item.type === 'AUTO_ARRIVAL') {
+    tone = 'arrival'; Icon = MapPinCheck
+    title = `${vehicle ? `LKW ${vehicle} прибыла` : 'Машина прибыла'} ${stop?.type === 'UNLOAD' ? 'на выгрузку' : stop?.type === 'LOAD' ? 'на загрузку' : 'на точку'}`
+    detail = place ? `${place}${stop?.arrivedAt ? `, ${formatTime(stop.arrivedAt)}` : ''} · GPS Webfleet, автоматически. BELADEN/ENTLADEN подтверждаете вы` : item.message
+    actions = [{ label: 'Понятно', primary: true, run: () => void state.resolve(item, 'ack') }]
+    if (item.stopId) actions.push({ label: 'Отменить прибытие', run: () => void state.resolve(item, 'revert') })
+  } else if (item.type === 'APPOINTMENT_MATCH') {
+    tone = 'termin'; Icon = CalendarDays
+    title = 'Termin на проверку'
+    detail = candidate && pending
+      ? [`LKW ${candidate.vehicleNumber}`, `Auftrag ${candidate.orderNumber}`, [candidate.city ?? pending.city, terminText(pending)].filter(Boolean).join(' ')].join(' · ')
+      : item.message
+    actions = [
+      { label: 'Принять', primary: true, run: () => void state.acceptTermin(item) },
+      { label: 'Исправить', run: () => void state.reviewTermin(item) }
+    ]
+  }
+
+  const headingId = `decision-${item.id}`
+  return <article className={`decision-card decision-card-${tone}`} aria-labelledby={headingId}>
+    <Icon className="decision-card-icon" aria-hidden="true" />
+    <div className="min-w-0">
+      {onSelect ? <button type="button" id={headingId} className="decision-card-title" onClick={() => onSelect(item.vehicleId)}>{title}</button> : <h3 id={headingId} className="decision-card-title">{title}</h3>}
+      {detail ? <p className="decision-card-detail">{detail}</p> : null}
+      {error ? <p role="alert" className="decision-card-error">{error}</p> : null}
+      <div className="decision-card-actions">
+        {actions.map((action) => <button key={action.label} type="button" className={action.primary ? 'decision-button decision-button-primary' : 'decision-button'} disabled={busy} onClick={action.run}>{action.label}</button>)}
+        {openLink ? <Link className="decision-button" to={`/vehicles/${item.vehicleId}`} onClick={() => state.hide(item.id)}>Открыть грузовик</Link> : null}
+      </div>
+    </div>
+  </article>
 }
 
+/** Off the dashboard the oldest open question shows as a toast; on the dashboard it lives in «Требует решения». */
 export function OperationsNotifications() {
-  // Keeps polling in a hidden tab so the sound and the Windows notification arrive while the dispatcher is in Outlook or Excel.
-  const notifications = usePolling(() => operationsRequest<{ notifications: AlertNotification[] }>('/notifications'), 30000, true, 'notifications', true)
-  const navigate = useNavigate()
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
+  const state = useNotifications()
+  const location = useLocation()
   const [permission, setPermission] = useState<AlertPermission>(alertPermission)
   const [banner, setBanner] = useState(() => !bannerDismissed())
-  const [termin, setTermin] = useState<PendingAppointment | null>(null)
-  // Notifications set aside with «Открыть грузовик» stay aside after a reload in this tab.
-  const [hidden, setHidden] = useState<string[]>(readHiddenNotifications)
-  useEffect(() => { try { sessionStorage.setItem(HIDDEN_KEY, JSON.stringify(hidden.slice(-200))) } catch { /* Storage may be unavailable. */ } }, [hidden])
-  useEffect(() => {
-    // Vercel Functions are request-bound; production uses the durable polling path.
-    if (!import.meta.env.DEV) return
-    const stream = new EventSource(`${operationsBase}/events/stream`)
-    stream.addEventListener('operations', notifications.refetch)
-    stream.addEventListener('open', notifications.refetch)
-    return () => stream.close()
-  }, [notifications.refetch])
+  const onDashboard = location.pathname === '/'
 
-  const items = notifications.data?.notifications
-  useEffect(() => {
-    if (!items) return
-    document.title = titleWithCount(items.length)
-    const { fresh, summary, seen } = pickNewAlerts(items, readSeen())
-    writeSeen(seen)
-    const away = document.visibilityState === 'hidden' || !document.hasFocus()
-    if (summary > 0) {
-      playAlertSound('SUMMARY')
-      if (away) showSummaryAlert(summary)
-    }
-    for (const item of fresh) {
-      playAlertSound(item.type)
-      if (away) showSystemAlert(item, (path) => navigate(path))
-    }
-  }, [items, navigate])
-  useEffect(() => () => { document.title = titleWithCount(0) }, [])
-
-  const current = items?.find(item => !hidden.includes(item.id))
-  useEffect(() => { setError('') }, [current?.id])
-
-  /** A waiting slip found its stop: the same review card as for a fresh document. */
-  async function openTermin() {
-    if (!current) return
-    setBusy(true); setError('')
-    try {
-      const pendingId = (JSON.parse(current.payloadJson ?? '{}') as { pendingId?: string }).pendingId
-      const item = (await api.pendingAppointments()).items.find((entry) => entry.id === pendingId)
-      if (!item) { await operationsRequest(`/notifications/${current.id}/ack`, 'POST'); await notifications.refetch(); setError('Термин уже привязан или отклонён.'); return }
-      setTermin(item)
-    } catch (e) { setError((e as Error).message) } finally { setBusy(false) }
-  }
-  async function closeTermin(applied: boolean) {
-    setTermin(null)
-    if (applied && current) { await operationsRequest(`/notifications/${current.id}/ack`, 'POST').catch(() => undefined); window.dispatchEvent(new CustomEvent('ops:data-changed')) }
-    await notifications.refetch()
-  }
-  async function enableAlerts() {
-    setPermission(await requestAlertPermission())
-  }
-  /** The truck left the stop without BELADEN/ENTLADEN: the dispatcher records it, keeps the arrival, or undoes it. */
-  async function answerDeparture(answer: 'done' | 'keep' | 'revert') {
-    if (!current?.stopId || !departure) return
-    const label = departure.stopType === 'LOAD' ? 'BELADEN' : 'ENTLADEN'
-    if (answer === 'done' && !window.confirm(`Записать ${label} на ${departure.time}? Это попадёт в историю тура.`)) return
-    if (answer === 'revert' && !window.confirm('Прибытие было ошибкой? Точка снова станет «в пути».')) return
-    setBusy(true); setError('')
-    try {
-      if (answer === 'done') await operationsRequest(`/stops/${current.stopId}/${departure.stopType === 'LOAD' ? 'loaded' : 'unloaded'}`, 'POST', { timestamp: departure.leftAt })
-      else if (answer === 'keep') await operationsRequest(`/stops/${current.stopId}/departure/keep`, 'POST', {})
-      else await operationsRequest(`/stops/${current.stopId}/arrival/revert`, 'POST', { reason: 'Уехала с точки: прибытие было ошибкой' })
-      await notifications.refetch()
-      window.dispatchEvent(new CustomEvent('ops:data-changed'))
-    } catch (e) { setError((e as Error).message) } finally { setBusy(false) }
-  }
-  async function resolve(action: 'ack' | 'revert') {
-    if (!current) return
-    setBusy(true); setError('')
-    try {
-      if (action === 'revert') {
-        if (!current.stopId || !window.confirm('Отменить автоматическое прибытие? Точка снова станет «в пути».')) return
-        await operationsRequest(`/stops/${current.stopId}/arrival/revert`, 'POST', { reason: 'Отменено из уведомления об автоприбытии' })
-        await notifications.refetch()
-        window.dispatchEvent(new CustomEvent('ops:data-changed'))
-        return
-      }
-      await operationsRequest(`/notifications/${current.id}/ack`, 'POST')
-      await notifications.refetch()
-    } catch (e) { setError((e as Error).message) } finally { setBusy(false) }
-  }
-
-  const askPermission = permission === 'default' && banner
-  if (termin) return <div className="appointment-review-overlay" role="dialog" aria-modal="true" aria-label="Проверка термина">
-    <AppointmentReview document={pendingToDocument(termin)} fingerprint={termin.fingerprint} match={termin.match} pendingId={termin.id} fileName="Ожидающий термин"
-      onApplied={() => void closeTermin(true)} onSaved={() => void closeTermin(false)} onSkip={() => void closeTermin(false)} />
+  if (state.termin) return <div className="appointment-review-overlay" role="dialog" aria-modal="true" aria-label="Проверка термина">
+    <AppointmentReview document={pendingToDocument(state.termin)} fingerprint={state.termin.fingerprint} match={state.termin.match} pendingId={state.termin.id} fileName="Ожидающий Termin"
+      onApplied={() => void state.closeTermin(true)} onSaved={() => void state.closeTermin(false)} onSkip={() => void state.closeTermin(false)} />
   </div>
+  const current = onDashboard ? undefined : state.open[0]
+  const askPermission = permission === 'default' && banner
   if (!current && !askPermission) return null
-  // AUTO_ARRIVAL is an already recorded GPS arrival: the dispatcher only acknowledges it or undoes a wrong one.
-  const isAuto = current?.type === 'AUTO_ARRIVAL'
-  const departure = current?.type === 'STOP_DEPARTED' ? departureOf(current.payloadJson) : null
-  return <aside role="dialog" aria-labelledby="operations-notification-heading" className="operations-toast fixed bottom-4 left-4 z-50 max-h-[80vh] w-[calc(100%-2rem)] max-w-lg overflow-auto rounded-xl border border-sky-300 bg-white p-5 shadow-xl text-balance-safe">
-    {askPermission ? <div className={current ? 'mb-3 border-b border-slate-200 pb-3' : ''}>
-      <h2 id={current ? undefined : 'operations-notification-heading'} className="font-semibold">Включите уведомления, чтобы не пропустить прибытие</h2>
+  return <aside role="dialog" aria-labelledby={current ? `decision-${current.id}` : 'operations-permission-heading'} className="operations-toast">
+    {askPermission ? <div className={current ? 'operations-toast-permission operations-toast-permission-split' : 'operations-toast-permission'}>
+      <h2 id="operations-permission-heading" className="font-semibold">Включите уведомления, чтобы не пропустить прибытие</h2>
       <p className="my-2 text-sm text-slate-600">Со звуком и окном Windows поверх других программ, пока вкладка OPS открыта.</p>
       <div className="flex flex-wrap gap-2">
-        <button type="button" className="primary-button" onClick={() => void enableAlerts()}>Включить</button>
+        <button type="button" className="primary-button" onClick={() => void requestAlertPermission().then(setPermission)}>Включить</button>
         <button type="button" className="secondary-button" onClick={() => { dismissBanner(); setBanner(false) }}>Не сейчас</button>
       </div>
     </div> : null}
-    {current ? <>
-      <h2 id="operations-notification-heading" className="font-semibold">{current.message}</h2>
-      {isAuto && <p className="my-2 text-sm text-slate-600">Прибытие отмечено автоматически: машина стоит в зоне точки по GPS Webfleet. BELADEN/ENTLADEN подтверждаете вы.</p>}
-      {error && <p role="alert" className="my-2 text-red-700">{error}</p>}
-      {departure && <p className="my-2 text-sm text-slate-600">Машина выехала из зоны точки по GPS Webfleet. Если {departure.stopType === 'LOAD' ? 'загрузка' : 'выгрузка'} была, подтвердите её — время возьмётся по выезду.</p>}
-      <div className="mt-3 flex flex-wrap gap-2">{departure
-        ? <><button className="primary-button" disabled={busy} onClick={() => void answerDeparture('done')}>{departure.stopType === 'LOAD' ? 'BELADEN' : 'ENTLADEN'} {departure.time}</button>
-          <button className="secondary-button" disabled={busy} onClick={() => void answerDeparture('keep')}>{departure.stopType === 'LOAD' ? 'Ещё не загружена' : 'Ещё не выгружена'}</button>
-          <button className="secondary-button" disabled={busy} onClick={() => void answerDeparture('revert')}>Прибытие было ошибкой</button></>
-        : isAuto
-        ? <><button className="primary-button" disabled={busy} onClick={() => void resolve('ack')}>Понятно</button>{current.stopId ? <button className="secondary-button" disabled={busy} onClick={() => void resolve('revert')}>Отменить прибытие</button> : null}</>
-        : current.type === 'APPOINTMENT_MATCH'
-          ? <><button className="primary-button" disabled={busy} onClick={() => void openTermin()}>Проверить термин</button><button className="secondary-button" disabled={busy} onClick={() => void resolve('ack')}>Позже</button></>
-          : <button className="secondary-button" disabled={busy} onClick={() => void resolve('ack')}>Прочитано</button>}
-        <Link className="secondary-button" to={`/vehicles/${current.vehicleId}`} onClick={() => setHidden(previous => [...previous, current.id])}>Открыть грузовик</Link></div>
-    </> : null}
+    {current ? <DecisionCard item={current} openLink /> : null}
   </aside>
-}
-
-function departureOf(payloadJson?: string | null) {
-  try {
-    const payload = JSON.parse(payloadJson ?? '{}') as { stopType?: string; leftAt?: string }
-    if (!payload.leftAt || (payload.stopType !== 'LOAD' && payload.stopType !== 'UNLOAD')) return null
-    const time = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit' }).format(new Date(payload.leftAt))
-    return { stopType: payload.stopType, leftAt: payload.leftAt, time }
-  } catch { return null }
 }
