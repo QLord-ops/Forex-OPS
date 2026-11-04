@@ -37,6 +37,9 @@ export interface Stop {
   appointmentAt?: string | null
   appointmentWindowStartAt?: string | null
   appointmentWindowEndAt?: string | null
+  plannedAt?: string | null
+  departureDeadlineAt?: string | null
+  terminRequired?: boolean
   loadingMeters?: number | null
   referenceNumbers?: string[] | null
   referenceNumbersJson?: string | null
@@ -426,6 +429,11 @@ export type RouteGeometry =
 export interface CreateTourStopInput {
   /** Existing stop being edited; omitted fields keep their saved values. */
   id?: string
+  /** Planned time without a Termin; never used for lateness. */
+  plannedAt?: string | null
+  departureDeadlineAt?: string | null
+  /** Imported label whose place the dispatcher corrected; the server remembers the correction. */
+  learnLabel?: string | null
   sequence: number
   type: StopType
   company?: string
@@ -473,6 +481,12 @@ export interface ImportedStopDraft {
   address: string | null
   city?: string | null
   appointmentLocal: string | null
+  /** Planned time when only a date was printed (06:00); never a Termin. */
+  plannedLocal?: string | null
+  /** The customer always sends a Termin and it has not arrived yet. */
+  terminRequired?: boolean
+  /** The imported company and city ("Seifert Bremen"): a corrected place is remembered for it. */
+  sourceLabel?: string
   appointmentWindowStartLocal?: string | null
   appointmentWindowEndLocal?: string | null
   loadingMeters?: number | null

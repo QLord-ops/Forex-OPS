@@ -192,10 +192,10 @@ export async function importOrdersWithOpenAi(
     return {
       drafts: parsed.drafts.map((draft): ImportedOrderDraft => ({
         ...draft,
-        // An exact time wins over a window; a date alone becomes the working-hours window.
+        // An exact time wins over a window; a date alone becomes the planned 06:00, not a Termin.
         stops: draft.stops.map(({ appointmentDateLocal, ...stop }) => {
           const schedule = normalizeAiSchedule({ ...stop, appointmentDateLocal });
-          return { ...stop, appointmentLocal: schedule.appointmentLocal, appointmentWindowStartLocal: schedule.appointmentWindowStartLocal, appointmentWindowEndLocal: schedule.appointmentWindowEndLocal };
+          return { ...stop, appointmentLocal: schedule.appointmentLocal, appointmentWindowStartLocal: schedule.appointmentWindowStartLocal, appointmentWindowEndLocal: schedule.appointmentWindowEndLocal, plannedLocal: schedule.plannedLocal ?? null };
         }),
         warnings: draft.warnings.map(compactWarning)
       })),

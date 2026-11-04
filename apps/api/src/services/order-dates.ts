@@ -4,18 +4,27 @@
  * written as "YYYY-MM-DDTHH:mm"; the browser converts them when the tour is confirmed.
  */
 
-/** A stop with only a date is expected during normal warehouse hours (owner's decision, 2026-11-02). */
+/** Normal warehouse hours: the bounds of "bis 12 Uhr" / "ab 14 Uhr" (owner's decision, 2026-11-02). */
 export const DATE_ONLY_WINDOW = { start: "06:00", end: "18:00" } as const;
+/**
+ * A stop with only a date (or "00:00h", which these orders print for "that day") is planned at 06:00.
+ * It is a planning rule, not a Termin: no lateness against it (owner's decision, 2026-11-04).
+ */
+export const PLANNED_START = "06:00";
 
 export type StopSchedule = {
   appointmentLocal: string | null;
   appointmentWindowStartLocal: string | null;
   appointmentWindowEndLocal: string | null;
+  /** Planned time when only a date is known; never a Termin. */
+  plannedLocal?: string | null;
   /** Machine-readable reason when the text could not be used fully. */
   note: "DATE_ONLY" | "MISSING_DATE" | "UNSUPPORTED" | null;
 };
 
-const EMPTY: StopSchedule = { appointmentLocal: null, appointmentWindowStartLocal: null, appointmentWindowEndLocal: null, note: null };
+const EMPTY: StopSchedule = { appointmentLocal: null, appointmentWindowStartLocal: null, appointmentWindowEndLocal: null, plannedLocal: null, note: null };
+const dateOnly = (day: string): StopSchedule => ({ ...EMPTY, plannedLocal: `${day}T${PLANNED_START}`, note: "DATE_ONLY" });
+const isMidnight = (value: string | null | undefined) => Boolean(value && value.endsWith("T00:00"));
 
 const DATE_ISO = /(\d{4})-(\d{1,2})-(\d{1,2})/;
 const DATE_GERMAN = /(?<![\d:])(\d{1,2})[./](\d{1,2})(?:[./](\d{2,4}))?\.?(?![\d:])/;
@@ -33,9 +42,7 @@ export function parseStopSchedule(raw: string | null | undefined, now = new Date
   if (!date) return times.kind === "none" ? { ...EMPTY, note: "UNSUPPORTED" } : { ...EMPTY, note: "MISSING_DATE" };
 
   const day = date.day;
-  if (times.kind === "none") {
-    return window(day, DATE_ONLY_WINDOW.start, DATE_ONLY_WINDOW.end, "DATE_ONLY");
-  }
+  if (times.kind === "none" || (times.kind === "exact" && times.at === "00:00")) return dateOnly(day);
   if (times.kind === "exact") return { ...EMPTY, appointmentLocal: `${day}T${times.at}` };
   if (times.kind === "range") return times.from <= times.to ? window(day, times.from, times.to) : { ...EMPTY, note: "UNSUPPORTED" };
   if (times.kind === "until") return window(day, times.at < DATE_ONLY_WINDOW.start ? "00:00" : DATE_ONLY_WINDOW.start, times.at);
@@ -57,14 +64,16 @@ export function normalizeAiSchedule(stop: {
   appointmentWindowStartLocal: string | null;
   appointmentWindowEndLocal: string | null;
   appointmentDateLocal?: string | null;
-}): StopSchedule {
-  if (stop.appointmentLocal) return { ...EMPTY, appointmentLocal: stop.appointmentLocal };
-  if (stop.appointmentWindowStartLocal && stop.appointmentWindowEndLocal) {
+}, options: { dateOnly?: "planned" | "window" } = {}): StopSchedule {
+  const day = (stop.appointmentDateLocal && isValidDay(stop.appointmentDateLocal) ? stop.appointmentDateLocal : null)
+    ?? (isMidnight(stop.appointmentLocal) ? stop.appointmentLocal!.slice(0, 10) : null)
+    ?? (isMidnight(stop.appointmentWindowStartLocal) && (isMidnight(stop.appointmentWindowEndLocal) || stop.appointmentWindowEndLocal?.endsWith("T23:59")) ? stop.appointmentWindowStartLocal!.slice(0, 10) : null);
+  const midnightOnly = isMidnight(stop.appointmentLocal) || (isMidnight(stop.appointmentWindowStartLocal) && !stop.appointmentLocal);
+  if (stop.appointmentLocal && !midnightOnly) return { ...EMPTY, appointmentLocal: stop.appointmentLocal };
+  if (stop.appointmentWindowStartLocal && stop.appointmentWindowEndLocal && !midnightOnly) {
     return { ...EMPTY, appointmentWindowStartLocal: stop.appointmentWindowStartLocal, appointmentWindowEndLocal: stop.appointmentWindowEndLocal };
   }
-  if (stop.appointmentDateLocal && isValidDay(stop.appointmentDateLocal)) {
-    return window(stop.appointmentDateLocal, DATE_ONLY_WINDOW.start, DATE_ONLY_WINDOW.end, "DATE_ONLY");
-  }
+  if (day) return options.dateOnly === "window" ? window(day, DATE_ONLY_WINDOW.start, DATE_ONLY_WINDOW.end, "DATE_ONLY") : dateOnly(day);
   return EMPTY;
 }
 
@@ -74,7 +83,7 @@ export function berlinToday(now = new Date()): string {
 }
 
 function window(day: string, start: string, end: string, note: StopSchedule["note"] = null): StopSchedule {
-  return { appointmentLocal: null, appointmentWindowStartLocal: `${day}T${start}`, appointmentWindowEndLocal: `${day}T${end}`, note };
+  return { appointmentLocal: null, appointmentWindowStartLocal: `${day}T${start}`, appointmentWindowEndLocal: `${day}T${end}`, plannedLocal: null, note };
 }
 
 function findDate(text: string, now: Date): { day: string; match: string } | null {

@@ -75,7 +75,7 @@ test('варианты маршрута от GPS: серый вариант ст
 })
 
 test('в проверке распознавания можно добавить выгрузку, и она уходит в Auftrag', async ({ page }) => {
-  let created: { stops?: unknown[] } | null = null
+  let created: { stops?: Array<{ learnLabel?: string | null; plannedAt?: string | null }> } | null = null
   const vehicle = truck('veh-1', '125')
   await page.route('**/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname.replace(/^\/api/, '')
@@ -85,7 +85,8 @@ test('в проверке распознавания можно добавить
     if (path === '/imports/pdf/preview') return json(route, { source: 'RULES', detectedLayout: 'PDF', warnings: [], aiAvailable: false,
       drafts: [{ orderNumber: '71123515', vehicleNumber: '125', vehiclePlate: null, trailerPlate: null, tourRemarks: 'vorladen Lager --> TST Hamburg + Seifert & BLG Bremen', warnings: [], stops: [
         { sequence: 1, type: 'LOAD', company: 'Lager', address: 'Rudolf-Diesel-Straße 2, 14974 Ludwigsfelde', city: 'Ludwigsfelde', appointmentLocal: null, confidence: 1 },
-        { sequence: 2, type: 'UNLOAD', company: 'TST Süderelbe', address: 'Dradenauer Deichweg 3, 21129 Hamburg', city: 'Hamburg', appointmentLocal: null, confidence: 1 }
+        { sequence: 2, type: 'UNLOAD', company: 'TST Süderelbe', address: 'Dradenauer Deichweg 3, 21129 Hamburg', city: 'Hamburg', appointmentLocal: null, plannedLocal: '2026-11-05T06:00', confidence: 1, sourceLabel: 'TST Süderelbe Hamburg' },
+        { sequence: 3, type: 'UNLOAD', company: 'Seifert', address: 'Bremen', city: 'Bremen', appointmentLocal: null, plannedLocal: '2026-11-05T06:00', confidence: 0.4, sourceLabel: 'Seifert Bremen', terminRequired: true }
       ] }] })
     if (path === '/geocode' || path === '/geocode/resolve') {
       const body = route.request().postDataJSON() as { address?: string } | null
@@ -102,13 +103,20 @@ test('в проверке распознавания можно добавить
   await page.getByRole('button', { name: 'Прикрепить Auftrag' }).click()
   await page.locator('.dispatcher-import-host input[type="file"]').setInputFiles({ name: 'auftrag.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.7 e2e') })
   await expect(page.getByLabel('Номер Auftrag')).toHaveValue('71123515')
+  await expect(page.locator('.quick-order-review-stop').nth(2)).toContainText('Termin нужен')
+  await expect(page.locator('.quick-order-review-stop').nth(1)).toContainText('не Termin')
   await page.getByRole('button', { name: 'Редактировать' }).click()
+  // The Seifert address is missing in the Auftrag: the dispatcher types it once.
+  await page.locator('.quick-order-review-stop').nth(2).getByLabel('Полный адрес').fill('Musterweg 5, 28197 Bremen')
   await page.getByRole('button', { name: 'Выгрузка', exact: true }).click()
-  const third = page.locator('.quick-order-review-stop').nth(2)
-  await expect(third.getByLabel('Тип точки 3')).toHaveValue('UNLOAD')
-  await third.getByLabel('Фирма').fill('BLG Industrielogistik')
-  await third.getByLabel('Полный адрес').fill('Senator-Apelt-Straße 90, 28197 Bremen')
-  await third.getByLabel('Город').fill('Bremen')
+  const fourth = page.locator('.quick-order-review-stop').nth(3)
+  await expect(fourth.getByLabel('Тип точки 4')).toHaveValue('UNLOAD')
+  await fourth.getByLabel('Фирма').fill('BLG Industrielogistik')
+  await fourth.getByLabel('Полный адрес').fill('Senator-Apelt-Straße 90, 28197 Bremen')
+  await fourth.getByLabel('Город').fill('Bremen')
   await page.getByRole('button', { name: 'Подтвердить', exact: true }).click()
-  await expect.poll(() => created?.stops?.length ?? 0).toBe(3)
+  await expect.poll(() => created?.stops?.length ?? 0).toBe(4)
+  // Only the corrected place is remembered; the planned 06:00 travels as a plan, not a Termin.
+  expect(created!.stops!.map((stop) => stop.learnLabel ?? null)).toEqual([null, null, 'Seifert Bremen', null])
+  expect(created!.stops![1].plannedAt).toBe('2026-11-05T05:00:00.000Z')
 })

@@ -97,6 +97,8 @@ export const accountsApi = {
   changeOwnPassword: (currentPassword: string, newPassword: string) => request<{ ok: true }>('/auth/password', json('POST', { currentPassword, newPassword }))
 }
 
+export interface AddressRule { id: string; pattern: string; kind: string; company: string | null; street: string | null; postalCode: string | null; city: string | null
+  latitude: number | null; longitude: number | null; requiresTermin: boolean; hits: number; updatedAt: string }
 export interface RouteOption { id: string; distanceMeters: number; durationSeconds: number; trafficDelaySeconds: number; mainRoads: string[]; providerStatus: string; geometry: Coordinate[] }
 export interface RouteOptions { vehicleId: string; version: number; legId: string; checkedAt: string; offRouteMeters: number | null
   current: { remainingDistanceMeters: number; eta: string | null; geometry: Coordinate[] }; options: RouteOption[] }
@@ -149,6 +151,10 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify(payload)
     }),
+  addressRules: () => request<{ rules: AddressRule[]; builtIn: Array<Pick<AddressRule, 'pattern' | 'kind' | 'company' | 'city' | 'requiresTermin'>> }>('/address-rules'),
+  updateAddressRule: (id: string, patch: Partial<Pick<AddressRule, 'company' | 'street' | 'postalCode' | 'city' | 'requiresTermin'>>) =>
+    request<AddressRule>(`/address-rules/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  deleteAddressRule: (id: string) => request<void>(`/address-rules/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   /** Three routes from the truck's GPS position to its next stop (TomTom). */
   routeOptions: (vehicleId: string) => request<RouteOptions>(`/vehicles/${encodeURIComponent(vehicleId)}/route-options`, { method: 'POST', body: '{}' }),
   applyRouteOption: (vehicleId: string, optionId: string, version: number) =>
@@ -212,6 +218,6 @@ export const api = {
     return request<OrderImportPreview>('/imports/image/preview', { method: 'POST', body })
   },
   geocode: (address: string) => request<GeocodeResult>(`/geocode?address=${encodeURIComponent(address)}`),
-  resolveAddress: (payload: { address: string; city?: string | null }) =>
+  resolveAddress: (payload: { address: string; city?: string | null; company?: string | null }) =>
     request<AddressResolution>('/geocode/resolve', { method: 'POST', body: JSON.stringify(payload) })
 }

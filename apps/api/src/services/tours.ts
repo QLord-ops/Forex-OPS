@@ -19,6 +19,7 @@ import {
 } from "../domain.js";
 import type { RoutingProvider } from "./routing.js";
 import { OFF_ROUTE_METERS, projectOnLine, splitAtProjection } from "./route-projection.js";
+import { requiresTermin } from "./address-rules.js";
 import { applyStopTime, createUnknownClockState, evaluateClockPlan, forecastDrive, type ClockState, type VehicleClockPlan } from "./vehicle-clock.js";
 import {
   calculateDistanceTravelled,
@@ -71,6 +72,9 @@ export type CreateTourInput = {
     serviceMaxMinutes?: number | null;
     latitude?: number;
     longitude?: number;
+    plannedAt?: string | null;
+    departureDeadlineAt?: string | null;
+    learnLabel?: string | null;
   }>;
 };
 
@@ -555,6 +559,7 @@ async function readDepartureContext(db: Prisma.TransactionClient, stopId: string
 type SavedStopFields = {
   id: string; company: string | null; sourceAddress: string | null; resolvedAddress: string | null; geocodePrecision: string | null; geocodeProvider: string | null;
   appointmentWindowStartAt: Date | null; appointmentWindowEndAt: Date | null; loadingMeters: number | null; referenceNumbersJson: string | null; instructions: string | null;
+  plannedAt?: Date | null; departureDeadlineAt?: Date | null;
 };
 
 /**
@@ -585,7 +590,9 @@ export function keepSavedTourFields(
         appointmentWindowEndAt: keepWindow ? old.appointmentWindowEndAt?.toISOString() ?? null : stop.appointmentWindowEndAt,
         loadingMeters: stop.loadingMeters === undefined ? old.loadingMeters : stop.loadingMeters,
         referenceNumbers: stop.referenceNumbers === undefined ? parseReferenceNumbers(old.referenceNumbersJson) : stop.referenceNumbers,
-        instructions: stop.instructions === undefined ? old.instructions : stop.instructions
+        instructions: stop.instructions === undefined ? old.instructions : stop.instructions,
+        plannedAt: stop.plannedAt === undefined ? old.plannedAt?.toISOString() ?? null : stop.plannedAt,
+        departureDeadlineAt: stop.departureDeadlineAt === undefined ? old.departureDeadlineAt?.toISOString() ?? null : stop.departureDeadlineAt
       };
     })
   };
@@ -740,7 +747,11 @@ async function persistTourPlan(
         referenceNumbersJson: stop.referenceNumbers?.length ? JSON.stringify(stop.referenceNumbers) : null,
         instructions: stop.instructions?.trim() || null,
         serviceMinMinutes: normalizeServiceMinutes(stop.serviceMinMinutes, 60),
-        serviceMaxMinutes: normalizeServiceMinutes(stop.serviceMaxMinutes, 120)
+        serviceMaxMinutes: normalizeServiceMinutes(stop.serviceMaxMinutes, 120),
+        plannedAt: toNullableDate(stop.plannedAt),
+        departureDeadlineAt: toNullableDate(stop.departureDeadlineAt),
+        // VW, BLG, Mercedes, Seifert, Audi, Rudolph, Rhenus always send a Termin: until it arrives the stop shows «Termin нужен».
+        terminRequired: !stop.appointmentAt && !stop.appointmentWindowStartAt && requiresTermin(`${stop.company ?? ""} ${stop.address}`)
       }
     });
     stopIds.push(created.id);

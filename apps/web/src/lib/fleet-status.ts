@@ -4,7 +4,7 @@ import type { DashboardVehicle } from '../types/domain'
 
 export type AttentionTone = 'dwell' | 'critical' | 'action' | 'watch' | 'moving' | 'ok' | 'idle'
 export type StatusTone = 'ok' | 'stop' | 'late' | 'plan' | 'idle'
-export type FleetFilter = 'ALL' | 'DECIDE' | 'MOVING' | 'AT_STOP' | 'TERMIN' | 'IDLE'
+export type FleetFilter = 'ALL' | 'DECIDE' | 'MOVING' | 'AT_STOP' | 'TERMIN' | 'NO_TERMIN' | 'IDLE'
 export type FleetSort = 'URGENCY' | 'NUMBER' | 'TERMIN'
 
 export function getDwellMinutes(row: DashboardVehicle, now = Date.now()) {
@@ -103,11 +103,18 @@ export function needsDecision(row: DashboardVehicle, notified: ReadonlySet<strin
   return getAttention(row, now).rank <= 2
 }
 
+/** The next stop belongs to a customer who always sends a Termin, and it has not come yet. */
+export function terminNeeded(row: DashboardVehicle) {
+  const stop = row.tour ? currentStopOf(row.tour) : null
+  return Boolean(stop?.terminRequired && !stop.appointmentAt && !stop.appointmentWindowStartAt)
+}
+
 export function matchesFleetFilter(row: DashboardVehicle, filter: FleetFilter, notified: ReadonlySet<string> = new Set(), now = Date.now()) {
   if (filter === 'ALL') return true
   if (filter === 'DECIDE') return needsDecision(row, notified, now)
   if (filter === 'MOVING') return row.statusText === 'MOVING'
   if (filter === 'TERMIN') return Boolean(terminOf(row.tour))
+  if (filter === 'NO_TERMIN') return terminNeeded(row)
   if (filter === 'AT_STOP') return atStop(row, now)
   return !row.tour || ['IDLE', 'NO_ACTIVE_ROUTE'].includes(row.statusText)
 }
