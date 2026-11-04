@@ -116,7 +116,14 @@
 .truck-card-parking > span { display: grid; width: 18px; height: 18px; place-items: center; border-radius: 4px; background: rgb(var(--bg-e2e8f0)); color: rgb(var(--tx-334155)); font-size: .6875rem; font-weight: 600; }
 
 .truck-card-stops { display: grid; gap: 8px; }
-.truck-card-stops > li { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 8px; font-size: .8125rem; line-height: 1.4; }
+.truck-card-stops > li { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 8px; align-items: start; font-size: .8125rem; line-height: 1.4; }
+/* Small BELADEN/ENTLADEN on the stop the truck is heading to or standing at. */
+.truck-card-mark-button { display: inline-flex; height: 26px; align-items: center; gap: 4px; border: 1px solid rgb(var(--ln-c9d8f7)); border-radius: 6px; background: rgb(var(--bg-f3f7ff)); padding: 0 8px; color: rgb(var(--tx-1d4ed8)); font-size: .6875rem; font-weight: 600; white-space: nowrap; }
+.truck-card-mark-button:hover { background: rgb(var(--bg-e6eeff)); }
+.truck-card-mark-button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.truck-card-mark { display: grid; gap: 6px; margin-top: 6px; border: 1px solid rgb(var(--ln-e3e8ef)); border-radius: 8px; background: rgb(var(--bg-f8fafc)); padding: 8px; }
+.truck-card-mark label { display: grid; gap: 4px; }
+.truck-card-mark-actions { display: flex; justify-content: flex-end; gap: 6px; }
 .truck-card-stops strong { display: block; font-weight: 500; }
 .truck-card-stop-seq { display: grid; width: 22px; height: 22px; place-items: center; border: 1px solid rgb(var(--ln-94a3b8)); border-radius: 50%; font-size: .6875rem; font-weight: 600; }
 .truck-card-stop-done .truck-card-stop-seq { border-color: rgb(var(--ln-0f766e)); background: rgb(var(--bg-0f766e)); color: #fff; }

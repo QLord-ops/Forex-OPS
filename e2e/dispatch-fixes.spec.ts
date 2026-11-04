@@ -154,3 +154,30 @@ test('«Открыть» в нижней панели показывает ка�
   await popover.getByRole('button', { name: 'Подтвердить вручную' }).click()
   await expect.poll(() => loaded).toMatchObject({ manual: true })
 })
+
+test('в карточке «Тур» у текущей точки есть маленькая кнопка BELADEN, которая записывает событие вручную', async ({ page }) => {
+  let loaded: unknown = null
+  await dashboard(page, async (route, path) => {
+    if (path === '/dashboard') {
+      await json(route, { vehicles: [{ vehicle: truck('v1', '124'), statusText: 'MOVING', etaSource: 'GPS', operationVersion: 2,
+        tour: { id: 'tour-1', vehicleId: 'v1', orderNumber: '20565574', status: 'ACTIVE', planVersion: 1, stops },
+        telemetry: { source: 'WEBFLEET', stale: false, ageSeconds: 60, speedKmh: 83, standstill: false },
+        mapPosition: { coordinate: [12.9, 50.83], source: 'WEBFLEET', stale: false, courseDeg: 90, standstill: false } }] }); return true
+    }
+    if (path === '/stops/s1/loaded') { loaded = route.request().postDataJSON(); await json(route, { id: 'tour-1', vehicleId: 'v1', stops: [] }); return true }
+    if (path === '/vehicles/v1/tours') { await json(route, []); return true }
+    if (path.endsWith('/card')) { await json(route, { vehicleId: 'v1', vehicleNumber: '124', licensePlate: null, currentTrailerPlate: null, generatedAt: new Date().toISOString(), webfleet: null, current: null, coupling: null, driver: null, events: null, trips: null, maintenance: null }); return true }
+    return false
+  })
+  await page.goto('/?vehicleId=v1&card=v1')
+  await page.evaluate(() => window.localStorage.setItem('ops-truck-card-tab', 'tour'))
+  await page.reload()
+  const card = page.getByRole('dialog', { name: /124/ })
+  await expect(card.getByRole('tab', { name: 'Тур' })).toHaveAttribute('aria-selected', 'true')
+  // Only the stop the truck is heading to gets the button; the later stops wait their turn.
+  await expect(card.getByRole('button', { name: /^BELADEN/ })).toHaveCount(1)
+  await card.getByRole('button', { name: 'BELADEN Hannover' }).click()
+  await expect(card).toContainText('Прибытия по GPS нет')
+  await card.getByRole('button', { name: 'Записать BELADEN' }).click()
+  await expect.poll(() => loaded).toMatchObject({ manual: true })
+})
