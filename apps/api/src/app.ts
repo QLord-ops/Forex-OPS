@@ -29,6 +29,7 @@ import { ReplanningService } from "./services/replanning.js";
 import { PrismaTrafficQuotaStore, TomTomRoutingProvider, TrafficRoutingService } from './services/traffic-routing.js';
 import { TrafficOperationsService } from './services/traffic-operations.js';
 import { RouteDeviationService } from './services/route-deviation.js';
+import { AddressRuleService, applyRulesToStop, BUILT_IN_RULES } from './services/address-rules.js';
 import { VEHICLE_CLOCK_LIMITS } from './services/vehicle-clock.js';
 import { bindWebfleetObject, listWebfleetBindings, unbindWebfleetVehicle, WebfleetSyncService, WebfleetTelemetryService, distanceMeters, DEFAULT_ARRIVAL_RADIUS_METERS, type AutoArrivalHandler } from './services/webfleet.js';
 import { buildVehicleCard, suggestWebfleetBindings, vehicleObjectUid, WebfleetDetailsSync, WebfleetLiveStore, WebfleetTrackService } from './services/webfleet-live.js';
@@ -70,12 +71,37 @@ const etaService = new EtaService();
 const alertService = new AlertService(prisma);
 const vehicleService = new VehicleService(prisma);
 const notificationService = new NotificationService(prisma, tourService);
+const addressRules = new AddressRuleService(prisma);
 const operationsService = new OperationsService(prisma, tourService);
 const pendingAppointments = new PendingAppointmentService(prisma);
 
 /** A Termin slip gets its truck and stop match and tells whether the same file was used before. */
+/** A corrected place with a street and coordinates becomes a rule for its imported label. Failures never block the tour. */
+async function learnAddressRules(stops: Array<{ learnLabel?: string | null; company?: string; address: string; city?: string | null; latitude?: number; longitude?: number; geocodePrecision?: string | null }>, actor?: AuditActor) {
+  for (const stop of stops) {
+    if (!stop.learnLabel || stop.latitude === undefined || stop.longitude === undefined || !/\d/.test(stop.address)) continue;
+    if (stop.geocodePrecision && stop.geocodePrecision !== "EXACT" && stop.geocodePrecision !== "STREET") continue;
+    const postalCode = stop.address.match(/\b\d{5}\b/)?.[0] ?? null;
+    const street = stop.address.split(",")[0]?.trim() || null;
+    await addressRules.learn({ sourceLabel: stop.learnLabel, company: stop.company?.trim() || null, street, postalCode, city: stop.city ?? null,
+      latitude: stop.latitude, longitude: stop.longitude }, actor).catch(() => undefined);
+  }
+}
+
+/** Recognised stops pass the address rules: city codes, company names, learned places and the Termin a customer still owes. */
+async function withAddressRules<T extends { drafts: Array<{ stops: Array<{ company: string | null; address: string | null; city?: string | null; appointmentLocal: string | null; appointmentWindowStartLocal?: string | null }>; warnings: Array<{ code: string; message: string }> }> }>(preview: T): Promise<T> {
+  if (!preview.drafts?.length) return preview;
+  const rules = await addressRules.all();
+  return { ...preview, drafts: preview.drafts.map((draft) => {
+    const stops = draft.stops.map((stop) => applyRulesToStop(stop, rules));
+    const missing = stops.filter((stop) => !stop.ruleApplied && (stop.address ?? "").trim() === (stop.city ?? "").trim() && stop.company);
+    return { ...draft, stops, warnings: [...draft.warnings, ...missing.map((stop) => ({ code: "ADDRESS_FROM_RULE_MISSING",
+      message: `Адрес ${stop.company}, ${stop.city ?? ""} не указан в Auftrag — введите его, он запомнится для следующих Auftrag.` }))] };
+  }) };
+}
+
 async function withAppointmentMatch<T extends DocumentImportPreview>(preview: T, buffer: Buffer) {
-  if (preview.documentKind !== 'APPOINTMENT' || !preview.appointment) return preview;
+  if (preview.documentKind !== 'APPOINTMENT' || !preview.appointment) return withAddressRules(preview);
   const fingerprint = documentFingerprint(buffer);
   const [match, previous] = await Promise.all([matchAppointment(prisma, preview.appointment), pendingAppointments.findByFingerprint(fingerprint)]);
   return { ...preview, appointment: { ...preview.appointment, fingerprint }, match, previous: previous ? { id: previous.id, status: previous.status, attachedStopId: previous.attachedStopId } : null };
@@ -126,7 +152,12 @@ const stopSchema = z.object({
   instructions: z.string().trim().max(4000).nullable().optional(),
   serviceMinMinutes: z.number().int().min(0).max(10080).default(60),
   serviceMaxMinutes: z.number().int().min(0).max(10080).default(120),
-  appointmentAt: z.string().datetime().nullable().optional()
+  appointmentAt: z.string().datetime().nullable().optional(),
+  // Planned time without a Termin and the latest departure; never used for lateness.
+  plannedAt: z.string().datetime().nullable().optional(),
+  departureDeadlineAt: z.string().datetime().nullable().optional(),
+  // The imported label the dispatcher corrected ("Seifert Bremen"): the corrected place is remembered for it.
+  learnLabel: z.string().trim().min(2).max(300).nullable().optional()
 }).superRefine((stop, context) => {
   if (stop.serviceMaxMinutes < stop.serviceMinMinutes) context.addIssue({ code: "custom", message: "Максимальное время стоянки не может быть меньше минимального." });
   if (Boolean(stop.appointmentWindowStartAt) !== Boolean(stop.appointmentWindowEndAt)) context.addIssue({ code: "custom", message: "Для временного окна нужны начало и конец." });
@@ -468,6 +499,24 @@ export async function buildApp(options: BuildAppOptions = {}) {
     await audit(request, 'DRIVING_EXCEPTIONS_CANCELLED', 'Vehicle', id, { vehicleId: id });
     return result;
   });
+  // Address rules learned from corrections, plus the built-in dictionary (read-only) for reference.
+  app.get('/address-rules', { preHandler: requireDispatcherRoles('admin', 'dispatcher') }, async () => ({
+    rules: (await addressRules.list()).map((rule) => toIsoObject(rule)),
+    builtIn: BUILT_IN_RULES.map(({ pattern, kind, company, city, requiresTermin }) => ({ pattern, kind, company, city, requiresTermin }))
+  }));
+  app.patch('/address-rules/:id', { preHandler: requireDispatcherRoles('admin', 'dispatcher') }, async request => {
+    const id = idParams.parse(request.params).id;
+    const patch = z.object({
+      company: z.string().trim().max(300).nullable().optional(), street: z.string().trim().max(300).nullable().optional(),
+      postalCode: z.string().trim().max(20).nullable().optional(), city: z.string().trim().max(200).nullable().optional(),
+      requiresTermin: z.boolean().optional()
+    }).strict().parse(request.body);
+    return toIsoObject(await addressRules.update(id, patch, auditActor(request)));
+  });
+  app.delete('/address-rules/:id', { preHandler: requireDispatcherRoles('admin', 'dispatcher') }, async (request, reply) => {
+    await addressRules.remove(idParams.parse(request.params).id, auditActor(request));
+    return reply.status(204).send();
+  });
   app.post('/stops/:id/arrival/revert', { preHandler: requireDispatcherRoles('admin', 'dispatcher') }, async request => {
     const input = z.object({ reason: z.string().trim().max(300).optional() }).parse(request.body ?? {});
     const { id } = idParams.parse(request.params);
@@ -562,7 +611,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
         request.log.error({ errorType: error instanceof Error ? error.name : 'unknown' }, "Не удалось разобрать книгу Excel");
         return reply.status(422).send({ error: "Не удалось безопасно прочитать книгу Excel." });
       }
-      return {
+      return withAddressRules({
         source: result.source,
         detectedLayout: result.detectedLayout,
         drafts: result.drafts.map((draft) => ({
@@ -581,7 +630,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
           row: warning.sourceRow
         })),
         aiAvailable: result.aiAvailable
-      };
+      });
     } finally {
       activeOrderImports -= 1;
     }
@@ -772,9 +821,10 @@ export async function buildApp(options: BuildAppOptions = {}) {
   app.post("/geocode/resolve", { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request) => {
     const input = z.object({
       address: z.string().trim().min(1).max(2000),
-      city: z.string().trim().max(300).nullable().optional()
+      city: z.string().trim().max(300).nullable().optional(),
+      company: z.string().trim().max(300).nullable().optional()
     }).parse(request.body);
-    const result = await resolveAddressWithFallback(routingService, input, addressResearcher);
+    const result = await resolveAddressWithFallback(routingService, input, addressResearcher, await addressRules.all());
     return { address: result.resolvedAddress, ...result };
   });
 
@@ -800,6 +850,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   app.post("/imports/tours/confirm", { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request, reply) => {
     const { importAttemptId, importFingerprint, ...input } = confirmImportedTourSchema.parse(request.body);
     const result = await tourService.createImportedTour(input, { importAttemptId, importFingerprint }, auditActor(request));
+    if (result.created) await learnAddressRules(input.stops, auditActor(request));
     return reply.status(result.created ? 201 : 200).send({
       tour: enrichTour(result.tour),
       created: result.created,
@@ -813,6 +864,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
       tour: createTourSchema.omit({ vehicleId: true })
     }).parse(request.body);
     const result = await tourService.createTourForNewVehicle(input, auditActor(request));
+    await learnAddressRules(input.tour.stops, auditActor(request));
     return reply.status(201).send({ vehicle: toIsoObject(result.vehicle), tour: enrichTour(result.tour) });
   });
 

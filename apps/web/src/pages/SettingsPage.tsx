@@ -2,6 +2,7 @@ import { ChevronRight, Moon, Sun, Users } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 
+import { AddressRules } from '../components/AddressRules'
 import { AlertToggle } from '../components/AlertToggle'
 import { currentDispatcher, currentDispatcherRole } from '../lib/auth'
 import { THEME_EVENT, currentTheme, setTheme, type Theme } from '../lib/theme'
@@ -36,6 +37,7 @@ export function SettingsPage() {
         <p className="page-subtitle">Звук и окно Windows о прибытии, выезде без BELADEN/ENTLADEN и Termin, пока вкладка OPS открыта.</p>
         <AlertToggle className="settings-toggle" />
       </section>
+      <AddressRules />
       {admin ? <Link to="/dispatchers" className="settings-card settings-link">
         <Users className="h-5 w-5" aria-hidden="true" />
         <span className="min-w-0 flex-1"><strong>Диспетчеры</strong><span>Личные аккаунты, роли и пароли</span></span>

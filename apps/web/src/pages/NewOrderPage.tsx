@@ -28,6 +28,8 @@ interface StopDraft {
   serviceMaxMinutes: number
   sourceExcerpt?: string | null
   sourcePage?: number | null
+  plannedAt?: string | null
+  terminRequired?: boolean
   geocode?: GeocodeResult
   geocodeError?: string
 }
@@ -87,7 +89,7 @@ function buildStopsFromImport(draft: ImportedOrderDraft): StopDraft[] {
     id: crypto.randomUUID(), type: stop.type, company: stop.company ?? '', address: stop.address ?? '', city: stop.city ?? '',
     appointmentAt: stop.appointmentLocal ?? '', appointmentWindowStartAt: stop.appointmentWindowStartLocal ?? '', appointmentWindowEndAt: stop.appointmentWindowEndLocal ?? '', loadingMeters: stop.loadingMeters?.toString() ?? '',
     referenceNumbers: stop.referenceNumbers?.join(', ') ?? '', instructions: stop.instructions ?? '', serviceMinMinutes: 60, serviceMaxMinutes: 120,
-    sourceExcerpt: stop.sourceExcerpt, sourcePage: stop.sourcePage
+    sourceExcerpt: stop.sourceExcerpt, sourcePage: stop.sourcePage, plannedAt: stop.plannedLocal ?? null, terminRequired: stop.terminRequired
   }))
   if (!result.length) return createInitialStops()
   if (result[0].type !== 'LOAD') result.unshift(createStop('LOAD'))
@@ -275,7 +277,7 @@ export function NewOrderPage() {
     }
     const tourInput = {
       orderNumber: orderNumber.trim(), trailerPlate: trailerPlate.trim() || null, tourRemarks: tourRemarks.trim() || null,
-      stops: resolvedStops.map((stop, index): CreateTourStopInput => ({ sequence: index + 1, type: stop.type, company: stop.company.trim() || undefined, address: stop.address.trim(), city: stop.city.trim() || undefined, latitude: stop.geocode!.latitude, longitude: stop.geocode!.longitude, appointmentAt: stop.appointmentAt ? berlinLocalToIso(stop.appointmentAt) : null, appointmentWindowStartAt: stop.appointmentWindowStartAt ? berlinLocalToIso(stop.appointmentWindowStartAt) : null, appointmentWindowEndAt: stop.appointmentWindowEndAt ? berlinLocalToIso(stop.appointmentWindowEndAt) : null, loadingMeters: stop.loadingMeters ? Number(stop.loadingMeters.replace(',', '.')) : null, referenceNumbers: stop.referenceNumbers.split(/[,;\n]+/).map((value) => value.trim()).filter(Boolean), instructions: stop.instructions.trim() || null, serviceMinMinutes: stop.serviceMinMinutes, serviceMaxMinutes: stop.serviceMaxMinutes }))
+      stops: resolvedStops.map((stop, index): CreateTourStopInput => ({ sequence: index + 1, type: stop.type, company: stop.company.trim() || undefined, address: stop.address.trim(), city: stop.city.trim() || undefined, latitude: stop.geocode!.latitude, longitude: stop.geocode!.longitude, appointmentAt: stop.appointmentAt ? berlinLocalToIso(stop.appointmentAt) : null, appointmentWindowStartAt: stop.appointmentWindowStartAt ? berlinLocalToIso(stop.appointmentWindowStartAt) : null, appointmentWindowEndAt: stop.appointmentWindowEndAt ? berlinLocalToIso(stop.appointmentWindowEndAt) : null, plannedAt: stop.plannedAt && !stop.appointmentAt ? berlinLocalToIso(stop.plannedAt) : null, loadingMeters: stop.loadingMeters ? Number(stop.loadingMeters.replace(',', '.')) : null, referenceNumbers: stop.referenceNumbers.split(/[,;\n]+/).map((value) => value.trim()).filter(Boolean), instructions: stop.instructions.trim() || null, serviceMinMinutes: stop.serviceMinMinutes, serviceMaxMinutes: stop.serviceMaxMinutes }))
     }
     try {
       const importedFile = appliedImportSelection ? importItems.find((item) => item.id === appliedImportSelection.itemId) : undefined

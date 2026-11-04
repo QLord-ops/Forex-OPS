@@ -1,11 +1,11 @@
 import { z } from "zod";
 import { isValidLocalDateTime } from "./excel-order-import.js";
-import { aiDateRules, DATE_ONLY_WINDOW, normalizeAiSchedule } from "./order-dates.js";
+import { aiDateRules, DATE_ONLY_WINDOW, normalizeAiSchedule, PLANNED_START } from "./order-dates.js";
 
 const DEFAULT_TIMEOUT_MS = 45_000;
 const MAX_OPENAI_OUTPUT_CHARS = 100_000;
 const TOUR_REMARKS_ROUTE_RULE =
-  "Interpret Tourbemerkung as German route syntax: every location before the first word 'für' is a LOAD in written order, and every location after 'für' is an UNLOAD in written order. A '+' separates additional stops of the same type on that side. Example: 'Hydro Crimmitschau + Voestalpine Schmölln für VW Braunschweig' means exactly 1) LOAD Hydro Crimmitschau, 2) LOAD Voestalpine Schmölln, 3) UNLOAD VW Braunschweig. A trailing parenthetical place after a destination is supplementary information, not the city: 'für Rudolph Großmehring (Győr)' means company Rudolph in city Großmehring. If the loading side says 'vorladen' or 'vorladen/Lager', it is an operational instruction meaning LOAD at the complete postal address printed under Abteilung; never create a city or company named vorladen/Lager. Return only locations explicitly named in Tourbemerkung, except this Abteilung loading rule. Never add a city merely because it appears in a table, direct-delivery note or address block. If the same loading or unloading location appears in several rows or pages, return exactly one stop for it and combine its supported references and notes. Tourbemerkung determines stop type and order; table rows, Abteilung and address blocks only provide the matching full postal address and stop details.";
+  "Interpret Tourbemerkung as German route syntax: every location before the first 'für' (or an arrow '-->', '->', '→', or 'nach') is a LOAD in written order, and every location after it is an UNLOAD in written order. A '+', ',' or 'und' separates additional stops of the same type on that side; '&' joins companies that share the city written after the last of them ('Seifert & BLG Bremen' = Seifert in Bremen and BLG in Bremen, two separate stops). One stop per company and city: several table rows or addresses of the same company in the same city are one stop. Example: 'Hydro Crimmitschau + Voestalpine Schmölln für VW Braunschweig' means exactly 1) LOAD Hydro Crimmitschau, 2) LOAD Voestalpine Schmölln, 3) UNLOAD VW Braunschweig. A trailing parenthetical place after a destination is supplementary information, not the city: 'für Rudolph Großmehring (Győr)' means company Rudolph in city Großmehring. If the loading side says 'vorladen' or 'vorladen/Lager', it is an operational instruction meaning LOAD at the complete postal address printed under Abteilung; never create a city or company named vorladen/Lager. Return only locations explicitly named in Tourbemerkung, except this Abteilung loading rule. Never add a city merely because it appears in a table, direct-delivery note or address block. If the same loading or unloading location appears in several rows or pages, return exactly one stop for it and combine its supported references and notes. Tourbemerkung determines stop type and order; table rows, Abteilung and address blocks only provide the matching full postal address and stop details.";
 export const supportedImageMimeTypes = ["image/png", "image/jpeg", "image/webp"] as const;
 // Termin slips (LKWcontrol Fahrtenschein, Deckblatt zur Warenanlieferung, mRoad) share the drop zone with Auftrag.
 const APPOINTMENT_RULE =
@@ -321,13 +321,14 @@ async function importVisualOrderPreview(input: {
           const { appointmentDateLocal, ...rest } = stop as typeof stop & { appointmentDateLocal?: string | null };
           // An exact time wins over a window; a date alone becomes the working-hours window.
           const schedule = normalizeAiSchedule({ ...rest, appointmentDateLocal });
-          if (schedule.note === "DATE_ONLY") dateNotes.push({ code: "DATE_ONLY", message: `Точка ${index + 1}: указана только дата, принято окно ${DATE_ONLY_WINDOW.start}–${DATE_ONLY_WINDOW.end}.` });
+          if (schedule.note === "DATE_ONLY") dateNotes.push({ code: "DATE_ONLY", message: `Точка ${index + 1}: указана только дата, плановое время ${PLANNED_START} — это не Termin.` });
           if (rest.appointmentLocal && rest.appointmentWindowStartLocal) dateNotes.push({ code: "APPOINTMENT_CONFLICT", message: `Точка ${index + 1}: указаны и точное время, и окно — оставлено точное время.` });
           return {
             ...rest,
             appointmentLocal: schedule.appointmentLocal,
             appointmentWindowStartLocal: schedule.appointmentWindowStartLocal,
             appointmentWindowEndLocal: schedule.appointmentWindowEndLocal,
+            plannedLocal: schedule.plannedLocal ?? null,
             sequence: index + 1,
             city: cleanCity(stop.city) ?? inferCityFromAddress(stop.address)
           };
@@ -377,7 +378,7 @@ function toAppointmentDocument(raw: z.infer<typeof appointmentSchema>): Appointm
     appointmentWindowStartLocal: window ? raw.windowStartLocal : null,
     appointmentWindowEndLocal: window ? raw.windowEndLocal : null,
     appointmentDateLocal: raw.appointmentDateLocal
-  });
+  }, { dateOnly: "window" });
   if (schedule.note === "DATE_ONLY") warnings.push({ code: "DATE_ONLY", message: `В документе только дата, принято окно ${DATE_ONLY_WINDOW.start}–${DATE_ONLY_WINDOW.end}.` });
   if (!schedule.appointmentLocal && !schedule.appointmentWindowStartLocal) warnings.push({ code: "APPOINTMENT_TIME_MISSING", message: "Время термина не найдено — укажите его вручную." });
   if (!raw.plate) warnings.push({ code: "PLATE_MISSING", message: "Номер машины в документе не указан — машину нужно выбрать." });
@@ -418,12 +419,15 @@ type DepartmentDetails = {
   sourcePage: number | null;
 };
 
-function parseTourRemarksRoute(tourRemarks: string | null): TourRemarkStop[] | null {
+// Loading side and unloading side: "A für B", "A --> B", "A -> B", "A → B", "A nach B".
+const ROUTE_SIDES = /\s+für\s+|\s*-+>\s*|\s*→\s*|\s+nach\s+/i;
+
+export function parseTourRemarksRoute(tourRemarks: string | null): TourRemarkStop[] | null {
   if (!tourRemarks) return null;
-  const parts = tourRemarks.split(/\s+für\s+/i);
-  if (parts.length !== 2) return null;
-  const loads = splitTourRemarkStops(parts[0]);
-  const unloads = splitTourRemarkStops(parts[1]);
+  const match = ROUTE_SIDES.exec(tourRemarks);
+  if (!match) return null;
+  const loads = splitTourRemarkStops(tourRemarks.slice(0, match.index));
+  const unloads = splitTourRemarkStops(tourRemarks.slice(match.index + match[0].length));
   if (!loads.length || !unloads.length) return null;
   const route = [
     ...loads.map((label) => ({
@@ -440,19 +444,30 @@ function parseTourRemarksRoute(tourRemarks: string | null): TourRemarkStop[] | n
     }))
   ];
   const seen = new Set<string>();
+  // One stop per company and city: "Seifert Bremen" and "BLG Bremen" are two stops, a repeated "BLG Bremen" is one.
   return route.filter((stop) => {
-    const key = `${stop.type}:${stop.addressSource}:${normalizeRouteText(stop.cityHint || stop.label)}`;
+    const key = `${stop.type}:${stop.addressSource}:${normalizeRouteText(stop.label)}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
 }
 
-function splitTourRemarkStops(value: string): string[] {
+/**
+ * "TST Hamburg + Seifert & BLG Bremen" → ["TST Hamburg", "Seifert Bremen", "BLG Bremen"]:
+ * '+', ',' and 'und' separate stops; '&' joins companies that share the city written after the last one.
+ */
+export function splitTourRemarkStops(value: string): string[] {
   return value
-    .split(/\s*\+\s*/)
+    .split(/\s*(?:\+|,|\bund\b)\s*/i)
     .map((part) => part.replace(/\s*\/\/.*$/, "").trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .flatMap((group) => {
+      const members = group.split(/\s*&\s*/).map((member) => member.trim()).filter(Boolean);
+      if (members.length < 2) return members;
+      const city = lastRouteToken(members.at(-1)!);
+      return members.map((member, index) => index < members.length - 1 && member.split(/\s+/).length === 1 && city ? `${member} ${city}` : member);
+    });
 }
 
 function reconcileStopsWithTourRemarks(
@@ -479,9 +494,11 @@ function reconcileStopsWithTourRemarks(
       });
       return placeholderStop({ ...routeStop, label: "Abteilung" }, sequence + 1, department.sourcePage ?? tourRemarksSourcePage);
     }
+    const companyTokens = tourRemarkCompanyTokens(routeStop);
     const ranked = candidates
       .map((candidate, index) => ({ candidate, index, score: tourRemarkMatchScore(routeStop, candidate) }))
-      .filter((match) => !used.has(match.index) && match.score > 0)
+      // A named company ("BLG Bremen") only takes rows of that company; the city alone is not enough.
+      .filter((match) => !used.has(match.index) && match.score > 0 && (!companyTokens.length || mentionsCompany(match.candidate, companyTokens)))
       .sort((left, right) => right.score - left.score || right.candidate.confidence - left.candidate.confidence);
     const selected = ranked[0];
     if (!selected || selected.score < 40) {
@@ -494,11 +511,31 @@ function reconcileStopsWithTourRemarks(
     }
     used.add(selected.index);
     const duplicates = ranked.filter((match) =>
-      match.index !== selected.index && sameTourRemarkCity(routeStop, match.candidate));
+      match.index !== selected.index && sameTourRemarkCity(routeStop, match.candidate) && (!companyTokens.length || mentionsCompany(match.candidate, companyTokens)));
     duplicates.forEach((match) => used.add(match.index));
     return mergeDuplicateStopDetails({ ...selected.candidate, type: routeStop.type }, duplicates.map((match) => match.candidate));
   });
+  // Rows the Tourbemerkung does not name are not dropped silently: the dispatcher sees them.
+  const unnamed = candidates.filter((candidate, index) => !used.has(index) && candidate.type === "UNLOAD")
+    .map((candidate) => [candidate.company, cleanCity(candidate.city) ?? inferCityFromAddress(candidate.address)].filter(Boolean).join(", "))
+    .filter((label, index, all) => label && all.indexOf(label) === index);
+  if (unnamed.length) {
+    warnings.push({ code: "TABLE_STOPS_NOT_IN_TOUR_REMARKS", message: `В таблице есть адреса, которых нет в Tourbemerkung: ${unnamed.slice(0, 4).join("; ")}. Проверьте, к какой точке они относятся.` });
+  }
   return { stops, warnings };
+}
+
+const COMPANY_STOPWORDS = new Set(["gmbh", "ag", "kg", "co", "se", "lager", "werk", "und", "the"]);
+
+/** Words of a Tourbemerkung label that name the company, not the city: "BLG Bremen" → ["blg"]. */
+function tourRemarkCompanyTokens(routeStop: TourRemarkStop): string[] {
+  const city = normalizeRouteText(routeStop.cityHint);
+  return normalizeRouteText(routeStop.label).split(" ").filter((token) => token.length >= 2 && token !== city && !COMPANY_STOPWORDS.has(token));
+}
+
+function mentionsCompany(stop: ParsedStop, tokens: string[]): boolean {
+  const text = ` ${normalizeRouteText([stop.company, stop.address, stop.sourceExcerpt].filter(Boolean).join(" "))} `;
+  return tokens.some((token) => text.includes(` ${token} `) || (token.length >= 5 && text.includes(token)));
 }
 
 function tourRemarkMatchScore(routeStop: TourRemarkStop, stop: ParsedStop): number {
@@ -524,18 +561,23 @@ function sameTourRemarkCity(routeStop: TourRemarkStop, stop: ParsedStop): boolea
 function mergeDuplicateStopDetails(primary: ParsedStop, duplicates: ParsedStop[]): ParsedStop {
   const references = [...new Set([primary, ...duplicates].flatMap((stop) => stop.referenceNumbers))];
   const notes = [...new Set([primary, ...duplicates].map((stop) => stop.instructions?.trim()).filter((value): value is string => Boolean(value)))];
+  // Several shipments to the same place load the trailer together: their Lademeter add up.
+  const meters = [primary, ...duplicates].map((stop) => stop.loadingMeters).filter((value): value is number => typeof value === "number");
   return {
     ...primary,
+    loadingMeters: meters.length ? Math.round(meters.reduce((sum, value) => sum + value, 0) * 100) / 100 : primary.loadingMeters,
     referenceNumbers: references,
     instructions: notes.length ? notes.join("\n") : null
   };
 }
 
 function placeholderStop(routeStop: TourRemarkStop, sequence: number, sourcePage: number | null): ParsedStop {
+  // "Seifert Bremen" → company "Seifert", city Bremen; the address is completed from the address rules or by the dispatcher.
+  const companyName = routeStop.cityHint && routeStop.label.endsWith(routeStop.cityHint) ? routeStop.label.slice(0, -routeStop.cityHint.length).trim() || routeStop.label : routeStop.label;
   return {
     sequence,
     type: routeStop.type,
-    company: routeStop.label,
+    company: companyName,
     address: routeStop.cityHint || routeStop.label,
     city: routeStop.cityHint || null,
     appointmentLocal: null,

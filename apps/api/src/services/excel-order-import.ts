@@ -1,5 +1,5 @@
 import ExcelJS, { type CellValue, type Row, type Worksheet } from "exceljs";
-import { DATE_ONLY_WINDOW, parseDateAndTime } from "./order-dates.js";
+import { parseDateAndTime, PLANNED_START } from "./order-dates.js";
 
 const { Workbook } = ExcelJS;
 
@@ -29,6 +29,8 @@ export interface ImportedStopDraft {
   /** Time window (Berlin wall clock); a date without a time becomes 06:00–18:00. */
   appointmentWindowStartLocal: string | null;
   appointmentWindowEndLocal: string | null;
+  /** Planned time when only a date is known (06:00); never a Termin. */
+  plannedLocal?: string | null;
   loadingMeters: number | null;
   referenceNumbers: string[];
   instructions: string | null;
@@ -753,13 +755,14 @@ function normalizeStopType(value: string | null): ImportedStopType | null {
 function readSchedule(dateText: string | null, timeText: string | null, warnings: ImportWarning[]) {
   const shown = [dateText, timeText].filter(Boolean).join(" ");
   const schedule = parseDateAndTime(dateText, timeText);
-  if (schedule.note === "DATE_ONLY") warnings.push(warning("DATE_ONLY", `В сроке «${shown}» только дата: принято окно ${DATE_ONLY_WINDOW.start}–${DATE_ONLY_WINDOW.end}.`));
+  if (schedule.note === "DATE_ONLY") warnings.push(warning("DATE_ONLY", `В сроке «${shown}» только дата: плановое время ${PLANNED_START}, это не Termin.`));
   if (schedule.note === "MISSING_DATE") warnings.push(warning("MISSING_DATE", `В сроке «${shown}» есть время, но нет даты.`));
   if (schedule.note === "UNSUPPORTED") warnings.push(warning("UNSUPPORTED_APPOINTMENT", `Неподдерживаемый формат срока «${shown}».`));
   return {
     appointmentLocal: schedule.appointmentLocal,
     appointmentWindowStartLocal: schedule.appointmentWindowStartLocal,
-    appointmentWindowEndLocal: schedule.appointmentWindowEndLocal
+    appointmentWindowEndLocal: schedule.appointmentWindowEndLocal,
+    plannedLocal: schedule.plannedLocal ?? null
   };
 }
 

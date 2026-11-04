@@ -12,10 +12,10 @@ import { usePolling } from '../hooks/usePolling'
 import { usePopover } from '../hooks/usePopover'
 import { useVehiclePosition } from '../hooks/useVehiclePosition'
 import { api, type RouteOptions } from '../lib/api'
-import { compareVehicles, getAttention, matchesFleetFilter, positionSource, terminMargin, vehiclePlace, vehicleStatus, type FleetFilter, type FleetSort } from '../lib/fleet-status'
+import { compareVehicles, getAttention, matchesFleetFilter, positionSource, terminMargin, terminNeeded, vehiclePlace, vehicleStatus, type FleetFilter, type FleetSort } from '../lib/fleet-status'
 import { getRoutePreview, setRoutePreview, subscribeRoutePreview } from '../lib/route-preview'
 import { etaText, routeProgress, type StopState } from '../lib/route-progress'
-import { terminOf } from '../lib/tours'
+import { currentStopOf, terminOf } from '../lib/tours'
 import { classNames, formatAppointment, formatDateTime, formatDurationMinutes, formatTime, shortAddress, statusLabel, stopTypeLabel } from '../lib/format'
 import type { Coordinate, CurrentPosition, DashboardVehicle, Stop } from '../types/domain'
 
@@ -27,7 +27,7 @@ const scopes: Array<{ value: FleetScope; label: string }> = [
 ]
 const filters: Array<{ value: FleetFilter; label: string }> = [
   { value: 'ALL', label: 'Все' }, { value: 'DECIDE', label: 'Решить' }, { value: 'MOVING', label: 'В пути' },
-  { value: 'AT_STOP', label: 'На точке' }, { value: 'TERMIN', label: 'Termin' }, { value: 'IDLE', label: 'Без тура' }
+  { value: 'AT_STOP', label: 'На точке' }, { value: 'TERMIN', label: 'Termin' }, { value: 'NO_TERMIN', label: 'Нет Termin' }, { value: 'IDLE', label: 'Без тура' }
 ]
 const sorts: Array<{ value: FleetSort; label: string }> = [
   { value: 'URGENCY', label: 'по срочности' }, { value: 'TERMIN', label: 'по Termin' }, { value: 'NUMBER', label: 'по номеру' }
@@ -288,6 +288,7 @@ function VehicleRow({ row, selected, open, pinned, owner, busy, onOpen, onRoute,
   const place = vehiclePlace(row)
   const plate = row.telemetry?.objectNo ?? row.vehicle.licensePlate
   const dwell = status.tone === 'stop' && row.dwellMinutes ? Math.round(row.dwellMinutes) : null
+  const plannedAt = row.tour ? currentStopOf(row.tour)?.plannedAt ?? null : null
   // A calm row takes the slot colour; an alarm keeps its own colour and the slot label stays visible.
   const calm = attention.tone === 'ok' || attention.tone === 'moving' || attention.tone === 'idle' || attention.tone === 'watch'
   const number = `LKW ${row.vehicle.vehicleNumber}`
@@ -300,7 +301,8 @@ function VehicleRow({ row, selected, open, pinned, owner, busy, onOpen, onRoute,
           <span className="vehicle-row-line"><span className={`status-dot status-dot-${status.tone}`} aria-hidden="true" /><span className={`vehicle-row-status status-text-${status.tone}`}>{status.label}</span>{place ? <span className="truncate">· {place}</span> : null}</span>
           <span className="vehicle-row-meta">
             {dwell ? <span>На точке {formatDurationMinutes(dwell)}</span> : null}
-            {termin ? <span className="vehicle-row-termin">{termin.label}</span> : null}
+            {termin ? <span className="vehicle-row-termin">{termin.label}</span> : terminNeeded(row) ? <span className="termin-needed">Termin нужен</span> : null}
+            {!termin && plannedAt ? <span>план {formatDateTime(plannedAt)}</span> : null}
             {row.eta && status.tone !== 'stop' ? <span>ETA {formatTime(row.eta)}{margin !== null ? <> · <span className={margin < 0 ? 'timing-late' : 'timing-ok'} title={margin < 0 ? `опоздание ${formatDurationMinutes(-margin)}` : `запас ${formatDurationMinutes(margin)}`}>+{formatDurationMinutes(Math.abs(margin))}</span></> : null}</span> : null}
             {!row.eta && status.tone === 'plan' && row.tour?.plannedStartAt ? <span>выезд {formatTime(row.tour.plannedStartAt)}</span> : null}
           </span>

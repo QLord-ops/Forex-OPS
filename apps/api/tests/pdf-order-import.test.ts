@@ -109,7 +109,7 @@ describe("PDF Auftrag import", () => {
     const instruction = (userMessage?.content as Array<{ type: string; text?: string }>).find((item) => item.type === "input_text")?.text;
     expect(instruction).toContain("FIRST locate and read Tourbemerkung");
     expect(instruction).toContain("SECOND find those same locations");
-    expect(instruction).toContain("every location before the first word 'für' is a LOAD");
+    expect(instruction).toContain("every location before the first 'für' (or an arrow");
     expect(instruction).toContain("Hydro Crimmitschau + Voestalpine Schmölln für VW Braunschweig");
     expect(instruction).toContain("vorladen/Lager");
     expect(instruction).toContain("departmentAddress");
@@ -183,6 +183,43 @@ describe("PDF Auftrag import", () => {
       { sequence: 3, type: "UNLOAD", city: "Braunschweig", referenceNumbers: ["B-1", "B-2"] }
     ]);
     expect(result.drafts[0].stops.some((stop) => stop.city === "Wendeburg")).toBe(false);
+  });
+
+  it("reads an arrow route with '&': one stop per company and city, 00:00h as a planned day (Schnellecke tour, 04.11.2026)", async () => {
+    const row = (company: string, address: string, city: string, lm: number, ref: string) =>
+      ({ sequence: 1, type: "UNLOAD", company, address, city, appointmentLocal: "2026-11-05T00:00", loadingMeters: lm, referenceNumbers: [ref], sourcePage: 1, confidence: 0.9 });
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ output_text: JSON.stringify({
+      drafts: [{
+        orderNumber: "71123515", vehicleNumber: null, vehiclePlate: "B-CY3786", trailerPlate: "GÖ-FX271",
+        departmentCompany: "Schnellecke Transportlogistik GmbH", departmentAddress: "Rudolf-Diesel-Straße 2, 14974 Ludwigsfelde", departmentCity: "Ludwigsfelde", departmentSourcePage: 1,
+        tourRemarks: "vorladen Lager --> TST Hamburg + Seifert & BLG Bremen", tourRemarksSourcePage: 1,
+        stops: [
+          row("BLG Industrielogistik GmbH & Co. KG", "Senator-Mester-Straße 17, 28197 Bremen", "Bremen", 0.4, "710685764"),
+          row("Mercedes-Benz AG / Werk 067", "Mercedesstraße 1, 28309 Bremen", "Bremen", 0.5, "710685172"),
+          row("BLG Industrielogistik GmbH & Co. KG", "Senator-Apelt-Straße 90, 28197 Bremen", "Bremen", 0.17, "710685395"),
+          row("BLG Industrielogistik GmbH & Co. KG", "Senator-Apelt-Straße 90, 28197 Bremen", "Bremen", 0.25, "710685550"),
+          row("Mercedes-Benz AG / Werk 067", "Bordeauxstrasse 10, 28309 Bremen", "Bremen", 1.5, "710685401"),
+          row("TST Süderelbe GmbH", "Dradenauer Deichweg 3, 21129 Hamburg", "Hamburg", 2.75, "710685596")
+        ], warnings: []
+      }], warnings: []
+    }) }), { status: 200 })) as unknown as typeof fetch;
+
+    const result = await importPdfPreview(Buffer.from("%PDF-1.7"), "transportauftrag.pdf", { apiKey: "test-key", fetchImpl, now: new Date("2026-11-04T08:00:00Z") });
+    const stops = result.drafts[0].stops;
+    expect(stops.map((stop) => [stop.type, stop.company, stop.city])).toEqual([
+      ["LOAD", "Schnellecke Transportlogistik GmbH", "Ludwigsfelde"],
+      ["UNLOAD", "TST Süderelbe GmbH", "Hamburg"],
+      ["UNLOAD", "Seifert", "Bremen"],
+      ["UNLOAD", "BLG Industrielogistik GmbH & Co. KG", "Bremen"]
+    ]);
+    // The three BLG rows are one stop with all their shipment numbers.
+    expect(stops[3].referenceNumbers).toEqual(expect.arrayContaining(["710685764", "710685395", "710685550"]));
+    expect(stops[3].loadingMeters).toBeCloseTo(0.82);
+    // 00:00h is that day, planned at 06:00 — not a Termin.
+    expect(stops[3]).toMatchObject({ appointmentLocal: null, appointmentWindowStartLocal: null, plannedLocal: "2026-11-05T06:00" });
+    const codes = result.drafts[0].warnings.map((warning) => warning.code);
+    expect(codes).toContain("TABLE_STOPS_NOT_IN_TOUR_REMARKS");
+    expect(result.drafts[0].warnings.find((warning) => warning.code === "TABLE_STOPS_NOT_IN_TOUR_REMARKS")?.message).toContain("Mercedes-Benz AG / Werk 067");
   });
 
   it("uses Abteilung for vorladen and ignores a parenthetical city after the unload destination", async () => {
@@ -327,7 +364,7 @@ describe("stop dates read from a PDF Auftrag", () => {
     loadingMeters: null, referenceNumbers: [], instructions: null, sourcePage: 1, sourceExcerpt: null, confidence: 0.9
   });
 
-  it("gives the reader today's date and turns a date-only stop into the 06:00–18:00 window; an exact time wins over a window", async () => {
+  it("gives the reader today's date and plans a date-only stop at 06:00 without a Termin; an exact time wins over a window", async () => {
     let instruction = "";
     const fetchMock = vi.fn(async (_input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
       instruction = JSON.stringify(JSON.parse(String(init?.body)).input);
@@ -343,7 +380,7 @@ describe("stop dates read from a PDF Auftrag", () => {
     expect(instruction).toContain("today is 2026-11-02");
     expect(instruction).toContain("Ladedatum");
     const [load, unload] = preview.drafts[0].stops;
-    expect(load).toMatchObject({ appointmentLocal: null, appointmentWindowStartLocal: "2026-11-05T06:00", appointmentWindowEndLocal: "2026-11-05T18:00" });
+    expect(load).toMatchObject({ appointmentLocal: null, appointmentWindowStartLocal: null, appointmentWindowEndLocal: null, plannedLocal: "2026-11-05T06:00" });
     expect(unload).toMatchObject({ appointmentLocal: "2026-11-06T13:30", appointmentWindowStartLocal: null, appointmentWindowEndLocal: null });
     expect(preview.drafts[0].warnings.map((warning) => warning.code)).toEqual(expect.arrayContaining(["DATE_ONLY", "APPOINTMENT_CONFLICT"]));
   });

@@ -367,3 +367,13 @@ button.decision-card-title:focus-visible { outline: 2px solid var(--focus); outl
 .quick-stop-type { width: auto; height: 32px; padding: 0 28px 0 8px; font-size: .8125rem; font-weight: 600; }
 .quick-stop-tools { display: inline-flex; gap: 4px; margin-left: auto; }
 .quick-stop-add { display: flex; gap: 8px; margin-top: 10px; }
+/* A Termin the customer still owes: dashed violet, so it is not mistaken for a real Termin. */
+.termin-needed { display: inline-flex; align-items: center; border: 1px dashed rgb(var(--ln-a78bfa)); border-radius: 6px; padding: 0 7px; color: rgb(var(--tx-6d28d9)); font-size: .75rem; font-weight: 500; }
+.rules-table { width: 100%; border-collapse: collapse; font-size: .875rem; }
+.rules-table th { border-bottom: 1px solid rgb(var(--ln-e3e8ef)); padding: 6px 8px; color: rgb(var(--tx-64748b)); font-size: .75rem; font-weight: 500; text-align: left; }
+.rules-table td { border-bottom: 1px solid rgb(var(--ln-eef1f5)); padding: 8px; vertical-align: top; }
+.rules-table td strong { display: block; font-weight: 600; }
+.rules-table td span { color: rgb(var(--tx-64748b)); font-size: .75rem; }
+.rules-toggle { display: inline-flex; align-items: center; gap: 6px; }
+.rules-builtin summary { cursor: pointer; color: rgb(var(--tx-334155)); font-size: .875rem; }
+.rules-builtin p { margin-top: 6px; color: rgb(var(--tx-475569)); font-size: .8125rem; line-height: 1.5; }

@@ -2,6 +2,7 @@ import type { GeocodeResult } from "../domain.js";
 import type { AddressResearchCandidate, AddressResearcher } from "./address-research.js";
 import type { RoutingProvider } from "./routing.js";
 import { RoutingError } from "./routing.js";
+import { expandCity, findSiteRule, type AddressRuleRecord } from "./address-rules.js";
 
 export const geocodePrecisions = ["EXACT", "STREET", "POSTCODE_CITY", "CITY"] as const;
 export type GeocodePrecision = (typeof geocodePrecisions)[number];
@@ -15,15 +16,28 @@ export type AddressResolution = GeocodeResult & {
   researchCandidates?: AddressResearchCandidate[];
 };
 
+/**
+ * Order of evidence (owner's decision 2026-11-04): a learned rule for the company in that city, then the city
+ * (codes like WOB spelled out), the street in it, and the company in the city before the bare city.
+ */
 export async function resolveAddressWithFallback(
   routing: RoutingProvider,
-  input: { address: string; city?: string | null },
-  researcher?: AddressResearcher
+  input: { address: string; city?: string | null; company?: string | null },
+  researcher?: AddressResearcher,
+  rules: AddressRuleRecord[] = []
 ): Promise<AddressResolution> {
   const sourceAddress = input.address.trim();
   if (!sourceAddress) throw new RoutingError("Адрес не может быть пустым.", 400);
+  const city = expandCity(input.city ?? null, rules.length ? rules : undefined);
 
-  const candidates = buildAddressCandidates(sourceAddress, input.city);
+  const site = findSiteRule(input.company, city, rules);
+  if (site && site.latitude !== null && site.longitude !== null) {
+    const label = [site.company, site.street, [site.postalCode, site.city].filter(Boolean).join(" ")].filter(Boolean).join(", ");
+    return { latitude: site.latitude, longitude: site.longitude, city: site.city, label, provider: "address-rule",
+      sourceAddress, resolvedAddress: label, precision: "EXACT", attempts: [`правило: ${site.pattern}`] };
+  }
+
+  const candidates = buildAddressCandidates(sourceAddress, city, input.company);
   const attempts: string[] = [];
   let lastNotFound: unknown;
   let approximateResult: AddressResolution | undefined;
@@ -79,7 +93,7 @@ export async function resolveAddressWithFallback(
   throw new RoutingError(`Адрес не найден. Проверены: ${attempts.join(" → ")}.`, 404);
 }
 
-export function buildAddressCandidates(address: string, city?: string | null): Array<{ query: string; precision: GeocodePrecision }> {
+export function buildAddressCandidates(address: string, city?: string | null, company?: string | null): Array<{ query: string; precision: GeocodePrecision }> {
   const normalizedAddress = normalizeGermanAddress(address);
   const normalizedCity = normalizeCity(city);
   const exact = appendCity(normalizedAddress, normalizedCity);
@@ -87,6 +101,14 @@ export function buildAddressCandidates(address: string, city?: string | null): A
   const postalCode = normalizedAddress.match(/\b\d{5}\b/)?.[0];
   const cityFromAddress = extractCityFromAddress(normalizedAddress, postalCode);
   const effectiveCity = normalizedCity || cityFromAddress;
+  // Only a city was printed ("Bremen" for "Seifert & BLG Bremen"): the company in that city first, the bare city last,
+  // and never a city centre presented as an exact address.
+  if (company?.trim() && effectiveCity && normalizeForCompare(normalizedAddress) === normalizeForCompare(effectiveCity)) {
+    return dedupeCandidates([
+      { query: `${company.trim()}, ${effectiveCity}`, precision: "POSTCODE_CITY" },
+      { query: effectiveCity, precision: "CITY" }
+    ]);
+  }
 
   return dedupeCandidates([
     { query: exact, precision: "EXACT" },
@@ -95,6 +117,10 @@ export function buildAddressCandidates(address: string, city?: string | null): A
       : []),
     ...(postalCode && effectiveCity
       ? [{ query: `${postalCode} ${effectiveCity}`, precision: "POSTCODE_CITY" as const }]
+      : []),
+    // The company in the city finds a plant or warehouse when no street was printed ("BLG, Bremen").
+    ...(company?.trim() && effectiveCity && !normalizedAddress.match(/\d/)
+      ? [{ query: `${company.trim()}, ${effectiveCity}`, precision: "POSTCODE_CITY" as const }]
       : []),
     ...(effectiveCity ? [{ query: effectiveCity, precision: "CITY" as const }] : [])
   ]);
