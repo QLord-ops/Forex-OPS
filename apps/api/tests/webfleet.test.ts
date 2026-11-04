@@ -7,7 +7,7 @@ import { PrismaClient } from '../src/generated/sqlite-client/index.js';
 import { MockRoutingProvider } from '../src/services/routing.js';
 import { OperationsService, SYSTEM_WEBFLEET_ACTOR } from '../src/services/operations.js';
 import { TourService } from '../src/services/tours.js';
-import { bindWebfleetObject, distanceMeters, fetchObjectReport, listWebfleetBindings, matchWebfleetObject, parseWebfleetObjectRow, unbindWebfleetVehicle, WebfleetError, WebfleetSyncService, WebfleetTelemetryService } from '../src/services/webfleet.js';
+import { bindWebfleetObject, distanceMeters, webfleetPlaceMatchesStop, fetchObjectReport, listWebfleetBindings, matchWebfleetObject, parseWebfleetObjectRow, unbindWebfleetVehicle, WebfleetError, WebfleetSyncService, WebfleetTelemetryService } from '../src/services/webfleet.js';
 import { asAppDatabase, migrateTestDatabase } from './test-database.js';
 
 let db: PrismaClient;
@@ -112,6 +112,42 @@ it('reports a Termin met on time, or how late, when GPS sets the arrival', async
   const none = await arrivalScenario('TERMIN-NONE');
   for (const minute of [1, 2, 3, 4, 5]) await none.feed(minute, north(100), true);
   expect(await db.notification.count({ where: { stopId: none.stopId, type: 'TERMIN_MET' } })).toBe(0);
+});
+
+it('reads Webfleet place names of a plant gate: VW Emden (VW-LKW-Tor) is the stop «Volkswagen AG, Emden»', () => {
+  expect(webfleetPlaceMatchesStop('VW Emden (VW-LKW-Tor), VW-LKW-Tor, 26723 Emden, DE', { company: 'Volkswagen AG', city: 'Emden' })).toBe(true);
+  expect(webfleetPlaceMatchesStop('VW Emden (VW-LKW-Tor), 26723 Emden, DE', { company: 'VW', city: 'Emden' })).toBe(true);
+  expect(webfleetPlaceMatchesStop('Autohof Emden, A31, 26723 Emden, DE', { company: 'Volkswagen AG', city: 'Emden' })).toBe(false);
+  expect(webfleetPlaceMatchesStop('VW Kassel, Baunatal, DE', { company: 'Volkswagen AG', city: 'Emden' })).toBe(false);
+  expect(webfleetPlaceMatchesStop(null, { company: 'Volkswagen AG', city: 'Emden' })).toBe(false);
+});
+
+it('sets the arrival at a plant gate kilometres from the postal address when Webfleet names the place', async () => {
+  const { stopId, feed, vehicle } = await arrivalScenario('GATE-1');
+  await db.stop.update({ where: { id: stopId }, data: { company: 'Volkswagen AG', city: 'Berlin' } });
+  const gate = north(2500);
+  const place = 'VW Berlin (VW-LKW-Tor), 10115 Berlin, DE';
+  const feedAt = (minute: number, point: { latitude: number; longitude: number }, standstill: boolean, address?: string) =>
+    new WebfleetTelemetryService(db as unknown as PostgresPrismaClient, (input) =>
+      new OperationsService(asAppDatabase(db), new TourService(asAppDatabase(db), new MockRoutingProvider())).confirmArrival(input.stopId, input.arrivedAt, input.now, SYSTEM_WEBFLEET_ACTOR, { source: 'WEBFLEET_AUTO', meta: input.meta }))
+      .applyPosition({ objectUid: 'wf-GATE-1', objectNo: 'GATE-1', ...point, standstill, address, recordedAt: at(minute) }, new Date(at(minute).getTime() + 30_000));
+  void feed;
+  await feedAt(0, north(3500), false, 'B96, Berlin');
+  for (const minute of [1, 2, 3, 4]) await feedAt(minute, gate, true, place);
+  const stop = await db.stop.findUniqueOrThrow({ where: { id: stopId } });
+  // Arrival when the truck stopped at the gate, not when it crossed the widened circle.
+  expect(stop.arrivedAt).toEqual(at(1));
+  expect(stop.arrivalRadiusMeters).toBeGreaterThan(2500);
+  const event = await db.operationEvent.findFirstOrThrow({ where: { stopId, type: 'ARRIVAL_CONFIRMED' } });
+  expect(JSON.parse(event.payloadJson)).toMatchObject({ zone: 'WEBFLEET_PLACE' });
+  expect(vehicle.id).toBeTruthy();
+});
+
+it('does not widen the zone for a truck standing 2.5 km away at a place Webfleet does not name as the stop', async () => {
+  const { stopId, feed } = await arrivalScenario('GATE-2');
+  await db.stop.update({ where: { id: stopId }, data: { company: 'Volkswagen AG', city: 'Berlin' } });
+  for (const minute of [0, 1, 2, 3, 4]) await feed(minute, north(2500), true);
+  expect((await db.stop.findUniqueOrThrow({ where: { id: stopId } })).arrivedAt).toBeNull();
 });
 
 it('waits while the truck has stood in the zone for less than three minutes', async () => {

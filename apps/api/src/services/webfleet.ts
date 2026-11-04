@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@prisma/client';
+import { BUILT_IN_RULES, normalizePattern } from './address-rules.js';
 
 const PROVIDER = 'WEBFLEET';
 export const DEFAULT_ARRIVAL_RADIUS_METERS = 500;
@@ -17,6 +18,27 @@ const DEPARTURE_FAST_KMH = 20;
 const FALLBACK_SECONDS = 30 * 60;
 const SNAPSHOT_INTERVAL_MS = 60_000;
 const SYNC_LEASE_MS = 45_000;
+// A plant's truck gate can be kilometres from its postal address (VW Emden, VW-LKW-Tor). When Webfleet itself names
+// the place as that company in that city, the zone widens to the truck's real spot, up to this distance.
+export const PLANT_GATE_MAX_METERS = 4_000;
+const GATE_MARGIN_METERS = 300;
+const COMPANY_STOPWORDS = new Set(['gmbh', 'ag', 'kg', 'co', 'se', 'mbh', 'werk', 'und', 'logistics', 'logistik']);
+
+/**
+ * Webfleet's place text (postext, e.g. "VW Emden (VW-LKW-Tor), 26723 Emden, DE") names the stop's company in the stop's city.
+ * Abbreviations from the address rules count both ways ("VW" ↔ "Volkswagen AG").
+ */
+export function webfleetPlaceMatchesStop(placeText: string | null | undefined, stop: { company: string | null; city: string | null }) {
+  const place = ` ${normalizePattern(placeText)} `;
+  const city = normalizePattern(stop.city);
+  if (place.trim().length < 3 || !city || !place.includes(city)) return false;
+  const companyTokens = normalizePattern(stop.company).split(' ').filter((token) => token.length >= 2 && !COMPANY_STOPWORDS.has(token) && token !== city);
+  if (!companyTokens.length) return false;
+  const companyText = normalizePattern(stop.company);
+  const aliases = BUILT_IN_RULES.filter((rule) => rule.kind === 'COMPANY' && rule.company && (normalizePattern(rule.company).split(' ').some((token) => companyTokens.includes(token)) || companyText.includes(rule.pattern)))
+    .flatMap((rule) => [rule.pattern, ...normalizePattern(rule.company).split(' ')]);
+  return [...companyTokens, ...aliases].some((token) => token.length >= 2 && !COMPANY_STOPWORDS.has(token) && place.includes(` ${token} `));
+}
 
 export type WebfleetObject = {
   objectUid: string;
@@ -92,7 +114,7 @@ export type AutoArrivalInput = {
   stopId: string;
   arrivedAt: Date;
   now: Date;
-  meta: { enteredAt: string; distanceMeters?: number; radiusMeters?: number; stoppedSince?: string; leftZoneAfter?: string; standstillSeconds?: number; retroactive?: boolean };
+  meta: { enteredAt: string; distanceMeters?: number; radiusMeters?: number; stoppedSince?: string; leftZoneAfter?: string; standstillSeconds?: number; retroactive?: boolean; zone?: string; place?: string | null };
 };
 export type AutoArrivalHandler = (input: AutoArrivalInput) => Promise<{ applied?: boolean } | unknown>;
 type ArrivalDecision = { suggested: boolean; confirmed: boolean };
@@ -281,8 +303,11 @@ export class WebfleetTelemetryService {
     });
     const stop = tour?.stops.find((item) => !item.completedAt);
     if (!tour || !stop || stop.arrivedAt) return none;
-    const radiusMeters = stop.arrivalRadiusMeters ?? DEFAULT_ARRIVAL_RADIUS_METERS;
+    const plannedRadius = stop.arrivalRadiusMeters ?? DEFAULT_ARRIVAL_RADIUS_METERS;
     const distance = distanceMeters(current.latitude, current.longitude, stop.latitude, stop.longitude);
+    // Webfleet names the truck's place as this company in this city (plant gate away from the postal address).
+    const atNamedPlace = distance > plannedRadius && distance <= PLANT_GATE_MAX_METERS && webfleetPlaceMatchesStop(current.address, stop);
+    const radiusMeters = atNamedPlace ? Math.ceil(distance + GATE_MARGIN_METERS) : plannedRadius;
     if (distance > radiusMeters) {
       await this.warnPreviousTourOpen(vehicleId, tour, stop, current, observedAt);
       return none;
@@ -312,10 +337,15 @@ export class WebfleetTelemetryService {
     if (reverted && (!leftZoneAt || leftZoneAt <= reverted.createdAt)) return none;
 
     const leg = tour.legs.find((item) => item.toStopId === stop.id);
-    const arrivedAt = leg?.startedAt && leg.startedAt > enteredAt ? leg.startedAt : enteredAt;
-    const meta = { distanceMeters: Math.round(distance), radiusMeters, enteredAt: enteredAt.toISOString(), stoppedSince: stoppedSince.toISOString() };
+    // At a named gate the wide zone includes the approach road, so the arrival is when the truck stopped there.
+    const zoneEntry = atNamedPlace ? stoppedSince : enteredAt;
+    const arrivedAt = leg?.startedAt && leg.startedAt > zoneEntry ? leg.startedAt : zoneEntry;
+    const meta = { distanceMeters: Math.round(distance), radiusMeters, enteredAt: enteredAt.toISOString(), stoppedSince: stoppedSince.toISOString(),
+      ...(atNamedPlace ? { zone: 'WEBFLEET_PLACE', place: current.address?.slice(0, 120) ?? null } : {}) };
 
     if (this.onAutoArrival) {
+      // The widened zone stays on the stop, so leaving it is measured from the gate and not from the postal address.
+      if (atNamedPlace) await this.db.stop.update({ where: { id: stop.id }, data: { arrivalRadiusMeters: radiusMeters } });
       try {
         const result = await this.onAutoArrival({ stopId: stop.id, arrivedAt, now, meta });
         const applied = !isRecord(result) || result.applied !== false;
