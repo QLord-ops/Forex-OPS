@@ -222,6 +222,27 @@ describe("PDF Auftrag import", () => {
     expect(result.drafts[0].warnings.find((warning) => warning.code === "TABLE_STOPS_NOT_IN_TOUR_REMARKS")?.message).toContain("Mercedes-Benz AG / Werk 067");
   });
 
+  it("reads 'Lager' as the Abteilung warehouse on the unloading side too, never as a town", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ output_text: JSON.stringify({
+      drafts: [{
+        orderNumber: "20565720", vehicleNumber: null, vehiclePlate: "GÖ-FX952", trailerPlate: "GÖ-FX671",
+        departmentCompany: "Schnellecke Transportlogistik GmbH", departmentAddress: "Büttenstraße 4, 08058 Zwickau", departmentCity: "Zwickau", departmentSourcePage: 1,
+        tourRemarks: "Vollmann Scheibenberg für VW Kassel + Lager", tourRemarksSourcePage: 1,
+        stops: [
+          { sequence: 1, type: "LOAD", company: "Vollmann (Sachsen) GmbH & Co. KG", address: "Elterleiner Str. 4, 09481 Scheibenberg", city: "Scheibenberg", appointmentLocal: null, referenceNumbers: ["23295302"], sourcePage: 1, confidence: 0.9 },
+          { sequence: 2, type: "UNLOAD", company: "Volkswagen AG", address: "Dr.-Rudolf-Leiding-Platz 1, 34225 Baunatal", city: "Kassel", appointmentLocal: null, sourcePage: 1, confidence: 0.8 },
+          { sequence: 3, type: "UNLOAD", company: "Lager", address: "Lager", city: "Lager", appointmentLocal: null, sourcePage: 1, confidence: 0.5 }
+        ], warnings: []
+      }], warnings: []
+    }) }), { status: 200 })) as unknown as typeof fetch;
+
+    const result = await importPdfPreview(Buffer.from("%PDF-1.7"), "auftrag.pdf", { apiKey: "test-key", fetchImpl });
+    const stops = result.drafts[0].stops;
+    expect(stops.map((stop) => [stop.type, stop.city])).toEqual([["LOAD", "Scheibenberg"], ["UNLOAD", "Kassel"], ["UNLOAD", "Zwickau"]]);
+    expect(stops[2]).toMatchObject({ company: "Schnellecke Transportlogistik GmbH", address: "Büttenstraße 4, 08058 Zwickau" });
+    expect(stops.some((stop) => stop.city === "Lager")).toBe(false);
+  });
+
   it("uses Abteilung for vorladen and ignores a parenthetical city after the unload destination", async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ output_text: JSON.stringify({
       drafts: [{
