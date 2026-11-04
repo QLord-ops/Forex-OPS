@@ -115,6 +115,8 @@ export type CurrentPosition = {
   remainingGeometry: Array<[number, number]>;
   /** Congested stretches of routeGeometry (point indices) from the last TomTom check. */
   trafficSegments?: Array<{ from: number; to: number; level: "SLOW" | "JAM" | "STANDSTILL" | "CLOSED"; delaySeconds?: number; speedKmh?: number | null }>;
+  /** Autobahn / Bundesstraße stretches of routeGeometry (point indices), for road shields on the map. */
+  roadSegments?: Array<{ from: number; to: number; road: string }>;
   trafficCheckedAt?: string | null;
   progress: number;
   distanceTravelledMeters: number;
@@ -139,7 +141,7 @@ export const MANUAL_POSITION_DISCLAIMER = "Позиция указана дис�
 export const LAST_STOP_POSITION_DISCLAIMER = "Последняя завершённая точка – не GPS" as const;
 
 export function withoutPositionGeometry(position: CurrentPosition) {
-  const { routeGeometry: _route, travelledGeometry: _travelled, remainingGeometry: _remaining, trafficSegments: _traffic, ...summary } = position;
+  const { routeGeometry: _route, travelledGeometry: _travelled, remainingGeometry: _remaining, trafficSegments: _traffic, roadSegments: _roads, ...summary } = position;
   return summary;
 }
 

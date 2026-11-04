@@ -1,5 +1,5 @@
 import type { RouteLeg, RouteOption } from '../types/assistant'
-import type { Coordinate, TrafficSegment } from '../types/domain'
+import type { Coordinate, RoadSegment, TrafficSegment } from '../types/domain'
 
 /** «через A14 и A2», as Webfleet names its route variants. */
 export function routeVia(option: RouteOption) {
@@ -17,6 +17,7 @@ export function chosenOption(leg: RouteLeg, index: number | undefined): RouteOpt
 export function composeRoute(legs: RouteLeg[], choice: number[]) {
   const geometry: Coordinate[] = []
   const trafficSegments: TrafficSegment[] = []
+  const roadSegments: RoadSegment[] = []
   let distanceMeters = 0
   legs.forEach((leg, index) => {
     const option = chosenOption(leg, choice[index])
@@ -27,9 +28,10 @@ export function composeRoute(legs: RouteLeg[], choice: number[]) {
     const offset = geometry.length - skip
     for (const point of option.geometry.slice(skip)) geometry.push(point)
     for (const segment of option.trafficSegments) trafficSegments.push({ ...segment, from: segment.from + offset, to: segment.to + offset })
+    for (const segment of option.roadSegments ?? []) roadSegments.push({ ...segment, from: segment.from + offset, to: segment.to + offset })
     distanceMeters += option.distanceMeters
   })
-  return { geometry, trafficSegments, distanceMeters }
+  return { geometry, trafficSegments, roadSegments, distanceMeters }
 }
 
 export function formatDrive(seconds: number) {

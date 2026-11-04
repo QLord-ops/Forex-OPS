@@ -27,7 +27,8 @@ async function dashboard(page: Page, handler: (route: Route, path: string) => Pr
         mapPosition: { coordinate: [11 + index * 0.4, 51 + index * 0.3], source: 'WEBFLEET', stale: false, courseDeg: 0, standstill: false } }))
     ] })
     if (path === '/vehicles/v1/current-position') return json(route, { status: 'MOVING', positionSource: 'WEBFLEET', etaSource: 'GPS', coordinate: [8.8, 53.07], tourId: 'tour-1', legId: 'leg-1',
-      routeGeometry: line, travelledGeometry: line.slice(0, 2), remainingGeometry: line.slice(1), progress: 0.5, remainingDistanceMeters: 215_000 })
+      routeGeometry: line, travelledGeometry: line.slice(0, 2), remainingGeometry: line.slice(1), progress: 0.5, remainingDistanceMeters: 215_000,
+      roadSegments: [{ from: 0, to: 1, road: 'A7' }, { from: 1, to: 2, road: 'A28' }] })
     if (path.endsWith('/current-position')) return json(route, { status: 'MOVING' })
     return json(route, [])
   })
@@ -48,6 +49,17 @@ test('маркеры остаются привязаны к карте посл�
   const center = () => page.evaluate(() => JSON.parse(window.localStorage.getItem('ops-dashboard-map-camera') ?? 'null')?.center as [number, number] | undefined)
   await page.getByRole('button', { name: /Показать на карте: 2 · .*Emden/ }).click()
   await expect.poll(async () => (await center())?.[0] ?? 0, { timeout: 5000 }).toBeLessThan(7.5)
+})
+
+test('на маршруте впереди машины видно табличку автобана с номером', async ({ page }) => {
+  await dashboard(page)
+  await page.goto('/?vehicleId=v1')
+  const shield = page.getByRole('img', { name: 'Автобан A28' })
+  await expect(shield).toBeAttached()
+  await expect(shield).toHaveText('A28')
+  await expect(shield).toHaveClass(/maplibregl-marker/)
+  // A7 is already behind the truck: no shield for it.
+  await expect(page.getByRole('img', { name: 'Автобан A7' })).toHaveCount(0)
 })
 
 test('варианты маршрута от GPS: серый вариант становится маршрутом тура', async ({ page }) => {

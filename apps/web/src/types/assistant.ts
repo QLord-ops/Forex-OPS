@@ -11,6 +11,7 @@ export interface RouteScenarioStop {
 export interface RouteOption {
   id: string; mainRoads: string[]; distanceMeters: number; durationSeconds: number; trafficDelaySeconds: number; hasRoadClosure: boolean
   geometry: Array<[number, number]>; trafficSegments: Array<{ from: number; to: number; level: 'SLOW' | 'JAM' | 'STANDSTILL' | 'CLOSED'; delaySeconds?: number; speedKmh?: number | null }>
+  roadSegments?: Array<{ from: number; to: number; road: string }>
 }
 /** Up to three ways to drive one leg; option 0 is the router's best. */
 export interface RouteLeg { from: string; to: string; options: RouteOption[] }

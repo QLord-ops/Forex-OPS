@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Coordinate, RouteResult } from "../src/domain.js";
 import { RoutingError, type RoutingProvider } from "../src/services/routing.js";
-import { extractMainRoads, extractTrafficSections,
+import { extractMainRoads, extractRoadSections, extractTrafficSections,
   PrismaTrafficQuotaStore,
   TomTomRoutingProvider,
   TrafficRoutingService,
@@ -348,6 +348,31 @@ describe("traffic sections for route colouring", () => {
       { start: 30, end: 49, level: "STANDSTILL", delaySeconds: 900, speedKmh: null },
       { start: 40, end: 45, level: "CLOSED", delaySeconds: 0, speedKmh: null }
     ]);
+  });
+});
+
+describe("road stretches for the shields on the map", () => {
+  it("keeps Autobahn and Bundesstraße stretches in driving order, joins pieces of one road, skips E-routes and Landesstraßen", () => {
+    expect(extractRoadSections({ sections: [
+      { sectionType: "ROAD_SHIELDS", startPointIndex: 40, endPointIndex: 60, roadShieldReferences: [{ shieldContent: "A 7" }, { shieldContent: "E45" }] },
+      { sectionType: "ROAD_SHIELDS", startPointIndex: 0, endPointIndex: 10, roadShieldReferences: [{ shieldContent: "L554" }] },
+      { sectionType: "ROAD_SHIELDS", startPointIndex: 10, endPointIndex: 40, roadShieldReferences: [{ shieldContent: "B3" }, { shieldContent: "A44" }] },
+      { sectionType: "ROAD_SHIELDS", startPointIndex: 60, endPointIndex: 80, roadShieldReferences: [{ shieldContent: "A7" }] },
+      { sectionType: "TRAFFIC", startPointIndex: 0, endPointIndex: 99, magnitudeOfDelay: 2 },
+      { sectionType: "ROAD_SHIELDS", startPointIndex: 80, endPointIndex: 120, roadShieldReferences: [{ shieldContent: "B27" }] }
+    ] }, 100)).toEqual([
+      { start: 10, end: 40, road: "A44" },
+      { start: 40, end: 80, road: "A7" },
+      { start: 80, end: 99, road: "B27" }
+    ]);
+  });
+
+  it("falls back to important road stretches and ignores unusable indices", () => {
+    expect(extractRoadSections({ sections: [
+      { sectionType: "IMPORTANT_ROAD_STRETCH", startPointIndex: 5, endPointIndex: 50, roadNumbers: ["A2"] },
+      { sectionType: "IMPORTANT_ROAD_STRETCH", startPointIndex: 50, endPointIndex: 50, roadNumbers: ["A39"] }
+    ] }, 60)).toEqual([{ start: 5, end: 50, road: "A2" }]);
+    expect(extractRoadSections({}, 60)).toEqual([]);
   });
 });
 

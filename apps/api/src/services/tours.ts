@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { TrafficSection } from "./traffic-routing.js";
+import type { RoadSection, TrafficSection } from "./traffic-routing.js";
 import type { Prisma, PrismaClient, Stop, Tour, Vehicle } from "@prisma/client";
 import {
   CALCULATED_POSITION_DISCLAIMER,
@@ -365,21 +365,28 @@ export class TourService {
     let travelledPrefix: Coordinate[] = [];
     let previousTravelledDistanceMeters = 0;
     let trafficSections: TrafficSection[] = [];
+    let roadSections: RoadSection[] = [];
     let trafficCheckedAt: string | null = null;
     try {
       const details = JSON.parse(activeLeg.routeDetails ?? "{}") as { travelledGeometry?: Array<Coordinate | [number, number]>; previousTravelledDistanceMeters?: number;
-        trafficSections?: TrafficSection[]; checkedAt?: string; providerStatus?: string; activeRoute?: { trafficSections?: TrafficSection[]; checkedAt?: string } };
+        trafficSections?: TrafficSection[]; roadSections?: RoadSection[]; checkedAt?: string; providerStatus?: string;
+        activeRoute?: { trafficSections?: TrafficSection[]; roadSections?: RoadSection[]; checkedAt?: string } };
       if (Array.isArray(details.travelledGeometry)) travelledPrefix = details.travelledGeometry.map(point => Array.isArray(point) ? { longitude: point[0], latitude: point[1] } : point);
       previousTravelledDistanceMeters = details.previousTravelledDistanceMeters ?? 0;
       // Two shapes: a refreshed route lives in `activeRoute`, a freshly planned one at the top level.
       const source = details.activeRoute?.trafficSections ? details.activeRoute : details;
       if (Array.isArray(source.trafficSections)) trafficSections = source.trafficSections;
+      const roads = details.activeRoute ? details.activeRoute.roadSections : details.roadSections;
+      if (Array.isArray(roads)) roadSections = roads;
       trafficCheckedAt = source.checkedAt ?? null;
     } catch { /* Legacy routes need no prefix. */ }
     // TomTom indices refer to the stored leg geometry; the line sent out starts with the travelled prefix.
     const trafficSegments = trafficSections
       .filter(section => Number.isInteger(section.start) && Number.isInteger(section.end) && section.end > section.start && section.end < geometry.length)
       .map(section => ({ from: section.start + travelledPrefix.length, to: section.end + travelledPrefix.length, level: section.level, delaySeconds: section.delaySeconds, speedKmh: section.speedKmh }));
+    const roadSegments = roadSections
+      .filter(section => Number.isInteger(section.start) && Number.isInteger(section.end) && section.end > section.start && section.end < geometry.length && typeof section.road === "string")
+      .map(section => ({ from: section.start + travelledPrefix.length, to: section.end + travelledPrefix.length, road: section.road }));
 
     return {
       state: activeLeg.toStop.arrivedAt ? "DWELL" : arrived && !projection ? "ANGEKOMMEN_WARTET_AUF_BESTAETIGUNG" : "UNTERWEGS",
@@ -397,6 +404,7 @@ export class TourService {
       travelledGeometry: [...travelledPrefix, ...split.travelledGeometry].map(toLonLat),
       remainingGeometry: split.remainingGeometry.map(toLonLat),
       trafficSegments,
+      roadSegments,
       trafficCheckedAt: trafficSegments.length ? trafficCheckedAt : null,
       progress: shownProgress,
       distanceTravelledMeters: previousTravelledDistanceMeters + (gpsRemainingMeters !== null ? Math.max(0, legMeters - gpsRemainingMeters) : calculateDistanceTravelled(activeLeg.distanceMeters, progress)),
@@ -1211,8 +1219,10 @@ function toLonLat(coordinate: Coordinate): [number, number] {
 function geometryFingerprint(legId: string, routeGeometry: string | null, routeDetails: string | null): string {
   let travelled = "";
   try {
-    const details = JSON.parse(routeDetails ?? "{}") as { travelledGeometry?: unknown; trafficSections?: unknown; activeRoute?: { trafficSections?: unknown } };
-    travelled = JSON.stringify([details.travelledGeometry ?? null, details.activeRoute?.trafficSections ?? details.trafficSections ?? null]);
+    const details = JSON.parse(routeDetails ?? "{}") as { travelledGeometry?: unknown; trafficSections?: unknown; roadSections?: unknown;
+      activeRoute?: { trafficSections?: unknown; roadSections?: unknown } };
+    travelled = JSON.stringify([details.travelledGeometry ?? null, details.activeRoute?.trafficSections ?? details.trafficSections ?? null,
+      details.activeRoute?.roadSections ?? details.roadSections ?? null]);
   } catch { /* Legacy details. */ }
   return `${legId}:${createHash("sha1").update(routeGeometry ?? "").update("|").update(travelled).digest("hex").slice(0, 16)}`;
 }

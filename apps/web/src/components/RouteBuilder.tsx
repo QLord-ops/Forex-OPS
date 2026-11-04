@@ -88,13 +88,13 @@ export function RouteBuilder({ vehicles, selectedVehicleNumber, onPreview }: {
   function showOnMap(nextLegs: RouteLeg[], nextChoice: number[], leg: number, scenario: RouteScenario) {
     const search = base.current
     if (!search) return
-    const composed = nextLegs.length ? composeRoute(nextLegs, nextChoice) : { geometry: scenario.geometry, trafficSegments: scenario.trafficSegments ?? [] }
+    const composed = nextLegs.length ? composeRoute(nextLegs, nextChoice) : { geometry: scenario.geometry, trafficSegments: scenario.trafficSegments ?? [], roadSegments: [] }
     if (composed.geometry.length < 2) { publish(null); return }
     const alternatives = (nextLegs[leg]?.options ?? [])
       .map((option, index) => ({ option, index }))
       .filter(({ index }) => index !== (nextChoice[leg] ?? 0))
       .map(({ option, index }) => ({ id: `${leg}:${index}`, geometry: option.geometry, label: formatDrive(option.durationSeconds) }))
-    publish({ geometry: composed.geometry, trafficSegments: composed.trafficSegments, label: search.label, stops: search.stopsOnMap, key: search.key,
+    publish({ geometry: composed.geometry, trafficSegments: composed.trafficSegments, roadSegments: composed.roadSegments, label: search.label, stops: search.stopsOnMap, key: search.key,
       alternatives, onSelectAlternative: (id) => { const [legIndex, optionIndex] = id.split(':').map(Number); chooseRef.current(legIndex, optionIndex) } })
   }
 
