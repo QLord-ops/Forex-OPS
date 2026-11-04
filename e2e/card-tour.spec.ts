@@ -85,12 +85,12 @@ test('уведомление в фоне: окно Windows, звук и счёт
   })
   await page.route('https://tile.openstreetmap.org/**', (route) => route.abort())
   await page.goto('/vehicles')
-  await expect(page).toHaveTitle('OPS Disponent')
+  await expect(page).toHaveTitle('OPS FOREX')
 
   notifications = [{ id: 'n1', vehicleId: vehicle.id, stopId: 's1', type: 'AUTO_ARRIVAL', message: 'Webfleet: LKW 997 прибыла на загрузку, Zwickau', createdAt: new Date().toISOString() }]
   // Showing the tab again refreshes at once instead of waiting for the 30 s poll.
   await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')))
-  await expect(page).toHaveTitle('(1) OPS Disponent')
+  await expect(page).toHaveTitle('(1) OPS FOREX')
   const shown = await page.evaluate(() => (window as unknown as { shownNotifications: Array<{ title: string; body?: string; tag?: string }> }).shownNotifications)
   expect(shown).toEqual([{ title: 'Прибытие по GPS', body: 'Webfleet: LKW 997 прибыла на загрузку, Zwickau', tag: 'n1' }])
 })

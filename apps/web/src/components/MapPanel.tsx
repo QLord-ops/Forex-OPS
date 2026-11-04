@@ -9,6 +9,7 @@ import { calculatedPositionLabel } from '../lib/format'
 import { useStableValue } from '../hooks/useStableValue'
 import { formatDelay, formatKm, INCIDENT_TITLES, trafficIncidents, type TrafficIncident } from '../lib/traffic-incidents'
 import type { MapRouteAlternative, MapRouteStop } from '../lib/route-preview'
+import { THEME_EVENT, currentTheme, type Theme } from '../lib/theme'
 import type { Coordinate, CurrentPosition, TrafficSegment, Tour } from '../types/domain'
 
 setWorkerUrl(mapLibreWorkerUrl)
@@ -121,6 +122,8 @@ export function MapPanel({
   const [mode, setMode] = useState<MapMode>(() => readMapMode())
   const [cameraRequest, setCameraRequest] = useState<'vehicle' | 'route' | null>(null)
   const initialModeRef = useRef(mode)
+  const [theme, setThemeState] = useState<Theme>(() => currentTheme())
+  const initialThemeRef = useRef(theme)
   const modeEffectReadyRef = useRef(false)
 
   const position = useStableValue(positionProp)
@@ -147,7 +150,7 @@ export function MapPanel({
 
     mapRef.current = new Map({
       container: containerRef.current,
-      style: styleFor(initialModeRef.current),
+      style: styleFor(initialModeRef.current, initialThemeRef.current),
       center: readCamera()?.center ?? [10.4515, 51.1657],
       zoom: readCamera()?.zoom ?? 5.2
     })
@@ -209,9 +212,15 @@ export function MapPanel({
     styleReadyRef.current = false
     map.once('style.load', restore)
     // A full reload, not a diff: a diff silently drops our runtime route layers.
-    map.setStyle(styleFor(mode), { diff: false })
+    map.setStyle(styleFor(mode, theme), { diff: false })
     return () => { map.off('style.load', restore) }
-  }, [mode])
+  }, [mode, theme])
+
+  useEffect(() => {
+    const onTheme = (event: Event) => setThemeState((event as CustomEvent<Theme>).detail)
+    window.addEventListener(THEME_EVENT, onTheme)
+    return () => window.removeEventListener(THEME_EVENT, onTheme)
+  }, [])
 
   useEffect(() => {
     const container = containerRef.current
@@ -557,12 +566,19 @@ function TrafficLegend({ segments, checkedAt }: { segments?: TrafficSegment[] | 
   </div>
 }
 
-function styleFor(mode: MapMode): StyleSpecification {
+// OSM has no night tiles: invert the brightness and turn the hues back, so water stays blue and forests green.
+const OSM_NIGHT_PAINT = { 'raster-brightness-min': 0.94, 'raster-brightness-max': 0.06, 'raster-hue-rotate': 180, 'raster-saturation': -0.55, 'raster-contrast': 0.12 } as const
+
+function styleFor(mode: MapMode, theme: Theme): StyleSpecification {
   const key = tomTomMapKey()
-  if (!key) return mode === 'satellite' ? fallbackSatelliteStyle : osmStyle
+  const night = theme === 'dark' && mode !== 'satellite'
+  if (!key) {
+    if (mode === 'satellite') return fallbackSatelliteStyle
+    return night ? { ...osmStyle, layers: [{ id: 'osm', type: 'raster', source: 'osm', paint: OSM_NIGHT_PAINT }] } : osmStyle
+  }
   const baseTile = mode === 'satellite'
     ? `https://api.tomtom.com/map/1/tile/sat/main/{z}/{x}/{y}.jpg?key=${key}`
-    : `https://api.tomtom.com/map/1/tile/basic/main/{z}/{x}/{y}.png?key=${key}`
+    : `https://api.tomtom.com/map/1/tile/basic/${night ? 'night' : 'main'}/{z}/{x}/{y}.png?key=${key}`
   const sources: StyleSpecification['sources'] = {
     base: { type: 'raster', tiles: [baseTile], tileSize: 256, attribution: '© TomTom, © OpenStreetMap contributors' }
   }
