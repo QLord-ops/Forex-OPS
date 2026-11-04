@@ -1,9 +1,9 @@
-import type { Coordinate, TrafficSegment } from '../types/domain.js'
+import type { Coordinate, RoadSegment, TrafficSegment } from '../types/domain.js'
 
 export type MapRouteStop = { coordinate: Coordinate; label: string; title: string }
 export type MapRouteAlternative = { id: string; geometry: Coordinate[]; label: string }
 export type MapRoutePreview = {
-  geometry: Coordinate[]; label: string; stops?: MapRouteStop[]; trafficSegments?: TrafficSegment[]
+  geometry: Coordinate[]; label: string; stops?: MapRouteStop[]; trafficSegments?: TrafficSegment[]; roadSegments?: RoadSegment[]
   /** The variants not chosen right now; they stay on the map, grey, and can be clicked. */
   alternatives?: MapRouteAlternative[]
   onSelectAlternative?: (id: string) => void

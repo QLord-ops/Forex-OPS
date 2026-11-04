@@ -52,10 +52,12 @@ it("returns congested stretches shifted by the already travelled part", async ()
   const line = [{ latitude: 52.52, longitude: 13.405 }, { latitude: 52.8, longitude: 12.5 }, { latitude: 53.1, longitude: 11.5 }, { latitude: 53.55, longitude: 9.99 }];
   await db.leg.update({ where: { id: leg.id }, data: { status: "ACTIVE", startedAt: new Date(Date.now() - 5 * 60_000), routeGeometry: JSON.stringify(line),
     routeDetails: JSON.stringify({ travelledGeometry: [[13.9, 52.4], [13.6, 52.5]], activeRoute: { checkedAt: "2026-11-02T10:00:00.000Z",
-      trafficSections: [{ start: 1, end: 2, level: "JAM", delaySeconds: 240, speedKmh: 22 }, { start: 2, end: 9, level: "SLOW", delaySeconds: 10, speedKmh: 60 }] } }) } });
+      trafficSections: [{ start: 1, end: 2, level: "JAM", delaySeconds: 240, speedKmh: 22 }, { start: 2, end: 9, level: "SLOW", delaySeconds: 10, speedKmh: 60 }],
+      roadSections: [{ start: 0, end: 2, road: "A24" }, { start: 2, end: 3, road: "A1" }, { start: 3, end: 9, road: "A7" }] } }) } });
   const position = await service.getCurrentPosition(vehicle.id);
   expect(position.routeGeometry).toHaveLength(6);
   expect(position.trafficSegments).toEqual([{ from: 3, to: 4, level: "JAM", delaySeconds: 240, speedKmh: 22 }]);
+  expect(position.roadSegments).toEqual([{ from: 2, to: 4, road: "A24" }, { from: 4, to: 5, road: "A1" }]);
   expect(position.trafficCheckedAt).toBe("2026-11-02T10:00:00.000Z");
 });
 

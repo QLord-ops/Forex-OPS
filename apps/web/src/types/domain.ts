@@ -370,6 +370,7 @@ export interface CurrentPosition {
   disclaimer?: string
   positionSource?: 'WEBFLEET' | 'CALCULATED' | 'MANUAL'
   trafficSegments?: TrafficSegment[]
+  roadSegments?: RoadSegment[]
   trafficCheckedAt?: string | null
   telemetryRecordedAt?: string | null
   telemetryAgeSeconds?: number | null
@@ -572,4 +573,6 @@ export type ExcelImportPreview = OrderImportPreview
 
 export type TrafficLevel = 'SLOW' | 'JAM' | 'STANDSTILL' | 'CLOSED'
 /** Congested stretch of a route line, as point indices (inclusive). */
+/** Stretch of the route on one Autobahn (A7) or Bundesstraße (B3), point indices of the drawn line. */
+export interface RoadSegment { from: number; to: number; road: string }
 export interface TrafficSegment { from: number; to: number; level: TrafficLevel; delaySeconds?: number; speedKmh?: number | null }

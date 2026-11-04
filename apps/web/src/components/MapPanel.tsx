@@ -9,8 +9,9 @@ import { calculatedPositionLabel } from '../lib/format'
 import { useStableValue } from '../hooks/useStableValue'
 import { formatDelay, formatKm, INCIDENT_TITLES, trafficIncidents, type TrafficIncident } from '../lib/traffic-incidents'
 import type { MapRouteAlternative, MapRouteStop } from '../lib/route-preview'
+import { roadShieldLabel, roadShields, visibleShields } from '../lib/road-shields'
 import { THEME_EVENT, currentTheme, type Theme } from '../lib/theme'
-import type { Coordinate, CurrentPosition, TrafficSegment, Tour } from '../types/domain'
+import type { Coordinate, CurrentPosition, RoadSegment, TrafficSegment, Tour } from '../types/domain'
 
 setWorkerUrl(mapLibreWorkerUrl)
 
@@ -78,6 +79,7 @@ export type MapPanelProps = {
   previewRoute?: Coordinate[]
   previewStops?: MapRouteStop[]
   previewTraffic?: TrafficSegment[]
+  previewRoads?: RoadSegment[]
   previewAlternatives?: MapRouteAlternative[]
   onSelectPreviewAlternative?: (id: string) => void
   previewKey?: string
@@ -101,6 +103,7 @@ export function MapPanel({
   previewRoute: previewRouteProp,
   previewStops: previewStopsProp,
   previewTraffic: previewTrafficProp,
+  previewRoads: previewRoadsProp,
   previewAlternatives: previewAlternativesProp,
   onSelectPreviewAlternative,
   previewKey,
@@ -117,6 +120,8 @@ export function MapPanel({
   const alternativeMarkersRef = useRef<Marker[]>([])
   const trafficMarkersRef = useRef<globalThis.Map<string, Marker>>(new globalThis.Map())
   const trafficPopupRef = useRef<{ id: string; popup: Popup } | null>(null)
+  const shieldMarkersRef = useRef<globalThis.Map<string, Marker>>(new globalThis.Map())
+  const declutterShieldsRef = useRef<() => void>(() => undefined)
   const onSelectAlternativeRef = useRef(onSelectPreviewAlternative)
   onSelectAlternativeRef.current = onSelectPreviewAlternative
   const fleetMarkersRef = useRef<globalThis.Map<string, Marker>>(new globalThis.Map())
@@ -148,6 +153,7 @@ export function MapPanel({
   const previewRoute = useStableValue(previewRouteProp)
   const previewStops = useStableValue(previewStopsProp)
   const previewTraffic = useStableValue(previewTrafficProp)
+  const previewRoads = useStableValue(previewRoadsProp)
   const previewAlternatives = useStableValue(previewAlternativesProp)
   const tourStops = useStableValue(tour?.stops)
   const tourLegs = useStableValue(tour?.legs)
@@ -162,6 +168,7 @@ export function MapPanel({
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return
     const trafficMarkers = trafficMarkersRef.current
+    const shieldMarkers = shieldMarkersRef.current
     const fleetMarkers = fleetMarkersRef.current
     const clusterMarkers = clusterMarkersRef
 
@@ -190,6 +197,7 @@ export function MapPanel({
       const map = mapRef.current
       if (!map) return
       reclusterRef.current()
+      declutterShieldsRef.current()
       const center = map.getCenter()
       window.localStorage.setItem(CAMERA_STORAGE_KEY, JSON.stringify({
         center: [center.lng, center.lat],
@@ -205,6 +213,8 @@ export function MapPanel({
       trafficPopupRef.current?.popup.remove()
       trafficMarkers.forEach((marker) => marker.remove())
       trafficMarkers.clear()
+      shieldMarkers.forEach((marker) => marker.remove())
+      shieldMarkers.clear()
       fleetMarkers.forEach((marker) => marker.remove())
       fleetMarkers.clear()
       clusterMarkers.current.forEach((marker) => marker.remove())
@@ -380,6 +390,57 @@ export function MapPanel({
     }
     if (trafficPopupRef.current && !wanted.has(trafficPopupRef.current.id)) trafficPopupRef.current.popup.remove()
   }, [incidents, incidentsCheckedAt, incidentFromTruck, styleVersion])
+
+  // Which Autobahn the route takes: a blue A7 / yellow B3 shield on each stretch ahead, like on the road signs.
+  const shields = useMemo(() => previewRoute?.length
+    ? roadShields(previewRoute, previewRoads)
+    : roadShields(fullRoute, position?.roadSegments, { startIndex: Math.max(0, geometryToCoordinates(position?.travelledGeometry).length - 1) }),
+  [fullRoute, position?.roadSegments, position?.travelledGeometry, previewRoute, previewRoads])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+    const markers = shieldMarkersRef.current
+    const wanted = new Set(shields.map((shield) => shield.id))
+    for (const [id, marker] of markers) {
+      if (!wanted.has(id)) { marker.remove(); markers.delete(id) }
+    }
+    for (const shield of shields) {
+      let marker = markers.get(shield.id)
+      if (!marker) {
+        const element = document.createElement('div')
+        element.setAttribute('role', 'img')
+        marker = new Marker({ element }).setLngLat(shield.coordinate).addTo(map)
+        markers.set(shield.id, marker)
+      }
+      const element = marker.getElement()
+      marker.setLngLat(shield.coordinate)
+      setMarkerClass(element, `road-shield road-shield-${shield.kind.toLowerCase()}`)
+      element.textContent = shield.road
+      element.title = roadShieldLabel(shield)
+      element.setAttribute('aria-label', roadShieldLabel(shield))
+    }
+    // Shields never cover each other or a jam icon: at country zoom only the main ones stay, the rest appear closer in.
+    declutterShieldsRef.current = () => {
+      const container = map.getContainer().getBoundingClientRect()
+      const boxOf = (element: HTMLElement) => {
+        const rect = element.getBoundingClientRect()
+        return { left: rect.left - container.left, top: rect.top - container.top, right: rect.right - container.left, bottom: rect.bottom - container.top }
+      }
+      const blockers = [...trafficMarkersRef.current.values()].map((marker) => boxOf(marker.getElement()))
+      const candidates = shields.flatMap((shield) => {
+        const element = markers.get(shield.id)?.getElement()
+        if (!element) return []
+        const point = map.project(shield.coordinate)
+        const width = element.offsetWidth || 32
+        const height = element.offsetHeight || 20
+        return [{ id: shield.id, box: { left: point.x - width / 2, top: point.y - height / 2, right: point.x + width / 2, bottom: point.y + height / 2 } }]
+      })
+      const visible = visibleShields(candidates, blockers)
+      for (const [id, marker] of markers) marker.getElement().classList.toggle('road-shield-hidden', !visible.has(id))
+    }
+    declutterShieldsRef.current()
+  }, [shields, incidents, styleVersion])
 
   useEffect(() => {
     const map = mapRef.current

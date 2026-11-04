@@ -43,6 +43,9 @@ export type TrafficLevel = "SLOW" | "JAM" | "STANDSTILL" | "CLOSED";
 /** Congested stretch of `geometry` (point indices, inclusive). Free-flowing parts are not listed. */
 export type TrafficSection = { start: number; end: number; level: TrafficLevel; delaySeconds: number; speedKmh: number | null };
 
+/** Stretch of `geometry` (point indices, inclusive) driven on one Autobahn or Bundesstraße, for the shield on the map. */
+export type RoadSection = { start: number; end: number; road: string };
+
 export type TrafficRouteResult = RouteResult & {
   checkedAt: string;
   trafficDelaySeconds: number;
@@ -56,6 +59,7 @@ export type TrafficRouteResult = RouteResult & {
   alternatives: TrafficRouteResult[];
   hasRoadClosure: boolean;
   trafficSections?: TrafficSection[];
+  roadSections?: RoadSection[];
   providerStatus: TrafficProviderStatus;
   warning?: string;
 };
@@ -448,9 +452,48 @@ function toTrafficRouteResult(
     alternatives: alternatives.map((alternative) => toTrafficRouteResult(alternative, providerStatus, warning, [], options)),
     hasRoadClosure: hasRoadClosure(route),
     trafficSections: extractTrafficSections(route, geometry.length),
+    roadSections: extractRoadSections(route, geometry.length),
     providerStatus,
     warning
   };
+}
+
+/**
+ * TomTom road shields -> which Autobahn or Bundesstraße each stretch of the route is on (no extra request).
+ * Only A and B numbers: E-routes and Landesstraßen would crowd the map. Neighbouring pieces of one road are joined.
+ */
+export function extractRoadSections(route: Pick<TomTomRoute, "sections">, pointCount: number): RoadSection[] {
+  const pick = (type: "ROAD_SHIELDS" | "IMPORTANT_ROAD_STRETCH") => {
+    const pieces: RoadSection[] = [];
+    for (const section of route.sections ?? []) {
+      if ((section.sectionType ?? "").toUpperCase() !== type) continue;
+      const start = section.startPointIndex;
+      const end = section.endPointIndex;
+      if (!Number.isInteger(start) || !Number.isInteger(end) || start! < 0 || end! <= start! || start! >= pointCount - 1) continue;
+      const names = type === "ROAD_SHIELDS"
+        ? (section.roadShieldReferences ?? []).map((shield) => shield.shieldContent ?? shield.roadNumber ?? shield.text)
+        : section.roadNumbers ?? [];
+      const roads = [...new Set(names.map(roadName).filter((value): value is string => Boolean(value)))];
+      // Where an Autobahn and a Bundesstraße share the stretch, the Autobahn is what the driver follows.
+      const road = roads.find((name) => name.startsWith("A")) ?? roads[0];
+      if (road) pieces.push({ start: start!, end: Math.min(end!, pointCount - 1), road });
+    }
+    return pieces;
+  };
+  const pieces = pick("ROAD_SHIELDS");
+  const sorted = (pieces.length ? pieces : pick("IMPORTANT_ROAD_STRETCH")).sort((a, b) => a.start - b.start || b.end - a.end);
+  const result: RoadSection[] = [];
+  for (const piece of sorted) {
+    const last = result.at(-1);
+    if (last && last.road === piece.road && piece.start <= last.end + 1) {
+      last.end = Math.max(last.end, piece.end);
+      continue;
+    }
+    // A stretch already covered by the previous road is not shown twice.
+    const start = last ? Math.max(piece.start, last.end) : piece.start;
+    if (piece.end > start) result.push({ ...piece, start });
+  }
+  return result;
 }
 
 /** TomTom TRAFFIC sections -> congestion stretches for colouring the route (no extra request). */
@@ -485,6 +528,7 @@ function fromFallbackRoute(route: RouteResult, status: TrafficProviderStatus, wa
     alternatives: [],
     hasRoadClosure: false,
     trafficSections: [],
+    roadSections: [],
     providerStatus: status,
     warning: `${warning ? `${warning} ` : ""}Без актуальных пробок и проверки ограничений для грузовиков.`
   };
