@@ -243,6 +243,25 @@ describe("PDF Auftrag import", () => {
     expect(stops.some((stop) => stop.city === "Lager")).toBe(false);
   });
 
+  it("reads 'divers' like 'Lager': the Abteilung address, on loading and unloading", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ output_text: JSON.stringify({
+      drafts: [{
+        orderNumber: "DIV-1", vehicleNumber: null, vehiclePlate: null, trailerPlate: null,
+        departmentCompany: "Schnellecke Transportlogistik GmbH", departmentAddress: "Rudolf-Diesel-Straße 2, 14974 Ludwigsfelde", departmentCity: "Ludwigsfelde", departmentSourcePage: 1,
+        tourRemarks: "divers für TST Hamburg + divers", tourRemarksSourcePage: 1,
+        stops: [
+          { sequence: 1, type: "UNLOAD", company: "TST Süderelbe GmbH", address: "Dradenauer Deichweg 3, 21129 Hamburg", city: "Hamburg", appointmentLocal: null, sourcePage: 1, confidence: 0.9 }
+        ], warnings: []
+      }], warnings: []
+    }) }), { status: 200 })) as unknown as typeof fetch;
+    const result = await importPdfPreview(Buffer.from("%PDF-1.7"), "auftrag.pdf", { apiKey: "test-key", fetchImpl });
+    expect(result.drafts[0].stops.map((stop) => [stop.type, stop.address])).toEqual([
+      ["LOAD", "Rudolf-Diesel-Straße 2, 14974 Ludwigsfelde"],
+      ["UNLOAD", "Dradenauer Deichweg 3, 21129 Hamburg"],
+      ["UNLOAD", "Rudolf-Diesel-Straße 2, 14974 Ludwigsfelde"]
+    ]);
+  });
+
   it("uses Abteilung for vorladen and ignores a parenthetical city after the unload destination", async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ output_text: JSON.stringify({
       drafts: [{
