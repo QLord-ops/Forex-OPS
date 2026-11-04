@@ -159,15 +159,15 @@ export const api = {
   routeOptions: (vehicleId: string) => request<RouteOptions>(`/vehicles/${encodeURIComponent(vehicleId)}/route-options`, { method: 'POST', body: '{}' }),
   applyRouteOption: (vehicleId: string, optionId: string, version: number) =>
     request<unknown>(`/vehicles/${encodeURIComponent(vehicleId)}/route-options/apply`, { method: 'POST', body: JSON.stringify({ optionId, version }) }),
-  markLoaded: (stopId: string, timestamp?: string) =>
+  markLoaded: (stopId: string, timestamp?: string, manual = false) =>
     request<Tour>(`/stops/${stopId}/loaded`, {
       method: 'POST',
-      body: JSON.stringify(timestamp ? { timestamp } : {})
+      body: JSON.stringify({ ...(timestamp ? { timestamp } : {}), ...(manual ? { manual } : {}) })
     }),
-  markUnloaded: (stopId: string, timestamp?: string) =>
+  markUnloaded: (stopId: string, timestamp?: string, manual = false) =>
     request<Tour>(`/stops/${stopId}/unloaded`, {
       method: 'POST',
-      body: JSON.stringify(timestamp ? { timestamp } : {})
+      body: JSON.stringify({ ...(timestamp ? { timestamp } : {}), ...(manual ? { manual } : {}) })
     }),
   manualStop: (vehicleId: string, version: number) =>
     request(`/vehicles/${vehicleId}/manual-stop`, {

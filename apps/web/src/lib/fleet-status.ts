@@ -23,7 +23,7 @@ export function getAttention(row: DashboardVehicle, now = Date.now()): { rank: n
   if (row.risk === 'RED' || (row.delayMinutes ?? 0) > 0) return { rank: 1, tone: 'critical', label: 'Критично', reason: `Опоздание ${formatDelay(row.delayMinutes)}` }
   if (dwellSeverity === 'WARNING') return { rank: 2, tone: 'action', label: 'Стоянка', reason: `На точке ${formatDurationMinutes(dwellMinutes)}` }
   // Only a recorded arrival (GPS, or the dispatcher for a truck without Webfleet) asks for BELADEN/ENTLADEN; the timer never does.
-  const waitingForEvent = Boolean(row.currentAction && (row.currentAction.type === 'MARK_LOADED' || row.currentAction.type === 'MARK_UNLOADED'))
+  const waitingForEvent = Boolean(row.currentAction && !row.currentAction.manual && (row.currentAction.type === 'MARK_LOADED' || row.currentAction.type === 'MARK_UNLOADED'))
   if (row.risk === 'ORANGE' || waitingForEvent) return { rank: 2, tone: 'action', label: 'Нужно действие', reason: waitingForEvent ? `Ожидается отметка ${row.currentAction?.type === 'MARK_LOADED' ? 'загрузки' : 'выгрузки'} на точке` : 'Высокий риск нарушения срока' }
   if (terminToday(row, now)) return { rank: 3, tone: 'watch', label: 'Termin сегодня', reason: terminOf(row.tour)?.label ?? 'Termin сегодня' }
   if (row.risk === 'YELLOW') return { rank: 4, tone: 'watch', label: 'Контроль', reason: 'Небольшой запас до термина' }
