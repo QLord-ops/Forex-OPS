@@ -7,7 +7,7 @@ export interface AlertNotification { id: string; vehicleId: string; stopId?: str
 const SEEN_KEY = 'ops-alerted-notifications'
 const SOUND_KEY = 'ops-alert-sound'
 const BANNER_KEY = 'ops-alert-banner-dismissed'
-export const BASE_TITLE = 'OPS Disponent'
+export const BASE_TITLE = 'OPS FOREX'
 
 export type AlertPermission = 'granted' | 'denied' | 'default' | 'unsupported'
 
@@ -71,6 +71,9 @@ export function alertHeading(type: string) {
   if (type === 'LONG_DWELL') return 'Долгая стоянка'
   if (type === 'APPOINTMENT_MATCH') return 'Термин нашёл свой тур'
   if (type === 'STOP_DEPARTED') return 'Машина уехала с точки'
+  if (type === 'ROUTE_DEVIATION') return 'Отклонение от маршрута'
+  if (type === 'TERMIN_MET') return 'Прибытие к Termin'
+  if (type === 'PREVIOUS_TOUR_OPEN') return 'Прошлый тур не закрыт'
   return 'Уведомление OPS'
 }
 

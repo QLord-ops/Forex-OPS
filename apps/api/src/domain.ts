@@ -120,7 +120,16 @@ export type CurrentPosition = {
   distanceTravelledMeters: number;
   remainingDistanceMeters: number;
   eta: string | null;
+  /** GPS: distance and ETA measured from the Webfleet position on the route; CALCULATED: from the drive timer. */
+  etaSource?: "GPS" | "CALCULATED";
+  /** Distance of the GPS point from the planned line, when GPS is fresh. */
+  offRouteMeters?: number | null;
+  /** The timer says the truck should be there, but nothing has confirmed it. */
+  predictedArrival?: boolean;
 };
+
+/** Fresh Webfleet GPS handed to the position calculation. */
+export type GpsFix = { latitude: number; longitude: number; fresh: boolean };
 
 export const CALCULATED_POSITION_DISCLAIMER =
   "Berechnete Position – keine GPS-Daten" as const;

@@ -94,6 +94,26 @@ it('sets the arrival automatically after three minutes standing inside the 500 m
   expect(await db.operationEvent.count({ where: { stopId, type: 'ARRIVAL_CONFIRMED' } })).toBe(1);
 });
 
+it('reports a Termin met on time, or how late, when GPS sets the arrival', async () => {
+  const onTime = await arrivalScenario('TERMIN-OK');
+  await db.stop.update({ where: { id: onTime.stopId }, data: { appointmentWindowStartAt: at(0), appointmentWindowEndAt: at(30) } });
+  for (const minute of [1, 2, 3, 4, 5]) await onTime.feed(minute, north(100), true);
+  const met = await db.notification.findFirstOrThrow({ where: { stopId: onTime.stopId, type: 'TERMIN_MET' } });
+  expect(met.message).toContain('прибыла вовремя');
+  expect(met.message).toContain('выполнен');
+  expect(JSON.parse(met.payloadJson!)).toMatchObject({ onTime: true, lateMinutes: 0 });
+
+  const late = await arrivalScenario('TERMIN-LATE');
+  await db.stop.update({ where: { id: late.stopId }, data: { appointmentAt: at(0) } });
+  for (const minute of [20, 21, 22, 23, 24]) await late.feed(minute, north(100), true);
+  const missed = await db.notification.findFirstOrThrow({ where: { stopId: late.stopId, type: 'TERMIN_MET' } });
+  expect(missed.message).toContain('с опозданием 20 мин');
+
+  const none = await arrivalScenario('TERMIN-NONE');
+  for (const minute of [1, 2, 3, 4, 5]) await none.feed(minute, north(100), true);
+  expect(await db.notification.count({ where: { stopId: none.stopId, type: 'TERMIN_MET' } })).toBe(0);
+});
+
 it('waits while the truck has stood in the zone for less than three minutes', async () => {
   const { stopId, feed } = await arrivalScenario('AUTO-SHORT');
   for (const minute of [0, 1, 2]) await feed(minute, north(100), true);
@@ -295,6 +315,34 @@ describe('leaving a stop without BELADEN/ENTLADEN', () => {
     expect((await two.departures())[0].acknowledgedAt).not.toBeNull();
   });
 
+  it('records the GPS arrival afterwards when the truck stood at the stop but no arrival was set (LKW 124)', async () => {
+    const { vehicle, stopId, feed } = await arrivalScenario('DEP-RETRO');
+    // GPS was stored while the truck stood at the loading stop, but nothing evaluated it at the time.
+    for (const minute of [0, 1, 2, 3, 4, 5, 6]) {
+      await db.vehicleTelemetry.create({ data: { vehicleId: vehicle.id, provider: 'WEBFLEET', externalId: 'wf-DEP-RETRO', latitude: north(100).latitude, longitude: north(100).longitude,
+        speedKmh: 0, recordedAt: at(minute), receivedAt: at(minute), rawJson: JSON.stringify({ standstill: true }) } });
+    }
+    await feed(7, north(1200), false);
+    await feed(8, north(2500), false);
+    expect((await db.stop.findUniqueOrThrow({ where: { id: stopId } })).arrivedAt).toEqual(at(0));
+    const departure = await db.notification.findFirstOrThrow({ where: { stopId, type: 'STOP_DEPARTED' } });
+    expect(departure.message).toContain('без BELADEN');
+    const event = await db.operationEvent.findFirstOrThrow({ where: { stopId, type: 'ARRIVAL_CONFIRMED' } });
+    expect(JSON.parse(event.payloadJson)).toMatchObject({ source: 'WEBFLEET_AUTO', retroactive: true });
+  });
+
+  it('does not invent an arrival for a truck that only drove past the stop', async () => {
+    const { vehicle, stopId, feed } = await arrivalScenario('DEP-PASS');
+    for (const minute of [0, 1]) {
+      await db.vehicleTelemetry.create({ data: { vehicleId: vehicle.id, provider: 'WEBFLEET', externalId: 'wf-DEP-PASS', latitude: north(100).latitude, longitude: north(100).longitude,
+        speedKmh: 60, recordedAt: at(minute), receivedAt: at(minute), rawJson: JSON.stringify({ standstill: false }) } });
+    }
+    await feed(2, north(1200), false);
+    await feed(3, north(2500), false);
+    expect((await db.stop.findUniqueOrThrow({ where: { id: stopId } })).arrivedAt).toBeNull();
+    expect(await db.notification.count({ where: { stopId, type: 'STOP_DEPARTED' } })).toBe(0);
+  });
+
   it('a fast first point outside is enough', async () => {
     const { departures, stopId } = await arrived('DEP-6');
     const service = new WebfleetTelemetryService(db as unknown as PostgresPrismaClient);
@@ -302,6 +350,21 @@ describe('leaving a stop without BELADEN/ENTLADEN', () => {
     expect(await departures()).toHaveLength(1);
     expect(stopId).toBeTruthy();
   });
+});
+
+it('tells the dispatcher when the truck stands at its next tour while the current one is still open', async () => {
+  const { vehicle, tours, feed } = await arrivalScenario('QUEUED-1');
+  const leipzig = { latitude: 51.34, longitude: 12.37 };
+  const next = await tours.createTour({ vehicleId: vehicle.id, orderNumber: 'ORD-NEXT', stops: [
+    { sequence: 1, type: 'LOAD', address: 'Leipzig', city: 'Leipzig', ...leipzig },
+    { sequence: 2, type: 'UNLOAD', address: 'Hamburg', city: 'Hamburg', ...HAMBURG }
+  ] });
+  expect(next.status).toBe('QUEUED');
+  for (const minute of [0, 1, 2, 3, 4]) await feed(minute, leipzig, true);
+  const notice = await db.notification.findFirstOrThrow({ where: { vehicleId: vehicle.id, type: 'PREVIOUS_TOUR_OPEN' } });
+  expect(notice.message).toContain('Leipzig');
+  expect(notice.message).toContain('не закрыт');
+  expect(await db.notification.count({ where: { vehicleId: vehicle.id, type: 'PREVIOUS_TOUR_OPEN' } })).toBe(1);
 });
 
 it('uses a geodesic radius close to one kilometre', () => {

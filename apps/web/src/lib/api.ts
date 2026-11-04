@@ -1,4 +1,5 @@
 import type {
+  Coordinate,
   Alert,
   AppointmentAnalysis,
   AppointmentDocument,
@@ -96,6 +97,10 @@ export const accountsApi = {
   changeOwnPassword: (currentPassword: string, newPassword: string) => request<{ ok: true }>('/auth/password', json('POST', { currentPassword, newPassword }))
 }
 
+export interface RouteOption { id: string; distanceMeters: number; durationSeconds: number; trafficDelaySeconds: number; mainRoads: string[]; providerStatus: string; geometry: Coordinate[] }
+export interface RouteOptions { vehicleId: string; version: number; legId: string; checkedAt: string; offRouteMeters: number | null
+  current: { remainingDistanceMeters: number; eta: string | null; geometry: Coordinate[] }; options: RouteOption[] }
+
 export const api = {
   dashboard: () => request<DashboardResponse>('/dashboard'),
   vehicles: () => request<Vehicle[]>('/vehicles'),
@@ -144,6 +149,10 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify(payload)
     }),
+  /** Three routes from the truck's GPS position to its next stop (TomTom). */
+  routeOptions: (vehicleId: string) => request<RouteOptions>(`/vehicles/${encodeURIComponent(vehicleId)}/route-options`, { method: 'POST', body: '{}' }),
+  applyRouteOption: (vehicleId: string, optionId: string, version: number) =>
+    request<unknown>(`/vehicles/${encodeURIComponent(vehicleId)}/route-options/apply`, { method: 'POST', body: JSON.stringify({ optionId, version }) }),
   markLoaded: (stopId: string, timestamp?: string) =>
     request<Tour>(`/stops/${stopId}/loaded`, {
       method: 'POST',

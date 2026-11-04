@@ -17,9 +17,9 @@ describe('alerts', () => {
   })
 
   it('shows the count in the tab title and links to the truck card', () => {
-    expect(titleWithCount(0)).toBe('OPS Disponent')
-    expect(titleWithCount(3)).toBe('(3) OPS Disponent')
-    expect(titleWithCount(140)).toBe('(99+) OPS Disponent')
+    expect(titleWithCount(0)).toBe('OPS FOREX')
+    expect(titleWithCount(3)).toBe('(3) OPS FOREX')
+    expect(titleWithCount(140)).toBe('(99+) OPS FOREX')
     expect(cardLink('veh 1')).toBe('/?vehicleId=veh%201&card=veh%201')
     expect(alertHeading('TRAFFIC_DELAY')).toBe('Пробка на маршруте')
   })
@@ -48,8 +48,8 @@ describe('termin label', () => {
   const stop = (extra = {}) => ({ id: 's', tourId: 't', sequence: 1, type: 'UNLOAD', address: 'x', latitude: 0, longitude: 0, ...extra }) as NonNullable<Tour['stops']>[number]
   it('shows the slot of the next open stop, exact or window, in Berlin time', async () => {
     const { terminOf } = await import('../src/lib/tours')
-    expect(terminOf({ stops: [stop({ appointmentAt: '2026-11-04T10:00:00Z' })] })?.label).toBe('Термин 04.11 11:00')
-    expect(terminOf({ stops: [stop({ appointmentWindowStartAt: '2026-11-04T08:00:00Z', appointmentWindowEndAt: '2026-11-04T08:30:00Z' })] })?.label).toBe('Термин 04.11 09:00–09:30')
+    expect(terminOf({ stops: [stop({ appointmentAt: '2026-11-04T10:00:00Z' })] })?.label).toBe('Termin 04.11 11:00')
+    expect(terminOf({ stops: [stop({ appointmentWindowStartAt: '2026-11-04T08:00:00Z', appointmentWindowEndAt: '2026-11-04T08:30:00Z' })] })?.label).toBe('Termin 04.11 09:00–09:30')
     expect(terminOf({ stops: [stop({ appointmentAt: '2026-11-04T10:00:00Z', completedAt: '2026-11-04T10:30:00Z' }), stop({ id: 's2', sequence: 2 })] })).toBeNull()
     expect(terminOf(null)).toBeNull()
   })

@@ -188,6 +188,12 @@ export class TrafficRoutingService {
     return this.quotaStore?.getStatus?.(source, now);
   }
 
+  /** Up to three routes from the truck to the stop: TomTom's best and its two alternatives. */
+  async routeOptions(origin: Coordinate, destination: Coordinate, options: RouteRequestOptions = {}): Promise<TrafficRouteResult[]> {
+    const best = await this.provider.calculateRoute(origin, destination, { ...options, maxAlternatives: 2, source: options.source ?? "manual" });
+    return [best, ...best.alternatives].slice(0, 3);
+  }
+
   async refreshCurrentRoute(input: TrafficRouteRefreshInput): Promise<TrafficRouteRefreshResult> {
     const options: RouteRequestOptions = {
       ...input.options,

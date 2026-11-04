@@ -209,6 +209,20 @@ export class OperationsService {
             payloadJson: JSON.stringify({ source, arrivedAt, ...options.meta }) },
           update: { acknowledgedAt: null, message: `Webfleet: LKW ${stop.tour.vehicle.vehicleNumber} прибыла ${stop.type === 'LOAD' ? 'на загрузку' : 'на выгрузку'}, ${stop.city || stop.address}, в ${berlinTime(arrivedAt)} (автоматически по GPS). Если это ошибка, отмените прибытие.` }
         });
+        // A GPS arrival settles the Termin: on time or how late. Only real GPS does this, never the timer.
+        const verdict = terminVerdict(stop, arrivedAt);
+        if (verdict) {
+          const place = stop.city || stop.address;
+          await tx.notification.upsert({
+            where: { dedupKey: `termin-met:${stopId}` },
+            create: { dedupKey: `termin-met:${stopId}`, vehicleId: stop.tour.vehicleId, stopId, type: 'TERMIN_MET',
+              message: verdict.lateMinutes <= 0
+                ? `LKW ${stop.tour.vehicle.vehicleNumber} прибыла вовремя: ${place} в ${berlinTime(arrivedAt)}, Termin ${verdict.label} выполнен.`
+                : `LKW ${stop.tour.vehicle.vehicleNumber} прибыла с опозданием ${verdict.lateMinutes} мин: ${place} в ${berlinTime(arrivedAt)}, Termin ${verdict.label}.`,
+              payloadJson: JSON.stringify({ onTime: verdict.lateMinutes <= 0, lateMinutes: Math.max(0, verdict.lateMinutes), arrivedAt, termin: verdict.label }) },
+            update: {}
+          });
+        }
       }
       applied = true;
     });
@@ -292,6 +306,16 @@ export class OperationsService {
     });
     return this.get(vehicleId, now);
   }
+}
+
+/** Arrival against the stop's Termin: an exact time or the end of a window. Null without a Termin. */
+export function terminVerdict(stop: { appointmentAt: Date | null; appointmentWindowStartAt: Date | null; appointmentWindowEndAt: Date | null }, arrivedAt: Date) {
+  const deadline = stop.appointmentWindowEndAt ?? stop.appointmentAt;
+  if (!deadline) return null;
+  const label = stop.appointmentWindowStartAt && stop.appointmentWindowEndAt
+    ? `${berlinTime(stop.appointmentWindowStartAt)}–${berlinTime(stop.appointmentWindowEndAt)}`
+    : berlinTime(deadline);
+  return { label, lateMinutes: Math.ceil((arrivedAt.getTime() - deadline.getTime()) / 60_000) };
 }
 
 function berlinTime(value: Date) {

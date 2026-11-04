@@ -4,8 +4,11 @@ import { TourService, TourPlanConflictError, snapshotVehicleClock, makePersisted
 import { NotificationService } from './notifications.js';
 import { TrafficRoutingService, type TrafficRefreshSource, type TrafficRouteResult, type RouteAlternativeProposal, type TruckRouteProfile } from './traffic-routing.js';
 import { calculateSimulatedDuration, parseGeometry, splitGeometryAtProgress } from './simulation.js';
+import { OFF_ROUTE_METERS } from './route-projection.js';
 
+type StoredRouteOption = { id: string; route: TrafficRouteResult };
 type TrafficDetails = {
+  routeOptions?: { createdAt: string; options: StoredRouteOption[] };
   checkedAt?: string; attemptedAt?: string; providerStatus?: string; warning?: string;
   activeRoute?: TrafficRouteResult; proposals?: RouteAlternativeProposal[];
   travelledGeometry?: Coordinate[]; refreshIntervalSeconds?: number; reason?: string;
@@ -82,14 +85,16 @@ export class TrafficOperationsService {
       if (!context.leg || context.leg.toStop.arrivedAt || (source === 'background' && position.status !== 'MOVING')) return this.status(vehicleId, now);
       const remaining = position.remainingGeometry.map(([longitude, latitude]) => ({ latitude, longitude }));
       if (remaining.length < 2 || !position.position) return this.status(vehicleId, now);
+      // The route always starts at the truck. Off the planned line the old line would drag it back, so TomTom plans afresh.
+      const offRoute = (position.offRouteMeters ?? 0) > OFF_ROUTE_METERS;
       const refreshed = await this.routing.refreshCurrentRoute({ origin: position.position, destination: context.leg.toStop,
-        supportingPoints: remaining, options: { source, includeInstructions: true, truck: truckProfile(context.vehicle.truckProfile, context.vehicle.maxSpeedKmh) } });
+        supportingPoints: offRoute ? undefined : [position.position, ...remaining.slice(1)], options: { source, includeInstructions: true, truck: truckProfile(context.vehicle.truckProfile, context.vehicle.maxSpeedKmh) } });
       const details: TrafficDetails = { ...context.details, attemptedAt: now.toISOString(),
         providerStatus: refreshed.activeRoute.providerStatus, warning: refreshed.activeRoute.warning,
         proposals: refreshed.activeRoute.providerStatus === 'live-traffic' ? refreshed.alternatives : [] };
       if (refreshed.activeRoute.providerStatus === 'live-traffic') {
         details.checkedAt = now.toISOString(); details.activeRoute = refreshed.activeRoute;
-        await this.applyRoute(context, refreshed.activeRoute, details, now, 'TRAFFIC_REFRESH');
+        await this.applyRoute(context, refreshed.activeRoute, details, now, 'TRAFFIC_REFRESH', gpsTravelled(position));
       } else {
         await this.db.leg.updateMany({ where: { id: context.leg.id, updatedAt: context.leg.updatedAt }, data: { routeDetails: JSON.stringify(details) } });
       }
@@ -121,7 +126,46 @@ export class TrafficOperationsService {
       options: { source: 'manual', maxAlternatives: 0, truck: truckProfile(context.vehicle.truckProfile, context.vehicle.maxSpeedKmh) } });
     if (refreshed.activeRoute.providerStatus !== 'live-traffic') throw new TourPlanConflictError('Объезд нельзя подтвердить без актуальных данных о трафике.');
     await this.applyRoute(context, refreshed.activeRoute, { ...context.details, proposals: [], activeRoute: refreshed.activeRoute,
-      checkedAt: now.toISOString(), attemptedAt: now.toISOString(), providerStatus: 'live-traffic', warning: undefined }, now, 'REROUTE_ACCEPTED');
+      checkedAt: now.toISOString(), attemptedAt: now.toISOString(), providerStatus: 'live-traffic', warning: undefined }, now, 'REROUTE_ACCEPTED', gpsTravelled(position));
+    return this.status(vehicleId, now);
+  }
+
+  /**
+   * Three routes from the truck's GPS position to its next stop. They are kept for a few minutes so the
+   * dispatcher's choice is applied exactly as shown.
+   */
+  async routeOptions(vehicleId: string, now = new Date()) {
+    const context = await this.context(vehicleId);
+    const position = await this.getPosition(vehicleId, now);
+    if (!context.leg || context.leg.toStop.arrivedAt) throw new TourPlanConflictError('У машины нет маршрута в движении.');
+    if (position.etaSource !== 'GPS' || !position.position) throw new TourPlanConflictError('Нет свежей позиции Webfleet GPS: варианты строятся только от реальной позиции.');
+    const routes = await this.routing.routeOptions(position.position, context.leg.toStop,
+      { source: 'manual', truck: truckProfile(context.vehicle.truckProfile, context.vehicle.maxSpeedKmh) });
+    const options = routes.map((route, index) => ({ id: `${now.getTime()}-${index}`, route }));
+    await this.db.leg.updateMany({ where: { id: context.leg.id, updatedAt: context.leg.updatedAt },
+      data: { routeDetails: JSON.stringify({ ...context.details, routeOptions: { createdAt: now.toISOString(), options } }) } });
+    return {
+      vehicleId, version: context.vehicle.operationVersion, legId: context.leg.id, checkedAt: now.toISOString(),
+      offRouteMeters: position.offRouteMeters ?? null,
+      current: { remainingDistanceMeters: position.remainingDistanceMeters, eta: position.eta, geometry: position.remainingGeometry },
+      options: options.map(({ id, route }) => ({
+        id, distanceMeters: route.distanceMeters, durationSeconds: route.durationSeconds, trafficDelaySeconds: route.trafficDelaySeconds,
+        mainRoads: route.mainRoads ?? route.roadNumbers.slice(0, 2), providerStatus: route.providerStatus,
+        geometry: route.geometry.map((point) => [point.longitude, point.latitude] as [number, number])
+      }))
+    };
+  }
+
+  /** The dispatcher picks one of the shown routes: it becomes the tour's route from the truck onwards and the ETA follows it. */
+  async applyRouteOption(vehicleId: string, optionId: string, version: number, now = new Date()) {
+    const context = await this.context(vehicleId);
+    if (!context.leg || context.vehicle.operationVersion !== version) throw new TourPlanConflictError('Состояние машины изменилось. Постройте варианты заново.');
+    const stored = context.details.routeOptions;
+    const option = stored?.options.find((item) => item.id === optionId);
+    if (!stored || !option || now.getTime() - Date.parse(stored.createdAt) > 600_000) throw new TourPlanConflictError('Варианты устарели. Постройте их заново.');
+    const position = await this.getPosition(vehicleId, now);
+    await this.applyRoute(context, option.route, { ...context.details, routeOptions: undefined, proposals: [], activeRoute: option.route,
+      checkedAt: now.toISOString(), attemptedAt: now.toISOString(), providerStatus: option.route.providerStatus, warning: option.route.warning }, now, 'ROUTE_OPTION_SELECTED', gpsTravelled(position));
     return this.status(vehicleId, now);
   }
 
@@ -134,12 +178,13 @@ export class TrafficOperationsService {
   }
 
   private async applyRoute(context: Awaited<ReturnType<TrafficOperationsService['context']>>, route: TrafficRouteResult,
-    details: TrafficDetails, now: Date, eventType: string) {
+    details: TrafficDetails, now: Date, eventType: string, travelled: Coordinate[] | null = null) {
     const { leg, vehicle } = context;
     if (!leg || leg.toStop.arrivedAt) throw new TourPlanConflictError('Маршрут больше не находится в движении.');
     const snapshot = snapshotVehicleClock(vehicle, leg, now);
-    const prefix = splitGeometryAtProgress(parseGeometry(leg.routeGeometry), snapshot.progress).travelledGeometry;
-    details.travelledGeometry = [...(context.details.travelledGeometry ?? []), ...prefix];
+    // With GPS the driven part is cut where the truck really is; the timer split is only for trucks without Webfleet.
+    details.travelledGeometry = travelled ?? [...(context.details.travelledGeometry ?? []),
+      ...splitGeometryAtProgress(parseGeometry(leg.routeGeometry), snapshot.progress).travelledGeometry];
     const duration = calculateSimulatedDuration(route.distanceMeters, route.durationSeconds, vehicle.maxSpeedKmh);
     await this.db.$transaction(async tx => {
       const locked = await tx.vehicle.updateMany({ where: { id: vehicle.id, operationVersion: vehicle.operationVersion },
@@ -158,6 +203,10 @@ export class TrafficOperationsService {
         payloadJson: JSON.stringify({ provider: route.provider, roadNumbers: route.roadNumbers, checkedAt: route.checkedAt }) } });
     });
   }
+}
+
+function gpsTravelled(position: { etaSource?: string; travelledGeometry: Array<[number, number]> }): Coordinate[] | null {
+  return position.etaSource === 'GPS' ? position.travelledGeometry.map(([longitude, latitude]) => ({ latitude, longitude })) : null;
 }
 
 function readDetails(raw?: string | null): TrafficDetails {

@@ -4,7 +4,7 @@ import multipart from "@fastify/multipart";
 import rateLimit from "@fastify/rate-limit";
 import Fastify, { type FastifyRequest } from "fastify";
 import { z } from "zod";
-import { CALCULATED_POSITION_DISCLAIMER, type CurrentPosition, withoutPositionGeometry } from "./domain.js";
+import { CALCULATED_POSITION_DISCLAIMER, type CurrentPosition, type GpsFix, withoutPositionGeometry } from "./domain.js";
 import { prisma } from "./lib/prisma.js";
 import { AlertService } from "./services/alerts.js";
 import { AppointmentService } from "./services/appointments.js";
@@ -28,6 +28,7 @@ import { OperationsService, SYSTEM_WEBFLEET_ACTOR } from "./services/operations.
 import { ReplanningService } from "./services/replanning.js";
 import { PrismaTrafficQuotaStore, TomTomRoutingProvider, TrafficRoutingService } from './services/traffic-routing.js';
 import { TrafficOperationsService } from './services/traffic-operations.js';
+import { RouteDeviationService } from './services/route-deviation.js';
 import { VEHICLE_CLOCK_LIMITS } from './services/vehicle-clock.js';
 import { bindWebfleetObject, listWebfleetBindings, unbindWebfleetVehicle, WebfleetSyncService, WebfleetTelemetryService, distanceMeters, DEFAULT_ARRIVAL_RADIUS_METERS, type AutoArrivalHandler } from './services/webfleet.js';
 import { buildVehicleCard, suggestWebfleetBindings, vehicleObjectUid, WebfleetDetailsSync, WebfleetLiveStore, WebfleetTrackService } from './services/webfleet-live.js';
@@ -88,11 +89,13 @@ const webfleetDetails = new WebfleetDetailsSync(webfleetLive);
 const webfleetTracks = new WebfleetTrackService();
 const webfleetTelemetry = new WebfleetTelemetryService(prisma, autoArrival);
 const currentPosition = async (id: string, now = new Date()) => {
-  return withWebfleetPosition(await tourService.getCurrentPosition(id, now), await webfleetTelemetry.latest(id, now));
+  const telemetry = await webfleetTelemetry.latest(id, now);
+  return withWebfleetPosition(await tourService.getCurrentPosition(id, now, gpsFixOf(telemetry)), telemetry);
 };
 const appointmentService = new AppointmentService(prisma, etaService, currentPosition);
 const replanningService = new ReplanningService(prisma, routingService, currentPosition);
 const trafficService = new TrafficOperationsService(prisma, tourService, notificationService, new TrafficRoutingService(trafficProvider, trafficQuota), currentPosition);
+const routeDeviation = new RouteDeviationService(prisma, currentPosition, (input) => notificationService.publish(input));
 const scenarioService = new RouteScenarioService(prisma, routingService, currentPosition);
 const assistantService = new DispatcherAssistantService(prisma, createDispatcherDependencies(prisma, routingService,
   (input, vehicleId, now) => scenarioService.calculate(routeScenarioInputSchema.parse({ ...input, vehicleId }), now)));
@@ -266,6 +269,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     try {
       await webfleetSync.refreshIfDue().catch(() => undefined);
       await webfleetDetails.refreshIfDue().catch(() => undefined);
+      await routeDeviation.check().catch((error) => app.log.error(error));
       await notificationService.refresh();
       await pendingAppointments.scan((input) => notificationService.publish(input)).catch((error) => app.log.error(error));
       await refreshAllAlerts();
@@ -409,6 +413,19 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const id = idParams.parse(request.params).id;
     const result = await trafficService.accept(id, input.index, input.version, input.origin);
     await audit(request, 'TRAFFIC_ROUTE_ACCEPTED', 'Vehicle', id, { vehicleId: id, metadata: { index: input.index } });
+    return result;
+  });
+  app.post('/vehicles/:id/route-options', { config: { rateLimit: { max: 6, timeWindow: '1 minute' } } }, async request => {
+    const id = idParams.parse(request.params).id;
+    const result = await trafficService.routeOptions(id);
+    await audit(request, 'ROUTE_OPTIONS_BUILT', 'Vehicle', id, { vehicleId: id, metadata: { count: result.options.length } });
+    return result;
+  });
+  app.post('/vehicles/:id/route-options/apply', async request => {
+    const input = versionInput.extend({ optionId: z.string().min(1).max(64) }).parse(request.body);
+    const id = idParams.parse(request.params).id;
+    const result = await trafficService.applyRouteOption(id, input.optionId, input.version);
+    await audit(request, 'ROUTE_OPTION_SELECTED', 'Vehicle', id, { vehicleId: id, metadata: { optionId: input.optionId } });
     return result;
   });
   app.post('/vehicles/:id/traffic/reject', async request => {
@@ -1049,17 +1066,20 @@ export async function buildApp(options: BuildAppOptions = {}) {
       const currentLeg = activeTour?.legs.find((leg) => leg.status === "ACTIVE" || leg.status === "ARRIVED");
       const fromStop = currentLeg ? activeTour?.stops.find((stop) => stop.id === currentLeg.fromStopId) : undefined;
       const toStop = currentLeg ? activeTour?.stops.find((stop) => stop.id === currentLeg.toStopId) : undefined;
-      const [calculatedPosition, latestTelemetry, lastOperation] = await Promise.all([
-        tourService.getCurrentPosition(vehicle.id),
+      const [latestTelemetry, lastOperation] = await Promise.all([
         webfleetTelemetry.latest(vehicle.id, generatedAt),
         prisma.operationEvent.findFirst({ where: { vehicleId: vehicle.id }, orderBy: { createdAt: "desc" } })
       ]);
+      const calculatedPosition = await tourService.getCurrentPosition(vehicle.id, generatedAt, gpsFixOf(latestTelemetry));
       const position = withWebfleetPosition(calculatedPosition, latestTelemetry);
       const currentStop = activeTour?.stops.find((stop) => !stop.completedAt) ?? null;
       const scheduledStop = currentStop ? etaService.calculateVehicleSchedule(vehicle.tours, generatedAt).find((stop) => stop.stopId === currentStop.id) : null;
+      // With fresh GPS the ETA is measured from the truck; the saved plan only fills in when there is no GPS.
+      const gpsEta = position.etaSource === "GPS";
       const displayedEta = position.eta ?? scheduledStop?.predictedEta?.toISOString() ?? null;
-      const displayedDelayMinutes = scheduledStop?.predictedDelayMinutes ?? position.delayMinutes;
-      const riskColor = scheduledStop?.riskColor ?? calculateRiskColor(displayedEta ? new Date(displayedEta) : null, currentStop?.appointmentAt);
+      const displayedDelayMinutes = gpsEta ? position.delayMinutes : scheduledStop?.predictedDelayMinutes ?? position.delayMinutes;
+      const riskColor = gpsEta ? calculateRiskColor(displayedEta ? new Date(displayedEta) : null, currentStop?.appointmentAt)
+        : scheduledStop?.riskColor ?? calculateRiskColor(displayedEta ? new Date(displayedEta) : null, currentStop?.appointmentAt);
       const dwell = calculateDwellState(currentStop, generatedAt);
       const clockSnapshot = snapshotVehicleClock(vehicle, currentLeg ?? null, generatedAt).clockState;
       const statusStartedAt = vehicle.manualStoppedAt
@@ -1110,6 +1130,9 @@ export async function buildApp(options: BuildAppOptions = {}) {
         mine: Boolean(me && vehicle.assignedDispatcherId === me),
         tour: activeTour ? toDashboardTourSummary(activeTour) : null,
         statusText: position.status,
+        etaSource: position.etaSource ?? "CALCULATED",
+        offRouteMeters: position.offRouteMeters ?? null,
+        predictedArrival: position.predictedArrival ?? false,
         from: fromStop ? toIsoObject(fromStop) : null,
         to: toStop ? toIsoObject(toStop) : null,
         appointmentAt: toStop?.appointmentAt?.toISOString() ?? null,
@@ -1358,6 +1381,12 @@ function feedStatus(feed: WebfleetLiveStore['drivingFeed']) {
     errorCategory: feed.error,
     providerErrorCode: feed.providerCode
   };
+}
+
+/** Only a fresh Webfleet position may move the truck along its route; a stale one is shown but not trusted. */
+function gpsFixOf(telemetry: Awaited<ReturnType<WebfleetTelemetryService['latest']>>): GpsFix | null {
+  if (!telemetry || !telemetry.usable) return null;
+  return { latitude: telemetry.latitude, longitude: telemetry.longitude, fresh: !telemetry.stale };
 }
 
 function withWebfleetPosition(
