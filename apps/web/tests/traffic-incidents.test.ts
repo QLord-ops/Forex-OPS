@@ -19,13 +19,13 @@ describe('traffic incidents', () => {
     expect(jam.distanceAheadMeters).toBeLessThan(4_500)
   })
 
-  it('leaves short slow-downs as colour only but always marks closures', () => {
+  it('marks every jam ahead, short slow-downs and closures included', () => {
     const result = trafficIncidents(line, [
       { from: 2, to: 3, level: 'SLOW', delaySeconds: 30 },
       { from: 10, to: 12, level: 'CLOSED' },
       { from: 15, to: 18, level: 'JAM', delaySeconds: 60 }
     ])
-    expect(result.map((item) => item.level)).toEqual(['CLOSED', 'JAM'])
+    expect(result.map((item) => item.level)).toEqual(['SLOW', 'CLOSED', 'JAM'])
   })
 
   it('counts from the truck and drops jams it has already passed', () => {
@@ -48,5 +48,6 @@ describe('traffic incidents', () => {
   it('formats the delay for the dispatcher', () => {
     expect(formatDelay(720)).toBe('+12 мин')
     expect(formatDelay(4_500)).toBe('+1 ч 15 мин')
+    expect(formatDelay(20)).toBe('<1 мин')
   })
 })

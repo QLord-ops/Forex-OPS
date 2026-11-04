@@ -181,3 +181,41 @@ test('в карточке «Тур» у текущей точки есть ма�
   await card.getByRole('button', { name: 'Записать BELADEN' }).click()
   await expect.poll(() => loaded).toMatchObject({ manual: true })
 })
+
+test('начатый тур меняется из карточки: будущие точки правятся через предпросмотр, пройденные остаются', async ({ page }) => {
+  let applied: unknown = null
+  let previewBody: { futureStops?: Array<{ address: string }> } | null = null
+  const done = { ...stops[0], arrivedAt: '2026-11-04T09:00:00Z', completedAt: '2026-11-04T10:15:00Z' }
+  const next = { ...stops[1], id: 's2' }
+  const later = stop('s3', 3, 'LOAD', 'Nürnberg', 49.45, 11.08)
+  const activeTour = { id: 'tour-1', vehicleId: 'v1', orderNumber: '1242343245', status: 'ACTIVE', planVersion: 3, stops: [done, next, later] }
+  await dashboard(page, async (route, path) => {
+    if (path === '/dashboard') {
+      await json(route, { vehicles: [{ vehicle: truck('v1', '321'), statusText: 'MOVING', etaSource: 'GPS', operationVersion: 2, tour: activeTour,
+        telemetry: { source: 'WEBFLEET', stale: false, ageSeconds: 60 }, mapPosition: { coordinate: [10.9, 49.4], source: 'WEBFLEET', stale: false, courseDeg: 0, standstill: false } }] }); return true
+    }
+    if (path === '/tours/tour-1') { await json(route, activeTour); return true }
+    if (path === '/tours/tour-1/replan/preview') {
+      previewBody = route.request().postDataJSON()
+      await json(route, { id: 'p1', version: 3, expiresAt: new Date(Date.now() + 600_000).toISOString(), affectedTourIds: [],
+        before: { distanceMeters: 300_000, durationSeconds: 14_400, roads: [] }, after: { distanceMeters: 320_000, durationSeconds: 15_000, roads: [] } }); return true
+    }
+    if (path === '/tours/tour-1/replan/apply') { applied = route.request().postDataJSON(); await json(route, { ok: true }); return true }
+    if (path === '/vehicles/v1/tours') { await json(route, [activeTour]); return true }
+    if (path.endsWith('/card')) { await json(route, { vehicleId: 'v1', vehicleNumber: '321', licensePlate: null, currentTrailerPlate: null, generatedAt: new Date().toISOString(), webfleet: null, current: null, coupling: null, driver: null, events: null, trips: null, maintenance: null }); return true }
+    return false
+  })
+  await page.goto('/?vehicleId=v1&card=v1')
+  await page.evaluate(() => window.localStorage.setItem('ops-truck-card-tab', 'tour'))
+  await page.reload()
+  const card = page.getByRole('dialog', { name: /321/ })
+  await card.getByRole('button', { name: 'Изменить тур' }).click()
+  // Only the future stops are editable: the loaded stop 1 is not in the form.
+  const fields = card.locator('.truck-card-editor fieldset')
+  await expect(fields).toHaveCount(2)
+  await fields.nth(1).getByLabel('Адрес').fill('Hafenstraße 4, 90451 Nürnberg')
+  await card.getByRole('button', { name: 'Рассчитать изменения' }).click()
+  await expect.poll(() => previewBody?.futureStops?.map((item) => item.address)).toEqual(['Werkstraße 2, Emden', 'Hafenstraße 4, 90451 Nürnberg'])
+  await card.getByRole('button', { name: 'Применить изменения' }).click()
+  await expect.poll(() => applied).toEqual({ previewId: 'p1', version: 3 })
+})

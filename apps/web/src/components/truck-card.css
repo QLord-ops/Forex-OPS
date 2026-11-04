@@ -156,3 +156,8 @@
 .assignment-button-primary:hover:not(:disabled) { background: rgb(var(--bg-115e59)); }
 .assignment-select { min-height: 30px; border: 1px solid rgb(var(--ln-cbd5e1)); border-radius: 6px; background: rgb(var(--bg-ffffff)); padding: 0 8px; font-size: .75rem; }
 .assignment-error { width: 100%; color: rgb(var(--tx-b91c1c)); font-size: .75rem; }
+
+/* The tour editor inside the card: no second card frame, compact fields. */
+.truck-card-editor { margin-top: 12px; border-top: 1px solid rgb(var(--ln-e3e8ef)); padding-top: 12px; }
+.truck-card-editor > .work-surface { border: 0; background: transparent; box-shadow: none; padding: 0; }
+.truck-card-editor fieldset { border-color: rgb(var(--ln-e3e8ef)); }

@@ -360,9 +360,11 @@ test('показывает пробки на маршруте выбранной
   await expect(legend).toContainText('медленно')
   await expect(legend).not.toContainText('стоит')
 
-  // Only the jam that costs time gets an icon; the short slow-down stays a colour on the line.
+  // Every jam gets an icon with the time it costs, the short slow-down too.
   const icons = page.getByRole('button', { name: /Подробнее о пробке/ })
-  await expect(icons).toHaveCount(1)
+  await expect(icons).toHaveCount(2)
+  await expect(icons.first()).toContainText('+12 мин')
+  await expect(icons.nth(1)).toContainText('<1 мин')
   await icons.first().click()
   const details = page.locator('.traffic-incident-details')
   await expect(details.locator('header')).toContainText('Пробка')
