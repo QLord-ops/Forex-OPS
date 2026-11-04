@@ -74,6 +74,9 @@ CREATE TABLE "Stop" (
     "instructions" TEXT,
     "arrivedAt" DATETIME,
     "arrivalRadiusMeters" INTEGER,
+    "plannedAt" DATETIME,
+    "departureDeadlineAt" DATETIME,
+    "terminRequired" BOOLEAN NOT NULL DEFAULT false,
     "serviceMinMinutes" INTEGER NOT NULL DEFAULT 60,
     "serviceMaxMinutes" INTEGER NOT NULL DEFAULT 120,
     "completedAt" DATETIME,
@@ -292,3 +295,20 @@ CREATE INDEX "PendingAppointment_vehicleId_status_idx" ON "PendingAppointment"("
 CREATE INDEX "AuditLog_actorDispatcherId_createdAt_idx" ON "AuditLog"("actorDispatcherId", "createdAt");
 CREATE UNIQUE INDEX "Dispatcher_login_key" ON "Dispatcher"("login");
 CREATE INDEX "Vehicle_assignedDispatcherId_idx" ON "Vehicle"("assignedDispatcherId");
+CREATE TABLE "AddressRule" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "pattern" TEXT NOT NULL,
+    "kind" TEXT NOT NULL,
+    "company" TEXT,
+    "street" TEXT,
+    "postalCode" TEXT,
+    "city" TEXT,
+    "latitude" REAL,
+    "longitude" REAL,
+    "requiresTermin" BOOLEAN NOT NULL DEFAULT false,
+    "hits" INTEGER NOT NULL DEFAULT 0,
+    "createdByDispatcherId" TEXT,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL
+);
+CREATE UNIQUE INDEX "AddressRule_pattern_key" ON "AddressRule"("pattern");

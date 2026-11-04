@@ -93,6 +93,9 @@ model Stop {
   instructions     String?
   arrivedAt         DateTime?
   arrivalRadiusMeters Int?
+  plannedAt     DateTime?
+  departureDeadlineAt DateTime?
+  terminRequired Boolean @default(false)
   serviceMinMinutes Int       @default(60)
   serviceMaxMinutes Int       @default(120)
   completedAt       DateTime?
@@ -398,4 +401,22 @@ model PendingAppointment {
 
   @@index([status, createdAt])
   @@index([vehicleId, status])
+}
+
+/// Learned and edited address knowledge for Auftrag import: "vw" → Volkswagen, "wob" → Wolfsburg, "seifert bremen" → its gate.
+model AddressRule {
+  id                    String   @id @default(cuid())
+  pattern               String   @unique
+  kind                  String
+  company               String?
+  street                String?
+  postalCode            String?
+  city                  String?
+  latitude              Float?
+  longitude             Float?
+  requiresTermin        Boolean  @default(false)
+  hits                  Int      @default(0)
+  createdByDispatcherId String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
 }
