@@ -1,4 +1,4 @@
-import { Check, ChevronRight, Clock3, ListFilter, Loader2, MapPin, PackageCheck, PauseCircle, Pin, PinOff, PlayCircle, Route, Search, Truck, X } from 'lucide-react'
+import { Check, ChevronRight, Clock3, GitFork, ListFilter, Loader2, MapPin, PackageCheck, PauseCircle, Pin, PinOff, PlayCircle, Route, Search, Truck, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 
@@ -11,7 +11,7 @@ import { useNotifications } from '../context/notifications'
 import { usePolling } from '../hooks/usePolling'
 import { usePopover } from '../hooks/usePopover'
 import { useVehiclePosition } from '../hooks/useVehiclePosition'
-import { api } from '../lib/api'
+import { api, type RouteOptions } from '../lib/api'
 import { compareVehicles, getAttention, matchesFleetFilter, positionSource, terminMargin, vehiclePlace, vehicleStatus, type FleetFilter, type FleetSort } from '../lib/fleet-status'
 import { getRoutePreview, setRoutePreview, subscribeRoutePreview } from '../lib/route-preview'
 import { etaText, routeProgress, type StopState } from '../lib/route-progress'
@@ -50,6 +50,10 @@ export function DashboardPage() {
   const [mapFocus, setMapFocus] = useState<Coordinate | null>(null)
   const [fitRoute, setFitRoute] = useState(0)
   const [track, setTrack] = useState<Coordinate[] | null>(null)
+  // Three routes from the truck's GPS position; the grey ones can become the tour's route.
+  const [routeOptions, setRouteOptions] = useState<RouteOptions | null>(null)
+  const [optionsBusy, setOptionsBusy] = useState(false)
+  const [optionsError, setOptionsError] = useState('')
   const searchRef = useRef<HTMLInputElement | null>(null)
   const draftRoute = useSyncExternalStore(subscribeRoutePreview, getRoutePreview)
   const vehicles = useMemo(() => data?.vehicles ?? [], [data?.vehicles])
@@ -77,7 +81,7 @@ export function DashboardPage() {
     if (!orderedVehicles.length || vehicles.some((row) => row.vehicle.id === selectedId)) return
     setSearchParams({ vehicleId: orderedVehicles[0].vehicle.id }, { replace: true })
   }, [orderedVehicles, selectedId, setSearchParams, vehicles])
-  useEffect(() => { setDrawerOpen(false) }, [selected?.vehicle.id])
+  useEffect(() => { setDrawerOpen(false); setRouteOptions(null); setOptionsError('') }, [selected?.vehicle.id])
   useEffect(() => {
     window.dispatchEvent(new CustomEvent('ops:assistant-context', { detail: { vehicleId: selected?.vehicle.id } }))
   }, [selected?.vehicle.id])
@@ -105,6 +109,37 @@ export function DashboardPage() {
     .some((value) => value?.toLocaleLowerCase('ru-RU').includes(needle)))
   const visibleVehicles = searched.filter((row) => matchesFleetFilter(row, filter, notified))
   const counts = Object.fromEntries(filters.map((item) => [item.value, searched.filter((row) => matchesFleetFilter(row, item.value, notified)).length])) as Record<FleetFilter, number>
+
+  const openRouteOptions = useCallback(async (vehicleId: string) => {
+    setOptionsBusy(true); setOptionsError(''); setRouteOptions(null)
+    try { setRouteOptions(await api.routeOptions(vehicleId)); setFitRoute((value) => value + 1) }
+    catch (cause) { setOptionsError(cause instanceof Error ? cause.message : 'Варианты маршрута не построены') }
+    finally { setOptionsBusy(false) }
+  }, [])
+  // «Варианты маршрута» from a deviation notice opens this page with ?routes=1.
+  useEffect(() => {
+    if (searchParams.get('routes') !== '1' || !selectedId) return
+    setSearchParams({ vehicleId: selectedId }, { replace: true })
+    void openRouteOptions(selectedId)
+  }, [openRouteOptions, searchParams, selectedId, setSearchParams])
+  async function selectRouteOption(optionId: string) {
+    if (!routeOptions) return
+    const option = routeOptions.options.find((item) => item.id === optionId)
+    const number = vehicles.find((row) => row.vehicle.id === routeOptions.vehicleId)?.vehicle.vehicleNumber
+    if (!option || !window.confirm(`Сделать этот вариант маршрутом LKW ${number ?? ''}? ${optionLabel(option)}. ETA пересчитается от GPS.`)) return
+    setOptionsBusy(true); setOptionsError('')
+    try {
+      await api.applyRouteOption(routeOptions.vehicleId, optionId, routeOptions.version)
+      setRouteOptions(null)
+      await Promise.all([refetch(), position.refetch()])
+    } catch (cause) { setOptionsError(cause instanceof Error ? cause.message : 'Вариант не применён') } finally { setOptionsBusy(false) }
+  }
+  // The planned route stays blue; the other routes from GPS are grey with their time and distance.
+  const optionAlternatives = useMemo(() => routeOptions
+    ? routeOptions.options
+      .filter((option) => Math.abs(option.distanceMeters - routeOptions.current.remainingDistanceMeters) > Math.max(2_000, routeOptions.current.remainingDistanceMeters * 0.02) || routeOptions.options.length <= 2)
+      .map((option) => ({ id: option.id, geometry: option.geometry, label: optionLabel(option) }))
+    : undefined, [routeOptions])
 
   // With the card open, picking another truck switches the card to it.
   function selectVehicle(vehicleId: string) { setSearchParams(cardId ? { vehicleId, card: vehicleId } : { vehicleId }, { replace: true }) }
@@ -211,10 +246,15 @@ export function DashboardPage() {
         </div>
       </aside>
       <section className="dashboard-stage" aria-label="Карта выбранного грузовика">
-        <LazyMapPanel tour={selected?.tour} position={position.data} vehicleNumber={selected?.vehicle.vehicleNumber} fleet={fleet} selectedVehicleId={selected?.vehicle.id} onSelectFleetVehicle={openCard} track={cardId ? track : null} focusCoordinate={mapFocus} previewRoute={draftRoute?.geometry} previewStops={draftRoute?.stops} previewTraffic={draftRoute?.trafficSegments} previewAlternatives={draftRoute?.alternatives} onSelectPreviewAlternative={draftRoute?.onSelectAlternative} previewKey={draftRoute?.key} fitRouteRequest={fitRoute} sourceNote height="100%" fill />
+        <LazyMapPanel tour={selected?.tour} position={position.data} vehicleNumber={selected?.vehicle.vehicleNumber} fleet={fleet} selectedVehicleId={selected?.vehicle.id} onSelectFleetVehicle={openCard} track={cardId ? track : null} focusCoordinate={mapFocus} previewRoute={draftRoute?.geometry} previewStops={draftRoute?.stops} previewTraffic={draftRoute?.trafficSegments} previewAlternatives={draftRoute?.alternatives ?? optionAlternatives} onSelectPreviewAlternative={draftRoute?.onSelectAlternative ?? (routeOptions ? (id) => void selectRouteOption(id) : undefined)} previewKey={draftRoute?.key} fitRouteRequest={fitRoute} sourceNote height="100%" fill />
         <MapLegend />
+        {!draftRoute && (routeOptions || optionsBusy || optionsError) ? <div className="map-draft-banner" role="status">
+          <span>{optionsBusy ? 'Строим варианты от GPS…' : optionsError || `Варианты от GPS · ${optionAlternatives?.length ?? 0} серых · нажмите время на сером маршруте, чтобы выбрать`}</span>
+          <button type="button" aria-label="Скрыть варианты маршрута" onClick={() => { setRouteOptions(null); setOptionsError('') }}><X size={16} /></button>
+        </div> : null}
         {draftRoute ? <div className="map-draft-banner"><span>{draftRoute.label} · черновик</span><button type="button" aria-label="Убрать черновой маршрут с карты" onClick={() => setRoutePreview(null)}><X size={16} /></button></div> : null}
-        {selected ? <VehiclePanel row={selected} position={position.data} drawerOpen={drawerOpen} onToggleDrawer={() => setDrawerOpen((value) => !value)} onOpen={() => openCard(selected.vehicle.id)} /> : null}
+        {selected ? <VehiclePanel row={selected} position={position.data} drawerOpen={drawerOpen} onToggleDrawer={() => setDrawerOpen((value) => !value)} onOpen={() => openCard(selected.vehicle.id)}
+          onRouteOptions={() => void openRouteOptions(selected.vehicle.id)} optionsBusy={optionsBusy} onFocusStop={(stop) => setMapFocus([stop.longitude, stop.latitude] as Coordinate)} /> : null}
         <QuickOrderPanel row={selected} vehicles={vehicles.map((item) => item.vehicle)} onAddressFound={setMapFocus} onRoutePreview={setRoutePreview} onCreated={async (vehicleId) => { selectVehicle(vehicleId); await refetch() }} />
         {cardId ? <TruckCard vehicleId={cardId} row={cardRow} onClose={closeCard} onTrack={setTrack} /> : null}
         {position.error ? <button type="button" className="map-error" onClick={() => void position.refetch()}>Позиция временно недоступна · повторить</button> : null}
@@ -331,7 +371,10 @@ function MapLegend() {
 }
 
 /** The selected truck at the bottom of the map: status, tour, Termin against ETA, distance, driver hours. */
-function VehiclePanel({ row, position, drawerOpen, onToggleDrawer, onOpen }: { row: DashboardVehicle; position?: CurrentPosition | null; drawerOpen: boolean; onToggleDrawer: () => void; onOpen: () => void }) {
+function VehiclePanel({ row, position, drawerOpen, onToggleDrawer, onOpen, onRouteOptions, optionsBusy, onFocusStop }: {
+  row: DashboardVehicle; position?: CurrentPosition | null; drawerOpen: boolean; onToggleDrawer: () => void; onOpen: () => void
+  onRouteOptions: () => void; optionsBusy: boolean; onFocusStop: (stop: Stop) => void
+}) {
   const progress = useMemo(() => routeProgress(row.tour?.stops, row, position), [row, position])
   const status = vehicleStatus(row)
   const source = positionSource(row)
@@ -344,7 +387,7 @@ function VehiclePanel({ row, position, drawerOpen, onToggleDrawer, onOpen }: { r
   const fromStop = progress.currentIndex > 0 ? progress.stops[progress.currentIndex - 1]?.stop : row.from
   const toStop = progress.currentIndex >= 0 ? progress.stops[progress.currentIndex]?.stop : row.to
   return <section className={classNames('vehicle-panel', drawerOpen && 'vehicle-panel-open')} aria-label={`LKW ${row.vehicle.vehicleNumber}`}>
-    {drawerOpen ? <RouteStopsTrack row={row} position={position} /> : null}
+    {drawerOpen ? <RouteStopsTrack row={row} position={position} onFocusStop={onFocusStop} /> : null}
     <div className="vehicle-panel-bar">
       <div className="vehicle-panel-id">
         <strong>LKW {row.vehicle.vehicleNumber}</strong>
@@ -365,7 +408,7 @@ function VehiclePanel({ row, position, drawerOpen, onToggleDrawer, onOpen }: { r
       <div className="vehicle-panel-metric">
         <span className="vehicle-panel-label">Осталось</span>
         <strong>{typeof row.remainingKm === 'number' ? `≈ ${Math.round(row.remainingKm)} км` : '–'}</strong>
-        <span>{etaMinutes !== null ? `≈ ${formatDurationMinutes(etaMinutes)} до точки` : 'время неизвестно'}</span>
+        <span>{etaMinutes !== null ? `≈ ${formatDurationMinutes(etaMinutes)} до точки` : 'время неизвестно'}{row.etaSource === 'GPS' ? ' · от GPS' : ' · расчёт'}</span>
       </div>
       {clock && (typeof clock.breakInMinutes === 'number' || typeof clock.remainingDrivingMinutes === 'number') ? <div className="vehicle-panel-metric">
         <span className="vehicle-panel-label">Часы водителя{clock.preliminary ? ' · предв.' : ''}</span>
@@ -373,6 +416,7 @@ function VehiclePanel({ row, position, drawerOpen, onToggleDrawer, onOpen }: { r
         <span>{typeof clock.breakInMinutes === 'number' ? 'до паузы 45 мин' : 'вождения сегодня'}</span>
       </div> : null}
       <div className="vehicle-panel-actions">
+        {row.etaSource === 'GPS' ? <button type="button" className="secondary-button" onClick={onRouteOptions} disabled={optionsBusy} title="Три маршрута от GPS-позиции до точки"><GitFork className="h-4 w-4" aria-hidden="true" />Варианты</button> : null}
         <button type="button" className="secondary-button" onClick={onToggleDrawer} aria-expanded={drawerOpen} aria-label={drawerOpen ? 'Скрыть точки маршрута' : 'Показать точки маршрута'} disabled={!progress.stops.length}><Route className="h-4 w-4" aria-hidden="true" />Маршрут</button>
         <button type="button" className="primary-button" onClick={onOpen}>Открыть<ChevronRight className="h-4 w-4" aria-hidden="true" /></button>
       </div>
@@ -380,7 +424,7 @@ function VehiclePanel({ row, position, drawerOpen, onToggleDrawer, onOpen }: { r
   </section>
 }
 
-function RouteStopsTrack({ row, position }: { row: DashboardVehicle; position?: CurrentPosition | null }) {
+function RouteStopsTrack({ row, position, onFocusStop }: { row: DashboardVehicle; position?: CurrentPosition | null; onFocusStop: (stop: Stop) => void }) {
   const progress = useMemo(() => routeProgress(row.tour?.stops, row, position), [row, position])
   const trackRef = useRef<HTMLOListElement | null>(null)
   useEffect(() => {
@@ -401,7 +445,7 @@ function RouteStopsTrack({ row, position }: { row: DashboardVehicle; position?: 
           {index < last ? <span className="route-stage-line"><span className="route-stage-line-fill" style={{ width: `${fill * 100}%` }} />{truckOnLine ? <span className="route-stage-truck" style={{ left: `${fill * 100}%` }}><Truck className="h-3.5 w-3.5" /></span> : null}</span> : null}
         </div>
         <p className="route-stage-state">{stopStateText(stop, state, progress.stage, row)}</p>
-        <StopCard stop={stop} current={index === progress.currentIndex} />
+        <StopCard stop={stop} current={index === progress.currentIndex} onFocus={() => onFocusStop(stop)} />
       </li>
     })}
   </ol> : <EmptyState label="У машины нет активного маршрута." />}</div>
@@ -413,17 +457,24 @@ function stopStateText(stop: Stop, state: StopState, stage: string, row: Dashboa
     const minutes = stop.arrivedAt ? Math.max(0, Math.floor((Date.now() - new Date(stop.arrivedAt).getTime()) / 60_000)) : null
     return `Машина здесь${minutes !== null ? ` · ${formatDurationMinutes(minutes)}` : ''}`
   }
-  if (state === 'HEADING') return stage === 'ARRIVING' ? 'Прибывает · подтвердите' : stage === 'WAITING' ? 'Первая точка' : `Едем сюда · ETA ${etaText(row.eta ?? stop.predictedEta)}`
+  if (state === 'HEADING') return stage === 'ARRIVING' ? 'Прибывает · ждём GPS' : stage === 'WAITING' ? 'Первая точка' : `Едем сюда · ETA ${etaText(row.eta ?? stop.predictedEta)}`
   if (state === 'NEXT') return `Следующая${stop.predictedEta ? ` · ETA ${etaText(stop.predictedEta)}` : ''}`
   return 'Впереди'
 }
 
-function StopCard({ stop, current = false }: { stop: Stop; current?: boolean }) {
+function StopCard({ stop, current = false, onFocus }: { stop: Stop; current?: boolean; onFocus?: () => void }) {
   const references = stop.referenceNumbers ?? parseStopReferences(stop.referenceNumbersJson)
-  return <article className={classNames('route-stop-card', current && 'route-stop-card-current')}><div className="flex items-center justify-between gap-2"><span className="badge border-slate-200 bg-slate-50 text-slate-700">{stop.sequence} · {stopTypeLabel(stop.type)}</span><span className="text-xs font-medium text-slate-500">{stop.status ? statusLabel(stop.status) : ''}</span></div><p className="mt-2 truncate font-semibold" title={stop.city || stop.address}>{shortAddress(stop)}</p><p className="mt-1 line-clamp-2 text-xs text-slate-500" title={stop.address}>{stop.address}</p><div className="mt-3 grid gap-1 text-xs text-slate-600"><span className="inline-flex items-center gap-1"><Clock3 className="h-3.5 w-3.5" /> {formatAppointment(stop.appointmentAt)}</span><span className="inline-flex items-center gap-1"><MapPin className="h-3.5 w-3.5" /> ETA {formatDateTime(stop.predictedEta)}</span>{stop.loadingMeters ? <span>{stop.loadingMeters} LDM</span> : null}{references.length ? <span>Ref: {references.join(', ')}</span> : null}{stop.instructions ? <span className="line-clamp-2">{stop.instructions}</span> : null}</div></article>
+  // The whole card shows the stop on the map.
+  return <article className={classNames('route-stop-card', current && 'route-stop-card-current', onFocus && 'route-stop-card-clickable')} onClick={onFocus}
+    role={onFocus ? 'button' : undefined} tabIndex={onFocus ? 0 : undefined} aria-label={onFocus ? `Показать на карте: ${stop.sequence} · ${stopTypeLabel(stop.type)}, ${shortAddress(stop)}` : undefined}
+    onKeyDown={onFocus ? (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onFocus() } } : undefined}><div className="flex items-center justify-between gap-2"><span className="badge border-slate-200 bg-slate-50 text-slate-700">{stop.sequence} · {stopTypeLabel(stop.type)}</span><span className="text-xs font-medium text-slate-500">{stop.status ? statusLabel(stop.status) : ''}</span></div><p className="mt-2 truncate font-semibold" title={stop.city || stop.address}>{shortAddress(stop)}</p><p className="mt-1 line-clamp-2 text-xs text-slate-500" title={stop.address}>{stop.address}</p><div className="mt-3 grid gap-1 text-xs text-slate-600"><span className="inline-flex items-center gap-1"><Clock3 className="h-3.5 w-3.5" /> {formatAppointment(stop.appointmentAt)}</span><span className="inline-flex items-center gap-1"><MapPin className="h-3.5 w-3.5" /> ETA {formatDateTime(stop.predictedEta)}</span>{stop.loadingMeters ? <span>{stop.loadingMeters} LDM</span> : null}{references.length ? <span>Ref: {references.join(', ')}</span> : null}{stop.instructions ? <span className="line-clamp-2">{stop.instructions}</span> : null}</div></article>
 }
 
 function parseStopReferences(value?: string | null): string[] { if (!value) return []; try { const parsed = JSON.parse(value) as unknown; return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [] } catch { return [] } }
+
+function optionLabel(option: { durationSeconds: number; distanceMeters: number; mainRoads: string[] }) {
+  return `${formatDurationMinutes(Math.round(option.durationSeconds / 60))} · ${Math.round(option.distanceMeters / 1000)} км${option.mainRoads.length ? ` · ${option.mainRoads.join(', ')}` : ''}`
+}
 
 function localDateTime(date = new Date()) {
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000)

@@ -58,3 +58,32 @@ it("returns congested stretches shifted by the already travelled part", async ()
   expect(position.trafficSegments).toEqual([{ from: 3, to: 4, level: "JAM", delaySeconds: 240, speedKmh: 22 }]);
   expect(position.trafficCheckedAt).toBe("2026-11-02T10:00:00.000Z");
 });
+
+it("measures distance and ETA from fresh GPS and never marks the truck arrived by the timer", async () => {
+  const service = new TourService(asAppDatabase(db), new MockRoutingProvider());
+  const vehicle = await db.vehicle.create({ data: { vehicleNumber: "GPS-9724" } });
+  await service.createTour({ vehicleId: vehicle.id, orderNumber: "GPS", stops: [
+    { sequence: 1, type: "LOAD", address: "Hannover", latitude: 52.37, longitude: 9.73 },
+    { sequence: 2, type: "UNLOAD", address: "Emden", latitude: 53.36, longitude: 7.2 }
+  ] });
+  const leg = await db.leg.findFirstOrThrow({ where: { tour: { vehicleId: vehicle.id } } });
+  const line = [{ latitude: 52.37, longitude: 9.73 }, { latitude: 53.07, longitude: 8.8 }, { latitude: 53.36, longitude: 7.2 }];
+  // The timer says the leg is over long ago; the truck is really in Bremen.
+  await db.leg.update({ where: { id: leg.id }, data: { status: "ACTIVE", startedAt: new Date(Date.now() - 24 * 3600_000), routeGeometry: JSON.stringify(line), distanceMeters: 230_000 } });
+
+  const timer = await service.getCurrentPosition(vehicle.id);
+  expect(timer.status).toBe("ARRIVED");
+  expect(timer.predictedArrival).toBe(true);
+
+  const gps = await service.getCurrentPosition(vehicle.id, new Date(), { latitude: 53.07, longitude: 8.8, fresh: true });
+  expect(gps.status).toBe("MOVING");
+  expect(gps.etaSource).toBe("GPS");
+  expect(gps.remainingDistanceMeters / 1000).toBeGreaterThan(100);
+  expect(gps.remainingDistanceMeters / 1000).toBeLessThan(125);
+  expect(Date.parse(gps.eta!)).toBeGreaterThan(Date.now());
+  expect(gps.offRouteMeters).toBeLessThan(100);
+
+  // Stale GPS does not move anything.
+  const stale = await service.getCurrentPosition(vehicle.id, new Date(), { latitude: 53.07, longitude: 8.8, fresh: false });
+  expect(stale.etaSource).toBe("CALCULATED");
+});

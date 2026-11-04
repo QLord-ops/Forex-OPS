@@ -1,6 +1,6 @@
-import { CalendarDays, LogOut, MapPinCheck, MessageSquareText } from 'lucide-react'
+import { CalendarCheck, CalendarDays, LogOut, MapPinCheck, MessageSquareText, Route, TriangleAlert } from 'lucide-react'
 import { useState } from 'react'
-import { Link, useLocation } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 
 import { departureOf, useNotifications } from '../context/notifications'
 import { alertPermission, bannerDismissed, dismissBanner, requestAlertPermission, type AlertNotification, type AlertPermission } from '../lib/alerts'
@@ -10,11 +10,12 @@ import { terminText } from '../lib/tours'
 import type { Stop } from '../types/domain'
 import { AppointmentReview } from './AppointmentReview'
 
-type Tone = 'late' | 'termin' | 'arrival' | 'info'
+type Tone = 'late' | 'termin' | 'arrival' | 'ok' | 'info'
 
 /** One open question for the dispatcher, with its own buttons. Used in «Требует решения», the bell and the toast. */
 export function DecisionCard({ item, stop, onSelect, openLink = false }: { item: AlertNotification; stop?: Stop | null; onSelect?: (vehicleId: string) => void; openLink?: boolean }) {
   const state = useNotifications()
+  const navigate = useNavigate()
   const busy = state.busyId === item.id
   const error = state.errors[item.id]
   const vehicle = /LKW\s+(\S+?)[\s,]/.exec(item.message)?.[1]
@@ -44,6 +45,25 @@ export function DecisionCard({ item, stop, onSelect, openLink = false }: { item:
     detail = place ? `${place}${stop?.arrivedAt ? `, ${formatTime(stop.arrivedAt)}` : ''} · GPS Webfleet, автоматически. BELADEN/ENTLADEN подтверждаете вы` : item.message
     actions = [{ label: 'Понятно', primary: true, run: () => void state.resolve(item, 'ack') }]
     if (item.stopId) actions.push({ label: 'Отменить прибытие', run: () => void state.resolve(item, 'revert') })
+  } else if (item.type === 'ROUTE_DEVIATION') {
+    tone = 'late'; Icon = Route
+    title = `${vehicle ? `LKW ${vehicle}` : 'Машина'} отклонилась от маршрута`
+    detail = item.message
+    actions = [
+      { label: 'Варианты маршрута', primary: true, run: () => { state.hide(item.id); void state.resolve(item, 'ack'); navigate(`/?vehicleId=${encodeURIComponent(item.vehicleId)}&routes=1`) } },
+      { label: 'Понятно', run: () => void state.resolve(item, 'ack') }
+    ]
+  } else if (item.type === 'TERMIN_MET') {
+    const onTime = /вовремя/.test(item.message)
+    tone = onTime ? 'ok' : 'late'; Icon = CalendarCheck
+    title = onTime ? `${vehicle ? `LKW ${vehicle}` : 'Машина'} прибыла вовремя · Termin выполнен` : `${vehicle ? `LKW ${vehicle}` : 'Машина'} прибыла с опозданием`
+    detail = item.message
+    actions = [{ label: 'Понятно', primary: true, run: () => void state.resolve(item, 'ack') }]
+  } else if (item.type === 'PREVIOUS_TOUR_OPEN') {
+    tone = 'late'; Icon = TriangleAlert
+    title = `${vehicle ? `LKW ${vehicle}` : 'Машина'} уже на следующем туре, прошлый не закрыт`
+    detail = item.message
+    actions = [{ label: 'Понятно', run: () => void state.resolve(item, 'ack') }]
   } else if (item.type === 'APPOINTMENT_MATCH') {
     tone = 'termin'; Icon = CalendarDays
     title = 'Termin на проверку'

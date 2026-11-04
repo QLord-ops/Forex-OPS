@@ -112,6 +112,8 @@
 .decision-card-late .decision-card-icon { color: rgb(var(--tx-dc2626)); }
 .decision-card-termin { border-color: rgb(var(--ln-f6d2ae)); background: rgb(var(--bg-fff8f1)); }
 .decision-card-termin .decision-card-icon { color: rgb(var(--tx-c2410c)); }
+.decision-card-ok { border-color: rgb(var(--ln-bfe5cc)); background: rgb(var(--bg-f2fbf5)); }
+.decision-card-ok .decision-card-icon { color: rgb(var(--tx-15803d)); }
 .decision-card-arrival { border-color: rgb(var(--ln-c9d8f7)); background: rgb(var(--bg-f3f7ff)); }
 .decision-card-arrival .decision-card-icon { color: rgb(var(--tx-1d4ed8)); }
 .decision-card-title { display: block; color: rgb(var(--tx-0f172a)); font-size: .9375rem; font-weight: 600; line-height: 1.35; text-align: left; }
@@ -222,7 +224,7 @@ button.decision-card-title:focus-visible { outline: 2px solid var(--focus); outl
 .map-draft-banner { bottom: calc(var(--map-bottom) + 48px) !important; left: 16px !important; }
 
 /* Map markers: a pill with a status dot and the truck number; Termin adds a violet ring. */
-.fleet-marker { position: relative; display: inline-flex; height: 30px; align-items: center; gap: 6px; border: 1px solid rgb(var(--ln-e3e8ef)); border-radius: 9px; background: rgb(var(--bg-ffffff)); padding: 0 10px; color: rgb(var(--tx-0f172a)); font-size: .8125rem; font-weight: 500; white-space: nowrap; box-shadow: 0 4px 12px rgb(var(--shadow-rgb) / 0.16); cursor: pointer; font-variant-numeric: tabular-nums; }
+.fleet-marker { display: inline-flex; height: 30px; align-items: center; gap: 6px; border: 1px solid rgb(var(--ln-e3e8ef)); border-radius: 9px; background: rgb(var(--bg-ffffff)); padding: 0 10px; color: rgb(var(--tx-0f172a)); font-size: .8125rem; font-weight: 500; white-space: nowrap; box-shadow: 0 4px 12px rgb(var(--shadow-rgb) / 0.16); cursor: pointer; font-variant-numeric: tabular-nums; }
 .fleet-marker::after { content: ""; position: absolute; left: 50%; bottom: -5px; width: 8px; height: 8px; border-right: 1px solid rgb(var(--ln-e3e8ef)); border-bottom: 1px solid rgb(var(--ln-e3e8ef)); background: inherit; transform: translateX(-50%) rotate(45deg); }
 .fleet-marker:hover { z-index: 2; border-color: rgb(var(--ln-c3ccd8)); }
 .fleet-marker:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
@@ -236,10 +238,11 @@ button.decision-card-title:focus-visible { outline: 2px solid var(--focus); outl
 .fleet-marker-source { color: rgb(var(--tx-64748b)); font: 500 .625rem/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .fleet-labels-off .fleet-marker { height: 18px; padding: 0 4px; }
 .fleet-labels-off .fleet-marker-label, .fleet-labels-off .fleet-marker-source, .fleet-labels-off .fleet-marker::after { display: none; }
+.fleet-marker[hidden] { display: none; }
 .fleet-cluster { display: grid; width: 44px; height: 44px; place-items: center; border: 4px solid rgb(var(--ln-ffffff) / 0.7); border-radius: 50%; background: rgb(var(--bg-dde3ea) / 0.95); background-clip: padding-box; color: rgb(var(--tx-334155)); font-size: .875rem; font-weight: 600; box-shadow: 0 2px 8px rgb(var(--shadow-rgb) / 0.12); cursor: pointer; font-variant-numeric: tabular-nums; }
 .fleet-cluster:hover { background: rgb(var(--bg-cfd6e0)); }
 .fleet-cluster:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-.truck-marker { position: relative; z-index: 3; width: 18px; height: 18px; border: 4px solid rgb(var(--ln-ffffff)); border-radius: 50%; background: var(--acc); box-shadow: 0 0 0 1px rgb(var(--shadow-rgb) / 0.2), 0 4px 10px rgb(var(--shadow-rgb) / 0.3); cursor: pointer; }
+.truck-marker { z-index: 3; width: 18px; height: 18px; border: 4px solid rgb(var(--ln-ffffff)); border-radius: 50%; background: var(--acc); box-shadow: 0 0 0 1px rgb(var(--shadow-rgb) / 0.2), 0 4px 10px rgb(var(--shadow-rgb) / 0.3); cursor: pointer; }
 .truck-marker-label { position: absolute; bottom: calc(100% + 10px); left: 50%; display: inline-flex; height: 34px; align-items: center; gap: 8px; border-radius: 10px; background: var(--acc); padding: 0 12px; color: var(--acc-ink); font-size: .875rem; font-weight: 600; white-space: nowrap; box-shadow: 0 8px 20px rgb(var(--shadow-rgb) / 0.28); transform: translateX(-50%); }
 .truck-marker-label::after { content: ""; position: absolute; left: 50%; bottom: -5px; width: 10px; height: 10px; background: inherit; transform: translateX(-50%) rotate(45deg); }
 .truck-marker-label small { font-size: .6875rem; font-weight: 500; opacity: .85; }
@@ -356,3 +359,11 @@ button.decision-card-title:focus-visible { outline: 2px solid var(--focus); outl
 @media (prefers-reduced-motion: reduce) {
   .vehicle-card, .route-stage-bar > span, .vehicle-pin-button { transition: none; }
 }
+
+/* Route stop cards show their point on the map; the recognised Auftrag can be completed by hand. */
+.route-stop-card-clickable { cursor: pointer; transition: border-color 120ms ease; }
+.route-stop-card-clickable:hover { border-color: var(--acc); }
+.route-stop-card-clickable:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.quick-stop-type { width: auto; height: 32px; padding: 0 28px 0 8px; font-size: .8125rem; font-weight: 600; }
+.quick-stop-tools { display: inline-flex; gap: 4px; margin-left: auto; }
+.quick-stop-add { display: flex; gap: 8px; margin-top: 10px; }

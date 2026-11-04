@@ -365,7 +365,7 @@ export function MapPanel({
       }
       const element = marker.getElement()
       marker.setLngLat(incident.coordinate)
-      element.className = `traffic-incident-marker traffic-incident-${incident.level.toLowerCase()}`
+      setMarkerClass(element, `traffic-incident-marker traffic-incident-${incident.level.toLowerCase()}`)
       const summary = `${INCIDENT_TITLES[incident.level]}${incident.delaySeconds >= 60 ? `, ${formatDelay(incident.delaySeconds)}` : ''}`
       element.title = summary
       element.setAttribute('aria-label', `${summary}. Подробнее о пробке`)
@@ -714,6 +714,11 @@ function clusterFleet(map: Map, markers: globalThis.Map<string, Marker>, cluster
 
 const FLEET_SOURCE_TEXT: Record<FleetMapVehicle['source'], string> = { WEBFLEET: 'GPS', MANUAL: 'указана вручную', CALCULATED: 'расчёт' }
 
+/** MapLibre positions a marker through its own maplibregl-* classes; replacing className would drop them and the marker would slide to the corner. */
+function setMarkerClass(element: HTMLElement, value: string) {
+  element.className = [value, ...Array.from(element.classList).filter((name) => name.startsWith('maplibregl-'))].join(' ')
+}
+
 const TONE_TEXT: Record<FleetTone, string> = { ok: 'в пути', stop: 'на точке', late: 'опоздание', plan: 'план', idle: 'без тура' }
 
 function drawFleetMarker(element: HTMLButtonElement, vehicle: FleetMapVehicle) {
@@ -724,7 +729,7 @@ function drawFleetMarker(element: HTMLButtonElement, vehicle: FleetMapVehicle) {
   const key = `${source}|${tone}|${vehicle.label}|${vehicle.termin ? 't' : ''}`
   if (element.dataset.key === key) return
   element.dataset.key = key
-  element.className = `fleet-marker fleet-marker-${source} fleet-marker-tone-${tone}${vehicle.termin ? ' fleet-marker-termin' : ''}`
+  setMarkerClass(element, `fleet-marker fleet-marker-${source} fleet-marker-tone-${tone}${vehicle.termin ? ' fleet-marker-termin' : ''}`)
   element.setAttribute('aria-label', `LKW ${vehicle.label}: ${TONE_TEXT[tone]}, ${sourceText}${motion}${vehicle.termin ? ', есть Termin' : ''}. Открыть карточку`)
   element.title = `LKW ${vehicle.label} · ${TONE_TEXT[tone]} · ${sourceText}${motion}`
   element.replaceChildren()

@@ -17,7 +17,10 @@ describe('fleet status', () => {
   it('names the state the way the dispatcher says it', () => {
     expect(vehicleStatus(row(), NOW)).toEqual({ label: 'В пути', tone: 'ok' })
     expect(vehicleStatus(row({ delayMinutes: 35 }), NOW)).toEqual({ label: 'Опоздание', tone: 'late' })
-    expect(vehicleStatus(row({ statusText: 'ARRIVED', currentStop: stop({ type: 'LOAD' }) }), NOW)).toEqual({ label: 'Загрузка', tone: 'stop' })
+    expect(vehicleStatus(row({ statusText: 'WAITING', currentStop: stop({ type: 'LOAD', arrivedAt: '2026-11-03T11:30:00Z' }) }), NOW)).toEqual({ label: 'Загрузка', tone: 'stop' })
+    // The timer alone never puts a truck at the stop: 997 was shown «Прибыл» while still driving.
+    expect(vehicleStatus(row({ statusText: 'ARRIVED', predictedArrival: true, currentStop: stop({ type: 'LOAD' }) }), NOW)).toEqual({ label: 'В пути', tone: 'ok' })
+    expect(needsDecision(row({ statusText: 'ARRIVED', predictedArrival: true }), new Set(), NOW)).toBe(false)
     expect(vehicleStatus(row({ statusText: 'WAITING_FOR_START', tour: { id: 't1', stops: [stop()] } as never }), NOW)).toEqual({ label: 'Запланирован', tone: 'plan' })
     expect(vehicleStatus(row({ statusText: 'IDLE' }), NOW)).toEqual({ label: 'Без тура', tone: 'idle' })
   })

@@ -14,9 +14,11 @@ import {
   type Coordinate,
   type RouteResult,
   type CurrentPosition,
+  type GpsFix,
   type StructuredCity
 } from "../domain.js";
 import type { RoutingProvider } from "./routing.js";
+import { OFF_ROUTE_METERS, projectOnLine, splitAtProjection } from "./route-projection.js";
 import { applyStopTime, createUnknownClockState, evaluateClockPlan, forecastDrive, type ClockState, type VehicleClockPlan } from "./vehicle-clock.js";
 import {
   calculateDistanceTravelled,
@@ -308,7 +310,7 @@ export class TourService {
     return this.recordStopEvent(stopId, "UNLOADED", now, note, actor, options);
   }
 
-  async getCurrentPosition(vehicleId: string, now = new Date()): Promise<CurrentPosition> {
+  async getCurrentPosition(vehicleId: string, now = new Date(), gps?: GpsFix | null): Promise<CurrentPosition> {
     const [vehicle, activeTour, activeLeg] = await Promise.all([
       this.db.vehicle.findUniqueOrThrow({ where: { id: vehicleId }, include: { issues: { where: { resolvedAt: null } } } }),
       this.db.tour.findFirst({
@@ -339,9 +341,23 @@ export class TourService {
     const eta = breakdown.blocked ? breakdown.resumeAt
       ? new Date(forecastDrive(waitClockUntil(clock.clockState, breakdown.resumeAt), Math.max(0, activeLeg.simulatedDurationSeconds - clock.driveElapsedSeconds), breakdown.resumeAt).endAt)
       : null : clock.eta;
-    const delayMinutes = activeLeg.toStop.appointmentAt ? calculateLateMinutes(eta, activeLeg.toStop.appointmentAt) : 0;
     const arrived = progress >= 1 && activeLeg.status !== "COMPLETED";
-    const split = splitGeometryAtProgress(geometry, progress);
+    // Fresh Webfleet GPS beats the timer: distance, ETA and the drawn split come from where the truck really is,
+    // and only a GPS arrival (arrivedAt) can put it at the stop.
+    const projection = gps?.fresh && !activeLeg.toStop.arrivedAt ? projectOnLine(geometry, gps) : null;
+    const lineMeters = projection?.totalMeters ?? 0;
+    const legMeters = activeLeg.distanceMeters > 0 ? activeLeg.distanceMeters : lineMeters;
+    const gpsRemainingMeters = projection && lineMeters > 0
+      ? Math.round((lineMeters - projection.alongMeters) * (legMeters / lineMeters) + (projection.offMeters > OFF_ROUTE_METERS ? projection.offMeters : 0))
+      : null;
+    const gpsProgress = gpsRemainingMeters !== null && legMeters > 0 ? Math.max(0, Math.min(1, 1 - gpsRemainingMeters / legMeters)) : null;
+    const gpsEta = gpsRemainingMeters !== null && !breakdown.blocked
+      ? new Date(forecastDrive(clock.clockState, legMeters > 0 ? activeLeg.simulatedDurationSeconds * gpsRemainingMeters / legMeters : 0, now).endAt)
+      : null;
+    const split = projection ? splitAtProjection(geometry, projection) : splitGeometryAtProgress(geometry, progress);
+    const shownEta = projection ? gpsEta : eta;
+    const delayMinutes = activeLeg.toStop.appointmentAt ? calculateLateMinutes(shownEta, activeLeg.toStop.appointmentAt) : 0;
+    const shownProgress = gpsProgress ?? progress;
     let travelledPrefix: Coordinate[] = [];
     let previousTravelledDistanceMeters = 0;
     let trafficSections: TrafficSection[] = [];
@@ -362,8 +378,8 @@ export class TourService {
       .map(section => ({ from: section.start + travelledPrefix.length, to: section.end + travelledPrefix.length, level: section.level, delaySeconds: section.delaySeconds, speedKmh: section.speedKmh }));
 
     return {
-      state: activeLeg.toStop.arrivedAt ? "DWELL" : arrived ? "ANGEKOMMEN_WARTET_AUF_BESTAETIGUNG" : "UNTERWEGS",
-      status: breakdown.blocked || activeLeg.toStop.arrivedAt ? "WAITING" : arrived ? "ARRIVED" : clock.paused ? "WAITING" : "MOVING",
+      state: activeLeg.toStop.arrivedAt ? "DWELL" : arrived && !projection ? "ANGEKOMMEN_WARTET_AUF_BESTAETIGUNG" : "UNTERWEGS",
+      status: breakdown.blocked || activeLeg.toStop.arrivedAt ? "WAITING" : arrived && !projection ? "ARRIVED" : clock.paused && !projection ? "WAITING" : "MOVING",
       disclaimer: CALCULATED_POSITION_DISCLAIMER,
       position,
       coordinate: position ? [position.longitude, position.latitude] : null,
@@ -378,10 +394,13 @@ export class TourService {
       remainingGeometry: split.remainingGeometry.map(toLonLat),
       trafficSegments,
       trafficCheckedAt: trafficSegments.length ? trafficCheckedAt : null,
-      progress,
-      distanceTravelledMeters: previousTravelledDistanceMeters + calculateDistanceTravelled(activeLeg.distanceMeters, progress),
-      remainingDistanceMeters: calculateRemainingDistance(activeLeg.distanceMeters, progress),
-      eta: eta?.toISOString() ?? null
+      progress: shownProgress,
+      distanceTravelledMeters: previousTravelledDistanceMeters + (gpsRemainingMeters !== null ? Math.max(0, legMeters - gpsRemainingMeters) : calculateDistanceTravelled(activeLeg.distanceMeters, progress)),
+      remainingDistanceMeters: gpsRemainingMeters ?? calculateRemainingDistance(activeLeg.distanceMeters, progress),
+      eta: shownEta?.toISOString() ?? null,
+      etaSource: projection ? "GPS" : "CALCULATED",
+      offRouteMeters: projection ? Math.round(projection.offMeters) : null,
+      predictedArrival: arrived && !activeLeg.toStop.arrivedAt
     };
   }
 

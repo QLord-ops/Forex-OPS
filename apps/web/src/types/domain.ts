@@ -99,6 +99,11 @@ export interface DashboardVehicle {
   vehicle: Vehicle
   tour?: Tour | null
   statusText: string
+  /** GPS: km and ETA measured from the Webfleet position; CALCULATED: from the drive timer. */
+  etaSource?: 'GPS' | 'CALCULATED'
+  offRouteMeters?: number | null
+  /** The timer says the truck should be at the stop, but GPS has not confirmed it. */
+  predictedArrival?: boolean
   operationVersion?: number
   /** Dispatcher who looks after the truck; null = free. */
   assignedTo?: { id: string; name: string } | null

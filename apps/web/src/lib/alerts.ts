@@ -71,6 +71,9 @@ export function alertHeading(type: string) {
   if (type === 'LONG_DWELL') return 'Долгая стоянка'
   if (type === 'APPOINTMENT_MATCH') return 'Термин нашёл свой тур'
   if (type === 'STOP_DEPARTED') return 'Машина уехала с точки'
+  if (type === 'ROUTE_DEVIATION') return 'Отклонение от маршрута'
+  if (type === 'TERMIN_MET') return 'Прибытие к Termin'
+  if (type === 'PREVIOUS_TOUR_OPEN') return 'Прошлый тур не закрыт'
   return 'Уведомление OPS'
 }
 

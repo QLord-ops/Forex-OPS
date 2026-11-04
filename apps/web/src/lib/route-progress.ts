@@ -54,7 +54,7 @@ export function routeProgress(input: Stop[] | undefined | null, row?: RowLike | 
   const place = shortAddress(current)
   const dwell = current.arrivedAt ? Math.max(0, Math.floor((now.getTime() - new Date(current.arrivedAt).getTime()) / 60_000)) : row?.dwellMinutes ?? null
   const stageLabel = stage === 'AT_STOP' ? `${isLoad(current) ? 'На загрузке' : 'На выгрузке'}, ${place}${dwell !== null ? ` · ${formatDurationMinutes(dwell)}` : ''}`
-    : stage === 'ARRIVING' ? `Прибывает: ${place} · подтвердите прибытие`
+    : stage === 'ARRIVING' ? `У точки ${place} по расчёту · ждём прибытие по GPS`
       : stage === 'WAITING' ? `Ожидает начала · первая точка ${place}`
         : `В пути ${isLoad(current) ? 'на загрузку' : 'на выгрузку'}, ${place}${row?.remainingKm != null ? ` · ${formatKm(row.remainingKm)}` : ''}${row?.eta || current.predictedEta ? ` · ETA ${etaText(row?.eta ?? current.predictedEta, now)}` : ''}`
 

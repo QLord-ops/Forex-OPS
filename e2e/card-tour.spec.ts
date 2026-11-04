@@ -84,7 +84,10 @@ test('уведомление в фоне: окно Windows, звук и счёт
     return json(route, [])
   })
   await page.route('https://tile.openstreetmap.org/**', (route) => route.abort())
+  // The first answer marks what is already known; only later notifications alert.
+  const firstPoll = page.waitForResponse((response) => response.url().endsWith('/api/notifications'))
   await page.goto('/vehicles')
+  await firstPoll
   await expect(page).toHaveTitle('OPS FOREX')
 
   notifications = [{ id: 'n1', vehicleId: vehicle.id, stopId: 's1', type: 'AUTO_ARRIVAL', message: 'Webfleet: LKW 997 прибыла на загрузку, Zwickau', createdAt: new Date().toISOString() }]

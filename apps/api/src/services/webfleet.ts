@@ -4,7 +4,9 @@ const PROVIDER = 'WEBFLEET';
 export const DEFAULT_ARRIVAL_RADIUS_METERS = 500;
 // The truck must stand inside the zone this long; Webfleet snapshots arrive once a minute.
 export const ARRIVAL_MIN_STANDSTILL_SECONDS = 180;
-const ARRIVAL_HISTORY_SECONDS = 30 * 60;
+// Long enough to find the zone entry of a truck that has stood at a stop for hours (e.g. while its previous tour was still open).
+const ARRIVAL_HISTORY_SECONDS = 12 * 3600;
+const ARRIVAL_HISTORY_ROWS = 900;
 const STOPPED_SPEED_KMH = 5;
 const FRESH_SECONDS = 120;
 // Webfleet keeps pos_time while a truck stands still; the unit's last contact (msgtime) proves the position is current.
@@ -90,7 +92,7 @@ export type AutoArrivalInput = {
   stopId: string;
   arrivedAt: Date;
   now: Date;
-  meta: { distanceMeters: number; radiusMeters: number; enteredAt: string; stoppedSince: string };
+  meta: { enteredAt: string; distanceMeters?: number; radiusMeters?: number; stoppedSince?: string; leftZoneAfter?: string; standstillSeconds?: number; retroactive?: boolean };
 };
 export type AutoArrivalHandler = (input: AutoArrivalInput) => Promise<{ applied?: boolean } | unknown>;
 type ArrivalDecision = { suggested: boolean; confirmed: boolean };
@@ -154,13 +156,17 @@ export class WebfleetTelemetryService {
       orderBy: [{ queueIndex: 'asc' }, { createdAt: 'asc' }]
     });
     const stop = tour?.stops.find((item) => !item.completedAt);
-    if (!tour || !stop?.arrivedAt) return false;
+    if (!tour || !stop) return false;
+    // The truck stood at the stop by GPS but the arrival was never recorded (e.g. no poll at that moment):
+    // record it now from the GPS history, with the zone entry time, so the departure question can follow.
+    const arrivedAt = stop.arrivedAt ?? await this.retroactiveArrival(vehicleId, tour.id, stop, current, now);
+    if (!arrivedAt) return false;
     const limit = (stop.arrivalRadiusMeters ?? DEFAULT_ARRIVAL_RADIUS_METERS) + DEPARTURE_MARGIN_METERS;
     const outside = (point: { latitude: number; longitude: number }) => distanceMeters(point.latitude, point.longitude, stop.latitude, stop.longitude) > limit;
     if (!outside(current)) return false;
 
     const history = await this.db.vehicleTelemetry.findMany({
-      where: { vehicleId, provider: PROVIDER, recordedAt: { gte: stop.arrivedAt, lte: current.recordedAt } },
+      where: { vehicleId, provider: PROVIDER, recordedAt: { gte: arrivedAt, lte: current.recordedAt } },
       orderBy: { recordedAt: 'desc' }, take: 120
     });
     const previous = history.find((row) => row.recordedAt < current.recordedAt);
@@ -209,6 +215,55 @@ export class WebfleetTelemetryService {
     };
   }
 
+  /** GPS shows the truck stood at the stop for 3 min or more and has left it, but no arrival was recorded: record it from that stay. */
+  private async retroactiveArrival(vehicleId: string, tourId: string, stop: ZoneStop, current: WebfleetPosition, now: Date): Promise<Date | null> {
+    if (!this.onAutoArrival) return null;
+    const leg = await this.db.leg.findFirst({ where: { tourId, toStopId: stop.id } });
+    const since = Math.max(current.recordedAt.getTime() - ARRIVAL_HISTORY_SECONDS * 1000, leg?.startedAt?.getTime() ?? 0);
+    const history = await this.db.vehicleTelemetry.findMany({
+      where: { vehicleId, provider: PROVIDER, recordedAt: { gte: new Date(since), lte: current.recordedAt } },
+      orderBy: { recordedAt: 'desc' }, take: ARRIVAL_HISTORY_ROWS
+    });
+    const stay = zoneStay(history, stop);
+    if (!stay || stay.longestStandstillSeconds < ARRIVAL_MIN_STANDSTILL_SECONDS) return null;
+    const reverted = await this.db.operationEvent.findFirst({ where: { stopId: stop.id, type: 'ARRIVAL_REVERTED' }, orderBy: { createdAt: 'desc' } });
+    if (reverted && reverted.createdAt >= stay.enteredAt) return null;
+    try {
+      const result = await this.onAutoArrival({ stopId: stop.id, arrivedAt: stay.enteredAt, now,
+        meta: { enteredAt: stay.enteredAt.toISOString(), leftZoneAfter: stay.lastInsideAt.toISOString(), standstillSeconds: Math.round(stay.longestStandstillSeconds), retroactive: true } });
+      return isRecord(result) && result.applied === false ? null : stay.enteredAt;
+    } catch { return null; }
+  }
+
+  /**
+   * The truck stands at the first stop of its next tour while the current tour still waits for its last event.
+   * Arrival can only follow that event, so the dispatcher is told instead of the system staying silent.
+   */
+  private async warnPreviousTourOpen(vehicleId: string, tour: { id: string; orderNumber: string }, openStop: ZoneStop, current: WebfleetPosition, observedAt: Date) {
+    const next = await this.db.tour.findFirst({
+      where: { vehicleId, status: 'QUEUED' }, orderBy: [{ queueIndex: 'asc' }, { createdAt: 'asc' }],
+      include: { stops: { orderBy: { sequence: 'asc' }, take: 1 }, vehicle: true }
+    });
+    const first = next?.stops[0];
+    if (!next || !first) return;
+    if (distanceMeters(current.latitude, current.longitude, first.latitude, first.longitude) > (first.arrivalRadiusMeters ?? DEFAULT_ARRIVAL_RADIUS_METERS)) return;
+    const history = await this.db.vehicleTelemetry.findMany({
+      where: { vehicleId, provider: PROVIDER, recordedAt: { gte: new Date(observedAt.getTime() - 3600_000), lte: current.recordedAt } },
+      orderBy: { recordedAt: 'desc' }, take: 120
+    });
+    const stay = zoneStay(history, first);
+    if (!stay || stay.longestStandstillSeconds < ARRIVAL_MIN_STANDSTILL_SECONDS) return;
+    const done = openStop.type === 'LOAD' ? 'BELADEN' : 'ENTLADEN';
+    const where = first.city || first.address;
+    await this.db.notification.upsert({
+      where: { dedupKey: `previous-tour-open:${first.id}` },
+      create: { dedupKey: `previous-tour-open:${first.id}`, vehicleId, stopId: openStop.id, type: 'PREVIOUS_TOUR_OPEN',
+        message: `LKW ${next.vehicle.vehicleNumber} по GPS стоит ${first.type === 'LOAD' ? 'на загрузке' : 'на выгрузке'} ${where} (тур ${next.orderNumber}), но тур ${tour.orderNumber} не закрыт: нет ${done} в ${openStop.city || openStop.address}. После ${done} прибытие поставится по GPS.`,
+        payloadJson: JSON.stringify({ openStopId: openStop.id, nextStopId: first.id, enteredAt: stay.enteredAt.toISOString(), source: 'WEBFLEET_GEOFENCE' }) },
+      update: {}
+    });
+  }
+
   /**
    * Geofence arrival from real GPS only: fresh position inside the stop zone and standing still
    * for ARRIVAL_MIN_STANDSTILL_SECONDS. The arrival time is when the truck entered the zone.
@@ -228,11 +283,14 @@ export class WebfleetTelemetryService {
     if (!tour || !stop || stop.arrivedAt) return none;
     const radiusMeters = stop.arrivalRadiusMeters ?? DEFAULT_ARRIVAL_RADIUS_METERS;
     const distance = distanceMeters(current.latitude, current.longitude, stop.latitude, stop.longitude);
-    if (distance > radiusMeters) return none;
+    if (distance > radiusMeters) {
+      await this.warnPreviousTourOpen(vehicleId, tour, stop, current, observedAt);
+      return none;
+    }
 
     const history = await this.db.vehicleTelemetry.findMany({
       where: { vehicleId, provider: PROVIDER, recordedAt: { gte: new Date(current.recordedAt.getTime() - ARRIVAL_HISTORY_SECONDS * 1000), lte: current.recordedAt } },
-      orderBy: { recordedAt: 'desc' }
+      orderBy: { recordedAt: 'desc' }, take: ARRIVAL_HISTORY_ROWS
     });
     let enteredAt: Date | null = null;
     let stoppedSince: Date | null = null;
@@ -277,6 +335,31 @@ export class WebfleetTelemetryService {
     });
     return { suggested: true, confirmed: false };
   }
+}
+
+type ZoneStop = { id: string; latitude: number; longitude: number; arrivalRadiusMeters: number | null; type: string; city: string | null; address: string };
+type TelemetryRow = { latitude: number; longitude: number; speedKmh: number | null; recordedAt: Date; rawJson: string | null };
+
+/** Newest contiguous stay inside the zone in a newest-first history: when it began and the longest standstill in it. */
+export function zoneStay(history: TelemetryRow[], stop: ZoneStop) {
+  const radius = stop.arrivalRadiusMeters ?? DEFAULT_ARRIVAL_RADIUS_METERS;
+  const inside = (row: { latitude: number; longitude: number }) => distanceMeters(row.latitude, row.longitude, stop.latitude, stop.longitude) <= radius;
+  const start = history.findIndex(inside);
+  if (start === -1) return null;
+  let enteredAt = history[start].recordedAt;
+  let longestStandstillSeconds = 0;
+  let runEnd: Date | null = null;
+  for (let index = start; index < history.length && inside(history[index]); index += 1) {
+    const row = history[index];
+    enteredAt = row.recordedAt;
+    const payload = row.rawJson ? safeJson(row.rawJson) : null;
+    const standstill = isRecord(payload) && typeof payload.standstill === 'boolean' ? payload.standstill : null;
+    if (isStopped(standstill, row.speedKmh)) {
+      if (!runEnd) runEnd = row.recordedAt;
+      longestStandstillSeconds = Math.max(longestStandstillSeconds, (runEnd.getTime() - row.recordedAt.getTime()) / 1000);
+    } else runEnd = null;
+  }
+  return { enteredAt, lastInsideAt: history[start].recordedAt, longestStandstillSeconds };
 }
 
 export class WebfleetSyncService {

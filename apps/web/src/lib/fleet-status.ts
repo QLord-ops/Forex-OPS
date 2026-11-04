@@ -22,7 +22,9 @@ export function getAttention(row: DashboardVehicle, now = Date.now()): { rank: n
   if (dwellSeverity === 'CRITICAL') return { rank: 0, tone: 'dwell', label: 'Долгая стоянка', reason: `На точке ${formatDurationMinutes(dwellMinutes)}` }
   if (row.risk === 'RED' || (row.delayMinutes ?? 0) > 0) return { rank: 1, tone: 'critical', label: 'Критично', reason: `Опоздание ${formatDelay(row.delayMinutes)}` }
   if (dwellSeverity === 'WARNING') return { rank: 2, tone: 'action', label: 'Стоянка', reason: `На точке ${formatDurationMinutes(dwellMinutes)}` }
-  if (row.risk === 'ORANGE' || row.statusText === 'ARRIVED') return { rank: 2, tone: 'action', label: 'Нужно действие', reason: row.statusText === 'ARRIVED' ? 'Ожидается подтверждение операции на точке' : 'Высокий риск нарушения срока' }
+  // Only a recorded arrival (GPS, or the dispatcher for a truck without Webfleet) asks for BELADEN/ENTLADEN; the timer never does.
+  const waitingForEvent = Boolean(row.currentAction && (row.currentAction.type === 'MARK_LOADED' || row.currentAction.type === 'MARK_UNLOADED'))
+  if (row.risk === 'ORANGE' || waitingForEvent) return { rank: 2, tone: 'action', label: 'Нужно действие', reason: waitingForEvent ? `Ожидается отметка ${row.currentAction?.type === 'MARK_LOADED' ? 'загрузки' : 'выгрузки'} на точке` : 'Высокий риск нарушения срока' }
   if (terminToday(row, now)) return { rank: 3, tone: 'watch', label: 'Termin сегодня', reason: terminOf(row.tour)?.label ?? 'Termin сегодня' }
   if (row.risk === 'YELLOW') return { rank: 4, tone: 'watch', label: 'Контроль', reason: 'Небольшой запас до термина' }
   if (row.statusText === 'MOVING') return { rank: 5, tone: 'moving', label: 'В пути', reason: 'Движется по расчётному маршруту' }
@@ -40,18 +42,23 @@ export function terminToday(row: DashboardVehicle, now = Date.now()) {
   return Boolean(termin && berlinDay(new Date(termin.at).getTime()) === berlinDay(now))
 }
 
-const AT_STOP = ['ARRIVED', 'WAITING', 'MANUAL_STOP']
+/** At the stop only when an arrival is recorded, the truck is stopped by hand, or (without Webfleet) the dispatcher can confirm it. */
+function atStop(row: DashboardVehicle, now: number) {
+  if (row.statusText === 'MANUAL_STOP' || getDwellMinutes(row, now) > 0) return true
+  return row.statusText === 'ARRIVED' && Boolean(row.currentAction?.withoutGpsArrival)
+}
 
 /** The word and colour of the second line of a list row, the map pill and the bottom panel. */
 export function vehicleStatus(row: DashboardVehicle, now = Date.now()): { label: string; tone: StatusTone } {
   if (row.issues?.some((issue) => issue.kind === 'BREAKDOWN')) return { label: 'Ремонт', tone: 'late' }
   if (row.risk === 'RED' || (row.delayMinutes ?? 0) > 0) return { label: 'Опоздание', tone: 'late' }
   const stop = row.currentStop ?? (row.tour ? currentStopOf(row.tour) : null)
-  if (AT_STOP.includes(row.statusText) || getDwellMinutes(row, now) > 0) {
+  if (atStop(row, now)) {
     if (row.statusText === 'MANUAL_STOP') return { label: 'Стоянка', tone: 'stop' }
     return { label: stop?.type === 'UNLOAD' ? 'Выгрузка' : stop?.type === 'LOAD' ? 'Загрузка' : 'На точке', tone: 'stop' }
   }
-  if (row.statusText === 'MOVING') return { label: 'В пути', tone: 'ok' }
+  if (row.statusText === 'WAITING') return { label: 'Пауза', tone: 'ok' }
+  if (row.statusText === 'MOVING' || row.predictedArrival || row.statusText === 'ARRIVED') return { label: 'В пути', tone: 'ok' }
   if (row.tour && !['IDLE', 'NO_ACTIVE_ROUTE'].includes(row.statusText)) return { label: 'Запланирован', tone: 'plan' }
   return { label: 'Без тура', tone: 'idle' }
 }
@@ -101,7 +108,7 @@ export function matchesFleetFilter(row: DashboardVehicle, filter: FleetFilter, n
   if (filter === 'DECIDE') return needsDecision(row, notified, now)
   if (filter === 'MOVING') return row.statusText === 'MOVING'
   if (filter === 'TERMIN') return Boolean(terminOf(row.tour))
-  if (filter === 'AT_STOP') return AT_STOP.includes(row.statusText) || getDwellMinutes(row, now) > 0
+  if (filter === 'AT_STOP') return atStop(row, now)
   return !row.tour || ['IDLE', 'NO_ACTIVE_ROUTE'].includes(row.statusText)
 }
 
