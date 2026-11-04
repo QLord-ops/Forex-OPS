@@ -1136,9 +1136,11 @@ export async function buildApp(options: BuildAppOptions = {}) {
       const scheduledStop = currentStop ? etaService.calculateVehicleSchedule(vehicle.tours, generatedAt).find((stop) => stop.stopId === currentStop.id) : null;
       // With fresh GPS the ETA is measured from the truck; the saved plan only fills in when there is no GPS.
       const gpsEta = position.etaSource === "GPS";
-      const displayedEta = position.eta ?? scheduledStop?.predictedEta?.toISOString() ?? null;
-      const displayedDelayMinutes = gpsEta ? position.delayMinutes : scheduledStop?.predictedDelayMinutes ?? position.delayMinutes;
-      const riskColor = gpsEta ? calculateRiskColor(displayedEta ? new Date(displayedEta) : null, currentStop?.appointmentAt)
+      // At the stop the truck is no longer late: the arrival settled it (TERMIN_MET says on time or how late).
+      const arrived = Boolean(currentStop?.arrivedAt);
+      const displayedEta = arrived ? currentStop!.arrivedAt!.toISOString() : position.eta ?? scheduledStop?.predictedEta?.toISOString() ?? null;
+      const displayedDelayMinutes = arrived ? 0 : gpsEta ? position.delayMinutes : scheduledStop?.predictedDelayMinutes ?? position.delayMinutes;
+      const riskColor = arrived ? "GREEN" : gpsEta ? calculateRiskColor(displayedEta ? new Date(displayedEta) : null, currentStop?.appointmentAt)
         : scheduledStop?.riskColor ?? calculateRiskColor(displayedEta ? new Date(displayedEta) : null, currentStop?.appointmentAt);
       const dwell = calculateDwellState(currentStop, generatedAt);
       const clockSnapshot = snapshotVehicleClock(vehicle, currentLeg ?? null, generatedAt).clockState;
