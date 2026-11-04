@@ -12,7 +12,7 @@ import { usePolling } from '../hooks/usePolling'
 import { usePopover } from '../hooks/usePopover'
 import { useVehiclePosition } from '../hooks/useVehiclePosition'
 import { api, type RouteOptions } from '../lib/api'
-import { compareVehicles, getAttention, matchesFleetFilter, positionSource, terminMargin, terminNeeded, vehiclePlace, vehicleStatus, type FleetFilter, type FleetSort } from '../lib/fleet-status'
+import { compareVehicles, getAttention, matchesFleetFilter, positionSource, restNote, terminMargin, terminNeeded, vehiclePlace, vehicleStatus, type FleetFilter, type FleetSort } from '../lib/fleet-status'
 import { getRoutePreview, setRoutePreview, subscribeRoutePreview } from '../lib/route-preview'
 import { etaText, routeProgress, type StopState } from '../lib/route-progress'
 import { currentStopOf, terminOf } from '../lib/tours'
@@ -301,6 +301,7 @@ function VehicleRow({ row, selected, open, pinned, owner, busy, onOpen, onRoute,
           <span className="vehicle-row-line"><span className={`status-dot status-dot-${status.tone}`} aria-hidden="true" /><span className={`vehicle-row-status status-text-${status.tone}`}>{status.label}</span>{place ? <span className="truncate">· {place}</span> : null}</span>
           <span className="vehicle-row-meta">
             {dwell ? <span>На точке {formatDurationMinutes(dwell)}</span> : null}
+            {row.restAtStop ? <span className="rest-at-stop">{restNote(row)}</span> : null}
             {termin ? <span className="vehicle-row-termin">{termin.label}</span> : terminNeeded(row) ? <span className="termin-needed">Termin нужен</span> : null}
             {!termin && plannedAt ? <span>план {formatDateTime(plannedAt)}</span> : null}
             {row.eta && status.tone !== 'stop' ? <span>ETA {formatTime(row.eta)}{margin !== null ? <> · <span className={margin < 0 ? 'timing-late' : 'timing-ok'} title={margin < 0 ? `опоздание ${formatDurationMinutes(-margin)}` : `запас ${formatDurationMinutes(margin)}`}>+{formatDurationMinutes(Math.abs(margin))}</span></> : null}</span> : null}
@@ -396,6 +397,7 @@ function VehiclePanel({ row, position, drawerOpen, onToggleDrawer, onOpen, onRou
         <strong>LKW {row.vehicle.vehicleNumber}</strong>
         <span className={`status-pill status-pill-${status.tone}`}><span className={`status-dot status-dot-${status.tone}`} aria-hidden="true" />{status.label}{speed}</span>
         <span className={`source-tag source-tag-${source.kind}`}>{source.kind === 'calculated' ? 'Расчётная позиция' : source.long}</span>
+        {row.restAtStop ? <span className="rest-at-stop">{restNote(row)}</span> : null}
       </div>
       <button type="button" className="vehicle-panel-tour route-stops-drawer-trigger" onClick={onToggleDrawer} aria-expanded={drawerOpen}>
         <span className="sr-only">Точки маршрута · {progress.stops.length}. </span>

@@ -1,4 +1,4 @@
-import { CalendarCheck, CalendarDays, LogOut, MapPinCheck, MessageSquareText, Route, TriangleAlert } from 'lucide-react'
+import { CalendarCheck, CalendarDays, LogOut, MapPinCheck, MessageSquareText, Moon, Route, TriangleAlert } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 
@@ -59,6 +59,12 @@ export function DecisionCard({ item, stop, onSelect, openLink = false }: { item:
     title = onTime ? `${vehicle ? `LKW ${vehicle}` : 'Машина'} прибыла вовремя · Termin выполнен` : `${vehicle ? `LKW ${vehicle}` : 'Машина'} прибыла с опозданием`
     detail = item.message
     actions = [{ label: 'Понятно', primary: true, run: () => void state.resolve(item, 'ack') }]
+  } else if (item.type === 'DAILY_REST_AT_STOP') {
+    tone = 'info'; Icon = Moon
+    const unload = (stop?.type ?? restStopType(item.payloadJson)) === 'UNLOAD'
+    title = `${vehicle ? `LKW ${vehicle}` : 'Машина'} на суточном отдыхе ${unload ? 'на выгрузке' : 'на загрузке'}`
+    detail = item.message
+    actions = [{ label: 'Понятно', primary: true, run: () => void state.resolve(item, 'ack') }]
   } else if (item.type === 'PREVIOUS_TOUR_OPEN') {
     tone = 'late'; Icon = TriangleAlert
     title = `${vehicle ? `LKW ${vehicle}` : 'Машина'} уже на следующем туре, прошлый не закрыт`
@@ -89,6 +95,10 @@ export function DecisionCard({ item, stop, onSelect, openLink = false }: { item:
       </div>
     </div>
   </article>
+}
+
+function restStopType(payloadJson?: string | null) {
+  try { return (JSON.parse(payloadJson ?? '{}') as { stopType?: string }).stopType ?? null } catch { return null }
 }
 
 /** Off the dashboard the oldest open question shows as a toast; on the dashboard it lives in «Требует решения». */

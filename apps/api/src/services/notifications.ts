@@ -28,7 +28,8 @@ export function calculateDwellState(stop: DwellStop | null | undefined, now = ne
 
 /** Durable notifications, not browser timers: missed arrivals survive app restarts. */
 export class NotificationService {
-  constructor(private readonly db: PrismaClient, private readonly tours: TourService) {}
+  constructor(private readonly db: PrismaClient, private readonly tours: TourService,
+    private readonly restingAt: (vehicleId: string, stopId: string) => boolean = () => false) {}
 
   async refresh(now = new Date()) {
     const vehicles = await this.db.vehicle.findMany({
@@ -37,7 +38,7 @@ export class NotificationService {
     });
     for (const vehicle of vehicles) {
       const stop = vehicle.tours[0]?.stops.find(item => !item.completedAt);
-      if (!stop) continue;
+      if (!stop || this.restingAt(vehicle.id, stop.id)) continue;
       // Arrival comes only from the GPS zone; a calculated position never raises an arrival prompt.
       const dwell = calculateDwellState(stop, now);
       if (dwell.dwellSeverity !== 'NONE') {

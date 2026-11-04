@@ -53,6 +53,14 @@ it('keeps existing unknown machine clocks preliminary and refuses undated except
   expect((await known.service.get(known.vehicle.id, start)).clockProposals).toEqual([]);
 });
 
+it('raises no «long stop» while the driver is on daily rest at the stop', async () => {
+  const f = await fixture('REST');
+  await f.service.confirmArrival(f.stop.id, at(122), at(125), { role: 'dispatcher' as const, sessionId: 'session-rest-test' });
+  const resting = new NotificationService(asAppDatabase(db), f.tours, (vehicleId, stopId) => vehicleId === f.vehicle.id && stopId === f.stop.id);
+  await resting.refresh(at(400));
+  expect(await db.notification.count({ where: { stopId: f.stop.id, type: 'LONG_DWELL' } })).toBe(0);
+});
+
 it('raises no arrival prompt from a calculated position and never records an arrival by itself', async () => {
   const f = await fixture('ARRIVAL');
   await f.notices.refresh(at(121));
