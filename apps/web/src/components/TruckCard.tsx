@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 
 import { usePolling } from '../hooks/usePolling'
 import { AssignmentBar } from './AssignmentBar'
+import { RouteEditor } from './RouteEditor'
 import { api } from '../lib/api'
 import { classNames, formatDateTime, formatDelay, shortAddress, statusLabel, stopTypeLabel } from '../lib/format'
 import { currentStopOf, followingTours, sortedStops, terminOf, tourCancellable } from '../lib/tours'
@@ -374,6 +375,9 @@ function CurrentTour({ tour, row, busy, onRemove }: { tour: Tour; row: Dashboard
           {stop.id === target?.id && !marking ? <button type="button" className="truck-card-mark-button" onClick={() => setMarking({ stopId: stop.id, time: localDateTimeNow(), busy: false, error: '' })} aria-label={`${stop.type === 'LOAD' ? 'BELADEN' : 'ENTLADEN'} ${shortAddress(stop)}`} title={stop.arrivedAt ? 'Записать событие на точке' : 'GPS не видел машину на точке: записать вручную'}><PackageCheck className="h-3.5 w-3.5" aria-hidden="true" />{stop.type === 'LOAD' ? 'BELADEN' : 'ENTLADEN'}</button> : null}
         </li>)}
       </ol>
+      {/* Future stops of a started tour can change; done stops and confirmed arrivals stay as recorded. */}
+      {tour.status === 'ACTIVE' || tour.status === 'QUEUED' ? <div className="truck-card-editor"><RouteEditor key={`${tour.id}-${tour.planVersion}`} tour={tour}
+        onChange={async () => { window.dispatchEvent(new CustomEvent('ops:data-changed')) }} /></div> : null}
     </Section> : null}
   </>
 }

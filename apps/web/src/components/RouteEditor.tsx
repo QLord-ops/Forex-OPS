@@ -37,7 +37,7 @@ export function RouteEditor({ tour, onChange }: { tour: Tour; onChange: () => Pr
     catch (e) { setError((e as Error).message); setPreview(null) } finally { setBusy(false) }
   }
   return <section id="route-editor" className="work-surface min-w-0 p-4">
-    <button className="secondary-button" disabled={busy} onClick={() => open ? setOpen(false) : void start()}>{open ? 'Закрыть редактирование' : 'Изменить маршрут'}</button>
+    <button className="secondary-button" disabled={busy} onClick={() => open ? setOpen(false) : void start()}>{open ? 'Закрыть редактирование' : 'Изменить тур'}</button>
     {error && <p role="alert" className="mt-2 text-sm text-red-700">{error}</p>}
     {open && <form className="mt-3 space-y-3" onSubmit={event => { event.preventDefault(); void calculate() }}>
       <p className="text-sm text-slate-600">Можно менять только будущие точки. Подтверждённые прибытия и завершённые точки сохраняются. Изменения вступят в силу после предварительного расчёта и подтверждения.</p>
