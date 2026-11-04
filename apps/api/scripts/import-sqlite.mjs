@@ -47,6 +47,7 @@ const modelOrder = [
   "routePreview",
   "vehicleIntegration",
   "pendingAppointment",
+  "addressRule",
   "vehicleTelemetry",
   "integrationSyncState",
   "integrationReceipt",
