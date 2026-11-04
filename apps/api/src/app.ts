@@ -924,30 +924,38 @@ export async function buildApp(options: BuildAppOptions = {}) {
    * Arrival comes from the GPS zone. Without fresh GPS the dispatcher's BELADEN/ENTLADEN records it too;
    * with fresh GPS outside the zone the event waits for the truck.
    */
-  async function stopEventArrival(stopId: string) {
+  async function stopEventArrival(stopId: string, manual = false) {
     const stop = await prisma.stop.findUniqueOrThrow({ where: { id: stopId }, include: { tour: { select: { vehicleId: true } } } });
     if (stop.arrivedAt) return { arriveWithEvent: false };
     const gps = await webfleetTelemetry.latest(stop.tour.vehicleId);
-    if (gps && !gps.stale) {
+    // «Вручную»: GPS missed the stop (no poll, wrong zone), the dispatcher knows the truck was there. Recorded as such.
+    if (gps && !gps.stale && !manual) {
       const distance = distanceMeters(gps.latitude, gps.longitude, stop.latitude, stop.longitude);
       const radius = stop.arrivalRadiusMeters ?? DEFAULT_ARRIVAL_RADIUS_METERS;
       if (distance > radius) throw Object.assign(new Error(`По GPS машина ещё не в зоне точки (${(distance / 1000).toFixed(1)} км). Прибытие поставится само.`), { statusCode: 409 });
     }
-    return { arriveWithEvent: true };
+    return { arriveWithEvent: true, manual: manual && Boolean(gps && !gps.stale) };
   }
+  const stopEventBody = z.object({ timestamp: z.string().datetime().optional(), note: z.string().max(2000).optional(), manual: z.boolean().optional() });
+  const manualNote = (note: string | undefined, arrival: { manual?: boolean }) =>
+    arrival.manual ? [note, "Отмечено диспетчером вручную: прибытие по GPS не зафиксировано"].filter(Boolean).join(" · ") : note;
 
   app.post("/stops/:id/loaded", async (request) => {
     const { id } = z.object({ id: z.string() }).parse(request.params);
-    const body = z.object({ timestamp: z.string().datetime().optional(), note: z.string().optional() }).parse(request.body ?? {});
-    const tour = await tourService.recordLoaded(id, body.timestamp ? new Date(body.timestamp) : new Date(), body.note, auditActor(request), await stopEventArrival(id));
+    const body = stopEventBody.parse(request.body ?? {});
+    const arrival = await stopEventArrival(id, body.manual);
+    const tour = await tourService.recordLoaded(id, body.timestamp ? new Date(body.timestamp) : new Date(), manualNote(body.note, arrival), auditActor(request), arrival);
+    if (arrival.manual) await audit(request, 'STOP_EVENT_WITHOUT_GPS', 'Stop', id, { vehicleId: tour.vehicleId, tourId: tour.id, stopId: id, metadata: { event: 'LOADED' } });
     await refreshAlertsForVehicle(tour.vehicleId);
     return enrichTour(tour);
   });
 
   app.post("/stops/:id/unloaded", async (request) => {
     const { id } = z.object({ id: z.string() }).parse(request.params);
-    const body = z.object({ timestamp: z.string().datetime().optional(), note: z.string().optional() }).parse(request.body ?? {});
-    const tour = await tourService.recordUnloaded(id, body.timestamp ? new Date(body.timestamp) : new Date(), body.note, auditActor(request), await stopEventArrival(id));
+    const body = stopEventBody.parse(request.body ?? {});
+    const arrival = await stopEventArrival(id, body.manual);
+    const tour = await tourService.recordUnloaded(id, body.timestamp ? new Date(body.timestamp) : new Date(), manualNote(body.note, arrival), auditActor(request), arrival);
+    if (arrival.manual) await audit(request, 'STOP_EVENT_WITHOUT_GPS', 'Stop', id, { vehicleId: tour.vehicleId, tourId: tour.id, stopId: id, metadata: { event: 'UNLOADED' } });
     await refreshAlertsForVehicle(tour.vehicleId);
     return enrichTour(tour);
   });
@@ -1156,6 +1164,16 @@ export async function buildApp(options: BuildAppOptions = {}) {
                 stopId: currentStop.id,
                 withoutGpsArrival: true
               }
+            // GPS is fresh but never saw the truck at the stop (no poll at that moment, wrong zone): the dispatcher
+            // may still record BELADEN/ENTLADEN by hand; it is marked «вручную» and is not an alarm.
+            : currentStop && !breakdown
+              ? {
+                  type: currentStop.type === "LOAD" ? "MARK_LOADED" : "MARK_UNLOADED",
+                  label: currentStop.type === "LOAD" ? "BELADEN" : "ENTLADEN",
+                  stopId: currentStop.id,
+                  withoutGpsArrival: true,
+                  manual: true
+                }
             : position.status === "MOVING"
               ? { type: "MANUAL_STOP", label: "Стоп", stopId: null }
               : null;

@@ -109,6 +109,11 @@ test('в проверке распознавания можно добавить
   // The Seifert address is missing in the Auftrag: the dispatcher types it once.
   await page.locator('.quick-order-review-stop').nth(2).getByLabel('Полный адрес').fill('Musterweg 5, 28197 Bremen')
   await page.getByRole('button', { name: 'Выгрузка', exact: true }).click()
+  // A wrong stop can be removed; the minimum of two stops is checked on confirm.
+  await page.getByRole('button', { name: 'Загрузка', exact: true }).click()
+  // A new loading is placed after the last loading, so it is stop 2.
+  await page.getByRole('button', { name: 'Удалить точку 2' }).click()
+  await expect(page.locator('.quick-order-review-stop')).toHaveCount(4)
   const fourth = page.locator('.quick-order-review-stop').nth(3)
   await expect(fourth.getByLabel('Тип точки 4')).toHaveValue('UNLOAD')
   await fourth.getByLabel('Фирма').fill('BLG Industrielogistik')
@@ -119,4 +124,60 @@ test('в проверке распознавания можно добавить
   // Only the corrected place is remembered; the planned 06:00 travels as a plan, not a Termin.
   expect(created!.stops!.map((stop) => stop.learnLabel ?? null)).toEqual([null, null, 'Seifert Bremen', null])
   expect(created!.stops![1].plannedAt).toBe('2026-11-05T05:00:00.000Z')
+})
+
+test('«Открыть» в нижней панели показывает карточку; BELADEN вручную уходит с пометкой manual', async ({ page }) => {
+  let loaded: unknown = null
+  await dashboard(page, async (route, path) => {
+    if (path === '/dashboard') {
+      await json(route, { vehicles: [{ vehicle: truck('v1', '124'), statusText: 'MOVING', etaSource: 'GPS', operationVersion: 2,
+        tour: { id: 'tour-1', vehicleId: 'v1', orderNumber: '20565574', status: 'ACTIVE', stops },
+        currentStop: stops[0], currentAction: { type: 'MARK_LOADED', label: 'BELADEN', stopId: 's1', withoutGpsArrival: true, manual: true },
+        telemetry: { source: 'WEBFLEET', stale: false, ageSeconds: 60, speedKmh: 83, standstill: false, address: 'A4, Chemnitz' },
+        mapPosition: { coordinate: [12.9, 50.83], source: 'WEBFLEET', stale: false, courseDeg: 90, standstill: false } }] }); return true
+    }
+    if (path === '/stops/s1/loaded') { loaded = route.request().postDataJSON(); await json(route, { id: 'tour-1', vehicleId: 'v1', stops: [] }); return true }
+    if (path.endsWith('/card')) { await json(route, { vehicleId: 'v1', vehicleNumber: '124', licensePlate: null, currentTrailerPlate: null, generatedAt: new Date().toISOString(), webfleet: null, current: null, coupling: null, driver: null, events: null, trips: null, maintenance: null }); return true }
+    return false
+  })
+  await page.goto('/?vehicleId=v1')
+  await page.getByRole('button', { name: 'Открыть', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: /124/ })).toBeVisible()
+  await page.getByRole('button', { name: 'Закрыть карточку' }).click()
+
+  // GPS never saw the truck at the stop, but it loaded: the dispatcher records BELADEN by hand.
+  const row = page.locator('.vehicle-card').filter({ hasText: 'LKW 124' })
+  await expect(row).not.toHaveClass(/vehicle-card-action/)
+  await row.getByRole('button', { name: 'BELADEN' }).click()
+  const popover = page.getByRole('dialog', { name: /BELADEN LKW 124/ })
+  await expect(popover).toContainText('GPS Webfleet не видел машину')
+  await popover.getByRole('button', { name: 'Подтвердить вручную' }).click()
+  await expect.poll(() => loaded).toMatchObject({ manual: true })
+})
+
+test('в карточке «Тур» у текущей точки есть маленькая кнопка BELADEN, которая записывает событие вручную', async ({ page }) => {
+  let loaded: unknown = null
+  await dashboard(page, async (route, path) => {
+    if (path === '/dashboard') {
+      await json(route, { vehicles: [{ vehicle: truck('v1', '124'), statusText: 'MOVING', etaSource: 'GPS', operationVersion: 2,
+        tour: { id: 'tour-1', vehicleId: 'v1', orderNumber: '20565574', status: 'ACTIVE', planVersion: 1, stops },
+        telemetry: { source: 'WEBFLEET', stale: false, ageSeconds: 60, speedKmh: 83, standstill: false },
+        mapPosition: { coordinate: [12.9, 50.83], source: 'WEBFLEET', stale: false, courseDeg: 90, standstill: false } }] }); return true
+    }
+    if (path === '/stops/s1/loaded') { loaded = route.request().postDataJSON(); await json(route, { id: 'tour-1', vehicleId: 'v1', stops: [] }); return true }
+    if (path === '/vehicles/v1/tours') { await json(route, []); return true }
+    if (path.endsWith('/card')) { await json(route, { vehicleId: 'v1', vehicleNumber: '124', licensePlate: null, currentTrailerPlate: null, generatedAt: new Date().toISOString(), webfleet: null, current: null, coupling: null, driver: null, events: null, trips: null, maintenance: null }); return true }
+    return false
+  })
+  await page.goto('/?vehicleId=v1&card=v1')
+  await page.evaluate(() => window.localStorage.setItem('ops-truck-card-tab', 'tour'))
+  await page.reload()
+  const card = page.getByRole('dialog', { name: /124/ })
+  await expect(card.getByRole('tab', { name: 'Тур' })).toHaveAttribute('aria-selected', 'true')
+  // Only the stop the truck is heading to gets the button; the later stops wait their turn.
+  await expect(card.getByRole('button', { name: /^BELADEN/ })).toHaveCount(1)
+  await card.getByRole('button', { name: 'BELADEN Hannover' }).click()
+  await expect(card).toContainText('Прибытия по GPS нет')
+  await card.getByRole('button', { name: 'Записать BELADEN' }).click()
+  await expect.poll(() => loaded).toMatchObject({ manual: true })
 })

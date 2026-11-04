@@ -30,3 +30,10 @@ it('has no manual arrival route any more: the arrival comes from the GPS zone', 
   expect((await app.inject({ method: 'POST', url: '/stops/s1/arrival', payload: {} })).statusCode).toBe(404);
   expect((await app.inject({ method: 'POST', url: '/stops/s1/not-arrived', payload: { latitude: 1, longitude: 1 } })).statusCode).toBe(404);
 });
+
+it('validates the manual flag of BELADEN/ENTLADEN before touching data', async () => {
+  const app = await buildApp({ auth: { disabled: true } });
+  apps.push(app);
+  expect((await app.inject({ method: 'POST', url: '/stops/s1/loaded', payload: { manual: 'yes' } })).statusCode).toBe(400);
+  expect((await app.inject({ method: 'POST', url: '/stops/s1/unloaded', payload: { timestamp: 'today', manual: true } })).statusCode).toBe(400);
+});

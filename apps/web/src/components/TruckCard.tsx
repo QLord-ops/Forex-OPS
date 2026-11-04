@@ -1,4 +1,4 @@
-import { Bell, ClipboardList, History, Loader2, Route, Trash2, Truck, UserRound, Wrench, X, type LucideIcon } from 'lucide-react'
+import { Bell, ClipboardList, History, Loader2, PackageCheck, Route, Trash2, Truck, UserRound, Wrench, X, type LucideIcon } from 'lucide-react'
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 
@@ -331,6 +331,19 @@ function TourTab({ vehicleId, row }: { vehicleId: string; row: DashboardVehicle 
 function CurrentTour({ tour, row, busy, onRemove }: { tour: Tour; row: DashboardVehicle; busy: boolean; onRemove: () => void }) {
   const stops = sortedStops(tour)
   const target = currentStopOf(tour)
+  const [marking, setMarking] = useState<{ stopId: string; time: string; busy: boolean; error: string } | null>(null)
+  // BELADEN/ENTLADEN from the card, also when GPS never saw the truck at the stop: marked «вручную» on the server.
+  async function markStop(stop: Stop) {
+    if (!marking || marking.stopId !== stop.id || !marking.time) return
+    setMarking({ ...marking, busy: true, error: '' })
+    try {
+      const timestamp = new Date(marking.time).toISOString()
+      if (stop.type === 'LOAD') await api.markLoaded(stop.id, timestamp, !stop.arrivedAt)
+      else await api.markUnloaded(stop.id, timestamp, !stop.arrivedAt)
+      setMarking(null)
+      window.dispatchEvent(new CustomEvent('ops:data-changed'))
+    } catch (cause) { setMarking({ ...marking, busy: false, error: cause instanceof Error ? cause.message : 'Не удалось записать событие' }) }
+  }
   const removable = tourCancellable(tour)
   const termin = terminOf(tour)
   return <>
@@ -350,11 +363,23 @@ function CurrentTour({ tour, row, busy, onRemove }: { tour: Tour; row: Dashboard
       <ol className="truck-card-stops">
         {stops.map((stop) => <li key={stop.id} className={classNames(stop.completedAt && 'truck-card-stop-done', stop.id === target?.id && 'truck-card-stop-current')}>
           <span className="truck-card-stop-seq">{stop.sequence}</span>
-          <span className="min-w-0"><strong>{stopTypeLabel(stop.type)} · {shortAddress(stop)}</strong><span className="truck-card-muted">{stopState(stop)}</span></span>
+          <span className="min-w-0"><strong>{stopTypeLabel(stop.type)} · {shortAddress(stop)}</strong><span className="truck-card-muted">{stopState(stop)}</span>
+            {stop.id === target?.id && marking?.stopId === stop.id ? <form className="truck-card-mark" onSubmit={(event) => { event.preventDefault(); void markStop(stop) }}>
+              <label className="truck-card-muted">Фактическое время<input className="field-input h-8" type="datetime-local" value={marking.time} required onChange={(event) => setMarking({ ...marking, time: event.target.value })} /></label>
+              {!stop.arrivedAt ? <span className="truck-card-muted">Прибытия по GPS нет: запишется вручную этим временем, с пометкой «без GPS».</span> : null}
+              {marking.error ? <span className="truck-card-alert" role="alert">{marking.error}</span> : null}
+              <span className="truck-card-mark-actions"><button type="button" className="secondary-button compact-button" onClick={() => setMarking(null)} disabled={marking.busy}>Отмена</button><button type="submit" className="primary-button compact-button" disabled={marking.busy}>{marking.busy ? 'Сохранение…' : `Записать ${stop.type === 'LOAD' ? 'BELADEN' : 'ENTLADEN'}`}</button></span>
+            </form> : null}
+          </span>
+          {stop.id === target?.id && !marking ? <button type="button" className="truck-card-mark-button" onClick={() => setMarking({ stopId: stop.id, time: localDateTimeNow(), busy: false, error: '' })} aria-label={`${stop.type === 'LOAD' ? 'BELADEN' : 'ENTLADEN'} ${shortAddress(stop)}`} title={stop.arrivedAt ? 'Записать событие на точке' : 'GPS не видел машину на точке: записать вручную'}><PackageCheck className="h-3.5 w-3.5" aria-hidden="true" />{stop.type === 'LOAD' ? 'BELADEN' : 'ENTLADEN'}</button> : null}
         </li>)}
       </ol>
     </Section> : null}
   </>
+}
+
+function localDateTimeNow(date = new Date()) {
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16)
 }
 
 function stopState(stop: Stop) {

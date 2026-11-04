@@ -377,3 +377,6 @@ button.decision-card-title:focus-visible { outline: 2px solid var(--focus); outl
 .rules-toggle { display: inline-flex; align-items: center; gap: 6px; }
 .rules-builtin summary { cursor: pointer; color: rgb(var(--tx-334155)); font-size: .875rem; }
 .rules-builtin p { margin-top: 6px; color: rgb(var(--tx-475569)); font-size: .8125rem; line-height: 1.5; }
+/* BELADEN/ENTLADEN by hand when GPS never saw the truck at the stop: quiet, not an alarm. */
+.vehicle-action-button-manual { border-color: rgb(var(--ln-dbe2ea)); background: rgb(var(--bg-ffffff)); color: rgb(var(--tx-475569)); }
+.vehicle-action-button-manual:hover { background: rgb(var(--bg-f8fafc)); }

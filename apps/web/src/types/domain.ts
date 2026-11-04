@@ -129,6 +129,8 @@ export interface DashboardVehicle {
     type: 'MARK_LOADED' | 'MARK_UNLOADED' | 'MANUAL_STOP' | 'RESUME'
     /** No GPS arrival yet: BELADEN/ENTLADEN records the arrival at the same moment. */
     withoutGpsArrival?: boolean
+    /** GPS is fresh but never saw the truck at the stop: the dispatcher records the event by hand, marked as such. */
+    manual?: boolean
     label: string
     stopId?: string | null
   } | null

@@ -166,8 +166,8 @@ export function DashboardPage() {
     try {
       const action = row.currentAction
       const timestamp = new Date(actionTime).toISOString()
-      if (action.type === 'MARK_LOADED' && action.stopId) await api.markLoaded(action.stopId, timestamp)
-      if (action.type === 'MARK_UNLOADED' && action.stopId) await api.markUnloaded(action.stopId, timestamp)
+      if (action.type === 'MARK_LOADED' && action.stopId) await api.markLoaded(action.stopId, timestamp, action.manual)
+      if (action.type === 'MARK_UNLOADED' && action.stopId) await api.markUnloaded(action.stopId, timestamp, action.manual)
       if (action.type === 'MANUAL_STOP') await api.manualStop(row.vehicle.id, row.operationVersion ?? 0)
       if (action.type === 'RESUME') await api.resumeVehicle(row.vehicle.id, row.operationVersion ?? 0)
       await refetch()
@@ -330,7 +330,7 @@ function VehicleActionButton({ row, busy, onClick }: { row: DashboardVehicle; bu
     : action.type === 'MARK_LOADED' || action.type === 'MARK_UNLOADED' ? PackageCheck
       : action.type === 'RESUME' ? PlayCircle : PauseCircle
   return (
-    <button type="button" className="icon-button vehicle-action-button" onClick={onClick} disabled={busy} aria-label={action.label} title={action.withoutGpsArrival ? `${action.label}: прибытия по GPS нет` : action.label}>
+    <button type="button" className={classNames('icon-button vehicle-action-button', action.manual && 'vehicle-action-button-manual')} onClick={onClick} disabled={busy} aria-label={action.label} title={action.manual ? `${action.label} вручную: GPS не видел машину на точке` : action.withoutGpsArrival ? `${action.label}: прибытия по GPS нет` : action.label}>
       <Icon className={classNames('h-4 w-4', busy && 'animate-spin')} aria-hidden="true" /><span>{action.label}</span>
     </button>
   )
@@ -351,12 +351,13 @@ function ActionPopover({ row, value, onChange, busy, error, onClose, onConfirm }
         </div>
         <button type="button" className="icon-button icon-button-compact" onClick={onClose} aria-label="Закрыть"><X className="h-3.5 w-3.5" /></button>
       </div>
-      {action.withoutGpsArrival ? <p className="mt-2 text-xs text-amber-800">Прибытие по GPS не зафиксировано: время прибытия будет равно времени {action.type === 'MARK_LOADED' ? 'загрузки' : 'выгрузки'}.</p> : null}
+      {action.manual ? <p className="mt-2 text-xs text-amber-800">GPS Webfleet не видел машину на этой точке. Отметка вручную запишет прибытие и {action.label} этим временем; в истории будет пометка «без GPS-прибытия».</p>
+        : action.withoutGpsArrival ? <p className="mt-2 text-xs text-amber-800">Прибытие по GPS не зафиксировано: время прибытия будет равно времени {action.type === 'MARK_LOADED' ? 'загрузки' : 'выгрузки'}.</p> : null}
       {needsTime ? <label className="mt-2 block text-xs font-medium text-slate-600">Фактическое время<input className="field-input mt-1 h-9" type="datetime-local" value={value} onChange={(event) => onChange(event.target.value)} /></label> : null}
       {error ? <p role="alert" className="mt-2 text-xs text-red-700">{error}</p> : null}
       <div className="mt-3 flex justify-end gap-2">
         <button type="button" className="secondary-button compact-button" onClick={onClose} disabled={busy}>Отмена</button>
-        <button type="button" className="primary-button compact-button" onClick={onConfirm} disabled={busy || (needsTime && !value)}>{busy ? 'Сохранение…' : 'Подтвердить'}</button>
+        <button type="button" className="primary-button compact-button" onClick={onConfirm} disabled={busy || (needsTime && !value)}>{busy ? 'Сохранение…' : action.manual ? 'Подтвердить вручную' : 'Подтвердить'}</button>
       </div>
     </div>
   )
