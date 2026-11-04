@@ -12,8 +12,6 @@ export interface TrafficIncident {
 }
 
 const SEVERITY: Record<TrafficLevel, number> = { SLOW: 1, JAM: 2, STANDSTILL: 3, CLOSED: 4 }
-/** Small slow-downs stay a colour on the line; only stretches that cost time get an icon. */
-export const MIN_INCIDENT_DELAY_SECONDS = 60
 const MAX_GAP_POINTS = 1
 
 function metersBetween(a: Coordinate, b: Coordinate) {
@@ -24,7 +22,7 @@ function metersBetween(a: Coordinate, b: Coordinate) {
   return 2 * 6_371_000 * Math.asin(Math.min(1, Math.sqrt(h)))
 }
 
-/** Joins neighbouring congested pieces into one jam and keeps those worth a dispatcher's attention. */
+/** Joins neighbouring congested pieces into one jam; every jam ahead gets an icon with what it costs (owner's decision 2026-11-04). */
 export function trafficIncidents(route: Coordinate[], segments: TrafficSegment[] | undefined, options: { startIndex?: number } = {}): TrafficIncident[] {
   if (route.length < 2 || !segments?.length) return []
   const cumulative = [0]
@@ -53,7 +51,6 @@ export function trafficIncidents(route: Coordinate[], segments: TrafficSegment[]
 
   return merged
     .filter((jam) => jam.to > startIndex)
-    .filter((jam) => jam.level === 'CLOSED' || jam.delaySeconds >= MIN_INCIDENT_DELAY_SECONDS)
     .map((jam) => {
       // A jam the truck is already in is reported from the truck onwards.
       const from = Math.max(jam.from, startIndex)
@@ -77,6 +74,7 @@ export function formatKm(meters: number) {
 }
 
 export function formatDelay(seconds: number) {
+  if (seconds > 0 && seconds < 60) return '<1 мин'
   const minutes = Math.round(seconds / 60)
   if (minutes < 60) return `+${minutes} мин`
   return `+${Math.floor(minutes / 60)} ч ${minutes % 60} мин`

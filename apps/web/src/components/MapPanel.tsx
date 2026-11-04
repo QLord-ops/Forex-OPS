@@ -359,14 +359,19 @@ export function MapPanel({
       if (!marker) {
         const element = document.createElement('button')
         element.type = 'button'
-        element.append(warningIcon())
+        const time = document.createElement('span')
+        time.className = 'traffic-incident-time'
+        element.append(warningIcon(), time)
         marker = new Marker({ element }).setLngLat(incident.coordinate).addTo(map)
         markers.set(incident.id, marker)
       }
       const element = marker.getElement()
       marker.setLngLat(incident.coordinate)
       setMarkerClass(element, `traffic-incident-marker traffic-incident-${incident.level.toLowerCase()}`)
-      const summary = `${INCIDENT_TITLES[incident.level]}${incident.delaySeconds >= 60 ? `, ${formatDelay(incident.delaySeconds)}` : ''}`
+      const summary = `${INCIDENT_TITLES[incident.level]}${incident.delaySeconds > 0 ? `, ${formatDelay(incident.delaySeconds)}` : ''}`
+      // The time a jam costs is written next to its icon, so the map reads without a click.
+      const time = element.querySelector<HTMLElement>('.traffic-incident-time')
+      if (time) time.textContent = incident.level === 'CLOSED' ? 'перекрыто' : incident.delaySeconds > 0 ? formatDelay(incident.delaySeconds) : ''
       element.title = summary
       element.setAttribute('aria-label', `${summary}. Подробнее о пробке`)
       element.onclick = (event) => { event.stopPropagation(); openPopup(incident, element, event.detail === 0) }
