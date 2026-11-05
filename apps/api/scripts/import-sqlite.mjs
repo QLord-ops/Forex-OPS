@@ -57,6 +57,9 @@ const modelOrder = [
   "assistantUsage",
   "vehicleIssue",
   "auditLog",
+  // Rows reference their list and (optionally) the truck.
+  "dailyStatusReport",
+  "dailyStatusRow",
 ];
 
 async function readAll(client) {
@@ -111,6 +114,11 @@ function assertRelations(data) {
     for (const row of data[model]) {
       requireId(vehicleIds.has(row.vehicleId), `${model} ${row.id} has missing vehicle ${row.vehicleId}`);
     }
+  }
+  const reportIds = ids("dailyStatusReport");
+  for (const row of data.dailyStatusRow) {
+    requireId(reportIds.has(row.reportId), `DailyStatusRow ${row.id} has missing report ${row.reportId}`);
+    if (row.vehicleId) requireId(vehicleIds.has(row.vehicleId), `DailyStatusRow ${row.id} has missing vehicle ${row.vehicleId}`);
   }
   for (const model of ["assistantMessage", "assistantProposal"]) {
     for (const row of data[model]) {

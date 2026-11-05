@@ -25,6 +25,11 @@ CREATE TABLE "Vehicle" (
     "truckProfile" TEXT,
     "assignedDispatcherId" TEXT,
     "assignedAt" DATETIME,
+    "line" TEXT,
+    "statusGroup" TEXT,
+    "servicePhone" TEXT,
+    "aSchild" BOOLEAN NOT NULL DEFAULT false,
+    "appSped" BOOLEAN NOT NULL DEFAULT false,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" DATETIME NOT NULL,
     CONSTRAINT "Vehicle_assignedDispatcherId_fkey" FOREIGN KEY ("assignedDispatcherId") REFERENCES "Dispatcher" ("id") ON DELETE SET NULL ON UPDATE CASCADE
@@ -312,3 +317,55 @@ CREATE TABLE "AddressRule" (
     "updatedAt" DATETIME NOT NULL
 );
 CREATE UNIQUE INDEX "AddressRule_pattern_key" ON "AddressRule"("pattern");
+CREATE INDEX "Vehicle_line_statusGroup_idx" ON "Vehicle"("line", "statusGroup");
+-- 07:00 status list per customer line and Berlin day.
+CREATE TABLE "DailyStatusReport" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "line" TEXT NOT NULL,
+    "date" TEXT NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'GENERATING',
+    "preliminary" BOOLEAN NOT NULL DEFAULT false,
+    "generatedAt" DATETIME,
+    "generatedByRole" TEXT NOT NULL,
+    "generatedByDispatcherId" TEXT,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL
+);
+CREATE UNIQUE INDEX "DailyStatusReport_line_date_key" ON "DailyStatusReport"("line", "date");
+CREATE TABLE "DailyStatusRow" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "reportId" TEXT NOT NULL,
+    "vehicleId" TEXT,
+    "vehicleNumber" TEXT NOT NULL,
+    "statusGroup" TEXT,
+    "sortIndex" INTEGER NOT NULL,
+    "rule" TEXT NOT NULL,
+    "ort" TEXT,
+    "ortSource" TEXT,
+    "startAt" DATETIME,
+    "startKind" TEXT NOT NULL,
+    "ziel" TEXT,
+    "ankunftAt" DATETIME,
+    "ankunftKind" TEXT NOT NULL,
+    "bemerkungAuto" TEXT,
+    "bemerkung" TEXT,
+    "overridesJson" TEXT,
+    "weNortheim" TEXT,
+    "trailer" TEXT,
+    "trailerSource" TEXT,
+    "servicePhone" TEXT,
+    "aSchild" BOOLEAN NOT NULL DEFAULT false,
+    "appSped" BOOLEAN NOT NULL DEFAULT false,
+    "tourId" TEXT,
+    "stopId" TEXT,
+    "detailsJson" TEXT,
+    "version" INTEGER NOT NULL DEFAULT 0,
+    "editedAt" DATETIME,
+    "editedByDispatcherId" TEXT,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL,
+    CONSTRAINT "DailyStatusRow_reportId_fkey" FOREIGN KEY ("reportId") REFERENCES "DailyStatusReport" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT "DailyStatusRow_vehicleId_fkey" FOREIGN KEY ("vehicleId") REFERENCES "Vehicle" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+);
+CREATE UNIQUE INDEX "DailyStatusRow_reportId_vehicleId_key" ON "DailyStatusRow"("reportId", "vehicleId");
+CREATE INDEX "DailyStatusRow_reportId_sortIndex_idx" ON "DailyStatusRow"("reportId", "sortIndex");
