@@ -4,6 +4,7 @@ import { TourService, TourPlanConflictError, snapshotVehicleClock, makePersisted
 import { NotificationService } from './notifications.js';
 import { TrafficRoutingService, type TrafficRefreshSource, type TrafficRouteResult, type RouteAlternativeProposal, type TruckRouteProfile } from './traffic-routing.js';
 import { calculateSimulatedDuration, parseGeometry, splitGeometryAtProgress } from './simulation.js';
+import { cleanTravelled } from './travelled-path.js';
 import { OFF_ROUTE_METERS } from './route-projection.js';
 
 type StoredRouteOption = { id: string; route: TrafficRouteResult };
@@ -11,7 +12,7 @@ type TrafficDetails = {
   routeOptions?: { createdAt: string; options: StoredRouteOption[] };
   checkedAt?: string; attemptedAt?: string; providerStatus?: string; warning?: string;
   activeRoute?: TrafficRouteResult; proposals?: RouteAlternativeProposal[];
-  travelledGeometry?: Coordinate[]; refreshIntervalSeconds?: number; reason?: string;
+  travelledGeometry?: Coordinate[]; travelledStitches?: number[]; refreshIntervalSeconds?: number; reason?: string;
 };
 
 export function trafficRefreshInterval(remainingQuota: number, movingVehicles: number, now: Date): number {
@@ -183,8 +184,13 @@ export class TrafficOperationsService {
     if (!leg || leg.toStop.arrivedAt) throw new TourPlanConflictError('Маршрут больше не находится в движении.');
     const snapshot = snapshotVehicleClock(vehicle, leg, now);
     // With GPS the driven part is cut where the truck really is; the timer split is only for trucks without Webfleet.
-    details.travelledGeometry = travelled ?? [...(context.details.travelledGeometry ?? []),
-      ...splitGeometryAtProgress(parseGeometry(leg.routeGeometry), snapshot.progress).travelledGeometry];
+    // Each stitch is remembered, so the map never joins two pieces with a straight line and drops what was not driven.
+    const legGeometry = parseGeometry(leg.routeGeometry);
+    const before = cleanTravelled(context.details.travelledGeometry ?? [], legGeometry[0] ?? null, context.details.travelledStitches);
+    const current = travelled && travelled.length >= before.points.length ? travelled.slice(before.points.length)
+      : splitGeometryAtProgress(legGeometry, snapshot.progress).travelledGeometry;
+    details.travelledGeometry = [...before.points, ...current];
+    details.travelledStitches = before.points.length ? [...before.starts, before.points.length] : [];
     const duration = calculateSimulatedDuration(route.distanceMeters, route.durationSeconds, vehicle.maxSpeedKmh);
     await this.db.$transaction(async tx => {
       const locked = await tx.vehicle.updateMany({ where: { id: vehicle.id, operationVersion: vehicle.operationVersion },

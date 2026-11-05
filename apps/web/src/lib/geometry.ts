@@ -38,6 +38,19 @@ export function stopCoordinates(stops?: Array<{ longitude: number; latitude: num
   return stops?.map((stop) => [stop.longitude, stop.latitude] as Coordinate).filter(isCoordinate) ?? []
 }
 
+/**
+ * A route drawn in pieces: at each break index a new piece starts, so two stretches that do not meet
+ * (where the truck left the old plan) are not joined by a straight line across the map.
+ */
+export function toBrokenLine(geometry?: RouteGeometry | null, breaks?: number[] | null) {
+  const points = geometryToCoordinates(geometry)
+  const cuts = [...new Set((breaks ?? []).filter((index) => Number.isInteger(index) && index > 0 && index < points.length))].sort((a, b) => a - b)
+  if (!cuts.length) return toLineString(points)
+  const bounds = [0, ...cuts, points.length]
+  const lines = bounds.slice(0, -1).map((from, index) => points.slice(from, bounds[index + 1])).filter((line) => line.length >= 2)
+  return { type: 'Feature' as const, properties: {}, geometry: { type: 'MultiLineString' as const, coordinates: lines } }
+}
+
 export function boundsFor(coordinates: Coordinate[]) {
   if (!coordinates.length) return null
 

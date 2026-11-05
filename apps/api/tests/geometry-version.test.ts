@@ -89,3 +89,25 @@ it("measures distance and ETA from fresh GPS and never marks the truck arrived b
   const stale = await service.getCurrentPosition(vehicle.id, new Date(), { latitude: 53.07, longitude: 8.8, fresh: false });
   expect(stale.etaSource).toBe("CALCULATED");
 });
+
+it("sends the driven part without a straight line between stitched pieces and without the stretch the truck did not drive", async () => {
+  const service = new TourService(asAppDatabase(db), new MockRoutingProvider());
+  const vehicle = await db.vehicle.create({ data: { vehicleNumber: "GEO-STITCH" } });
+  await service.createTour({ vehicleId: vehicle.id, orderNumber: "GEO-S", stops: [
+    { sequence: 1, type: "LOAD", address: "Recklinghausen", latitude: 51.6, longitude: 7.2 },
+    { sequence: 2, type: "UNLOAD", address: "Erfurt", latitude: 50.98, longitude: 11.03 }
+  ] });
+  const leg = await db.leg.findFirstOrThrow({ where: { tour: { vehicleId: vehicle.id } } });
+  const steps = (from: [number, number], to: [number, number], count: number) =>
+    Array.from({ length: count + 1 }, (_, index) => [from[0] + (to[0] - from[0]) * index / count, from[1] + (to[1] - from[1]) * index / count]);
+  const west = steps([7.2, 51.6], [7.7, 51.53], 40);
+  const spur = steps([9.48, 51.3], [9.9, 51.22], 40);
+  const line = [{ latitude: 51.12, longitude: 9.52 }, { latitude: 51.0, longitude: 10.3 }, { latitude: 50.98, longitude: 11.03 }];
+  await db.leg.update({ where: { id: leg.id }, data: { status: "ACTIVE", startedAt: new Date(Date.now() - 5 * 60_000), routeGeometry: JSON.stringify(line),
+    routeDetails: JSON.stringify({ travelledGeometry: [...west, ...spur], activeRoute: { roadSections: [{ start: 0, end: 2, road: "A4" }] } }) } });
+  const position = await service.getCurrentPosition(vehicle.id);
+  const prefixLength = position.routeGeometry.length - line.length;
+  expect(position.routeBreaks).toEqual([west.length, prefixLength]);
+  expect(position.routeGeometry.slice(0, prefixLength).every(([longitude]) => longitude < 9.65)).toBe(true);
+  expect(position.roadSegments).toEqual([{ from: prefixLength, to: prefixLength + 2, road: "A4" }]);
+});

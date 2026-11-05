@@ -19,6 +19,7 @@ import {
 } from "../domain.js";
 import type { RoutingProvider } from "./routing.js";
 import { OFF_ROUTE_METERS, projectOnLine, splitAtProjection } from "./route-projection.js";
+import { cleanTravelled } from "./travelled-path.js";
 import { requiresTermin } from "./address-rules.js";
 import { applyStopTime, createUnknownClockState, evaluateClockPlan, forecastDrive, type ClockState, type VehicleClockPlan } from "./vehicle-clock.js";
 import {
@@ -363,15 +364,20 @@ export class TourService {
     const delayMinutes = activeLeg.toStop.appointmentAt ? calculateLateMinutes(shownEta, activeLeg.toStop.appointmentAt) : 0;
     const shownProgress = gpsProgress ?? progress;
     let travelledPrefix: Coordinate[] = [];
+    let routeBreaks: number[] = [];
     let previousTravelledDistanceMeters = 0;
     let trafficSections: TrafficSection[] = [];
     let roadSections: RoadSection[] = [];
     let trafficCheckedAt: string | null = null;
     try {
-      const details = JSON.parse(activeLeg.routeDetails ?? "{}") as { travelledGeometry?: Array<Coordinate | [number, number]>; previousTravelledDistanceMeters?: number;
+      const details = JSON.parse(activeLeg.routeDetails ?? "{}") as { travelledGeometry?: Array<Coordinate | [number, number]>; travelledStitches?: unknown; previousTravelledDistanceMeters?: number;
         trafficSections?: TrafficSection[]; roadSections?: RoadSection[]; checkedAt?: string; providerStatus?: string;
         activeRoute?: { trafficSections?: TrafficSection[]; roadSections?: RoadSection[]; checkedAt?: string } };
-      if (Array.isArray(details.travelledGeometry)) travelledPrefix = details.travelledGeometry.map(point => Array.isArray(point) ? { longitude: point[0], latitude: point[1] } : point);
+      if (Array.isArray(details.travelledGeometry)) {
+        const cleaned = cleanTravelled(details.travelledGeometry.map(point => Array.isArray(point) ? { longitude: point[0], latitude: point[1] } : point), geometry[0] ?? null, details.travelledStitches);
+        travelledPrefix = cleaned.points;
+        routeBreaks = cleaned.breaks;
+      }
       previousTravelledDistanceMeters = details.previousTravelledDistanceMeters ?? 0;
       // Two shapes: a refreshed route lives in `activeRoute`, a freshly planned one at the top level.
       const source = details.activeRoute?.trafficSections ? details.activeRoute : details;
@@ -402,6 +408,7 @@ export class TourService {
       delayMinutes,
       routeGeometry: [...travelledPrefix, ...geometry].map(toLonLat),
       travelledGeometry: [...travelledPrefix, ...split.travelledGeometry].map(toLonLat),
+      routeBreaks,
       remainingGeometry: split.remainingGeometry.map(toLonLat),
       trafficSegments,
       roadSegments,
