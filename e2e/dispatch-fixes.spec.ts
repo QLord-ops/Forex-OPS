@@ -293,20 +293,42 @@ test('утром наверху то, что требует решения; ин
   await expect.poll(() => acked).toEqual({ ids: ['n-old-jam', 'n-termin'] })
 })
 
-test('нижняя панель машины сворачивается в полоску за «бровь» и помнит это после перезагрузки', async ({ page }) => {
-  await dashboard(page)
+test('нижняя панель: этап под «бровью», следующая точка, часы по тахографу; при карточке съезжает в полоску', async ({ page }) => {
+  const reference = new Date(Date.now() - 3 * 60_000).toISOString()
+  const card = { vehicleId: 'v1', vehicleNumber: '9724', licensePlate: 'B-9724', currentTrailerPlate: null, generatedAt: new Date().toISOString(), webfleet: null, current: null, coupling: null, events: null, trips: null, maintenance: null,
+    driver: { status: 'SIGNED_ON', name: null, workState: 5, activitySince: null, checkedAt: reference, optiDrive: null, drivingTimesStatus: 'OK',
+      drivingTimes: { referenceTime: reference, remainDrivingTodayMs: 97 * 60_000, totalDrivingTodayMs: 0, totalOtherWorkTodayMs: 0, totalAvailabilityTodayMs: 0, maxDrivingTodayMs: 9 * 3600_000,
+        remainDrivingWeekMs: null, maxDrivingWeekMs: null, shiftStartedAt: null, latestShiftEndAt: null, nextBreakAt: new Date(Date.now() + 45 * 60_000).toISOString(), nextBreakMinMs: 45 * 60_000,
+        nextRestAt: null, nextRestMinMs: null, earliestNextShiftAt: null, extendedShiftsUsed: null, maxExtendedShifts: null, reducedRestsUsed: null, maxReducedRests: null, restBalances: [], infringements: false, lastCardActivityAt: null } } }
+  await dashboard(page, async (route, path) => { if (path.endsWith('/card')) { await json(route, card); return true } return false })
   await page.goto('/?vehicleId=v1')
   const panel = page.locator('.vehicle-panel')
-  await expect(panel).toContainText('Осталось')
+  await expect(panel.locator('.vehicle-panel-stage')).toContainText('Тур 20565181')
+  const [stage, bar] = await Promise.all([panel.locator('.vehicle-panel-stage').boundingBox(), panel.locator('.vehicle-panel-bar').boundingBox()])
+  expect(stage!.y).toBeLessThan(bar!.y)
+  await expect(panel.locator('.vehicle-panel-next')).toContainText('Следующая точка')
+  await expect(panel.locator('.vehicle-panel-next')).toContainText('Hannover')
+  await expect(panel.getByLabel('Часы водителя')).toContainText('Вождение: осталось 1 ч 37 мин')
+  await expect(panel.getByLabel('Часы водителя')).toContainText('по тахографу Webfleet')
   await page.screenshot({ path: 'test-results/panel-open.png' })
+
   await page.getByRole('button', { name: 'Свернуть панель машины' }).click()
   await expect(panel).toHaveClass(/vehicle-panel-collapsed/)
   await expect(panel).toContainText('LKW 9724')
+  await expect(panel.locator('.vehicle-panel-strip-next')).toContainText('Hannover')
   await expect(panel).not.toContainText('Осталось')
   await page.screenshot({ path: 'test-results/panel-collapsed.png' })
   await page.reload()
   await expect(page.locator('.vehicle-panel')).toHaveClass(/vehicle-panel-collapsed/)
   await page.getByRole('button', { name: 'Развернуть панель LKW 9724' }).click()
   await expect(page.locator('.vehicle-panel')).toContainText('Осталось')
+
+  // The truck card opens: the panel steps aside to the strip, and comes back when the card closes.
+  await page.goto('/?vehicleId=v1&card=v1')
+  await expect(page.locator('.vehicle-panel')).toHaveClass(/vehicle-panel-collapsed/)
+  await expect(page.locator('.vehicle-panel-strip-next')).toContainText('Hannover')
+  await page.screenshot({ path: 'test-results/panel-with-card.png' })
+  await page.getByRole('dialog').getByRole('button', { name: /Закрыть/ }).first().click()
+  await expect(page.locator('.vehicle-panel')).not.toHaveClass(/vehicle-panel-collapsed/)
   await expect(page.getByRole('button', { name: 'Свернуть панель машины' })).toHaveAttribute('aria-expanded', 'true')
 })

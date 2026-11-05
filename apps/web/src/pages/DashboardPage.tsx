@@ -13,7 +13,7 @@ import { usePolling } from '../hooks/usePolling'
 import { usePopover } from '../hooks/usePopover'
 import { useVehiclePosition } from '../hooks/useVehiclePosition'
 import { api, type RouteOptions } from '../lib/api'
-import { compareVehicles, getAttention, matchesFleetFilter, positionSource, activityNote, terminMargin, terminNeeded, vehiclePlace, vehicleStatus, type FleetFilter, type FleetSort } from '../lib/fleet-status'
+import { compareVehicles, driverHoursLine, getAttention, matchesFleetFilter, positionSource, activityNote, terminMargin, terminNeeded, vehiclePlace, vehicleStatus, type FleetFilter, type FleetSort } from '../lib/fleet-status'
 import { getRoutePreview, setRoutePreview, subscribeRoutePreview } from '../lib/route-preview'
 import { etaText, routeProgress, type StopState } from '../lib/route-progress'
 import { currentStopOf, terminOf } from '../lib/tours'
@@ -45,11 +45,17 @@ export function DashboardPage() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   // The bottom panel slides down to a thin strip so the map is free; the choice is remembered in this browser.
   const [panelCollapsed, setPanelCollapsed] = useState(() => { try { return localStorage.getItem('ops-panel-collapsed') === '1' } catch { return false } })
-  const togglePanel = () => setPanelCollapsed((value) => {
-    try { localStorage.setItem('ops-panel-collapsed', value ? '0' : '1') } catch { /* Storage may be unavailable. */ }
-    if (!value) setDrawerOpen(false)
-    return !value
-  })
+  // While the truck card is open the panel steps aside to a strip; the dispatcher's own choice stays as it was.
+  const [openWithCard, setOpenWithCard] = useState(false)
+  const togglePanel = () => {
+    if (cardIdRef.current) { setOpenWithCard((value) => !value); return }
+    setPanelCollapsed((value) => {
+      try { localStorage.setItem('ops-panel-collapsed', value ? '0' : '1') } catch { /* Storage may be unavailable. */ }
+      if (!value) setDrawerOpen(false)
+      return !value
+    })
+  }
+  const cardIdRef = useRef<string | null>(null)
   const [pinned, setPinned] = useState<string[]>(() => readPinnedVehicles())
   const [actingId, setActingId] = useState<string | null>(null)
   const [actionVehicleId, setActionVehicleId] = useState<string | null>(null)
@@ -77,6 +83,8 @@ export function DashboardPage() {
   const selected = vehicles.find((row) => row.vehicle.id === selectedId) ?? orderedVehicles[0] ?? null
   const cardId = searchParams.get('card')
   const cardRow = cardId ? vehicles.find((row) => row.vehicle.id === cardId) ?? null : null
+  cardIdRef.current = cardId
+  useEffect(() => { setOpenWithCard(false) }, [cardId])
   const fleet = useMemo(() => vehicles.flatMap((row) => row.mapPosition
     ? [{ id: row.vehicle.id, label: row.vehicle.vehicleNumber, ...row.mapPosition, termin: Boolean(terminOf(row.tour)), tone: vehicleStatus(row).tone }]
     : []), [vehicles])
@@ -261,7 +269,7 @@ export function DashboardPage() {
           <button type="button" aria-label="Скрыть варианты маршрута" onClick={() => { setRouteOptions(null); setOptionsError('') }}><X size={16} /></button>
         </div> : null}
         {draftRoute ? <div className="map-draft-banner"><span>{draftRoute.label} · черновик</span><button type="button" aria-label="Убрать черновой маршрут с карты" onClick={() => setRoutePreview(null)}><X size={16} /></button></div> : null}
-        {selected ? <VehiclePanel row={selected} position={position.data} drawerOpen={drawerOpen} onToggleDrawer={() => setDrawerOpen((value) => !value)} collapsed={panelCollapsed} onToggleCollapsed={togglePanel} onOpen={() => openCard(selected.vehicle.id)}
+        {selected ? <VehiclePanel row={selected} position={position.data} drawerOpen={drawerOpen} onToggleDrawer={() => setDrawerOpen((value) => !value)} collapsed={cardId ? !openWithCard : panelCollapsed} onToggleCollapsed={togglePanel} onOpen={() => openCard(selected.vehicle.id)}
           onRouteOptions={() => void openRouteOptions(selected.vehicle.id)} optionsBusy={optionsBusy} onFocusStop={(stop) => setMapFocus([stop.longitude, stop.latitude] as Coordinate)} /> : null}
         <QuickOrderPanel row={selected} vehicles={vehicles.map((item) => item.vehicle)} onAddressFound={setMapFocus} onRoutePreview={setRoutePreview} onCreated={async (vehicleId) => { selectVehicle(vehicleId); await refetch() }} />
         {cardId ? <TruckCard vehicleId={cardId} row={cardRow} onClose={closeCard} onTrack={setTrack} /> : null}
@@ -396,24 +404,44 @@ function VehiclePanel({ row, position, drawerOpen, onToggleDrawer, collapsed, on
   const margin = terminMargin(row)
   const speed = status.tone === 'ok' && row.telemetry?.source === 'WEBFLEET' && typeof row.telemetry.speedKmh === 'number' ? ` · ${Math.round(row.telemetry.speedKmh)} км/ч` : ''
   const etaMinutes = row.eta ? Math.max(0, Math.round((new Date(row.eta).getTime() - Date.now()) / 60_000)) : null
-  const clock = row.clockSummary
-  const fromStop = progress.currentIndex > 0 ? progress.stops[progress.currentIndex - 1]?.stop : row.from
-  const toStop = progress.currentIndex >= 0 ? progress.stops[progress.currentIndex]?.stop : row.to
+  const nextStop = progress.currentIndex >= 0 ? progress.stops[progress.currentIndex]?.stop ?? null : row.to ?? null
+  // Tachograph figures come from server memory (no Webfleet call); only while the panel is open.
+  const card = usePolling(() => api.vehicleCard(row.vehicle.id), 60_000, !collapsed, `${row.vehicle.id}-${collapsed}`)
+  const driver = card.data?.driver && 'drivingTimes' in card.data.driver ? card.data.driver.drivingTimes : null
+  const hours = driverHoursLine(driver, row.clockSummary)
+  const stageText = `${row.tour ? `Тур ${row.tour.orderNumber} · ` : ''}${progress.stops.length ? progress.summary : 'Нет активного маршрута'}`
+  const timing = termin ? `${termin.label}${margin !== null ? margin < 0 ? ` · опоздание ${formatDurationMinutes(-margin)}` : ` · запас ${formatDurationMinutes(margin)}` : ''}` : row.eta ? `ETA ${formatDateTime(row.eta)}` : 'ETA нет'
+  const nextText = nextStop ? `${stopTypeLabel(nextStop.type)} · ${shortAddress(nextStop)}` : 'Без тура'
+  const bar = progress.stops.length ? <span className="route-stage-bar" role="progressbar" aria-label="Пройдено от тура" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress.tourProgress * 100)}><span style={{ width: `${progress.tourProgress * 100}%` }} /></span> : null
   const handle = <button type="button" className="vehicle-panel-handle" onClick={onToggleCollapsed} aria-expanded={!collapsed} aria-controls="vehicle-panel-body"
     aria-label={collapsed ? 'Развернуть панель машины' : 'Свернуть панель машины'} title={collapsed ? 'Развернуть' : 'Свернуть'}>
     <span className="vehicle-panel-grip" aria-hidden="true" />{collapsed ? <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" /> : <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />}
   </button>
+
   if (collapsed) return <section className="vehicle-panel vehicle-panel-collapsed" aria-label={`LKW ${row.vehicle.vehicleNumber}`}>
     {handle}
     <button type="button" className="vehicle-panel-strip" onClick={onToggleCollapsed} aria-label={`Развернуть панель LKW ${row.vehicle.vehicleNumber}`}>
-      <strong>LKW {row.vehicle.vehicleNumber}</strong>
-      <span className={`status-pill status-pill-${status.tone}`}><span className={`status-dot status-dot-${status.tone}`} aria-hidden="true" />{status.label}{speed}</span>
-      <span className="vehicle-panel-strip-text">{termin ? `${termin.label}${margin !== null && margin < 0 ? ` · опоздание ${formatDurationMinutes(-margin)}` : ''}` : row.eta ? `ETA ${formatDateTime(row.eta)}` : progress.stops.length ? shortAddress(toStop) : 'Без тура'}</span>
+      <span className="vehicle-panel-strip-id">
+        <strong>LKW {row.vehicle.vehicleNumber}</strong>
+        <span className={`status-pill status-pill-${status.tone}`}><span className={`status-dot status-dot-${status.tone}`} aria-hidden="true" />{status.label}{speed}</span>
+      </span>
+      <span className="vehicle-panel-strip-route">
+        <span className="vehicle-panel-label">{stageText}</span>
+        <span className="vehicle-panel-strip-next"><MapPin className="h-3.5 w-3.5" aria-hidden="true" />{nextText}</span>
+      </span>
+      <span className={classNames('vehicle-panel-strip-time', margin !== null && margin < 0 && 'timing-late')}>{timing}</span>
+      {bar}
     </button>
   </section>
+
   return <section className={classNames('vehicle-panel', drawerOpen && 'vehicle-panel-open')} aria-label={`LKW ${row.vehicle.vehicleNumber}`}>
     {handle}
     <div id="vehicle-panel-body">
+    <button type="button" className="vehicle-panel-stage route-stops-drawer-trigger" onClick={onToggleDrawer} aria-expanded={drawerOpen}>
+      <span className="sr-only">Точки маршрута · {progress.stops.length}. </span>
+      <span className={classNames('route-stage-summary', `route-stage-summary-${progress.stage.toLowerCase()}`)}>{stageText}</span>
+      {bar}
+    </button>
     {drawerOpen ? <RouteStopsTrack row={row} position={position} onFocusStop={onFocusStop} /> : null}
     <div className="vehicle-panel-bar">
       <div className="vehicle-panel-id">
@@ -422,12 +450,11 @@ function VehiclePanel({ row, position, drawerOpen, onToggleDrawer, collapsed, on
         <span className={`source-tag source-tag-${source.kind}`}>{source.kind === 'calculated' ? 'Расчётная позиция' : source.long}</span>
         {activityNote(row) ? <span className={classNames('rest-at-stop', !row.restAtStop && 'rest-at-stop-pause')}>{activityNote(row)}</span> : null}
       </div>
-      <button type="button" className="vehicle-panel-tour route-stops-drawer-trigger" onClick={onToggleDrawer} aria-expanded={drawerOpen}>
-        <span className="sr-only">Точки маршрута · {progress.stops.length}. </span>
-        <span className="vehicle-panel-label">{row.tour ? `Тур ${row.tour.orderNumber} · ` : ''}<span className={classNames('route-stage-summary', `route-stage-summary-${progress.stage.toLowerCase()}`)}>{progress.stops.length ? progress.summary : 'Нет активного маршрута'}</span></span>
-        <span className="vehicle-panel-route"><MapPin className="h-4 w-4" aria-hidden="true" />{progress.stops.length ? <>{shortAddress(fromStop)} <ChevronRight className="h-4 w-4" aria-hidden="true" /> {shortAddress(toStop)}</> : 'Без тура'}</span>
-        {progress.stops.length ? <span className="route-stage-bar" role="progressbar" aria-label="Пройдено от тура" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress.tourProgress * 100)}><span style={{ width: `${progress.tourProgress * 100}%` }} /></span> : null}
-      </button>
+      <div className="vehicle-panel-next">
+        <span className="vehicle-panel-label">Следующая точка</span>
+        <span className="vehicle-panel-route"><MapPin className="h-4 w-4" aria-hidden="true" />{nextText}</span>
+        {nextStop?.company ? <span className="vehicle-panel-note"><span>{nextStop.company}</span></span> : null}
+      </div>
       <div className="vehicle-panel-metric">
         <span className="vehicle-panel-label">{termin ? `Termin ${terminStop?.type === 'LOAD' ? 'загрузки' : 'выгрузки'}` : 'ETA'}</span>
         <strong className={termin ? 'text-termin' : undefined}>{termin ? termin.label.replace(/^Termin /, '') : row.eta ? formatDateTime(row.eta) : '–'}</strong>
@@ -438,17 +465,19 @@ function VehiclePanel({ row, position, drawerOpen, onToggleDrawer, collapsed, on
         <strong>{typeof row.remainingKm === 'number' ? `≈ ${Math.round(row.remainingKm)} км` : '–'}</strong>
         <span className="vehicle-panel-note"><span>{etaMinutes !== null ? `≈ ${formatDurationMinutes(etaMinutes)} до точки` : 'время неизвестно'}</span><span>{row.etaSource === 'GPS' ? 'от GPS' : 'расчёт'}</span></span>
       </div>
-      {clock && (typeof clock.breakInMinutes === 'number' || typeof clock.remainingDrivingMinutes === 'number') ? <div className="vehicle-panel-metric">
-        <span className="vehicle-panel-label">Часы водителя{clock.preliminary ? ' · предв.' : ''}</span>
-        <strong className="inline-flex items-center gap-1"><Clock3 className="h-4 w-4" aria-hidden="true" />{formatDurationMinutes(clock.breakInMinutes ?? clock.remainingDrivingMinutes)}</strong>
-        <span>{typeof clock.breakInMinutes === 'number' ? 'до паузы 45 мин' : 'вождения сегодня'}</span>
-      </div> : null}
       <div className="vehicle-panel-actions">
         {row.etaSource === 'GPS' ? <button type="button" className="secondary-button" onClick={onRouteOptions} disabled={optionsBusy} title="Три маршрута от GPS-позиции до точки"><GitFork className="h-4 w-4" aria-hidden="true" />Варианты</button> : null}
         <button type="button" className="secondary-button" onClick={onToggleDrawer} aria-expanded={drawerOpen} aria-label={drawerOpen ? 'Скрыть точки маршрута' : 'Показать точки маршрута'} disabled={!progress.stops.length}><Route className="h-4 w-4" aria-hidden="true" />Маршрут</button>
         <button type="button" className="primary-button" onClick={onOpen}>Открыть<ChevronRight className="h-4 w-4" aria-hidden="true" /></button>
       </div>
     </div>
+    <p className={classNames('vehicle-panel-hours', hours?.stale && 'vehicle-panel-hours-stale')} aria-label="Часы водителя">
+      <Clock3 className="h-4 w-4" aria-hidden="true" />
+      {hours ? <>
+        {hours.parts.map((part) => <span key={part.label} className={part.warn ? 'vehicle-panel-hours-warn' : undefined}>{part.label} <strong>{part.value}</strong></span>)}
+        <span className="vehicle-panel-hours-source">{hours.source}{hours.stale ? ' · устарели' : ''}</span>
+      </> : <span>Часы водителя: нет данных тахографа</span>}
+    </p>
     </div>
   </section>
 }
