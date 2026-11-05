@@ -6,8 +6,8 @@ const time = (iso: string) => new Date(iso).toLocaleTimeString('ru-RU', { hour: 
 
 describe('driver hours line in the bottom panel', () => {
   it('reads the tachograph and says how old it is', () => {
-    const line = driverHoursLine({ referenceTime: '2026-11-05T11:57:00Z', remainDrivingTodayMs: 97 * 60_000, nextBreakAt: '2026-11-05T12:45:00Z', nextRestAt: '2026-11-05T20:15:00Z', latestShiftEndAt: '2026-11-05T23:00:00Z' }, null, NOW)!
-    expect(line.parts.map((part) => `${part.label} ${part.value}`)).toEqual(['Вождение: осталось 1 ч 37 мин', 'До перерыва 45 мин', `Суточный отдых не позже ${time('2026-11-05T20:15:00Z')}`, 'Смена до 06.11, 00:00'])
+    const line = driverHoursLine({ referenceTime: '2026-11-05T11:57:00Z', remainDrivingTodayMs: 97 * 60_000, nextBreakAt: '2026-11-05T12:45:00Z', nextRestAt: '2026-11-05T20:15:00Z', latestShiftEndAt: '2026-11-05T21:00:00Z' }, null, NOW)!
+    expect(line.parts.map((part) => `${part.label} ${part.value}`)).toEqual(['Вождение: осталось 1 ч 37 мин', 'До перерыва 45 мин', `Суточный отдых не позже ${time('2026-11-05T20:15:00Z')}`, `Смена до ${time('2026-11-05T21:00:00Z')}`])
     expect(line).toMatchObject({ source: 'по тахографу Webfleet, 3 мин назад', stale: false })
   })
   it('flags old tachograph data and a break that is due', () => {
