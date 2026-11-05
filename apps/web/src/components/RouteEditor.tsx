@@ -1,4 +1,6 @@
 import { useState } from 'react'
+import { AddressInput } from './AddressInput'
+import { suggestionAddress } from '../lib/address-book'
 import { formatDateTime, formatDurationMinutes, metersToKm } from '../lib/format'
 import type { Stop, Tour } from '../types/domain'
 import { localDateTime, operationsRequest } from './VehicleOperationsPanel'
@@ -44,7 +46,8 @@ export function RouteEditor({ tour, onChange }: { tour: Tour; onChange: () => Pr
       {stops.map((stop, index) => <fieldset key={stop.id ?? `new-${index}`} className="space-y-2 rounded border p-3" disabled={busy || Boolean(stop.arrivedAt)}>
         <legend className="px-1 text-sm font-semibold">Точка {index + 1}{stop.arrivedAt ? ' · прибытие подтверждено (изменение запрещено)' : ''}</legend>
         <label className="block text-sm">Тип<select className="input" value={stop.type} onChange={e => change(index, { type: e.target.value as DraftStop['type'] })}><option value="LOAD">Загрузка</option><option value="UNLOAD">Выгрузка</option></select></label>
-        <label className="block text-sm">Адрес<input className="input" required value={stop.address} onChange={e => change(index, { address: e.target.value, latitude: undefined, longitude: undefined })} /></label>
+        <label className="block text-sm">Адрес<AddressInput className="input" required value={stop.address} onChange={value => change(index, { address: value, latitude: undefined, longitude: undefined })} placeholder="Фирма, улица или город"
+          onPick={item => change(index, { address: suggestionAddress(item), city: item.city ?? stop.city, company: stop.company || item.company, latitude: item.latitude, longitude: item.longitude })} /></label>
         <label className="block text-sm">Город<input className="input" value={stop.city ?? ''} onChange={e => change(index, { city: e.target.value })} /></label>
         <label className="block text-sm">Срок (необязательно)<input className="input" type="datetime-local" value={stop.appointmentAt ? localDateTime(stop.appointmentAt) : ''} onChange={e => change(index, { appointmentAt: e.target.value ? new Date(e.target.value).toISOString() : null })} /></label>
         <div className="grid grid-cols-2 gap-2"><label className="text-sm">Стоянка, минимум<input className="input" type="number" min="0" required value={stop.serviceMinMinutes} onChange={e => change(index, { serviceMinMinutes: Number(e.target.value) })} /></label><label className="text-sm">Стоянка, максимум<input className="input" type="number" min={stop.serviceMinMinutes} required value={stop.serviceMaxMinutes} onChange={e => change(index, { serviceMaxMinutes: Number(e.target.value) })} /></label></div>

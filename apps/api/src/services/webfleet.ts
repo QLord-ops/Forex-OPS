@@ -590,7 +590,8 @@ export function readWebfleetConfig(env = process.env): WebfleetConfig | null {
 
 /** Only reporting actions are allowed: Webfleet stays read-only. */
 export type WebfleetReadAction = 'showObjectReportExtern' | 'showVehicleReportExtern' | 'getRemainingDrivingTimesEU' | 'showDriverReportExtern'
-  | 'getActiveAssetCouplings' | 'showEventReportExtern' | 'showTripReportExtern' | 'showOptiDriveIndicator' | 'showMaintenanceSchedules' | 'showTracks';
+  | 'getActiveAssetCouplings' | 'showEventReportExtern' | 'showTripReportExtern' | 'showOptiDriveIndicator' | 'showMaintenanceSchedules' | 'showTracks'
+  | 'showAddressReportExtern' | 'showAddressGroupAddressReportExtern';
 
 export async function fetchObjectReport(config: WebfleetConfig, fetchImpl: typeof fetch = fetch): Promise<WebfleetPosition[]> {
   const rows = await webfleetRequest(config, 'showObjectReportExtern', {}, fetchImpl);
