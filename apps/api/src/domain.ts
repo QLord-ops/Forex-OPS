@@ -113,6 +113,8 @@ export type CurrentPosition = {
   routeGeometry: Array<[number, number]>;
   travelledGeometry: Array<[number, number]>;
   remainingGeometry: Array<[number, number]>;
+  /** Point indices of routeGeometry where a new piece starts: the map draws no line into them (the truck left the old plan there). */
+  routeBreaks?: number[];
   /** Congested stretches of routeGeometry (point indices) from the last TomTom check. */
   trafficSegments?: Array<{ from: number; to: number; level: "SLOW" | "JAM" | "STANDSTILL" | "CLOSED"; delaySeconds?: number; speedKmh?: number | null }>;
   /** Autobahn / Bundesstraße stretches of routeGeometry (point indices), for road shields on the map. */
@@ -141,7 +143,7 @@ export const MANUAL_POSITION_DISCLAIMER = "Позиция указана дис�
 export const LAST_STOP_POSITION_DISCLAIMER = "Последняя завершённая точка – не GPS" as const;
 
 export function withoutPositionGeometry(position: CurrentPosition) {
-  const { routeGeometry: _route, travelledGeometry: _travelled, remainingGeometry: _remaining, trafficSegments: _traffic, roadSegments: _roads, ...summary } = position;
+  const { routeGeometry: _route, travelledGeometry: _travelled, remainingGeometry: _remaining, trafficSegments: _traffic, roadSegments: _roads, routeBreaks: _breaks, ...summary } = position;
   return summary;
 }
 

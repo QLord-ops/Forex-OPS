@@ -378,6 +378,8 @@ export interface CurrentPosition {
   routeGeometry?: RouteGeometry | null
   travelledGeometry?: RouteGeometry | null
   remainingGeometry?: RouteGeometry | null
+  /** Indices of routeGeometry where a new piece starts; no line is drawn into them. */
+  routeBreaks?: number[]
 }
 
 export interface GeocodeResult {

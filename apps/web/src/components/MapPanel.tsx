@@ -4,7 +4,7 @@ import mapLibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&ur
 import { Layers, LocateFixed, Minus, Plus, TriangleAlert } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { boundsFor, geometryToCoordinates, stopCoordinates, toLineString, trafficFeatures } from '../lib/geometry'
+import { boundsFor, geometryToCoordinates, stopCoordinates, toBrokenLine, toLineString, trafficFeatures } from '../lib/geometry'
 import { calculatedPositionLabel } from '../lib/format'
 import { useStableValue } from '../hooks/useStableValue'
 import { formatDelay, formatKm, INCIDENT_TITLES, trafficIncidents, type TrafficIncident } from '../lib/traffic-incidents'
@@ -645,10 +645,11 @@ function warningIcon() {
 
 function renderMapContent(map: Map, fullRoute: Coordinate[], position?: CurrentPosition | null, previewRoute?: Coordinate[], previewTraffic?: TrafficSegment[], previewAlternatives?: MapRouteAlternative[]) {
   const travelled = geometryToCoordinates(position?.travelledGeometry)
-  upsertRouteLayer(map, 'route-casing', toLineString(fullRoute), { 'line-color': '#ffffff', 'line-width': CASING_WIDTH, 'line-opacity': 0.95 })
-  upsertRouteLayer(map, 'route-main', toLineString(fullRoute), { 'line-color': ROUTE_BLUE, 'line-width': LINE_WIDTH })
+  const breaks = position?.routeBreaks ?? null
+  upsertRouteLayer(map, 'route-casing', toBrokenLine(fullRoute, breaks), { 'line-color': '#ffffff', 'line-width': CASING_WIDTH, 'line-opacity': 0.95 })
+  upsertRouteLayer(map, 'route-main', toBrokenLine(fullRoute, breaks), { 'line-color': ROUTE_BLUE, 'line-width': LINE_WIDTH })
   upsertRouteLayer(map, 'route-traffic', trafficFeatures(fullRoute, position?.trafficSegments), { 'line-color': TRAFFIC_COLOR, 'line-width': LINE_WIDTH })
-  upsertRouteLayer(map, 'route-travelled', toLineString(travelled), { 'line-color': '#9aa0a6', 'line-width': LINE_WIDTH })
+  upsertRouteLayer(map, 'route-travelled', toBrokenLine(travelled, breaks), { 'line-color': '#9aa0a6', 'line-width': LINE_WIDTH })
   const preview = previewRoute ?? []
   const alternatives = { type: 'FeatureCollection' as const, features: (previewAlternatives ?? []).filter((item) => item.geometry.length >= 2)
     .map((item) => ({ type: 'Feature' as const, properties: { id: item.id }, geometry: { type: 'LineString' as const, coordinates: item.geometry } })) }
