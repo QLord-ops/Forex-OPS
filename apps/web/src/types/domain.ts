@@ -16,9 +16,18 @@ export interface Vehicle {
   manualPositionLongitude?: number | null
   manualPositionAt?: string | null
   maxSpeedKmh: number
+  /** Customer line: only SCHNELLECKE trucks get the 07:00 status list. */
+  line?: VehicleLine | null
+  statusGroup?: StatusGroup | null
+  /** The truck's service phone, never a driver's personal number. */
+  servicePhone?: string | null
+  aSchild?: boolean
+  appSped?: boolean
   createdAt?: string
   updatedAt?: string
 }
+export type VehicleLine = 'SCHNELLECKE' | 'WALTER_TESLA' | 'OTHER'
+export type StatusGroup = 'NORD' | 'SUED' | 'LUFE'
 
 export interface Stop {
   id: string
