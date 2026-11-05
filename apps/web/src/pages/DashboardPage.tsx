@@ -3,7 +3,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { useSearchParams } from 'react-router-dom'
 
 import { LazyMapPanel } from '../components/LazyMapPanel'
-import { DecisionCard } from '../components/OperationsNotifications'
+import { DecisionGroups } from '../components/OperationsNotifications'
+import { needsAttention } from '../lib/alerts'
 import { QuickOrderPanel } from '../components/QuickOrderPanel'
 import { TruckCard } from '../components/TruckCard'
 import { EmptyState, ErrorState, LoadingState } from '../components/States'
@@ -215,8 +216,8 @@ export function DashboardPage() {
         </div>
         <div className="fleet-scroll">
           {notifications.open.length ? <section className="decision-section" aria-label="Требует решения">
-            <h2 className="fleet-section-title">Требует решения<span>{notifications.open.length}</span></h2>
-            <div className="decision-list">{notifications.open.map((item) => <DecisionCard key={item.id} item={item} stop={item.stopId ? stopsById.get(item.stopId) : null} onSelect={focusVehicle} />)}</div>
+            <h2 className="fleet-section-title">Требует решения<span>{notifications.open.filter(needsAttention).length}</span></h2>
+            <DecisionGroups items={notifications.open} stopOf={(item) => item.stopId ? stopsById.get(item.stopId) : null} onSelect={focusVehicle} />
           </section> : null}
           <div className="fleet-section-head">
             <h2 className="fleet-section-title">Машины</h2>

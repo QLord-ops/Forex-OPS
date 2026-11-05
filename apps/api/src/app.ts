@@ -350,6 +350,12 @@ export async function buildApp(options: BuildAppOptions = {}) {
     await audit(request, 'NOTIFICATION_ACKNOWLEDGED', 'Notification', id);
     return { ok: true };
   });
+  app.post('/notifications/ack-many', async (request) => {
+    const { ids } = z.object({ ids: z.array(z.string().min(1).max(64)).min(1).max(300) }).parse(request.body);
+    const result = await notificationService.acknowledgeMany([...new Set(ids)]);
+    await audit(request, 'NOTIFICATIONS_ACKNOWLEDGED', 'Notification', 'bulk', { metadata: { count: result.count } });
+    return { ok: true, count: result.count };
+  });
   app.get('/events/stream', async (request, reply) => {
     const sessionId = request.dispatcherSession?.sessionId;
     if (!sessionId) return reply.code(401).send({ error: 'Войдите в диспетчерскую.' });
