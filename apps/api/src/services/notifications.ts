@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@prisma/client';
+import { prioritize } from './notification-priority.js';
 import type { TourService } from './tours.js';
 
 export type DwellSeverity = 'NONE' | 'WARNING' | 'CRITICAL';
@@ -75,12 +76,30 @@ export class NotificationService {
     });
   }
 
-  list() {
-    return this.db.notification.findMany({ where: { acknowledgedAt: null }, orderBy: { createdAt: 'asc' }, take: 100 });
+  /** Open notifications, most important first: decisions, then risks, then information and what no longer applies. */
+  async list(now = new Date()) {
+    const items = await this.db.notification.findMany({ where: { acknowledgedAt: null }, orderBy: { createdAt: 'asc' }, take: 300 });
+    const legIds = new Set<string>();
+    const stopIds = new Set<string>();
+    for (const item of items) {
+      if (item.stopId) stopIds.add(item.stopId);
+      const payload = parsePayload(item.payloadJson);
+      if (typeof payload.legId === 'string') legIds.add(payload.legId);
+      if (typeof payload.openStopId === 'string') stopIds.add(payload.openStopId);
+    }
+    const legs = legIds.size ? await this.db.leg.findMany({ where: { id: { in: [...legIds] } }, select: { id: true, toStopId: true } }) : [];
+    for (const leg of legs) stopIds.add(leg.toStopId);
+    const stops = stopIds.size ? await this.db.stop.findMany({ where: { id: { in: [...stopIds] } },
+      select: { id: true, type: true, arrivedAt: true, completedAt: true, appointmentAt: true, appointmentWindowStartAt: true } }) : [];
+    return prioritize(items, { stops: new Map(stops.map((stop) => [stop.id, stop])), legTarget: new Map(legs.map((leg) => [leg.id, leg.toStopId])) }, now);
   }
 
   acknowledge(id: string, now = new Date()) {
     return this.db.notification.updateMany({ where: { id, acknowledgedAt: null }, data: { acknowledgedAt: now } });
+  }
+
+  acknowledgeMany(ids: string[], now = new Date()) {
+    return this.db.notification.updateMany({ where: { id: { in: ids }, acknowledgedAt: null }, data: { acknowledgedAt: now } });
   }
 }
 
@@ -90,5 +109,14 @@ function getPayloadSeverity(payloadJson: string): DwellSeverity | null {
     return payload.severity === 'WARNING' || payload.severity === 'CRITICAL' ? payload.severity : null;
   } catch {
     return null;
+  }
+}
+
+function parsePayload(payloadJson: string): Record<string, unknown> {
+  try {
+    const value: unknown = JSON.parse(payloadJson);
+    return value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  } catch {
+    return {};
   }
 }

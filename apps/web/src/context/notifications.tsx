@@ -2,7 +2,8 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { useNavigate } from 'react-router-dom'
 
 import { usePolling } from '../hooks/usePolling'
-import { pickNewAlerts, playAlertSound, readSeen, showSummaryAlert, showSystemAlert, titleWithCount, writeSeen, type AlertNotification } from '../lib/alerts'
+import { needsAttention, planAlerts, playAlertSound, readDeferred, readSeen, showSummaryAlert, showSystemAlert, titleWithCount, writeDeferred, writeSeen, type AlertNotification } from '../lib/alerts'
+import { readWorkHours, WORK_HOURS_EVENT, type WorkHours } from '../lib/work-hours'
 import { api } from '../lib/api'
 import { pendingToDocument } from '../lib/appointments'
 import type { PendingAppointment } from '../types/domain'
@@ -21,8 +22,10 @@ export interface Departure { stopType: 'LOAD' | 'UNLOAD'; leftAt: string; time: 
 
 interface NotificationsState {
   items: AlertNotification[]
-  /** Open items the dispatcher has not set aside in this tab. */
+  /** Open items the dispatcher has not set aside in this tab, most important first. */
   open: AlertNotification[]
+  workHours: WorkHours
+  acknowledgeAll: (items: AlertNotification[]) => Promise<void>
   pending: PendingAppointment[]
   busyId: string | null
   errors: Record<string, string>
@@ -61,19 +64,27 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
     return () => stream.close()
   }, [refetch])
 
+  const [workHours, setWorkHours] = useState<WorkHours>(readWorkHours)
+  useEffect(() => {
+    const onChange = () => setWorkHours(readWorkHours())
+    window.addEventListener(WORK_HOURS_EVENT, onChange)
+    return () => window.removeEventListener(WORK_HOURS_EVENT, onChange)
+  }, [])
   const items = useMemo(() => notifications.data?.notifications ?? [], [notifications.data])
   const loaded = notifications.data !== null
   useEffect(() => {
     if (!loaded) return
-    document.title = titleWithCount(items.length)
-    const { fresh, summary, seen } = pickNewAlerts(items, readSeen())
-    writeSeen(seen)
+    document.title = titleWithCount(items.filter(needsAttention).length)
+    // Outside the working day only urgent items ring; the rest wait for one morning summary.
+    const plan = planAlerts(items, readSeen(), readDeferred(), new Date(), readWorkHours())
+    writeSeen(plan.seen)
+    writeDeferred(plan.deferred)
     const away = document.visibilityState === 'hidden' || !document.hasFocus()
-    if (summary > 0) {
+    if (plan.summary) {
       playAlertSound('SUMMARY')
-      if (away) showSummaryAlert(summary)
+      if (away) showSummaryAlert(plan.summary)
     }
-    for (const item of fresh) {
+    for (const item of plan.ring) {
       playAlertSound(item.type)
       if (away) showSystemAlert(item, (path) => navigate(path))
     }
@@ -160,12 +171,26 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
     await Promise.all([refetch(), refetchPending()])
   }, [refetch, refetchPending, termin])
 
+  /** «Прочитать все» for the information block; the server closes only items that are still open. */
+  const acknowledgeAll = useCallback(async (list: AlertNotification[]) => {
+    if (!list.length) return
+    setBusyId('all')
+    try {
+      for (let index = 0; index < list.length; index += 300) {
+        await operationsRequest('/notifications/ack-many', 'POST', { ids: list.slice(index, index + 300).map((item) => item.id) })
+      }
+      await refetch()
+    } catch (cause) {
+      setErrors((current) => ({ ...current, all: cause instanceof Error ? cause.message : 'Не удалось отметить прочитанными' }))
+    } finally { setBusyId(null) }
+  }, [refetch])
+
   const hide = useCallback((id: string) => setHidden((previous) => [...previous, id]), [])
   const pendingOf = useCallback((item: AlertNotification) => pending.find((entry) => entry.id === pendingIdOf(item)) ?? null, [pending])
 
   const value = useMemo<NotificationsState>(() => ({
-    items, open, pending, busyId, errors, termin: termin?.item ?? null, hide, answerDeparture, resolve, reviewTermin, acceptTermin, closeTermin, pendingOf
-  }), [acceptTermin, answerDeparture, busyId, closeTermin, errors, hide, items, open, pending, pendingOf, resolve, reviewTermin, termin])
+    items, open, workHours, acknowledgeAll, pending, busyId, errors, termin: termin?.item ?? null, hide, answerDeparture, resolve, reviewTermin, acceptTermin, closeTermin, pendingOf
+  }), [acceptTermin, acknowledgeAll, answerDeparture, busyId, closeTermin, errors, hide, items, open, pending, pendingOf, resolve, reviewTermin, termin, workHours])
   return <Context.Provider value={value}>{children}</Context.Provider>
 }
 

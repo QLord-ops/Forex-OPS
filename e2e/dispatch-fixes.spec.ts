@@ -262,3 +262,32 @@ test('машина на суточном отдыхе на загрузке: п�
   await expect(decisions).toContainText('LKW 3010 на суточном отдыхе на загрузке')
   await expect(decisions).toContainText('Загрузка продолжится после отдыха')
 })
+
+test('утром наверху то, что требует решения; информационное и устаревшее свёрнуто, «Прочитать все» закрывает только его', async ({ page }) => {
+  await page.clock.setFixedTime(new Date('2026-11-05T07:00:00+01:00'))
+  const at = (time: string) => new Date(`2026-11-05T${time}:00+01:00`).toISOString()
+  const notifications = [
+    { id: 'n-left', vehicleId: 'v1', stopId: 's1', type: 'STOP_DEPARTED', priority: 'ACTION', urgent: true, createdAt: at('03:10'),
+      message: 'LKW 9724 уехала с загрузки', payloadJson: JSON.stringify({ stopType: 'LOAD', leftAt: at('03:05') }) },
+    { id: 'n-jam', vehicleId: 'v1', stopId: 's2', type: 'TRAFFIC_DELAY', priority: 'RISK', createdAt: at('04:20'), message: 'Грузовик 9724: задержка из-за трафика 25 мин', payloadJson: '{}' },
+    { id: 'n-old-jam', vehicleId: 'v1', stopId: 's2', type: 'TRAFFIC_DELAY', priority: 'INFO', resolved: true, resolvedReason: 'есть новее', createdAt: at('02:20'), message: 'Грузовик 9724: задержка из-за трафика 12 мин', payloadJson: '{}' },
+    { id: 'n-termin', vehicleId: 'v1', stopId: 's2', type: 'TERMIN_MET', priority: 'INFO', createdAt: at('01:00'), message: 'LKW 9724 прибыла вовремя', payloadJson: '{}' }
+  ]
+  let acked: unknown = null
+  await dashboard(page, async (route, path) => {
+    if (path === '/notifications/ack-many') { acked = route.request().postDataJSON(); await json(route, { ok: true, count: 2 }); return true }
+    return false
+  })
+  await page.route('**/api/notifications', (route) => json(route, { notifications }))
+  await page.goto('/')
+  const decisions = page.getByRole('region', { name: 'Требует решения' })
+  await expect(decisions.getByRole('status')).toHaveText('За ночь: 4 · требуют решения: 1')
+  await expect(decisions.locator('.decision-group-title')).toHaveText(['Нужно решение1', 'Важно1', 'Для сведения2'])
+  await expect(decisions.getByRole('group', { name: 'Нужно решение' })).toContainText('LKW 9724 уехала с загрузки без BELADEN')
+  await expect(decisions.getByText('задержка из-за трафика 12 мин')).toBeHidden()
+  await decisions.getByText('Для сведения').click()
+  await expect(decisions.getByText('Уже не актуально: есть новее')).toBeVisible()
+  page.once('dialog', (dialog) => void dialog.accept())
+  await decisions.getByRole('button', { name: 'Прочитать все' }).click()
+  await expect.poll(() => acked).toEqual({ ids: ['n-old-jam', 'n-termin'] })
+})
