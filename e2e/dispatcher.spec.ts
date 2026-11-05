@@ -446,7 +446,8 @@ test('карточка машины: компактная строка, вкла
   await expect(dialog.getByRole('tab', { name: 'Водитель' })).toBeFocused()
   await expect(dialog.getByRole('tab', { name: 'Водитель' })).toHaveAttribute('aria-selected', 'true')
   await expect(dialog).toContainText('Max Mustermann')
-  await expect(dialog).toContainText(/по тахографу · с \d\d:\d\d \(1 ч 6 мин\)/)
+  // Just after midnight the activity started yesterday and carries its date («с 05.11, 22:55»).
+  await expect(dialog).toContainText(/по тахографу · с (\d\d\.\d\d, )?\d\d:\d\d \(1 ч 6 мин\)/)
   await expect(dialog.getByRole('meter', { name: 'Остаток вождения' }).first()).toHaveAttribute('aria-valuetext', '6 ч 46 мин из 10 ч')
   await expect(dialog).toContainText('Рабочее время всего4 ч 48 мин')
   await expect(dialog).toContainText(/Следующий перерывдо (\d\d\.\d\d, )?\d\d:\d\d \(не меньше 30 мин\)/)
