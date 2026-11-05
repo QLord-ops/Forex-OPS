@@ -135,6 +135,14 @@
 .truck-card-tours > li:first-child { border-top: 0; padding-top: 0; }
 .truck-card-tours strong { display: block; font-weight: 500; font-variant-numeric: tabular-nums; }
 .truck-card-tours .truck-card-muted { display: block; }
+/* The whole title is the toggle: one click shows the stops of a queued tour. */
+.truck-card-tour-toggle { display: grid; grid-template-columns: minmax(0, 1fr) 16px; align-items: start; gap: 6px; min-width: 0; border-radius: 6px; padding: 0; text-align: left; font: inherit; color: inherit; background: transparent; }
+.truck-card-tour-toggle:hover strong { text-decoration: underline; }
+.truck-card-tour-toggle:focus-visible { outline: 2px solid rgb(var(--ln-0ea5e9)); outline-offset: 2px; }
+.truck-card-tour-chevron { width: 16px; height: 16px; margin-top: 2px; color: rgb(var(--tx-64748b)); transition: transform .15s; }
+.truck-card-tour-open .truck-card-tour-chevron { transform: rotate(180deg); }
+.truck-card-tour-details { grid-column: 2 / -1; display: grid; gap: 6px; margin-top: 2px; border-left: 2px solid rgb(var(--ln-0f172a) / 0.08); padding-left: 10px; }
+@media (prefers-reduced-motion: reduce) { .truck-card-tour-chevron { transition: none; } }
 .truck-card-remove { display: inline-flex; align-items: center; gap: 4px; min-height: 28px; border: 1px solid rgb(var(--ln-fecaca)); border-radius: 8px; background: rgb(var(--bg-ffffff)); padding: 0 8px; color: rgb(var(--tx-b91c1c)); font-size: .75rem; font-weight: 500; }
 .truck-card-remove:hover { background: rgb(var(--bg-fef2f2)); }
 .truck-card-remove:focus-visible { outline: 2px solid rgb(var(--ln-0ea5e9)); outline-offset: 1px; }
