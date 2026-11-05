@@ -1234,6 +1234,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
         dwellMinutes: dwell.dwellMinutes,
         dwellSeverity: restAtStop.restAt(vehicle.id)?.stopId === currentStop?.id ? "NONE" : dwell.dwellSeverity,
         restAtStop: (() => { const rest = restAtStop.restAt(vehicle.id); return rest && rest.stopId === currentStop?.id ? rest : null; })(),
+        stopActivity: (() => { const activity = restAtStop.activityAt(vehicle.id); return activity && activity.stopId === currentStop?.id ? activity : null; })(),
         currentAction,
         issues: vehicle.issues.map(toIsoObject),
         statusStartedAt: statusStartedAt?.toISOString() ?? null,

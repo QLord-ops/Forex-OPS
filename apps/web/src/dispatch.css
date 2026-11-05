@@ -441,3 +441,5 @@ button.decision-card-title:focus-visible { outline: 2px solid var(--focus); outl
 /* Daily rest at the stop: a calm, known state, not an alarm. */
 .rest-at-stop { display: inline-flex; align-items: center; border: 1px solid rgb(var(--ln-bae6fd)); border-radius: 6px; padding: 0 7px; background: rgb(var(--bg-f0f9ff)); color: rgb(var(--tx-075985)); font-size: .75rem; font-weight: 500; white-space: nowrap; }
 .vehicle-panel-id .rest-at-stop { font-size: .8125rem; }
+/* A break or waiting at the dock: neutral, the truck goes on today. */
+.rest-at-stop-pause { border-color: rgb(var(--ln-e2e8f0)); background: rgb(var(--bg-f8fafc)); color: rgb(var(--tx-334155)); }
