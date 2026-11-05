@@ -1,0 +1,8 @@
+.address-input { position: relative; min-width: 0; flex: 1; }
+.address-input-list { position: absolute; z-index: 40; top: calc(100% + 4px); right: 0; left: 0; max-height: 300px; overflow-y: auto; border: 1px solid rgb(var(--ln-e2e8f0)); border-radius: 10px; padding: 4px; background: rgb(var(--bg-ffffff)); box-shadow: 0 12px 28px rgb(var(--shadow-rgb) / 0.16); }
+.address-input-option { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: start; gap: 8px; border-radius: 7px; padding: 7px 8px; cursor: pointer; font-size: .8125rem; line-height: 1.35; color: rgb(var(--tx-0f172a)); }
+.address-input-option svg { margin-top: 2px; color: rgb(var(--tx-64748b)); }
+.address-input-option strong { display: block; overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.address-input-option small { display: block; overflow: hidden; color: rgb(var(--tx-64748b)); text-overflow: ellipsis; white-space: nowrap; }
+.address-input-option em { font-style: normal; font-size: .6875rem; color: rgb(var(--tx-64748b)); white-space: nowrap; }
+.address-input-option.active { background: rgb(var(--bg-f1f5f9)); }

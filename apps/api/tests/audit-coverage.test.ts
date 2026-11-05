@@ -5,11 +5,13 @@ import { describe, expect, it } from 'vitest';
 const NOT_AUDITED = new Set([
   'POST /imports/excel/preview', 'POST /imports/pdf/preview', 'POST /imports/image/preview',
   'POST /tours/preview', 'POST /stops/:id/appointment/preview', 'POST /tours/:id/replan/preview',
-  'POST /geocode/resolve'
+  'POST /geocode/resolve',
+  // Ranking counter only; the address book sync audits inside its service.
+  'POST /addresses/:id/used'
 ]);
 
 // Route files outside app.ts that mutate data; each handler must audit too.
-const SOURCES = ['../src/app.ts', '../src/routes/vehicle-status-settings.ts', '../src/routes/daily-status.ts'];
+const SOURCES = ['../src/app.ts', '../src/routes/vehicle-status-settings.ts', '../src/routes/daily-status.ts', '../src/routes/address-book.ts'];
 
 describe('CLAUDE.md rule 7: every mutating route writes the audit log', () => {
   it.each(SOURCES)('has an audit call in each mutating handler of %s', (file) => {
@@ -21,7 +23,7 @@ describe('CLAUDE.md rule 7: every mutating route writes the audit log', () => {
       const body = source.slice(match.index, starts[index + 1]?.index ?? source.length).split(/\n\s*app\.(get|register|addHook|setErrorHandler)\(/)[0];
       if (NOT_AUDITED.has(route)) return;
       // The daily list audits inside its service: generate() and editRow() write the entry.
-      if (!/\baudit\(|writeAuditLog\(|auditActor\(request\)|\.generate\(|\.editRow\(/.test(body)) missing.push(route);
+      if (!/\baudit\(|writeAuditLog\(|auditActor\(request\)|\.generate\(|\.editRow\(|\.runNow\(/.test(body)) missing.push(route);
     });
     expect(missing).toEqual([]);
   });

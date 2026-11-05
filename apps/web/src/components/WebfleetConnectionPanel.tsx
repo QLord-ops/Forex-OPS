@@ -1,5 +1,6 @@
 import { Link2, RefreshCw, Satellite, Unlink } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { AddressBookStatus } from './AddressBookStatus'
 
 import { usePolling } from '../hooks/usePolling'
 import { currentDispatcherRole } from '../lib/auth'
@@ -226,6 +227,7 @@ export function WebfleetConnectionPanel({ vehicles = [] }: { vehicles?: Vehicle[
       {bindingError ? <p role="alert" className="text-sm text-red-700">{bindingError}</p> : null}
       {error || syncError ? <p role="alert" className="text-sm text-red-700">{syncError || error?.message}</p> : null}
       {!data?.configured ? <button type="button" className="secondary-button" disabled={loading} onClick={() => void refetch()}>{loading ? 'Получаем статус…' : 'Обновить статус'}</button> : null}
+      {data?.configured ? <AddressBookStatus /> : null}
       <p className="text-xs text-slate-500">GPS не подтверждает загрузку или выгрузку автоматически. Доступность тахографа и рабочих часов проверяется отдельно; расчётные часы машины не заменяются.</p>
     </section>
   )

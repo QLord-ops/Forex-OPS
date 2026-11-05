@@ -48,6 +48,8 @@ import { registerDispatcherRoutes } from './routes/dispatchers.js';
 import { registerVehicleAssignmentRoutes } from './routes/vehicle-assignment.js';
 import { registerVehicleStatusSettingsRoutes } from './routes/vehicle-status-settings.js';
 import { registerDailyStatusRoutes } from './routes/daily-status.js';
+import { registerAddressBookRoutes } from './routes/address-book.js';
+import { AddressBookSync } from './services/address-book.js';
 import { DailyStatusService } from './services/daily-status.js';
 import { createDispatcherDependencies } from './services/dispatcher-adapters.js';
 import { writeAuditLog, type AuditActor } from './services/audit-log.js';
@@ -119,6 +121,7 @@ const autoArrival: AutoArrivalHandler | undefined = process.env.AUTO_ARRIVAL_ENA
 const webfleetLive = new WebfleetLiveStore();
 const webfleetSync = new WebfleetSyncService(prisma, undefined, undefined, autoArrival, (positions, now) => webfleetLive.setObjects(positions, now));
 const webfleetDetails = new WebfleetDetailsSync(webfleetLive);
+const addressBook = new AddressBookSync(prisma);
 const webfleetTracks = new WebfleetTrackService();
 const webfleetTelemetry = new WebfleetTelemetryService(prisma, autoArrival);
 const currentPosition = async (id: string, now = new Date()) => {
@@ -284,6 +287,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   registerVehicleAssignmentRoutes(app, prisma);
   registerVehicleStatusSettingsRoutes(app, prisma);
   registerDailyStatusRoutes(app, dailyStatus);
+  registerAddressBookRoutes(app, prisma, addressBook);
   await registerRouteScenarioRoutes(app, { service: scenarioService });
 
   let activeOrderImports = 0;
@@ -324,6 +328,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     try {
       await webfleetSync.refreshIfDue().catch(() => undefined);
       await webfleetDetails.refreshIfDue().catch(() => undefined);
+      await addressBook.refreshIfDue(new Date(), webfleetLive.objectsAt).catch((error) => app.log.error(error));
       await routeDeviation.check().catch((error) => app.log.error(error));
       await restAtStop.check().catch((error) => app.log.error(error));
       await notificationService.refresh();

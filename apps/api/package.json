@@ -22,7 +22,8 @@
     "db:reset": "npm run db:deploy && npm run db:seed",
     "db:seed": "tsx prisma/seed.ts",
     "auth:secrets": "tsx src/cli/auth-secrets.ts",
-    "webfleet:check": "tsx src/cli/webfleet-check.ts"
+    "webfleet:check": "tsx src/cli/webfleet-check.ts",
+    "webfleet:addresses": "tsx src/cli/webfleet-address-check.ts"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",

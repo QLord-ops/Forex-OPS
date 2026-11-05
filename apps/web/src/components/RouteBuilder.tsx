@@ -1,9 +1,10 @@
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { AlertTriangle, GripVertical, LoaderCircle, Plus, Route, Truck, X } from 'lucide-react'
+import { AlertTriangle, GripVertical, LoaderCircle, MapPin, Plus, Route, Truck, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
+import { suggestionAddress } from '../lib/address-book'
 import { previewRouteScenario, type RouteScenarioRequest } from '../lib/assistant-api'
 import { formatAppointment } from '../lib/format'
 import type { MapRoutePreview } from '../lib/route-preview'
@@ -11,10 +12,12 @@ import { chosenOption, composeRoute, formatDrive, formatRouteKm } from '../lib/r
 import { looksLikeVehicleReference, vehicleMatch, type VehicleMatch } from '../lib/vehicle-match'
 import type { RouteLeg, RouteScenario } from '../types/assistant'
 import type { Vehicle } from '../types/domain'
+import { AddressInput, type ExtraOption } from './AddressInput'
 import { RouteVariants } from './RouteVariants'
 
 export const MAX_ROUTE_POINTS = 10
-type RoutePoint = { id: string; value: string }
+/** A picked saved address carries exact coordinates: the server does not geocode that point again. */
+type RoutePoint = { id: string; value: string; coords?: { latitude: number; longitude: number } }
 
 let pointSequence = 0
 const newPoint = (value = ''): RoutePoint => ({ id: `point-${++pointSequence}`, value })
@@ -139,7 +142,7 @@ export function RouteBuilder({ vehicles, selectedVehicleNumber, onPreview }: {
     showOnMap(legs, choice, index, base.current.result)
   }
 
-  function update(id: string, value: string) { invalidate(); setPoints((current) => current.map((point) => point.id === id ? { ...point, value } : point)) }
+  function update(id: string, value: string, coords?: RoutePoint['coords']) { invalidate(); setPoints((current) => current.map((point) => point.id === id ? { ...point, value, coords } : point)) }
   function add() { if (points.length >= MAX_ROUTE_POINTS) return; invalidate(); setPoints((current) => [...current, newPoint()]) }
   function remove(id: string) { if (points.length <= 2) return; invalidate(); setPoints((current) => current.filter((point) => point.id !== id)) }
   function onDragEnd(event: DragEndEvent) {
@@ -163,7 +166,7 @@ export function RouteBuilder({ vehicles, selectedVehicleNumber, onPreview }: {
     base.current = null
     setBusy(true); setError(''); setResult(null); setLegs([]); setChoice([]); setActiveLeg(0); setRetiming(false); publish(null)
     try {
-      const stops = filled.slice(1).map((address) => ({ address }))
+      const stops = filled.slice(1).map((address, index) => ({ address, ...(points[index + 1]?.coords ? { coords: points[index + 1]!.coords } : {}) }))
       const body: RouteScenarioRequest = start?.status === 'MATCHED'
         ? { vehicleId: start.id, startMode: 'NOW', includeQueueImpact: false, stops }
         : { originAddress: filled[0], stops }
@@ -200,12 +203,11 @@ export function RouteBuilder({ vehicles, selectedVehicleNumber, onPreview }: {
     <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
       <SortableContext items={points.map((point) => point.id)} strategy={verticalListSortingStrategy}>
         <ol className="route-points">
-          {points.map((point, index) => <SortablePoint key={point.id} point={point} index={index} total={points.length} match={matches[index]}
-            onChange={(value) => update(point.id, value)} onRemove={() => remove(point.id)} />)}
+          {points.map((point, index) => <SortablePoint key={point.id} point={point} index={index} total={points.length} match={matches[index]} vehicles={vehicles}
+            onChange={(value, coords) => update(point.id, value, coords)} onRemove={() => remove(point.id)} />)}
         </ol>
       </SortableContext>
     </DndContext>
-    <datalist id="route-vehicles">{vehicles.map((vehicle) => <option key={vehicle.id} value={`LKW ${vehicle.vehicleNumber}`}>{vehicle.licensePlate || vehicle.vehicleNumber}</option>)}</datalist>
     <button type="button" className="route-add-point" onClick={add} disabled={points.length >= MAX_ROUTE_POINTS}>
       <Plus className="h-4 w-4" aria-hidden="true" />{points.length >= MAX_ROUTE_POINTS ? `Максимум ${MAX_ROUTE_POINTS} точек` : 'Добавить точку'}
     </button>
@@ -228,9 +230,9 @@ export function RouteBuilder({ vehicles, selectedVehicleNumber, onPreview }: {
   </form>
 }
 
-function SortablePoint({ point, index, total, match, onChange, onRemove }: {
-  point: RoutePoint; index: number; total: number; match: VehicleMatch | null
-  onChange: (value: string) => void; onRemove: () => void
+function SortablePoint({ point, index, total, match, vehicles, onChange, onRemove }: {
+  point: RoutePoint; index: number; total: number; match: VehicleMatch | null; vehicles: Vehicle[]
+  onChange: (value: string, coords?: RoutePoint['coords']) => void; onRemove: () => void
 }) {
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id: point.id })
   const inputId = `route-point-${point.id}`
@@ -243,8 +245,10 @@ function SortablePoint({ point, index, total, match, onChange, onRemove }: {
     <span className="route-point-number" aria-hidden="true">{index + 1}</span>
     <div className="min-w-0 flex-1">
       <label className="sr-only" htmlFor={inputId}>{label}</label>
-      <input id={inputId} className="field-input" value={point.value} onChange={(event) => onChange(event.target.value)} placeholder={index === 0 ? 'Номер машины или адрес' : 'Город или полный адрес'}
-        list={index === 0 ? 'route-vehicles' : undefined} autoComplete="off" />
+      <AddressInput id={inputId} value={point.value} onChange={(value) => onChange(value)} placeholder={index === 0 ? 'Номер машины или адрес' : 'Город, фирма или адрес'}
+        onPick={(item) => onChange(`${item.label}, ${suggestionAddress(item)}`, { latitude: item.latitude, longitude: item.longitude })}
+        extraOptions={index === 0 ? vehicleOptions(vehicles, point.value) : undefined} />
+      {index > 0 && point.coords ? <small className="route-point-note"><MapPin className="inline h-3.5 w-3.5" aria-hidden="true" /> точные координаты из адресной книги</small> : null}
       {index === 0 && point.value.trim() ? <small className="route-point-note">{vehicle
         ? <><Truck className="inline h-3.5 w-3.5" aria-hidden="true" /> LKW {vehicle.vehicleNumber}{vehicle.licensePlate ? ` · ${vehicle.licensePlate}` : ''} · от текущей позиции</>
         : match?.status === 'AMBIGUOUS' ? 'Несколько машин с таким номером' : match ? 'Машина не найдена' : 'Адрес старта'}</small> : null}
@@ -260,4 +264,12 @@ function formatDuration(minutes: number) {
   const hours = Math.floor(minutes / 60)
   const rest = minutes % 60
   return hours ? `${hours} ч ${String(rest).padStart(2, '0')} мин` : `${rest} мин`
+}
+
+/** Trucks whose number or plate contains what was typed, for the first route point. */
+function vehicleOptions(vehicles: Vehicle[], typed: string): ExtraOption[] {
+  const query = typed.trim().toLowerCase().replace(/^lkw\s*/, '').replace(/[^a-z0-9äöü]/g, '')
+  if (!query) return []
+  return vehicles.filter((vehicle) => `${vehicle.vehicleNumber}${vehicle.licensePlate ?? ''}`.toLowerCase().replace(/[^a-z0-9äöü]/g, '').includes(query)).slice(0, 4)
+    .map((vehicle) => ({ key: vehicle.id, label: `LKW ${vehicle.vehicleNumber}`, line2: vehicle.licensePlate ?? undefined, value: `LKW ${vehicle.vehicleNumber}` }))
 }
