@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { compareVehicles, getAttention, matchesFleetFilter, needsDecision, positionSource, restNote, terminMargin, vehiclePlace, vehicleStatus } from '../src/lib/fleet-status'
+import { compareVehicles, getAttention, matchesFleetFilter, needsDecision, positionSource, activityNote, restNote, terminMargin, vehiclePlace, vehicleStatus } from '../src/lib/fleet-status'
 import type { DashboardVehicle, Stop } from '../src/types/domain'
 
 const NOW = new Date('2026-11-03T12:00:00Z').getTime()
@@ -34,6 +34,22 @@ describe('fleet status', () => {
     expect(getAttention(resting, NOW)).toMatchObject({ label: 'Суточный отдых', tone: 'watch' })
     expect(needsDecision(resting, new Set(), NOW)).toBe(false)
     expect(restNote(row(), NOW)).toBeNull()
+  })
+
+  it('a long stop with driving time left is a break, not daily rest; waiting and work are named too', () => {
+    const time = (iso: string) => new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+    const atDock = { statusText: 'WAITING', dwellMinutes: 200, currentStop: stop({ type: 'LOAD', arrivedAt: '2026-11-03T08:40:00Z' }) } as const
+    const activity = { stopId: 's1', stopType: 'LOAD' as const, place: 'Düsseldorf', until: null, drivingLeftMs: 150 * 60_000, shiftEndAt: '2026-11-03T17:00:00Z' }
+    const resting = row({ ...atDock, stopActivity: { ...activity, kind: 'BREAK', since: '2026-11-03T09:10:00Z' } })
+    expect(vehicleStatus(resting, NOW)).toEqual({ label: 'Пауза', tone: 'stop' })
+    expect(activityNote(resting, NOW)).toBe(`Пауза с ${time('2026-11-03T09:10:00Z')} · вождения ещё 2 ч 30 мин · смена до ${time('2026-11-03T17:00:00Z')}`)
+    // A break is not the explained daily rest: a long stop still reaches the dispatcher.
+    expect(getAttention(resting, NOW).label).not.toBe('Суточный отдых')
+    const waiting = row({ ...atDock, stopActivity: { ...activity, kind: 'WAITING', since: '2026-11-03T11:00:00Z' } })
+    expect(vehicleStatus(waiting, NOW)).toEqual({ label: 'Загрузка', tone: 'stop' })
+    expect(activityNote(waiting, NOW)).toBe(`Ждёт с ${time('2026-11-03T11:00:00Z')} · готовность`)
+    expect(activityNote(row({ ...atDock, stopActivity: { ...activity, kind: 'WORKING', since: null } }), NOW)).toBe('Идёт работа')
+    expect(activityNote(row(), NOW)).toBeNull()
   })
 
   it('shows where the truck goes and the reserve before Termin', () => {

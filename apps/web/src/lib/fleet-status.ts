@@ -58,6 +58,8 @@ export function vehicleStatus(row: DashboardVehicle, now = Date.now()): { label:
   if (atStop(row, now)) {
     if (row.statusText === 'MANUAL_STOP') return { label: 'Стоянка', tone: 'stop' }
     if (row.restAtStop) return { label: 'Суточный отдых', tone: 'stop' }
+    // Resting with driving time left is a break: the truck goes on after it, not tomorrow.
+    if (row.stopActivity?.kind === 'BREAK') return { label: 'Пауза', tone: 'stop' }
     return { label: stop?.type === 'UNLOAD' ? 'Выгрузка' : stop?.type === 'LOAD' ? 'Загрузка' : 'На точке', tone: 'stop' }
   }
   if (row.statusText === 'WAITING') return { label: 'Пауза', tone: 'ok' }
@@ -73,6 +75,23 @@ export function restNote(row: DashboardVehicle, now = Date.now()) {
   const work = rest.stopType === 'LOAD' ? 'загрузка' : 'выгрузка'
   const until = rest.until ? (berlinDay(new Date(rest.until).getTime()) === berlinDay(now) ? formatTime(rest.until) : formatDateTime(rest.until)) : null
   return `Суточный отдых${until ? ` до ${until}` : ''} · потом ${work}`
+}
+
+/**
+ * What the driver does at the stop, in one line, from the tachograph:
+ * «Суточный отдых до 23:46 · потом загрузка», «Пауза с 14:10 · вождения ещё 2 ч 30 мин», «Ждёт с 13:50», «Идёт работа с 13:20».
+ */
+export function activityNote(row: DashboardVehicle, now = Date.now()) {
+  if (row.restAtStop) return restNote(row, now)
+  const activity = row.stopActivity
+  if (!activity || activity.kind === 'DAILY_REST') return null
+  const at = (iso: string) => berlinDay(new Date(iso).getTime()) === berlinDay(now) ? formatTime(iso) : formatDateTime(iso)
+  const since = activity.since ? ` с ${at(activity.since)}` : ''
+  if (activity.kind === 'WAITING') return `Ждёт${since} · готовность`
+  if (activity.kind === 'WORKING') return `Идёт работа${since}`
+  const left = activity.drivingLeftMs !== null && activity.drivingLeftMs > 0 ? ` · вождения ещё ${formatDurationMinutes(Math.floor(activity.drivingLeftMs / 60_000))}` : ''
+  const shift = activity.shiftEndAt ? ` · смена до ${at(activity.shiftEndAt)}` : ''
+  return `Пауза${since}${left}${shift}`
 }
 
 /** Where the truck is or goes: "A38 → Zwickau", "Magdeburg", "Bovenden → Chemnitz". */
