@@ -400,9 +400,12 @@ type TomTomRoute = {
     magnitudeOfDelay?: number;
     roadNumbers?: string[];
     roadShieldReferences?: Array<{
+      /** The text on the sign: for a German Autobahn just "7", the "A" is the sign itself (see `reference` / `affixes`). */
       shieldContent?: string;
       roadNumber?: string;
       text?: string;
+      affixes?: string[];
+      reference?: string;
     }>;
   }>;
   guidance?: {
@@ -452,17 +455,72 @@ function toTrafficRouteResult(
     alternatives: alternatives.map((alternative) => toTrafficRouteResult(alternative, providerStatus, warning, [], options)),
     hasRoadClosure: hasRoadClosure(route),
     trafficSections: extractTrafficSections(route, geometry.length),
-    roadSections: extractRoadSections(route, geometry.length),
+    roadSections: extractRoadSections(route, geometry.length, geometry),
     providerStatus,
     warning
   };
+}
+
+type ShieldReference = NonNullable<NonNullable<TomTomRoute["sections"]>[number]["roadShieldReferences"]>[number];
+/**
+ * "A7" from a road shield reference. TomTom puts only the number on the shield ("7"); which sign it is comes from
+ * the affixes or the atlas reference ("DEU-A…", "…motorway…"). A plain "A7" / "A 7" / "B3" is accepted as well.
+ */
+export function shieldRoadName(shield: ShieldReference): string | null {
+  const direct = roadName(shield.shieldContent) ?? roadName(shield.roadNumber) ?? roadName(shield.text);
+  if (direct) return direct;
+  const number = /^\s*(\d{1,3}[a-z]?)\s*$/i.exec(shield.shieldContent ?? shield.roadNumber ?? shield.text ?? "")?.[1];
+  if (!number) return null;
+  const affix = (shield.affixes ?? []).map((value) => value.trim().toUpperCase()).find((value) => value === "A" || value === "B");
+  const letter = affix ?? letterFromReference(shield.reference);
+  return letter ? `${letter}${number}` : null;
+}
+function letterFromReference(reference: string | undefined): "A" | "B" | null {
+  if (!reference) return null;
+  const upper = reference.toUpperCase();
+  if (/MOTORWAY|AUTOBAHN|FREEWAY/.test(upper)) return "A";
+  if (/BUNDES|FEDERAL|NATIONAL|PRIMARY/.test(upper)) return "B";
+  const match = /(?:^|[^A-Z])([AB])(?:[^A-Z]|$)/.exec(upper.replace(/^(DEU|DE|GER)(?=[^A-Z]|$)/, ""));
+  return match ? (match[1] as "A" | "B") : null;
+}
+/**
+ * The road after each guidance instruction ("Auf A7 fahren" at 12 km) until the next one that names a road:
+ * the fallback when a route comes without usable road sections.
+ */
+export function instructionRoadSections(route: Pick<TomTomRoute, "guidance">, geometry: Coordinate[]): RoadSection[] {
+  const instructions = (route.guidance?.instructions ?? [])
+    .filter((instruction) => Number.isFinite(instruction.routeOffsetInMeters))
+    .sort((a, b) => (a.routeOffsetInMeters ?? 0) - (b.routeOffsetInMeters ?? 0));
+  if (geometry.length < 2 || !instructions.length) return [];
+  const along = cumulativeMeters(geometry);
+  const total = along[along.length - 1];
+  const indexAt = (meters: number) => {
+    let index = 0;
+    while (index < along.length - 1 && along[index + 1] <= meters) index += 1;
+    return index;
+  };
+  const changes: Array<{ meters: number; road: string | null }> = [];
+  for (const instruction of instructions) {
+    const roads = [...new Set((instruction.roadNumbers ?? []).map(roadName).filter((value): value is string => Boolean(value)))];
+    const road = roads.find((name) => name.startsWith("A")) ?? roads[0] ?? null;
+    if (changes.at(-1)?.road !== road || !changes.length) changes.push({ meters: instruction.routeOffsetInMeters ?? 0, road });
+  }
+  const result: RoadSection[] = [];
+  changes.forEach((change, index) => {
+    if (!change.road) return;
+    const end = changes[index + 1]?.meters ?? total;
+    const start = indexAt(change.meters);
+    const stop = Math.min(geometry.length - 1, end >= total ? geometry.length - 1 : indexAt(end));
+    if (stop > start) result.push({ start, end: stop, road: change.road });
+  });
+  return result;
 }
 
 /**
  * TomTom road shields -> which Autobahn or Bundesstraße each stretch of the route is on (no extra request).
  * Only A and B numbers: E-routes and Landesstraßen would crowd the map. Neighbouring pieces of one road are joined.
  */
-export function extractRoadSections(route: Pick<TomTomRoute, "sections">, pointCount: number): RoadSection[] {
+export function extractRoadSections(route: Pick<TomTomRoute, "sections" | "guidance">, pointCount: number, geometry: Coordinate[] = []): RoadSection[] {
   const pick = (type: "ROAD_SHIELDS" | "IMPORTANT_ROAD_STRETCH") => {
     const pieces: RoadSection[] = [];
     for (const section of route.sections ?? []) {
@@ -471,9 +529,9 @@ export function extractRoadSections(route: Pick<TomTomRoute, "sections">, pointC
       const end = section.endPointIndex;
       if (!Number.isInteger(start) || !Number.isInteger(end) || start! < 0 || end! <= start! || start! >= pointCount - 1) continue;
       const names = type === "ROAD_SHIELDS"
-        ? (section.roadShieldReferences ?? []).map((shield) => shield.shieldContent ?? shield.roadNumber ?? shield.text)
-        : section.roadNumbers ?? [];
-      const roads = [...new Set(names.map(roadName).filter((value): value is string => Boolean(value)))];
+        ? (section.roadShieldReferences ?? []).map(shieldRoadName)
+        : (section.roadNumbers ?? []).map(roadName);
+      const roads = [...new Set(names.filter((value): value is string => Boolean(value)))];
       // Where an Autobahn and a Bundesstraße share the stretch, the Autobahn is what the driver follows.
       const road = roads.find((name) => name.startsWith("A")) ?? roads[0];
       if (road) pieces.push({ start: start!, end: Math.min(end!, pointCount - 1), road });
@@ -481,7 +539,8 @@ export function extractRoadSections(route: Pick<TomTomRoute, "sections">, pointC
     return pieces;
   };
   const pieces = pick("ROAD_SHIELDS");
-  const sorted = (pieces.length ? pieces : pick("IMPORTANT_ROAD_STRETCH")).sort((a, b) => a.start - b.start || b.end - a.end);
+  const stretches = pieces.length ? pieces : pick("IMPORTANT_ROAD_STRETCH");
+  const sorted = (stretches.length ? stretches : instructionRoadSections(route, geometry)).sort((a, b) => a.start - b.start || b.end - a.end);
   const result: RoadSection[] = [];
   for (const piece of sorted) {
     const last = result.at(-1);
@@ -612,9 +671,9 @@ export function extractMainRoads(route: Pick<TomTomRoute, "sections" | "guidance
       if (!Number.isInteger(start) || !Number.isInteger(end) || start! < 0 || end! <= start! || !along.length) continue;
       const meters = along[Math.min(end!, along.length - 1)] - along[Math.min(start!, along.length - 1)];
       const names = type === "ROAD_SHIELDS"
-        ? (section.roadShieldReferences ?? []).map((shield) => shield.shieldContent ?? shield.roadNumber ?? shield.text)
-        : section.roadNumbers ?? [];
-      for (const name of new Set(names.map(roadName).filter((value): value is string => Boolean(value)))) {
+        ? (section.roadShieldReferences ?? []).map(shieldRoadName)
+        : (section.roadNumbers ?? []).map(roadName);
+      for (const name of new Set(names.filter((value): value is string => Boolean(value)))) {
         const entry = roads.get(name) ?? { meters: 0, first: start! };
         entry.meters += meters;
         entry.first = Math.min(entry.first, start!);
@@ -670,9 +729,9 @@ function extractRoadNumbers(route: TomTomRoute): string[] {
   for (const section of [...(route.sections ?? [])].sort((a, b) => (a.startPointIndex ?? 0) - (b.startPointIndex ?? 0))) {
     for (const number of section.roadNumbers ?? []) add(number);
     for (const shield of section.roadShieldReferences ?? []) {
-      add(shield.shieldContent);
-      add(shield.roadNumber);
-      add(shield.text);
+      const named = shieldRoadName(shield);
+      if (named) add(named);
+      else { add(shield.shieldContent); add(shield.roadNumber); add(shield.text); }
     }
   }
   if (!numbers.length) {

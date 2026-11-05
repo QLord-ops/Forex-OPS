@@ -367,6 +367,38 @@ describe("road stretches for the shields on the map", () => {
     ]);
   });
 
+  it("reads the sign letter from the affixes or the atlas reference when the shield shows only the number", () => {
+    expect(extractRoadSections({ sections: [
+      { sectionType: "ROAD_SHIELDS", startPointIndex: 0, endPointIndex: 20, roadShieldReferences: [{ reference: "DEU-A", shieldContent: "7" }] },
+      { sectionType: "ROAD_SHIELDS", startPointIndex: 20, endPointIndex: 40, roadShieldReferences: [{ reference: "de_motorway_2", shieldContent: "44", affixes: [] }] },
+      { sectionType: "ROAD_SHIELDS", startPointIndex: 40, endPointIndex: 60, roadShieldReferences: [{ reference: "shield-123", shieldContent: "3", affixes: ["B"] }] },
+      { sectionType: "ROAD_SHIELDS", startPointIndex: 60, endPointIndex: 80, roadShieldReferences: [{ reference: "DEU-E", shieldContent: "45" }] },
+      { sectionType: "ROAD_SHIELDS", startPointIndex: 80, endPointIndex: 99, roadShieldReferences: [{ reference: "DEU-B", shieldContent: "27" }, { reference: "DEU-A", shieldContent: "38" }] }
+    ] }, 100)).toEqual([
+      { start: 0, end: 20, road: "A7" },
+      { start: 20, end: 40, road: "A44" },
+      { start: 40, end: 60, road: "B3" },
+      { start: 80, end: 99, road: "A38" }
+    ]);
+  });
+
+  it("builds the stretches from the guidance when no road sections are usable", () => {
+    const line = Array.from({ length: 101 }, (_, index) => ({ latitude: 51, longitude: 10 + index * 0.01 }));
+    const route = { sections: [{ sectionType: "TRAFFIC", startPointIndex: 0, endPointIndex: 5, magnitudeOfDelay: 1 }], guidance: { instructions: [
+      { message: "Losfahren", routeOffsetInMeters: 0, roadNumbers: [] },
+      { message: "Auf A7 fahren", routeOffsetInMeters: 7_000, roadNumbers: ["A7", "E45"] },
+      { message: "Weiter auf A7", routeOffsetInMeters: 20_000, roadNumbers: ["A7"] },
+      { message: "Ausfahrt nehmen", routeOffsetInMeters: 35_000, roadNumbers: ["B3"] },
+      { message: "Ziel erreicht", routeOffsetInMeters: 69_000, roadNumbers: [] }
+    ] } };
+    const sections = extractRoadSections(route, line.length, line);
+    expect(sections.map((section) => section.road)).toEqual(["A7", "B3"]);
+    expect(sections[0]!.start).toBeGreaterThan(5);
+    expect(sections[0]!.end).toBe(sections[1]!.start);
+    expect(sections[1]!.end).toBeLessThan(100);
+    expect(extractRoadSections({ guidance: { instructions: [{ message: "x", routeOffsetInMeters: 0, roadNumbers: ["A2"] }] } }, 5)).toEqual([]);
+  });
+
   it("falls back to important road stretches and ignores unusable indices", () => {
     expect(extractRoadSections({ sections: [
       { sectionType: "IMPORTANT_ROAD_STRETCH", startPointIndex: 5, endPointIndex: 50, roadNumbers: ["A2"] },
