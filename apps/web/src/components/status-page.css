@@ -1,0 +1,28 @@
+.status-actions { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; }
+.status-date { display: grid; gap: 4px; }
+.status-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: .8125rem; color: rgb(var(--tx-61748a)); }
+.status-chip { display: inline-flex; align-items: center; border: 1px solid rgb(var(--ln-e2e8f0)); border-radius: 6px; padding: 0 7px; background: rgb(var(--bg-f8fafc)); color: rgb(var(--tx-334155)); font-size: .75rem; font-weight: 500; white-space: nowrap; }
+.status-chip-warn { border-color: rgb(var(--ln-fde68a)); background: rgb(var(--bg-fffbeb)); color: rgb(var(--tx-92400e)); }
+.status-chip-error { border-color: rgb(var(--ln-fecaca)); background: rgb(var(--bg-fef2f2)); color: rgb(var(--tx-b91c1c)); }
+.status-banner { border: 1px solid rgb(var(--ln-fde68a)); border-radius: 10px; padding: 8px 12px; background: rgb(var(--bg-fffbeb)); color: rgb(var(--tx-92400e)); font-size: .8125rem; }
+.status-banner a { text-decoration: underline; }
+.status-block { padding: 12px 14px; }
+.status-block-title { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; font-size: .9375rem; font-weight: 700; color: rgb(var(--tx-18344d)); }
+.status-count { font-size: .75rem; font-weight: 500; color: rgb(var(--tx-61748a)); font-variant-numeric: tabular-nums; }
+.status-table { width: 100%; min-width: 1100px; table-layout: fixed; border-collapse: collapse; font-size: .8125rem; }
+.status-table th, .status-table td { border-bottom: 1px solid rgb(var(--ln-e2e8f0)); padding: 6px 8px; text-align: left; vertical-align: top; }
+.status-table thead th { font-size: .6875rem; font-weight: 700; color: rgb(var(--tx-61748a)); white-space: nowrap; }
+.status-lkw { font-weight: 700; color: rgb(var(--tx-b91c1c)); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.status-remark { overflow-wrap: anywhere; }
+.status-remark > span:first-child { white-space: pre-wrap; }
+.status-notes { display: block; font-size: .6875rem; color: rgb(var(--tx-92400e)); }
+.status-edit { display: grid; gap: 6px; }
+.status-edit-actions { display: inline-flex; gap: 4px; margin-left: 6px; vertical-align: middle; }
+.status-edit .status-edit-actions { margin-left: 0; justify-content: flex-end; }
+.status-icon-button { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 6px; color: rgb(var(--tx-61748a)); }
+.status-icon-button:hover { background: rgb(var(--bg-f8fafc)); }
+.status-icon-button:focus-visible, .status-banner a:focus-visible { outline: 2px solid rgb(var(--ln-0ea5e9)); outline-offset: 1px; }
+.status-we { width: 100%; min-height: 0; height: 30px; padding: 4px 8px; }
+.status-yes { color: rgb(var(--tx-15803d)); font-weight: 600; }
+.status-no { color: rgb(var(--tx-b91c1c)); }
+.status-error { display: block; margin-top: 4px; font-size: .75rem; color: rgb(var(--tx-b91c1c)); }

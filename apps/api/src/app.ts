@@ -46,6 +46,9 @@ import { AssistantError, DispatcherAssistantService } from './services/dispatche
 import { assistantSessionKey, registerDispatcherAssistantRoutes } from './routes/dispatcher-assistant.js';
 import { registerDispatcherRoutes } from './routes/dispatchers.js';
 import { registerVehicleAssignmentRoutes } from './routes/vehicle-assignment.js';
+import { registerVehicleStatusSettingsRoutes } from './routes/vehicle-status-settings.js';
+import { registerDailyStatusRoutes } from './routes/daily-status.js';
+import { DailyStatusService } from './services/daily-status.js';
 import { createDispatcherDependencies } from './services/dispatcher-adapters.js';
 import { writeAuditLog, type AuditActor } from './services/audit-log.js';
 import { matchAppointment } from './services/appointment-match.js';
@@ -131,6 +134,16 @@ const scenarioService = new RouteScenarioService(prisma, routingService, current
 const driverHours = (vehicleId: string, now: Date) => readDriverHours(prisma, webfleetLive, vehicleId, now);
 const terminService = new TerminService(prisma, routingService, currentPosition, driverHours);
 const briefService = new VehicleBriefService(prisma, etaService, currentPosition, driverHours, async (id, now) => (await webfleetTelemetry.latest(id, now))?.address ?? null);
+const dailyStatus = new DailyStatusService(prisma, {
+  getPosition: currentPosition,
+  latestTelemetry: async (id, now) => { const telemetry = await webfleetTelemetry.latest(id, now); return telemetry ? { address: telemetry.address, stale: telemetry.stale } : null; },
+  // The card is often out at 07:00: the last driver's figures still tell when the next shift may start (memory only).
+  driverHours: (id, now) => readDriverHours(prisma, webfleetLive, id, now, { recent: true }),
+  coupledTrailerNo: async (id) => { const coupling = webfleetLive.coupling(await vehicleObjectUid(prisma, id)); return coupling ? webfleetLive.objectNo(coupling.assetUid) : null; },
+  webfleetReady: (now) => now.getTime() - webfleetLive.objectsAt < 3 * 60_000 && (webfleetLive.drivingFeed.at > 0 || webfleetLive.drivingFeed.error !== null),
+  eta: etaService,
+  startedAt: new Date()
+});
 const assistantService = new DispatcherAssistantService(prisma, createDispatcherDependencies(prisma, routingService,
   (input, vehicleId, now) => scenarioService.calculate(routeScenarioInputSchema.parse({ ...input, vehicleId }), now),
   { termin: (input, vehicleId, now) => terminService.plan(input, vehicleId, now), brief: (vehicleId, now) => briefService.build(vehicleId, now) }));
@@ -269,6 +282,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
   registerAppointmentDocumentRoutes(app, { prisma, appointments: appointmentService, pending: pendingAppointments, audit, refreshAlertsForVehicle: (vehicleId) => refreshAlertsForVehicle(vehicleId) });
   registerDispatcherRoutes(app, prisma);
   registerVehicleAssignmentRoutes(app, prisma);
+  registerVehicleStatusSettingsRoutes(app, prisma);
+  registerDailyStatusRoutes(app, dailyStatus);
   await registerRouteScenarioRoutes(app, { service: scenarioService });
 
   let activeOrderImports = 0;
@@ -315,6 +330,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
       await pendingAppointments.scan((input) => notificationService.publish(input)).catch((error) => app.log.error(error));
       await refreshAllAlerts();
       await trafficService.tick();
+      await dailyStatus.runIfDue(new Date()).catch((error) => app.log.error(error));
       lastNotificationRefreshAt = Date.now();
       for (const client of subscribers) client.write(`event: operations\ndata: ${JSON.stringify({ at: Date.now() })}\n\n`);
     } catch (error) { app.log.error(error); }

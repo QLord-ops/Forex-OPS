@@ -9,6 +9,7 @@ import { DashboardPage } from './pages/DashboardPage'
 const VehiclesPage = lazy(() => import('./pages/VehiclesPage').then((module) => ({ default: module.VehiclesPage })))
 const VehicleDetailPage = lazy(() => import('./pages/VehicleDetailPage').then((module) => ({ default: module.VehicleDetailPage })))
 const ToursPage = lazy(() => import('./pages/ToursPage').then((module) => ({ default: module.ToursPage })))
+const StatusPage = lazy(() => import('./pages/StatusPage').then((module) => ({ default: module.StatusPage })))
 const EditTourPage = lazy(() => import('./pages/EditTourPage').then((module) => ({ default: module.EditTourPage })))
 const NewOrderPage = lazy(() => import('./pages/NewOrderPage').then((module) => ({ default: module.NewOrderPage })))
 const AlertsPage = lazy(() => import('./pages/AlertsPage').then((module) => ({ default: module.AlertsPage })))
@@ -33,6 +34,7 @@ export function App() {
         <Route path="vehicles" element={page(<VehiclesPage />)} />
         <Route path="vehicles/:id" element={page(<VehicleDetailPage />)} />
         <Route path="tours" element={page(<ToursPage />)} />
+        <Route path="status" element={page(<StatusPage />)} />
         <Route path="tours/:id/edit" element={page(<EditTourPage />)} />
         <Route path="orders/new" element={page(<NewOrderPage />)} />
         <Route path="alerts" element={page(<AlertsPage />)} />

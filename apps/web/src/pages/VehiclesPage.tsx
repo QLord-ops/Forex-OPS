@@ -5,6 +5,7 @@ import { Link } from 'react-router-dom'
 
 import { DataTable } from '../components/DataTable'
 import { WebfleetConnectionPanel } from '../components/WebfleetConnectionPanel'
+import { SchnelleckePreset, VehicleStatusCells } from '../components/VehicleStatusSettings'
 import { EmptyState, ErrorState, LoadingState } from '../components/States'
 import { usePolling } from '../hooks/usePolling'
 import { api } from '../lib/api'
@@ -57,6 +58,7 @@ export function VehiclesPage() {
       </div>
 
       <WebfleetConnectionPanel vehicles={vehicles} />
+      <SchnelleckePreset onApplied={() => void refetch()} />
 
       <form className="work-surface p-4" onSubmit={handleCreateVehicle}>
         <div className="grid items-end gap-3 md:grid-cols-[180px_220px_160px_auto]">
@@ -89,12 +91,13 @@ export function VehiclesPage() {
       {createError ? <ErrorState error={createError} /> : null}
 
       {vehicles.length ? (
-        <DataTable columns={['Грузовик', 'Госномер', 'Макс. скорость', '']}>
+        <DataTable columns={['Грузовик', 'Госномер', 'Макс. скорость', 'Линия', 'Группа', 'Телефон машины', 'A Schild', 'AppSped', '']}>
           {vehicles.map((vehicle) => (
             <tr key={vehicle.id} className="hover:bg-slate-50">
               <td className="px-3 py-3 text-lg font-bold tabular-nums">{vehicle.vehicleNumber}</td>
               <td className="px-3 py-3 text-sm">{vehicle.licensePlate || '–'}</td>
               <td className="px-3 py-3 text-sm tabular-nums">{vehicle.maxSpeedKmh} км/ч</td>
+              <VehicleStatusCells vehicle={vehicle} onSaved={() => void refetch()} />
               <td className="px-3 py-3 text-right">
                 <Link className="secondary-button min-h-9 px-2" to={`/vehicles/${vehicle.id}`} aria-label={`Открыть грузовик ${vehicle.vehicleNumber}`}>
                   <ArrowUpRight className="h-4 w-4" aria-hidden="true" />

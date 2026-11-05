@@ -9,6 +9,8 @@ const MINUTE = 60_000;
 /** Extra reports run only right after a successful position snapshot, so wrong credentials cost one login, not several. */
 const CREDENTIALS_PROVEN_MS = 3 * MINUTE;
 const DRIVER_LIVE_MS = 5 * MINUTE;
+/** A card taken out in the evening still tells at 07:00 when the next shift may start. */
+const LAST_DRIVER_MS = 20 * 60 * MINUTE;
 /** Event and trip reports allow 1 request/minute per account; keep a safety margin between any two of them. */
 export const SLOW_REPORT_GAP_MS = 65_000;
 const TRACK_CACHE_MS = 2 * MINUTE;
@@ -65,6 +67,7 @@ type ObjectFacts = { objectNo: string | null; licensePlate: string | null; isTra
  */
 export class WebfleetLiveStore {
   private objects = new Map<string, ObjectFacts>();
+  private lastDrivers = new Map<string, { driverUid: string; seenAt: number }>();
   private drivers = new Map<string, WebfleetDrivingTimes>();
   private activities = new Map<string, WebfleetDriverActivity>();
   private optiDrive = new Map<string, number>();
@@ -86,7 +89,17 @@ export class WebfleetLiveStore {
     this.objects = new Map(positions.map((position) => [position.objectUid, {
       objectNo: position.objectNo ?? null, licensePlate: position.licensePlate ?? null, isTrailer: position.isTrailer === true, driver: position.driver ?? null
     }]));
+    for (const position of positions) {
+      if (position.driver?.driverUid) this.lastDrivers.set(position.objectUid, { driverUid: position.driver.driverUid, seenAt: now.getTime() });
+    }
+    for (const [objectUid, last] of this.lastDrivers) if (now.getTime() - last.seenAt > LAST_DRIVER_MS) this.lastDrivers.delete(objectUid);
     this.objectsAt = now.getTime();
+  }
+
+  /** The driver who last had the card in this truck, within 20 h: memory only, for "when may the next shift start". */
+  lastDriverOn(objectUid: string, now: Date) {
+    const last = this.lastDrivers.get(objectUid);
+    return last && now.getTime() - last.seenAt <= LAST_DRIVER_MS ? last.driverUid : null;
   }
 
   setDrivingTimes(rows: WebfleetDrivingTimes[], activities: WebfleetDriverActivity[], now: Date) {
@@ -472,8 +485,11 @@ export async function buildVehicleCard(
 }
 
 export type DriverHours = {
-  /** NO_WEBFLEET: the truck is not bound; WAITING: no fresh object report yet; NONE: nobody signed on. */
-  status: 'SIGNED_ON' | 'NONE' | 'WAITING' | 'NO_WEBFLEET';
+  /**
+   * NO_WEBFLEET: the truck is not bound; WAITING: no fresh object report yet; NONE: nobody signed on;
+   * RECENT: nobody signed on now, the figures are of the driver who last had the card in the truck (only when asked for).
+   */
+  status: 'SIGNED_ON' | 'NONE' | 'WAITING' | 'NO_WEBFLEET' | 'RECENT';
   workState: number | null; activitySince: string | null;
   times: WebfleetDrivingTimes | null;
   timesStatus: 'OK' | 'NO_DATA' | 'UNAVAILABLE' | 'WAITING';
@@ -490,10 +506,15 @@ function driverHoursOf(store: WebfleetLiveStore, driver: WebfleetDriverOnObject 
 }
 
 /** The signed-on driver's tachograph figures for a truck, from server memory only; no name, no driver id. */
-export async function readDriverHours(db: PrismaClient, store: WebfleetLiveStore, vehicleId: string, now: Date): Promise<DriverHours> {
+export async function readDriverHours(db: PrismaClient, store: WebfleetLiveStore, vehicleId: string, now: Date, options: { recent?: boolean } = {}): Promise<DriverHours> {
   const binding = await db.vehicleIntegration.findUnique({ where: { provider_vehicleId: { provider: PROVIDER, vehicleId } } });
   if (!binding || binding.status !== 'ACTIVE') return { status: 'NO_WEBFLEET', workState: null, activitySince: null, times: null, timesStatus: 'NO_DATA' };
   const driver = store.driverOn(binding.externalId, now);
+  if (driver === null && options.recent) {
+    const last = store.lastDriverOn(binding.externalId, now);
+    const times = last ? store.drivingTimes(last) : null;
+    if (times) return { status: 'RECENT', workState: null, activitySince: null, times, timesStatus: 'OK' };
+  }
   const hours = driverHoursOf(store, driver);
   return { status: driver === undefined ? 'WAITING' : driver === null ? 'NONE' : 'SIGNED_ON', workState: driver?.workState ?? null, activitySince: hours.activitySince, times: hours.times, timesStatus: hours.timesStatus };
 }

@@ -92,27 +92,12 @@ export class TerminService {
       }
     };
 
-    const stops: PlannerStop[] = [];
-    let origin: Coordinate | null = position.position;
-    let cursor = startAt;
-    for (const tour of tours) {
-      for (const stop of tour.stops.filter(s => !s.completedAt)) {
-        const leg = tour.legs.find(l => l.toStopId === stop.id && l.status !== 'COMPLETED');
-        const coords: Coordinate = { latitude: stop.latitude, longitude: stop.longitude };
-        let driveSeconds: number | null;
-        if (stop.arrivedAt) driveSeconds = 0;
-        else if (leg && leg.id === activeLeg?.id) {
-          // Fresh GPS: the remaining share of the leg; otherwise what the drive timer has not yet covered.
-          const gps = position.positionSource === 'WEBFLEET' && !position.telemetryStale && leg.distanceMeters > 0 ? position.remainingDistanceMeters / leg.distanceMeters : null;
-          driveSeconds = Math.max(0, gps !== null ? leg.simulatedDurationSeconds * Math.min(1, gps) : leg.simulatedDurationSeconds - snapshot.driveElapsedSeconds);
-          if (leg.routeGeometry) for (const point of parseGeometry(leg.routeGeometry)) geometry.push([point.longitude, point.latitude]);
-        } else if (leg && stops.length) driveSeconds = leg.simulatedDurationSeconds;
-        else driveSeconds = await route(origin, coords, stop.city ?? stop.address, cursor);
-        stops.push(plannerStop(stop, tour.id, driveSeconds));
-        if (driveSeconds !== null) cursor = new Date(cursor.getTime() + (driveSeconds + stop.serviceMinMinutes * 60) * 1000);
-        origin = coords;
-      }
-    }
+    const built = await buildPlannerStops({ tours, activeLeg, position, driveElapsedSeconds: snapshot.driveElapsedSeconds, startAt,
+      estimate: (from, to, label, departure) => route(from, to, label, departure),
+      onActiveLegGeometry: (points) => { for (const point of points) geometry.push([point.longitude, point.latitude]); } });
+    const stops = built.stops;
+    const origin = built.origin;
+    const cursor = built.cursor;
     let targetIndex: number;
     if (input.stopId) {
       targetIndex = stops.findIndex(s => s.stopId === input.stopId);
@@ -147,6 +132,44 @@ export class TerminService {
       geometry, routingProviders: [...providers]
     });
   }
+}
+
+/** How long the drive to a stop without a stored leg takes; `approachSeconds` is the tour's planned approach when it has one. */
+export type DriveEstimate = (from: Coordinate | null, to: Coordinate, label: string, departure: Date, approachSeconds: number | null) => Promise<number | null>;
+type TourRow = VehicleWithTours['tours'][number];
+
+/**
+ * The remaining stops of the active tour and the queue, with the drive to each: the active leg from GPS or the drive timer,
+ * later legs from their stored duration, and only stops without a leg through `estimate` (TomTom, or an offline guess).
+ */
+export async function buildPlannerStops(input: {
+  tours: TourRow[]; activeLeg: TourRow['legs'][number] | null; position: CurrentPosition; driveElapsedSeconds: number; startAt: Date;
+  estimate: DriveEstimate; onActiveLegGeometry?: (points: Coordinate[]) => void;
+}): Promise<{ stops: PlannerStop[]; origin: Coordinate | null; cursor: Date }> {
+  const { position, activeLeg } = input;
+  const stops: PlannerStop[] = [];
+  let origin: Coordinate | null = position.position;
+  let cursor = input.startAt;
+  for (const tour of input.tours) {
+    const started = tour.stops.some(s => s.completedAt || s.arrivedAt);
+    for (const [index, stop] of tour.stops.filter(s => !s.completedAt).entries()) {
+      const leg = tour.legs.find(l => l.toStopId === stop.id && l.status !== 'COMPLETED');
+      const coords: Coordinate = { latitude: stop.latitude, longitude: stop.longitude };
+      let driveSeconds: number | null;
+      if (stop.arrivedAt) driveSeconds = 0;
+      else if (leg && leg.id === activeLeg?.id) {
+        // Fresh GPS: the remaining share of the leg; otherwise what the drive timer has not yet covered.
+        const gps = position.positionSource === 'WEBFLEET' && !position.telemetryStale && leg.distanceMeters > 0 ? position.remainingDistanceMeters / leg.distanceMeters : null;
+        driveSeconds = Math.max(0, gps !== null ? leg.simulatedDurationSeconds * Math.min(1, gps) : leg.simulatedDurationSeconds - input.driveElapsedSeconds);
+        if (leg.routeGeometry) input.onActiveLegGeometry?.(parseGeometry(leg.routeGeometry));
+      } else if (leg && stops.length) driveSeconds = leg.simulatedDurationSeconds;
+      else driveSeconds = await input.estimate(origin, coords, stop.city ?? stop.address, cursor, index === 0 && !started ? tour.approachDurationSeconds ?? null : null);
+      stops.push(plannerStop(stop, tour.id, driveSeconds));
+      if (driveSeconds !== null) cursor = new Date(cursor.getTime() + (driveSeconds + stop.serviceMinMinutes * 60) * 1000);
+      origin = coords;
+    }
+  }
+  return { stops, origin, cursor };
 }
 
 function plannerStop(stop: StopRow, tourId: string, driveSeconds: number | null): PlannerStop {
