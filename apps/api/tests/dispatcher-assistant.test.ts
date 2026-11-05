@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, expect, it, vi } from 'vitest';
 import { PrismaClient } from '../src/generated/sqlite-client/index.js';
 import { asAppDatabase, migrateTestDatabase } from './test-database.js';
-import { DispatcherAssistantService, resolveAssistantVehicle, type AssistantModel, type DispatcherDependencies } from '../src/services/dispatcher-assistant.js';
+import { ANSWER_FALLBACK_SUFFIX, compactForModel, DispatcherAssistantService, persistable, resolveAssistantVehicle, summarizeStoredResult, type AssistantModel, type DispatcherDependencies } from '../src/services/dispatcher-assistant.js';
 
 let db: PrismaClient;
 let directory: string;
@@ -91,7 +91,8 @@ it('scenario only stores dialogue, with no proposal or operational writes', asyn
   const f = await fixture('ASSISTANT-130');
   const before = await db.vehicle.findUniqueOrThrow({ where: { id: f.vehicle.id } });
   const result = await f.send('SCENARIO', { stops: [{ address: 'Berlin', type: 'VISIT' }] });
-  expect(result.scenario).toEqual({ result: 'ON_TIME' });
+  expect(result.scenario).toEqual({ kind: 'SCENARIO', result: 'ON_TIME' });
+  expect(result.results).toEqual([{ kind: 'SCENARIO', result: 'ON_TIME' }]);
   expect(result.proposals).toEqual([]);
   expect(await db.vehicle.findUniqueOrThrow({ where: { id: f.vehicle.id } })).toEqual(before);
   expect(await db.tour.count({ where: { vehicleId: f.vehicle.id } })).toBe(0);
@@ -131,4 +132,80 @@ it('model can request clarification without creating actions', async () => {
   const result = await f.service.message(f.conversation.id, { text: 'Она приехала' }, 'clarification', now);
   expect(result.message.content).toBe('Какая машина?');
   expect(result.proposals).toEqual([]);
+});
+
+const terminPlan = { vehicleNumber: '7490', target: { label: 'Выгрузка · Hannover' }, timeline: [{ type: 'DRIVE' }], geometry: [[13, 52], [10, 53]],
+  recommendation: { terminAtLocal: '14:45' }, driver: { source: 'WEBFLEET', activitySince: '2026-10-16T09:00:00Z', hours: { drivenTodaySeconds: 3600 } }, warnings: ['Позиция устарела'] };
+
+it('calculates a Termin before the answer: the model is asked twice and the second text is kept, with no proposal', async () => {
+  const model = vi.fn<AssistantModel>()
+    .mockResolvedValueOnce({ answer: 'Считаю по данным тахографа…', commands: [{ action: 'TERMIN', vehicle: null, inputJson: '{}', summary: 'Termin в Hannover' }] })
+    .mockResolvedValueOnce({ answer: 'Рекомендую Termin 14:45.', commands: [{ action: 'NOTE', vehicle: null, inputJson: '{"description":"ignored"}', summary: 'не должно попасть' }] });
+  const termin = vi.fn(async () => terminPlan);
+  const brief = vi.fn(async (vehicleId: string) => ({ vehicleNumber: '7490', vehicleId, position: { status: 'MOVING' } }));
+  const f = await fixture('ASSISTANT-TERMIN', { termin, brief }, model);
+  const result = await f.service.message(f.conversation.id, { text: 'Когда лучше взять Termin?', vehicleId: f.vehicle.id }, 'termin', now);
+  expect(termin).toHaveBeenCalledWith({}, f.vehicle.id, now);
+  expect(model).toHaveBeenCalledTimes(2);
+  expect(model.mock.calls[0]![0]).toMatchObject({ phase: 'PLAN', context: { selected: { vehicleNumber: '7490' } } });
+  const second = model.mock.calls[1]![0];
+  expect(second.phase).toBe('ANSWER');
+  expect(second.results).toHaveLength(1);
+  expect(second.results![0]).toMatchObject({ action: 'TERMIN', result: { kind: 'TERMIN', recommendation: { terminAtLocal: '14:45' } } });
+  expect((second.results![0]!.result as Record<string, unknown>).geometry).toBeUndefined();
+  expect(result.message.content).toBe('Рекомендую Termin 14:45.');
+  expect(result.proposals).toEqual([]);
+  expect(result.results).toHaveLength(1);
+  expect((result.results[0] as Record<string, unknown>).driver).toEqual({ source: 'WEBFLEET' });
+  const stored = (await f.service.getMessages(f.conversation.id)).messages.find(m => m.role === 'scenario')!;
+  expect(stored.content).not.toContain('drivenTodaySeconds');
+  expect(JSON.parse(stored.content)).toMatchObject({ kind: 'TERMIN', recommendation: { terminAtLocal: '14:45' } });
+  expect(await db.assistantProposal.count({ where: { conversationId: f.conversation.id } })).toBe(0);
+});
+
+it('keeps the numbers when the second model call fails', async () => {
+  const model = vi.fn<AssistantModel>()
+    .mockResolvedValueOnce({ answer: 'Считаю…', commands: [{ action: 'TERMIN', vehicle: null, inputJson: '{}', summary: 'Termin' }] })
+    .mockRejectedValueOnce(new Error('timeout'));
+  const f = await fixture('ASSISTANT-TERMIN-2', { termin: async () => terminPlan }, model);
+  const result = await f.service.message(f.conversation.id, { text: 'Когда?', vehicleId: f.vehicle.id }, 'termin-2', now);
+  expect(result.message.content).toBe(`Считаю…\n\n${ANSWER_FALLBACK_SUFFIX}`);
+  expect(result.results).toHaveLength(1);
+});
+
+it('runs one model call for a draft and rejects TERMIN without a vehicle or a dependency', async () => {
+  const model = vi.fn<AssistantModel>().mockResolvedValue({ answer: 'x', commands: [{ action: 'TERMIN', vehicle: null, inputJson: '{}', summary: 'Termin' }] });
+  const f = await fixture('ASSISTANT-TERMIN-3', {}, model);
+  await expect(f.service.message(f.conversation.id, { text: 'Когда?' }, 'termin-3', now)).rejects.toThrow('Укажите машину');
+  await expect(f.service.message(f.conversation.id, { text: 'Когда?', vehicleId: f.vehicle.id }, 'termin-3', now)).rejects.toThrow('временно недоступен');
+  const scenario = vi.fn(async () => ({ result: 'ON_TIME' }));
+  const g = await fixture('ASSISTANT-TERMIN-4', { scenario }, model);
+  await g.send('SCENARIO', { stops: [{ address: 'Berlin' }] });
+  expect(model).not.toHaveBeenCalledWith(expect.objectContaining({ phase: 'ANSWER' }));
+});
+
+it('INFO returns the vehicle brief and the history keeps old results short', async () => {
+  const model = vi.fn<AssistantModel>()
+    .mockResolvedValueOnce({ answer: 'Смотрю.', commands: [{ action: 'INFO', vehicle: null, inputJson: '{}', summary: 'Сводка' }] })
+    .mockResolvedValueOnce({ answer: 'Машина в пути.', commands: [] })
+    .mockResolvedValue({ answer: 'Понял.', commands: [] });
+  const f = await fixture('ASSISTANT-INFO', { brief: async () => ({ vehicleNumber: '7490', driver: { summary: 'Ездил 2 ч', hours: { drivenToday: '2 ч' } } }) }, model);
+  const first = await f.service.message(f.conversation.id, { text: 'Что с машиной?', vehicleId: f.vehicle.id }, 'info', now);
+  expect(first.results[0]).toMatchObject({ kind: 'VEHICLE_BRIEF', driver: { summary: 'Ездил 2 ч' } });
+  expect((first.results[0] as { driver: Record<string, unknown> }).driver.hours).toBeUndefined();
+  await f.service.message(f.conversation.id, { text: 'Спасибо', vehicleId: f.vehicle.id }, 'info', now);
+  const history = model.mock.calls[2]![0].history;
+  expect(history.find(m => m.role === 'scenario')!.content).toBe('[VEHICLE_BRIEF] · LKW 7490');
+});
+
+it('strips map lines for the model and summarizes stored results', () => {
+  const compact = compactForModel({ kind: 'TERMIN', geometry: [[1, 2]], stops: [{ coords: { latitude: 1, longitude: 2 }, label: 'A' }], timeline: Array.from({ length: 50 }, (_, i) => ({ type: 'DRIVE', i })) }) as Record<string, unknown>;
+  expect(compact.geometry).toBeUndefined();
+  expect(compact.stops).toEqual([{ label: 'A' }]);
+  expect(compact.timeline).toHaveLength(40);
+  expect(persistable({ kind: 'TERMIN', driver: { source: 'WEBFLEET', hours: {}, activitySince: 'x' } })).toEqual({ kind: 'TERMIN', driver: { source: 'WEBFLEET' } });
+  expect(persistable({ kind: 'SCENARIO', geometry: [] })).toEqual({ kind: 'SCENARIO', geometry: [] });
+  expect(summarizeStoredResult(JSON.stringify({ kind: 'TERMIN', vehicleNumber: '1', target: { label: 'Выгрузка · Emden' }, recommendation: { terminAtLocal: '14:45' }, warnings: ['a', 'b', 'c', 'd'] })))
+    .toBe('[TERMIN] · LKW 1 · Выгрузка · Emden · рекомендуемый Termin 14:45 · предупреждения: a; b; c');
+  expect(summarizeStoredResult('not json')).toBe('not json');
 });

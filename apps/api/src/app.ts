@@ -33,7 +33,9 @@ import { RestAtStopService } from './services/rest-at-stop.js';
 import { AddressRuleService, applyRulesToStop, BUILT_IN_RULES } from './services/address-rules.js';
 import { VEHICLE_CLOCK_LIMITS } from './services/vehicle-clock.js';
 import { bindWebfleetObject, listWebfleetBindings, unbindWebfleetVehicle, WebfleetSyncService, WebfleetTelemetryService, distanceMeters, DEFAULT_ARRIVAL_RADIUS_METERS, type AutoArrivalHandler } from './services/webfleet.js';
-import { buildVehicleCard, suggestWebfleetBindings, vehicleObjectUid, WebfleetDetailsSync, WebfleetLiveStore, WebfleetTrackService } from './services/webfleet-live.js';
+import { buildVehicleCard, readDriverHours, suggestWebfleetBindings, vehicleObjectUid, WebfleetDetailsSync, WebfleetLiveStore, WebfleetTrackService } from './services/webfleet-live.js';
+import { TerminService } from './services/termin-service.js';
+import { VehicleBriefService } from './services/vehicle-brief.js';
 import { calculateRiskColor, calculateSimulatedDuration } from './services/simulation.js';
 import { forecastDrive } from './services/vehicle-clock.js';
 import { parseClockState } from './services/tours.js';
@@ -126,8 +128,12 @@ const trafficService = new TrafficOperationsService(prisma, tourService, notific
 const routeDeviation = new RouteDeviationService(prisma, currentPosition, (input) => notificationService.publish(input));
 const restAtStop: RestAtStopService = new RestAtStopService(prisma, webfleetLive, (input) => notificationService.publish(input));
 const scenarioService = new RouteScenarioService(prisma, routingService, currentPosition);
+const driverHours = (vehicleId: string, now: Date) => readDriverHours(prisma, webfleetLive, vehicleId, now);
+const terminService = new TerminService(prisma, routingService, currentPosition, driverHours);
+const briefService = new VehicleBriefService(prisma, etaService, currentPosition, driverHours, async (id, now) => (await webfleetTelemetry.latest(id, now))?.address ?? null);
 const assistantService = new DispatcherAssistantService(prisma, createDispatcherDependencies(prisma, routingService,
-  (input, vehicleId, now) => scenarioService.calculate(routeScenarioInputSchema.parse({ ...input, vehicleId }), now)));
+  (input, vehicleId, now) => scenarioService.calculate(routeScenarioInputSchema.parse({ ...input, vehicleId }), now),
+  { termin: (input, vehicleId, now) => terminService.plan(input, vehicleId, now), brief: (vehicleId, now) => briefService.build(vehicleId, now) }));
 
 const vehicleSchema = z.object({
   vehicleNumber: z.string().trim().min(1),

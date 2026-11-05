@@ -80,13 +80,14 @@ async function ownedTour(db: PrismaClient, tourId: string, vehicleId: string) {
   return tour;
 }
 
-export function createDispatcherDependencies(db: PrismaClient, routing: RoutingProvider, scenario?: DispatcherDependencies['scenario']): DispatcherDependencies {
+export function createDispatcherDependencies(db: PrismaClient, routing: RoutingProvider, scenario?: DispatcherDependencies['scenario'], extras: Pick<DispatcherDependencies, 'termin' | 'brief'> = {}): DispatcherDependencies {
   function services(client: PrismaClient, routes = routing) {
     const tours = new TourService(client, routes);
     return { tours, operations: new OperationsService(client, tours), appointments: new AppointmentService(client, undefined, (v, n) => tours.getCurrentPosition(v, n)), replanning: new ReplanningService(client, routes, (v, n) => tours.getCurrentPosition(v, n)) };
   }
   return {
     scenario,
+    ...extras,
     async prepare(action, input, vehicleId, now) {
       if (action === 'CREATE_VEHICLE') {
         const data = vehicleSchema.parse(input);
