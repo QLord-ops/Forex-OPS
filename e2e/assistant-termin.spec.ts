@@ -61,7 +61,8 @@ test('ИИ-диспетчер показывает расчёт Termin с пау
   const card = page.locator('.termin-plan')
   await expect(card).toHaveCount(1)
   await expect(card).toContainText('по тахографу Webfleet')
-  await expect(card.locator('.termin-timeline .termin-pause')).toContainText('Перерыв · 45 мин · до 13:15')
+  // The fixture is fixed on 05.11: on any other day the card adds the date («до 05.11, 13:15»).
+  await expect(card.locator('.termin-timeline .termin-pause')).toContainText(/Перерыв · 45 мин · до (\d\d\.\d\d, )?13:15/)
   await expect(card).toContainText('Прибытие от 14:45 до 15:45')
   await expect(card).toContainText('С запасом +1 ч')
   await expect(card).toContainText('Позиция машины по Webfleet устарела')

@@ -60,6 +60,7 @@ const modelOrder = [
   // Rows reference their list and (optionally) the truck.
   "dailyStatusReport",
   "dailyStatusRow",
+  "knownAddress",
 ];
 
 async function readAll(client) {

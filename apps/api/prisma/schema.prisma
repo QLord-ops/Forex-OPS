@@ -485,3 +485,31 @@ model DailyStatusRow {
   @@unique([reportId, vehicleId])
   @@index([reportId, sortIndex])
 }
+
+/// Saved addresses (plants, warehouses, gates) for address suggestions. Read from the Webfleet address book; no contacts or phones (DSGVO).
+model KnownAddress {
+  id             String   @id @default(cuid())
+  source         String
+  externalId     String
+  externalNumber String?
+  name           String
+  name2          String?
+  street         String?
+  postalCode     String?
+  city           String?
+  country        String?
+  region         String?
+  latitude       Float
+  longitude      Float
+  radiusMeters   Int?
+  groups         String?
+  searchText     String
+  active         Boolean  @default(true)
+  useCount       Int      @default(0)
+  lastSeenAt     DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([source, externalId])
+  @@index([active])
+}
