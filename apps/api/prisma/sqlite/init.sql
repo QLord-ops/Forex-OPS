@@ -369,3 +369,29 @@ CREATE TABLE "DailyStatusRow" (
 );
 CREATE UNIQUE INDEX "DailyStatusRow_reportId_vehicleId_key" ON "DailyStatusRow"("reportId", "vehicleId");
 CREATE INDEX "DailyStatusRow_reportId_sortIndex_idx" ON "DailyStatusRow"("reportId", "sortIndex");
+-- Saved addresses for suggestions (Webfleet address book).
+CREATE TABLE "KnownAddress" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "source" TEXT NOT NULL,
+    "externalId" TEXT NOT NULL,
+    "externalNumber" TEXT,
+    "name" TEXT NOT NULL,
+    "name2" TEXT,
+    "street" TEXT,
+    "postalCode" TEXT,
+    "city" TEXT,
+    "country" TEXT,
+    "region" TEXT,
+    "latitude" REAL NOT NULL,
+    "longitude" REAL NOT NULL,
+    "radiusMeters" INTEGER,
+    "groups" TEXT,
+    "searchText" TEXT NOT NULL,
+    "active" BOOLEAN NOT NULL DEFAULT true,
+    "useCount" INTEGER NOT NULL DEFAULT 0,
+    "lastSeenAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL
+);
+CREATE UNIQUE INDEX "KnownAddress_source_externalId_key" ON "KnownAddress"("source", "externalId");
+CREATE INDEX "KnownAddress_active_idx" ON "KnownAddress"("active");
