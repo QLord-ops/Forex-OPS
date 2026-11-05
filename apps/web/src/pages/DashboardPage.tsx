@@ -406,12 +406,12 @@ function VehiclePanel({ row, position, drawerOpen, onToggleDrawer, onOpen, onRou
       <div className="vehicle-panel-metric">
         <span className="vehicle-panel-label">{termin ? `Termin ${terminStop?.type === 'LOAD' ? 'загрузки' : 'выгрузки'}` : 'ETA'}</span>
         <strong className={termin ? 'text-termin' : undefined}>{termin ? termin.label.replace(/^Termin /, '') : row.eta ? formatDateTime(row.eta) : '–'}</strong>
-        <span>{termin && row.eta ? <>ETA {formatTime(row.eta)}{margin !== null ? <> · <span className={margin < 0 ? 'timing-late' : 'timing-ok'}>{margin < 0 ? `опоздание ${formatDurationMinutes(-margin)}` : `запас ${formatDurationMinutes(margin)}`}</span></> : null}</> : termin ? 'ETA нет' : 'Termin нет'}</span>
+        <span className="vehicle-panel-note">{termin && row.eta ? <><span>ETA {formatTime(row.eta)}</span>{margin !== null ? <span className={margin < 0 ? 'timing-late' : 'timing-ok'}>{margin < 0 ? `опоздание ${formatDurationMinutes(-margin)}` : `запас ${formatDurationMinutes(margin)}`}</span> : null}</> : <span>{termin ? 'ETA нет' : 'Termin нет'}</span>}</span>
       </div>
       <div className="vehicle-panel-metric">
         <span className="vehicle-panel-label">Осталось</span>
         <strong>{typeof row.remainingKm === 'number' ? `≈ ${Math.round(row.remainingKm)} км` : '–'}</strong>
-        <span>{etaMinutes !== null ? `≈ ${formatDurationMinutes(etaMinutes)} до точки` : 'время неизвестно'}{row.etaSource === 'GPS' ? ' · от GPS' : ' · расчёт'}</span>
+        <span className="vehicle-panel-note"><span>{etaMinutes !== null ? `≈ ${formatDurationMinutes(etaMinutes)} до точки` : 'время неизвестно'}</span><span>{row.etaSource === 'GPS' ? 'от GPS' : 'расчёт'}</span></span>
       </div>
       {clock && (typeof clock.breakInMinutes === 'number' || typeof clock.remainingDrivingMinutes === 'number') ? <div className="vehicle-panel-metric">
         <span className="vehicle-panel-label">Часы водителя{clock.preliminary ? ' · предв.' : ''}</span>
