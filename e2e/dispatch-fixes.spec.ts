@@ -231,3 +231,34 @@ test('начатый тур меняется из карточки: будущи
   await card.getByRole('button', { name: 'Применить изменения' }).click()
   await expect.poll(() => applied).toEqual({ previewId: 'p1', version: 3 })
 })
+
+test('машина на суточном отдыхе на загрузке: пометка в списке и панели, уведомление в «Требует решения»', async ({ page }) => {
+  const arrivedAt = new Date(Date.now() - 5 * 3600_000).toISOString()
+  const until = new Date(Date.now() + 6 * 3600_000)
+  const restStops = [{ ...stops[0], arrivedAt }, stops[1]]
+  await page.route('**/api/**', async (route) => {
+    const path = new URL(route.request().url()).pathname.replace(/^\/api/, '')
+    if (path === '/auth/session') return json(route, { authenticated: true, role: 'dispatcher', csrfToken: 'e2e' })
+    if (path === '/notifications') return json(route, { notifications: [{ id: 'n-rest', vehicleId: 'v1', stopId: 's1', type: 'DAILY_REST_AT_STOP', createdAt: new Date().toISOString(),
+      message: 'LKW 3010 на загрузке в Hannover: водитель на суточном отдыхе с 14:46 (тахограф Webfleet). Загрузка продолжится после отдыха, не раньше 23:46.',
+      payloadJson: JSON.stringify({ stopType: 'LOAD', place: 'Hannover', since: arrivedAt, until: until.toISOString() }) }] })
+    if (path === '/dashboard') return json(route, { vehicles: [{ vehicle: truck('v1', '3010'), statusText: 'WAITING', etaSource: 'GPS', operationVersion: 4, dwellMinutes: 300, dwellSeverity: 'NONE',
+      currentStop: restStops[0], currentAction: { type: 'MARK_LOADED', label: 'BELADEN', stopId: 's1' },
+      restAtStop: { stopId: 's1', stopType: 'LOAD', place: 'Hannover', since: arrivedAt, until: until.toISOString() },
+      tour: { id: 'tour-1', vehicleId: 'v1', orderNumber: '20565181', status: 'ACTIVE', stops: restStops },
+      telemetry: { source: 'WEBFLEET', stale: false, ageSeconds: 60, speedKmh: 0, standstill: true },
+      mapPosition: { coordinate: [9.73, 52.37], source: 'WEBFLEET', stale: false, courseDeg: 0, standstill: true } }] })
+    if (path.endsWith('/current-position')) return json(route, { status: 'WAITING' })
+    return json(route, [])
+  })
+  await page.route('https://tile.openstreetmap.org/**', (route) => route.abort())
+  await page.goto('/?vehicleId=v1')
+  const untilText = until.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+  const row = page.locator('.vehicle-card').filter({ hasText: 'LKW 3010' })
+  await expect(row).toContainText('Суточный отдых')
+  await expect(row).toContainText(`до ${untilText} · потом загрузка`)
+  await expect(page.locator('.vehicle-panel')).toContainText(`потом загрузка`)
+  const decisions = page.getByRole('region', { name: 'Требует решения' })
+  await expect(decisions).toContainText('LKW 3010 на суточном отдыхе на загрузке')
+  await expect(decisions).toContainText('Загрузка продолжится после отдыха')
+})

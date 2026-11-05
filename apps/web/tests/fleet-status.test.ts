@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { compareVehicles, matchesFleetFilter, needsDecision, positionSource, terminMargin, vehiclePlace, vehicleStatus } from '../src/lib/fleet-status'
+import { compareVehicles, getAttention, matchesFleetFilter, needsDecision, positionSource, restNote, terminMargin, vehiclePlace, vehicleStatus } from '../src/lib/fleet-status'
 import type { DashboardVehicle, Stop } from '../src/types/domain'
 
 const NOW = new Date('2026-11-03T12:00:00Z').getTime()
@@ -23,6 +23,17 @@ describe('fleet status', () => {
     expect(needsDecision(row({ statusText: 'ARRIVED', predictedArrival: true }), new Set(), NOW)).toBe(false)
     expect(vehicleStatus(row({ statusText: 'WAITING_FOR_START', tour: { id: 't1', stops: [stop()] } as never }), NOW)).toEqual({ label: 'Запланирован', tone: 'plan' })
     expect(vehicleStatus(row({ statusText: 'IDLE' }), NOW)).toEqual({ label: 'Без тура', tone: 'idle' })
+  })
+
+  it('marks daily rest at the stop as a known state: no long-stop alarm, the work goes on after the rest', () => {
+    const resting = row({ statusText: 'WAITING', dwellMinutes: 300, dwellSeverity: 'NONE', currentAction: { type: 'MARK_LOADED', label: 'BELADEN', stopId: 's1' },
+      currentStop: stop({ type: 'LOAD', arrivedAt: '2026-11-03T07:00:00Z' }),
+      restAtStop: { stopId: 's1', stopType: 'LOAD', place: 'Düsseldorf', since: '2026-11-03T10:46:00Z', until: '2026-11-03T19:46:00Z' } })
+    expect(vehicleStatus(resting, NOW)).toEqual({ label: 'Суточный отдых', tone: 'stop' })
+    expect(restNote(resting, NOW)).toBe(`Суточный отдых до ${new Date('2026-11-03T19:46:00Z').toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })} · потом загрузка`)
+    expect(getAttention(resting, NOW)).toMatchObject({ label: 'Суточный отдых', tone: 'watch' })
+    expect(needsDecision(resting, new Set(), NOW)).toBe(false)
+    expect(restNote(row(), NOW)).toBeNull()
   })
 
   it('shows where the truck goes and the reserve before Termin', () => {
