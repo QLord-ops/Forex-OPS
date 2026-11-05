@@ -125,6 +125,8 @@ export interface DashboardVehicle {
   currentStop?: Stop | null
   dwellMinutes?: number | null
   dwellSeverity?: 'NONE' | 'WARNING' | 'CRITICAL'
+  /** The driver went into daily rest at this loading or unloading point (Webfleet tachograph); the work goes on after it. */
+  restAtStop?: { stopId: string; stopType: 'LOAD' | 'UNLOAD'; place: string; since: string | null; until: string | null } | null
   currentAction?: {
     type: 'MARK_LOADED' | 'MARK_UNLOADED' | 'MANUAL_STOP' | 'RESUME'
     /** No GPS arrival yet: BELADEN/ENTLADEN records the arrival at the same moment. */

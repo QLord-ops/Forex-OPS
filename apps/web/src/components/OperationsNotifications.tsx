@@ -1,9 +1,9 @@
-import { CalendarCheck, CalendarDays, LogOut, MapPinCheck, MessageSquareText, Route, TriangleAlert } from 'lucide-react'
+import { CalendarCheck, CalendarDays, LogOut, MapPinCheck, MessageSquareText, Moon, Route, TriangleAlert } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 
 import { departureOf, useNotifications } from '../context/notifications'
-import { alertPermission, bannerDismissed, dismissBanner, requestAlertPermission, type AlertNotification, type AlertPermission } from '../lib/alerts'
+import { alertPermission, bannerDismissed, dismissBanner, needsAttention, nightItems, requestAlertPermission, type AlertNotification, type AlertPermission } from '../lib/alerts'
 import { pendingToDocument } from '../lib/appointments'
 import { formatTime } from '../lib/format'
 import { terminText } from '../lib/tours'
@@ -59,6 +59,12 @@ export function DecisionCard({ item, stop, onSelect, openLink = false }: { item:
     title = onTime ? `${vehicle ? `LKW ${vehicle}` : 'Машина'} прибыла вовремя · Termin выполнен` : `${vehicle ? `LKW ${vehicle}` : 'Машина'} прибыла с опозданием`
     detail = item.message
     actions = [{ label: 'Понятно', primary: true, run: () => void state.resolve(item, 'ack') }]
+  } else if (item.type === 'DAILY_REST_AT_STOP') {
+    tone = 'info'; Icon = Moon
+    const unload = (stop?.type ?? restStopType(item.payloadJson)) === 'UNLOAD'
+    title = `${vehicle ? `LKW ${vehicle}` : 'Машина'} на суточном отдыхе ${unload ? 'на выгрузке' : 'на загрузке'}`
+    detail = item.message
+    actions = [{ label: 'Понятно', primary: true, run: () => void state.resolve(item, 'ack') }]
   } else if (item.type === 'PREVIOUS_TOUR_OPEN') {
     tone = 'late'; Icon = TriangleAlert
     title = `${vehicle ? `LKW ${vehicle}` : 'Машина'} уже на следующем туре, прошлый не закрыт`
@@ -77,10 +83,11 @@ export function DecisionCard({ item, stop, onSelect, openLink = false }: { item:
   }
 
   const headingId = `decision-${item.id}`
-  return <article className={`decision-card decision-card-${tone}`} aria-labelledby={headingId}>
+  return <article className={`decision-card decision-card-${item.resolved ? 'info' : tone}`} aria-labelledby={headingId}>
     <Icon className="decision-card-icon" aria-hidden="true" />
     <div className="min-w-0">
       {onSelect ? <button type="button" id={headingId} className="decision-card-title" onClick={() => onSelect(item.vehicleId)}>{title}</button> : <h3 id={headingId} className="decision-card-title">{title}</h3>}
+      {item.resolved ? <p className="decision-card-stale">Уже не актуально{item.resolvedReason ? `: ${item.resolvedReason}` : ''}</p> : null}
       {detail ? <p className="decision-card-detail">{detail}</p> : null}
       {error ? <p role="alert" className="decision-card-error">{error}</p> : null}
       <div className="decision-card-actions">
@@ -89,6 +96,46 @@ export function DecisionCard({ item, stop, onSelect, openLink = false }: { item:
       </div>
     </div>
   </article>
+}
+
+/**
+ * «Требует решения» in priority order: decisions, then risks; information and what no longer applies
+ * waits folded in «Для сведения» with one «Прочитать все».
+ */
+export function DecisionGroups({ items, stopOf, onSelect, openLink = false }: { items: AlertNotification[]; stopOf?: (item: AlertNotification) => Stop | null | undefined; onSelect?: (vehicleId: string) => void; openLink?: boolean }) {
+  const state = useNotifications()
+  const actions = items.filter((item) => needsAttention(item) && item.priority !== 'RISK')
+  const risks = items.filter((item) => needsAttention(item) && item.priority === 'RISK')
+  const info = items.filter((item) => !needsAttention(item))
+  const night = nightItems(items, state.workHours)
+  const nightDecisions = night.filter((item) => needsAttention(item) && item.priority !== 'RISK').length
+  const card = (item: AlertNotification) => <DecisionCard key={item.id} item={item} stop={stopOf?.(item)} onSelect={onSelect} openLink={openLink} />
+  const readAll = () => {
+    if (window.confirm(`Отметить прочитанными ${info.length} уведомл. «Для сведения»? Требующие решения останутся.`)) void state.acknowledgeAll(info)
+  }
+  return <div className="decision-groups">
+    {night.length ? <p className="decision-night" role="status">За ночь: {night.length}{nightDecisions ? ` · требуют решения: ${nightDecisions}` : ''}</p> : null}
+    {actions.length ? <div className="decision-group" role="group" aria-label="Нужно решение">
+      <h3 className="decision-group-title decision-group-action">Нужно решение<span>{actions.length}</span></h3>
+      <div className="decision-list">{actions.map(card)}</div>
+    </div> : null}
+    {risks.length ? <div className="decision-group" role="group" aria-label="Важно">
+      <h3 className="decision-group-title decision-group-risk">Важно<span>{risks.length}</span></h3>
+      <div className="decision-list">{risks.map(card)}</div>
+    </div> : null}
+    {info.length ? <details className="decision-info">
+      <summary className="decision-group-title"><span className="decision-info-name">Для сведения</span><span>{info.length}</span></summary>
+      <div className="decision-info-actions">
+        <button type="button" className="decision-button" disabled={state.busyId === 'all'} onClick={readAll}>Прочитать все</button>
+        {state.errors.all ? <p role="alert" className="decision-card-error">{state.errors.all}</p> : null}
+      </div>
+      <div className="decision-list">{info.map(card)}</div>
+    </details> : null}
+  </div>
+}
+
+function restStopType(payloadJson?: string | null) {
+  try { return (JSON.parse(payloadJson ?? '{}') as { stopType?: string }).stopType ?? null } catch { return null }
 }
 
 /** Off the dashboard the oldest open question shows as a toast; on the dashboard it lives in «Требует решения». */
@@ -103,7 +150,7 @@ export function OperationsNotifications() {
     <AppointmentReview document={pendingToDocument(state.termin)} fingerprint={state.termin.fingerprint} match={state.termin.match} pendingId={state.termin.id} fileName="Ожидающий Termin"
       onApplied={() => void state.closeTermin(true)} onSaved={() => void state.closeTermin(false)} onSkip={() => void state.closeTermin(false)} />
   </div>
-  const current = onDashboard ? undefined : state.open[0]
+  const current = onDashboard ? undefined : state.open.find(needsAttention)
   const askPermission = permission === 'default' && banner
   if (!current && !askPermission) return null
   return <aside role="dialog" aria-labelledby={current ? `decision-${current.id}` : 'operations-permission-heading'} className="operations-toast">

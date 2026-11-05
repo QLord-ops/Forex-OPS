@@ -2,11 +2,27 @@
  * Alerts that reach the dispatcher outside the OPS tab: a sound, a Windows notification and a count in the tab title.
  * They work while OPS is open in a browser tab, also in the background.
  */
-export interface AlertNotification { id: string; vehicleId: string; stopId?: string | null; type: string; message: string; createdAt: string; payloadJson?: string | null }
+import { isWorkTime, lastShiftEnd, type WorkHours } from './work-hours'
+
+export type AlertPriority = 'ACTION' | 'RISK' | 'INFO'
+export interface AlertNotification {
+  id: string; vehicleId: string; stopId?: string | null; type: string; message: string; createdAt: string; payloadJson?: string | null
+  /** Set by the server: decisions first, then risks, then information. */
+  priority?: AlertPriority
+  /** Rings also outside the working day: left without BELADEN/ENTLADEN, critical stop. */
+  urgent?: boolean
+  /** No longer applies (BELADEN done, a newer jam); stays until the dispatcher reads it. */
+  resolved?: boolean
+  resolvedReason?: string | null
+}
+
+/** Counts in the title and on the bell: only what still asks for the dispatcher. */
+export const needsAttention = (item: AlertNotification) => !item.resolved && item.priority !== 'INFO'
 
 const SEEN_KEY = 'ops-alerted-notifications'
 const SOUND_KEY = 'ops-alert-sound'
 const BANNER_KEY = 'ops-alert-banner-dismissed'
+const DEFERRED_KEY = 'ops-deferred-alerts'
 export const BASE_TITLE = 'OPS FOREX'
 
 export type AlertPermission = 'granted' | 'denied' | 'default' | 'unsupported'
@@ -61,6 +77,63 @@ export function pickNewAlerts(items: AlertNotification[], seen: string[] | null)
   return { fresh, summary: 0, seen: [...seen, ...fresh.map((item) => item.id)] }
 }
 
+export function readDeferred(): string[] {
+  try {
+    const value: unknown = JSON.parse(window.sessionStorage.getItem(DEFERRED_KEY) ?? '[]')
+    return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+  } catch { return [] }
+}
+
+export function writeDeferred(ids: string[]) {
+  try { window.sessionStorage.setItem(DEFERRED_KEY, JSON.stringify(ids.slice(-300))) } catch { /* storage may be unavailable */ }
+}
+
+/** Notifications that came after the last working day ended, while the dispatcher was away. */
+export function nightItems(items: AlertNotification[], hours: WorkHours, now = new Date()) {
+  if (!isWorkTime(now, hours)) return []
+  const since = lastShiftEnd(now, hours)
+  return items.filter((item) => {
+    const at = new Date(item.createdAt)
+    return (!since || at > since) && !isWorkTime(at, hours)
+  })
+}
+
+export interface AlertPlan {
+  ring: AlertNotification[]
+  /** One summary instead of many sounds: the backlog on the first poll, or what waited through the night. */
+  summary: { total: number; decisions: number; night: boolean } | null
+  seen: string[]
+  deferred: string[]
+}
+
+/**
+ * Which notifications ring now. Outside the working day only urgent ones ring; the rest wait silently
+ * and the first poll of the working day gives one summary of them.
+ */
+export function planAlerts(items: AlertNotification[], seen: string[] | null, deferred: string[], now: Date, hours: WorkHours): AlertPlan {
+  const working = isWorkTime(now, hours)
+  const open = new Set(items.map((item) => item.id))
+  const summaryOf = (list: AlertNotification[], night: boolean) => list.length
+    ? { total: list.length, decisions: list.filter((item) => needsAttention(item) && item.priority === 'ACTION').length, night }
+    : null
+  if (seen === null) {
+    const ids = items.map((item) => item.id)
+    if (working) return { ring: [], summary: summaryOf(items.filter(needsAttention), false), seen: ids, deferred: [] }
+    const urgent = items.filter((item) => item.urgent && needsAttention(item))
+    return { ring: [], summary: summaryOf(urgent, false), seen: ids, deferred: items.filter((item) => !urgent.includes(item)).map((item) => item.id) }
+  }
+  const known = new Set(seen)
+  const fresh = items.filter((item) => !known.has(item.id) && !item.resolved)
+  const nextSeen = [...seen, ...items.filter((item) => !known.has(item.id)).map((item) => item.id)]
+  if (working) {
+    const waited = items.filter((item) => deferred.includes(item.id))
+    return { ring: fresh, summary: summaryOf(waited, true), seen: nextSeen, deferred: [] }
+  }
+  const ring = fresh.filter((item) => item.urgent)
+  const quiet = fresh.filter((item) => !item.urgent).map((item) => item.id)
+  return { ring, summary: null, seen: nextSeen, deferred: [...deferred.filter((id) => open.has(id)), ...quiet] }
+}
+
 export function titleWithCount(count: number) {
   return count > 0 ? `(${count > 99 ? '99+' : count}) ${BASE_TITLE}` : BASE_TITLE
 }
@@ -92,9 +165,14 @@ export function showSystemAlert(item: AlertNotification, onOpen: (path: string) 
   } catch { return null }
 }
 
-export function showSummaryAlert(count: number) {
-  if (alertPermission() !== 'granted' || count <= 0) return
-  try { new window.Notification(BASE_TITLE, { body: `Непрочитанных уведомлений: ${count}`, tag: 'ops-summary' }).onclick = () => window.focus() } catch { /* ignore */ }
+export function summaryText(summary: { total: number; decisions: number; night: boolean }) {
+  const head = summary.night ? `За ночь: ${summary.total}` : `Непрочитанных уведомлений: ${summary.total}`
+  return summary.decisions ? `${head} · требуют решения: ${summary.decisions}` : head
+}
+
+export function showSummaryAlert(summary: { total: number; decisions: number; night: boolean }) {
+  if (alertPermission() !== 'granted' || summary.total <= 0) return
+  try { new window.Notification(BASE_TITLE, { body: summaryText(summary), tag: 'ops-summary' }).onclick = () => window.focus() } catch { /* ignore */ }
 }
 
 let audio: AudioContext | null = null

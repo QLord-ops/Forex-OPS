@@ -106,6 +106,32 @@
 .fleet-list { display: grid; align-content: start; gap: 10px; }
 
 /* ---- Decisions ---- */
+.decision-groups { display: grid; gap: 14px; }
+.decision-night { border-left: 3px solid rgb(var(--ln-e2e8f0)); padding: 2px 0 2px 10px; color: rgb(var(--tx-334155)); font-size: .8125rem; font-variant-numeric: tabular-nums; }
+.decision-group { display: grid; gap: 8px; }
+.decision-group-title { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 0 2px; color: rgb(var(--tx-334155)); font-size: .75rem; font-weight: 500; }
+.decision-group-title span { color: rgb(var(--tx-64748b)); font-variant-numeric: tabular-nums; }
+.decision-group-action { color: rgb(var(--tx-b91c1c)); }
+.decision-group-risk { color: rgb(var(--tx-b45309)); }
+.decision-info { display: grid; gap: 8px; }
+.decision-info > summary { justify-content: flex-start; cursor: pointer; list-style: none; border-radius: 6px; padding: 6px 2px; }
+.decision-info > summary::-webkit-details-marker { display: none; }
+.decision-info > summary::before { content: '▸'; color: rgb(var(--tx-64748b)); font-size: .875rem; }
+.decision-group-title .decision-info-name { margin-right: auto; color: rgb(var(--tx-334155)); }
+.decision-info[open] > summary::before { content: '▾'; }
+.decision-info > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.decision-info-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 4px; }
+.decision-card-stale { margin-top: 3px; color: rgb(var(--tx-64748b)); font-size: .75rem; }
+.decision-card-info.decision-card { background: rgb(var(--bg-f8fafc)); }
+.work-hours { display: grid; gap: 10px; }
+.work-hours-days { display: flex; flex-wrap: wrap; gap: 6px; }
+.work-hours-day { min-width: 40px; height: 34px; border: 1px solid rgb(var(--ln-dbe2ea)); border-radius: 8px; background: rgb(var(--bg-ffffff)); padding: 0 10px; color: rgb(var(--tx-475569)); font-size: .8125rem; font-weight: 500; }
+.work-hours-day[aria-pressed='true'] { border-color: var(--acc); background: rgb(var(--bg-f1f5f9)); color: rgb(var(--tx-0f172a)); }
+.work-hours-day:focus-visible, .work-hours-time input:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.work-hours-times { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.work-hours-time { display: inline-flex; align-items: center; gap: 8px; color: rgb(var(--tx-475569)); font-size: .8125rem; }
+.work-hours-time input { height: 34px; border: 1px solid rgb(var(--ln-dbe2ea)); border-radius: 8px; background: rgb(var(--bg-ffffff)); padding: 0 8px; color: rgb(var(--tx-0f172a)); font-variant-numeric: tabular-nums; }
+.work-hours-error { color: rgb(var(--tx-b91c1c)); font-size: .8125rem; }
 .decision-card { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 12px; border: 1px solid rgb(var(--ln-e3e8ef)); border-radius: 12px; background: rgb(var(--bg-f8fafc)); padding: 14px 14px 14px 16px; }
 .decision-card-icon { width: 20px; height: 20px; margin-top: 1px; color: rgb(var(--tx-475569)); }
 .decision-card-late { border-color: rgb(var(--ln-f6c4c4)); background: rgb(var(--bg-fef4f4)); }
@@ -264,9 +290,13 @@ button.decision-card-title:focus-visible { outline: 2px solid var(--focus); outl
 .vehicle-panel-label .route-stage-summary { display: inline; color: inherit; font-size: inherit; font-weight: 400; }
 .vehicle-panel-route { display: flex; min-width: 0; align-items: center; gap: 6px; overflow: hidden; color: rgb(var(--tx-0f172a)); font-size: 1.0625rem; font-weight: 500; white-space: nowrap; }
 .vehicle-panel-route svg { flex: none; color: rgb(var(--tx-475569)); }
-.vehicle-panel-metric { display: grid; min-width: 0; gap: 4px; }
+.vehicle-panel-metric { display: grid; min-width: min-content; gap: 4px; }
 .vehicle-panel-metric strong { color: rgb(var(--tx-0f172a)); font-size: 1.125rem; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .vehicle-panel-metric > span:last-child { color: rgb(var(--tx-64748b)); font-size: .8125rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* «ETA 10:41 · опоздание 2 ч 12 мин»: the parts move to a new line instead of running into the next column. */
+.vehicle-panel-note { display: flex; flex-wrap: wrap; column-gap: 6px; }
+.vehicle-panel-note > span { white-space: nowrap; }
+.vehicle-panel-note > span + span::before { content: '·'; margin-right: 6px; color: rgb(var(--tx-94a3b8)); }
 .vehicle-panel-actions { display: flex; grid-column: -2; gap: 10px; justify-self: end; }
 .vehicle-panel-actions .primary-button, .vehicle-panel-actions .secondary-button { min-height: 46px; padding: 0 16px; font-size: .9375rem; white-space: nowrap; }
 .route-stage-bar { display: block; height: 4px; overflow: hidden; border-radius: 999px; background: rgb(var(--bg-e3e8ef)); }
@@ -407,3 +437,7 @@ button.decision-card-title:focus-visible { outline: 2px solid var(--focus); outl
 .road-shield-a { background: #1d5ca8; color: #ffffff; box-shadow: inset 0 0 0 1.5px #ffffff, 0 0 0 1px #1d5ca8, 0 1px 3px rgb(0 0 0 / .35); }
 .road-shield-b { background: #f5c400; color: #111111; box-shadow: inset 0 0 0 1.5px #111111, 0 0 0 1px #ffffff, 0 1px 3px rgb(0 0 0 / .3); }
 .road-shield-hidden { visibility: hidden; }
+
+/* Daily rest at the stop: a calm, known state, not an alarm. */
+.rest-at-stop { display: inline-flex; align-items: center; border: 1px solid rgb(var(--ln-bae6fd)); border-radius: 6px; padding: 0 7px; background: rgb(var(--bg-f0f9ff)); color: rgb(var(--tx-075985)); font-size: .75rem; font-weight: 500; white-space: nowrap; }
+.vehicle-panel-id .rest-at-stop { font-size: .8125rem; }

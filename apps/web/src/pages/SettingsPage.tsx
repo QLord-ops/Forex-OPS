@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 
 import { AddressRules } from '../components/AddressRules'
 import { AlertToggle } from '../components/AlertToggle'
+import { WorkHoursSettings } from '../components/WorkHoursSettings'
 import { currentDispatcher, currentDispatcherRole } from '../lib/auth'
 import { THEME_EVENT, currentTheme, setTheme, type Theme } from '../lib/theme'
 
@@ -22,7 +23,7 @@ export function SettingsPage() {
       <div className="page-header">
         <div className="min-w-0">
           <h2 className="page-title">Настройки</h2>
-          <p className="page-subtitle">{person ? `${person.name} · ` : ''}тема и звук хранятся в этом браузере</p>
+          <p className="page-subtitle">{person ? `${person.name} · ` : ''}тема, звук и рабочий день хранятся в этом браузере</p>
         </div>
       </div>
       <section className="settings-card" aria-labelledby="settings-theme">
@@ -36,6 +37,7 @@ export function SettingsPage() {
         <h3 id="settings-sound" className="section-title">Уведомления</h3>
         <p className="page-subtitle">Звук и окно Windows о прибытии, выезде без BELADEN/ENTLADEN и Termin, пока вкладка OPS открыта.</p>
         <AlertToggle className="settings-toggle" />
+        <WorkHoursSettings />
       </section>
       <AddressRules />
       {admin ? <Link to="/dispatchers" className="settings-card settings-link">

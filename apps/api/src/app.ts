@@ -29,6 +29,7 @@ import { ReplanningService } from "./services/replanning.js";
 import { PrismaTrafficQuotaStore, TomTomRoutingProvider, TrafficRoutingService } from './services/traffic-routing.js';
 import { TrafficOperationsService } from './services/traffic-operations.js';
 import { RouteDeviationService } from './services/route-deviation.js';
+import { RestAtStopService } from './services/rest-at-stop.js';
 import { AddressRuleService, applyRulesToStop, BUILT_IN_RULES } from './services/address-rules.js';
 import { VEHICLE_CLOCK_LIMITS } from './services/vehicle-clock.js';
 import { bindWebfleetObject, listWebfleetBindings, unbindWebfleetVehicle, WebfleetSyncService, WebfleetTelemetryService, distanceMeters, DEFAULT_ARRIVAL_RADIUS_METERS, type AutoArrivalHandler } from './services/webfleet.js';
@@ -70,7 +71,8 @@ const tourService = new TourService(prisma, routingService);
 const etaService = new EtaService();
 const alertService = new AlertService(prisma);
 const vehicleService = new VehicleService(prisma);
-const notificationService = new NotificationService(prisma, tourService);
+// A truck on daily rest at its stop is not a «long stop»: the rest notice already told the dispatcher why.
+const notificationService: NotificationService = new NotificationService(prisma, tourService, (vehicleId, stopId): boolean => restAtStop.restAt(vehicleId)?.stopId === stopId);
 const addressRules = new AddressRuleService(prisma);
 const operationsService = new OperationsService(prisma, tourService);
 const pendingAppointments = new PendingAppointmentService(prisma);
@@ -122,6 +124,7 @@ const appointmentService = new AppointmentService(prisma, etaService, currentPos
 const replanningService = new ReplanningService(prisma, routingService, currentPosition);
 const trafficService = new TrafficOperationsService(prisma, tourService, notificationService, new TrafficRoutingService(trafficProvider, trafficQuota), currentPosition);
 const routeDeviation = new RouteDeviationService(prisma, currentPosition, (input) => notificationService.publish(input));
+const restAtStop: RestAtStopService = new RestAtStopService(prisma, webfleetLive, (input) => notificationService.publish(input));
 const scenarioService = new RouteScenarioService(prisma, routingService, currentPosition);
 const assistantService = new DispatcherAssistantService(prisma, createDispatcherDependencies(prisma, routingService,
   (input, vehicleId, now) => scenarioService.calculate(routeScenarioInputSchema.parse({ ...input, vehicleId }), now)));
@@ -301,6 +304,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
       await webfleetSync.refreshIfDue().catch(() => undefined);
       await webfleetDetails.refreshIfDue().catch(() => undefined);
       await routeDeviation.check().catch((error) => app.log.error(error));
+      await restAtStop.check().catch((error) => app.log.error(error));
       await notificationService.refresh();
       await pendingAppointments.scan((input) => notificationService.publish(input)).catch((error) => app.log.error(error));
       await refreshAllAlerts();
@@ -345,6 +349,12 @@ export async function buildApp(options: BuildAppOptions = {}) {
     await notificationService.acknowledge(id);
     await audit(request, 'NOTIFICATION_ACKNOWLEDGED', 'Notification', id);
     return { ok: true };
+  });
+  app.post('/notifications/ack-many', async (request) => {
+    const { ids } = z.object({ ids: z.array(z.string().min(1).max(64)).min(1).max(300) }).parse(request.body);
+    const result = await notificationService.acknowledgeMany([...new Set(ids)]);
+    await audit(request, 'NOTIFICATIONS_ACKNOWLEDGED', 'Notification', 'bulk', { metadata: { count: result.count } });
+    return { ok: true, count: result.count };
   });
   app.get('/events/stream', async (request, reply) => {
     const sessionId = request.dispatcherSession?.sessionId;
@@ -1216,7 +1226,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
         warning: riskColor !== "GREEN" && riskColor !== "GREY" ? riskColor : null,
         currentStop: currentStop ? toIsoObject(currentStop) : null,
         dwellMinutes: dwell.dwellMinutes,
-        dwellSeverity: dwell.dwellSeverity,
+        dwellSeverity: restAtStop.restAt(vehicle.id)?.stopId === currentStop?.id ? "NONE" : dwell.dwellSeverity,
+        restAtStop: (() => { const rest = restAtStop.restAt(vehicle.id); return rest && rest.stopId === currentStop?.id ? rest : null; })(),
         currentAction,
         issues: vehicle.issues.map(toIsoObject),
         statusStartedAt: statusStartedAt?.toISOString() ?? null,

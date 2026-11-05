@@ -1,4 +1,4 @@
-import { formatDelay, formatDurationMinutes, formatDateTime, shortAddress, statusLabel } from './format'
+import { formatDelay, formatDurationMinutes, formatDateTime, formatTime, shortAddress, statusLabel } from './format'
 import { currentStopOf, terminOf } from './tours'
 import type { DashboardVehicle } from '../types/domain'
 
@@ -17,6 +17,8 @@ export function getDwellMinutes(row: DashboardVehicle, now = Date.now()) {
 export function getAttention(row: DashboardVehicle, now = Date.now()): { rank: number; tone: AttentionTone; label: string; reason: string } {
   const breakdown = row.issues?.find(issue => issue.kind === 'BREAKDOWN')
   if (breakdown) return { rank: -1, tone: 'critical', label: 'Ремонт', reason: `${breakdown.description} · ${breakdown.expectedResolvedAt ? `ETA условная, ремонт до ${formatDateTime(breakdown.expectedResolvedAt)}` : 'Срок ремонта и ETA неизвестны'}` }
+  // Daily rest at the stop is known and explained: no «long stop» alarm and no BELADEN reminder while the driver sleeps.
+  if (row.restAtStop) return { rank: 3, tone: 'watch', label: 'Суточный отдых', reason: restNote(row, now) ?? 'Суточный отдых на точке' }
   const dwellMinutes = getDwellMinutes(row, now)
   const dwellSeverity = row.dwellSeverity ?? (dwellMinutes > 120 ? 'CRITICAL' : dwellMinutes > 60 ? 'WARNING' : 'NONE')
   if (dwellSeverity === 'CRITICAL') return { rank: 0, tone: 'dwell', label: 'Долгая стоянка', reason: `На точке ${formatDurationMinutes(dwellMinutes)}` }
@@ -55,12 +57,22 @@ export function vehicleStatus(row: DashboardVehicle, now = Date.now()): { label:
   const stop = row.currentStop ?? (row.tour ? currentStopOf(row.tour) : null)
   if (atStop(row, now)) {
     if (row.statusText === 'MANUAL_STOP') return { label: 'Стоянка', tone: 'stop' }
+    if (row.restAtStop) return { label: 'Суточный отдых', tone: 'stop' }
     return { label: stop?.type === 'UNLOAD' ? 'Выгрузка' : stop?.type === 'LOAD' ? 'Загрузка' : 'На точке', tone: 'stop' }
   }
   if (row.statusText === 'WAITING') return { label: 'Пауза', tone: 'ok' }
   if (row.statusText === 'MOVING' || row.predictedArrival || row.statusText === 'ARRIVED') return { label: 'В пути', tone: 'ok' }
   if (row.tour && !['IDLE', 'NO_ACTIVE_ROUTE'].includes(row.statusText)) return { label: 'Запланирован', tone: 'plan' }
   return { label: 'Без тура', tone: 'idle' }
+}
+
+/** «Суточный отдых до 23:46 · потом загрузка»: when the driver may work again and what goes on then. */
+export function restNote(row: DashboardVehicle, now = Date.now()) {
+  const rest = row.restAtStop
+  if (!rest) return null
+  const work = rest.stopType === 'LOAD' ? 'загрузка' : 'выгрузка'
+  const until = rest.until ? (berlinDay(new Date(rest.until).getTime()) === berlinDay(now) ? formatTime(rest.until) : formatDateTime(rest.until)) : null
+  return `Суточный отдых${until ? ` до ${until}` : ''} · потом ${work}`
 }
 
 /** Where the truck is or goes: "A38 → Zwickau", "Magdeburg", "Bovenden → Chemnitz". */

@@ -6,7 +6,8 @@ import { usePopover } from '../hooks/usePopover'
 import { AccountMenu } from './AccountMenu'
 import { BrandMark, BrandWordmark } from './Brand'
 import { DispatcherAssistant } from './DispatcherAssistant'
-import { DecisionCard, OperationsNotifications } from './OperationsNotifications'
+import { DecisionGroups, OperationsNotifications } from './OperationsNotifications'
+import { needsAttention } from '../lib/alerts'
 
 /** `also` keeps a section lit on the pages that belong to it. */
 const navItems = [
@@ -75,7 +76,7 @@ function TopBar() {
 function BellMenu() {
   const { open } = useNotifications()
   const popover = usePopover()
-  const count = open.length
+  const count = open.filter(needsAttention).length
   return <div className="topbar-popover-anchor" ref={popover.ref}>
     <button type="button" className="topbar-icon-button topbar-bell" aria-expanded={popover.open} onClick={popover.toggle} aria-label={count ? `Требует решения: ${count}` : 'Уведомления'} title={count ? `Требует решения: ${count}` : 'Нет открытых вопросов'}>
       <Bell className="h-5 w-5" aria-hidden="true" />
@@ -83,7 +84,7 @@ function BellMenu() {
     </button>
     {popover.open ? <div className="topbar-popover bell-popover" aria-label="Требует решения">
       <p className="bell-popover-title">Требует решения <span>{count}</span></p>
-      {count ? <div className="bell-popover-list">{open.map((item) => <DecisionCard key={item.id} item={item} openLink />)}</div> : <p className="bell-popover-empty">Открытых вопросов нет.</p>}
+      {open.length ? <div className="bell-popover-list"><DecisionGroups items={open} openLink /></div> : <p className="bell-popover-empty">Открытых вопросов нет.</p>}
       <NavLink to="/alerts" className="bell-popover-link" onClick={popover.close}>Все предупреждения по срокам</NavLink>
     </div> : null}
   </div>

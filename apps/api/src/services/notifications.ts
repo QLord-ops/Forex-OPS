@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@prisma/client';
+import { prioritize } from './notification-priority.js';
 import type { TourService } from './tours.js';
 
 export type DwellSeverity = 'NONE' | 'WARNING' | 'CRITICAL';
@@ -28,7 +29,8 @@ export function calculateDwellState(stop: DwellStop | null | undefined, now = ne
 
 /** Durable notifications, not browser timers: missed arrivals survive app restarts. */
 export class NotificationService {
-  constructor(private readonly db: PrismaClient, private readonly tours: TourService) {}
+  constructor(private readonly db: PrismaClient, private readonly tours: TourService,
+    private readonly restingAt: (vehicleId: string, stopId: string) => boolean = () => false) {}
 
   async refresh(now = new Date()) {
     const vehicles = await this.db.vehicle.findMany({
@@ -37,7 +39,7 @@ export class NotificationService {
     });
     for (const vehicle of vehicles) {
       const stop = vehicle.tours[0]?.stops.find(item => !item.completedAt);
-      if (!stop) continue;
+      if (!stop || this.restingAt(vehicle.id, stop.id)) continue;
       // Arrival comes only from the GPS zone; a calculated position never raises an arrival prompt.
       const dwell = calculateDwellState(stop, now);
       if (dwell.dwellSeverity !== 'NONE') {
@@ -74,12 +76,30 @@ export class NotificationService {
     });
   }
 
-  list() {
-    return this.db.notification.findMany({ where: { acknowledgedAt: null }, orderBy: { createdAt: 'asc' }, take: 100 });
+  /** Open notifications, most important first: decisions, then risks, then information and what no longer applies. */
+  async list(now = new Date()) {
+    const items = await this.db.notification.findMany({ where: { acknowledgedAt: null }, orderBy: { createdAt: 'asc' }, take: 300 });
+    const legIds = new Set<string>();
+    const stopIds = new Set<string>();
+    for (const item of items) {
+      if (item.stopId) stopIds.add(item.stopId);
+      const payload = parsePayload(item.payloadJson);
+      if (typeof payload.legId === 'string') legIds.add(payload.legId);
+      if (typeof payload.openStopId === 'string') stopIds.add(payload.openStopId);
+    }
+    const legs = legIds.size ? await this.db.leg.findMany({ where: { id: { in: [...legIds] } }, select: { id: true, toStopId: true } }) : [];
+    for (const leg of legs) stopIds.add(leg.toStopId);
+    const stops = stopIds.size ? await this.db.stop.findMany({ where: { id: { in: [...stopIds] } },
+      select: { id: true, type: true, arrivedAt: true, completedAt: true, appointmentAt: true, appointmentWindowStartAt: true } }) : [];
+    return prioritize(items, { stops: new Map(stops.map((stop) => [stop.id, stop])), legTarget: new Map(legs.map((leg) => [leg.id, leg.toStopId])) }, now);
   }
 
   acknowledge(id: string, now = new Date()) {
     return this.db.notification.updateMany({ where: { id, acknowledgedAt: null }, data: { acknowledgedAt: now } });
+  }
+
+  acknowledgeMany(ids: string[], now = new Date()) {
+    return this.db.notification.updateMany({ where: { id: { in: ids }, acknowledgedAt: null }, data: { acknowledgedAt: now } });
   }
 }
 
@@ -89,5 +109,14 @@ function getPayloadSeverity(payloadJson: string): DwellSeverity | null {
     return payload.severity === 'WARNING' || payload.severity === 'CRITICAL' ? payload.severity : null;
   } catch {
     return null;
+  }
+}
+
+function parsePayload(payloadJson: string): Record<string, unknown> {
+  try {
+    const value: unknown = JSON.parse(payloadJson);
+    return value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  } catch {
+    return {};
   }
 }

@@ -231,3 +231,63 @@ test('начатый тур меняется из карточки: будущи
   await card.getByRole('button', { name: 'Применить изменения' }).click()
   await expect.poll(() => applied).toEqual({ previewId: 'p1', version: 3 })
 })
+
+test('машина на суточном отдыхе на загрузке: пометка в списке и панели, уведомление в «Требует решения»', async ({ page }) => {
+  const arrivedAt = new Date(Date.now() - 5 * 3600_000).toISOString()
+  const until = new Date(Date.now() + 6 * 3600_000)
+  const restStops = [{ ...stops[0], arrivedAt }, stops[1]]
+  await page.route('**/api/**', async (route) => {
+    const path = new URL(route.request().url()).pathname.replace(/^\/api/, '')
+    if (path === '/auth/session') return json(route, { authenticated: true, role: 'dispatcher', csrfToken: 'e2e' })
+    if (path === '/notifications') return json(route, { notifications: [{ id: 'n-rest', vehicleId: 'v1', stopId: 's1', type: 'DAILY_REST_AT_STOP', createdAt: new Date().toISOString(),
+      message: 'LKW 3010 на загрузке в Hannover: водитель на суточном отдыхе с 14:46 (тахограф Webfleet). Загрузка продолжится после отдыха, не раньше 23:46.',
+      payloadJson: JSON.stringify({ stopType: 'LOAD', place: 'Hannover', since: arrivedAt, until: until.toISOString() }) }] })
+    if (path === '/dashboard') return json(route, { vehicles: [{ vehicle: truck('v1', '3010'), statusText: 'WAITING', etaSource: 'GPS', operationVersion: 4, dwellMinutes: 300, dwellSeverity: 'NONE',
+      currentStop: restStops[0], currentAction: { type: 'MARK_LOADED', label: 'BELADEN', stopId: 's1' },
+      restAtStop: { stopId: 's1', stopType: 'LOAD', place: 'Hannover', since: arrivedAt, until: until.toISOString() },
+      tour: { id: 'tour-1', vehicleId: 'v1', orderNumber: '20565181', status: 'ACTIVE', stops: restStops },
+      telemetry: { source: 'WEBFLEET', stale: false, ageSeconds: 60, speedKmh: 0, standstill: true },
+      mapPosition: { coordinate: [9.73, 52.37], source: 'WEBFLEET', stale: false, courseDeg: 0, standstill: true } }] })
+    if (path.endsWith('/current-position')) return json(route, { status: 'WAITING' })
+    return json(route, [])
+  })
+  await page.route('https://tile.openstreetmap.org/**', (route) => route.abort())
+  await page.goto('/?vehicleId=v1')
+  const untilText = until.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+  const row = page.locator('.vehicle-card').filter({ hasText: 'LKW 3010' })
+  await expect(row).toContainText('Суточный отдых')
+  await expect(row).toContainText(`до ${untilText} · потом загрузка`)
+  await expect(page.locator('.vehicle-panel')).toContainText(`потом загрузка`)
+  const decisions = page.getByRole('region', { name: 'Требует решения' })
+  await expect(decisions).toContainText('LKW 3010 на суточном отдыхе на загрузке')
+  await expect(decisions).toContainText('Загрузка продолжится после отдыха')
+})
+
+test('утром наверху то, что требует решения; информационное и устаревшее свёрнуто, «Прочитать все» закрывает только его', async ({ page }) => {
+  await page.clock.setFixedTime(new Date('2026-11-05T07:00:00+01:00'))
+  const at = (time: string) => new Date(`2026-11-05T${time}:00+01:00`).toISOString()
+  const notifications = [
+    { id: 'n-left', vehicleId: 'v1', stopId: 's1', type: 'STOP_DEPARTED', priority: 'ACTION', urgent: true, createdAt: at('03:10'),
+      message: 'LKW 9724 уехала с загрузки', payloadJson: JSON.stringify({ stopType: 'LOAD', leftAt: at('03:05') }) },
+    { id: 'n-jam', vehicleId: 'v1', stopId: 's2', type: 'TRAFFIC_DELAY', priority: 'RISK', createdAt: at('04:20'), message: 'Грузовик 9724: задержка из-за трафика 25 мин', payloadJson: '{}' },
+    { id: 'n-old-jam', vehicleId: 'v1', stopId: 's2', type: 'TRAFFIC_DELAY', priority: 'INFO', resolved: true, resolvedReason: 'есть новее', createdAt: at('02:20'), message: 'Грузовик 9724: задержка из-за трафика 12 мин', payloadJson: '{}' },
+    { id: 'n-termin', vehicleId: 'v1', stopId: 's2', type: 'TERMIN_MET', priority: 'INFO', createdAt: at('01:00'), message: 'LKW 9724 прибыла вовремя', payloadJson: '{}' }
+  ]
+  let acked: unknown = null
+  await dashboard(page, async (route, path) => {
+    if (path === '/notifications/ack-many') { acked = route.request().postDataJSON(); await json(route, { ok: true, count: 2 }); return true }
+    return false
+  })
+  await page.route('**/api/notifications', (route) => json(route, { notifications }))
+  await page.goto('/')
+  const decisions = page.getByRole('region', { name: 'Требует решения' })
+  await expect(decisions.getByRole('status')).toHaveText('За ночь: 4 · требуют решения: 1')
+  await expect(decisions.locator('.decision-group-title')).toHaveText(['Нужно решение1', 'Важно1', 'Для сведения2'])
+  await expect(decisions.getByRole('group', { name: 'Нужно решение' })).toContainText('LKW 9724 уехала с загрузки без BELADEN')
+  await expect(decisions.getByText('задержка из-за трафика 12 мин')).toBeHidden()
+  await decisions.getByText('Для сведения').click()
+  await expect(decisions.getByText('Уже не актуально: есть новее')).toBeVisible()
+  page.once('dialog', (dialog) => void dialog.accept())
+  await decisions.getByRole('button', { name: 'Прочитать все' }).click()
+  await expect.poll(() => acked).toEqual({ ids: ['n-old-jam', 'n-termin'] })
+})

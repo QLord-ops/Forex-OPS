@@ -3,7 +3,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { useSearchParams } from 'react-router-dom'
 
 import { LazyMapPanel } from '../components/LazyMapPanel'
-import { DecisionCard } from '../components/OperationsNotifications'
+import { DecisionGroups } from '../components/OperationsNotifications'
+import { needsAttention } from '../lib/alerts'
 import { QuickOrderPanel } from '../components/QuickOrderPanel'
 import { TruckCard } from '../components/TruckCard'
 import { EmptyState, ErrorState, LoadingState } from '../components/States'
@@ -12,7 +13,7 @@ import { usePolling } from '../hooks/usePolling'
 import { usePopover } from '../hooks/usePopover'
 import { useVehiclePosition } from '../hooks/useVehiclePosition'
 import { api, type RouteOptions } from '../lib/api'
-import { compareVehicles, getAttention, matchesFleetFilter, positionSource, terminMargin, terminNeeded, vehiclePlace, vehicleStatus, type FleetFilter, type FleetSort } from '../lib/fleet-status'
+import { compareVehicles, getAttention, matchesFleetFilter, positionSource, restNote, terminMargin, terminNeeded, vehiclePlace, vehicleStatus, type FleetFilter, type FleetSort } from '../lib/fleet-status'
 import { getRoutePreview, setRoutePreview, subscribeRoutePreview } from '../lib/route-preview'
 import { etaText, routeProgress, type StopState } from '../lib/route-progress'
 import { currentStopOf, terminOf } from '../lib/tours'
@@ -215,8 +216,8 @@ export function DashboardPage() {
         </div>
         <div className="fleet-scroll">
           {notifications.open.length ? <section className="decision-section" aria-label="Требует решения">
-            <h2 className="fleet-section-title">Требует решения<span>{notifications.open.length}</span></h2>
-            <div className="decision-list">{notifications.open.map((item) => <DecisionCard key={item.id} item={item} stop={item.stopId ? stopsById.get(item.stopId) : null} onSelect={focusVehicle} />)}</div>
+            <h2 className="fleet-section-title">Требует решения<span>{notifications.open.filter(needsAttention).length}</span></h2>
+            <DecisionGroups items={notifications.open} stopOf={(item) => item.stopId ? stopsById.get(item.stopId) : null} onSelect={focusVehicle} />
           </section> : null}
           <div className="fleet-section-head">
             <h2 className="fleet-section-title">Машины</h2>
@@ -301,6 +302,7 @@ function VehicleRow({ row, selected, open, pinned, owner, busy, onOpen, onRoute,
           <span className="vehicle-row-line"><span className={`status-dot status-dot-${status.tone}`} aria-hidden="true" /><span className={`vehicle-row-status status-text-${status.tone}`}>{status.label}</span>{place ? <span className="truncate">· {place}</span> : null}</span>
           <span className="vehicle-row-meta">
             {dwell ? <span>На точке {formatDurationMinutes(dwell)}</span> : null}
+            {row.restAtStop ? <span className="rest-at-stop">{restNote(row)}</span> : null}
             {termin ? <span className="vehicle-row-termin">{termin.label}</span> : terminNeeded(row) ? <span className="termin-needed">Termin нужен</span> : null}
             {!termin && plannedAt ? <span>план {formatDateTime(plannedAt)}</span> : null}
             {row.eta && status.tone !== 'stop' ? <span>ETA {formatTime(row.eta)}{margin !== null ? <> · <span className={margin < 0 ? 'timing-late' : 'timing-ok'} title={margin < 0 ? `опоздание ${formatDurationMinutes(-margin)}` : `запас ${formatDurationMinutes(margin)}`}>+{formatDurationMinutes(Math.abs(margin))}</span></> : null}</span> : null}
@@ -396,6 +398,7 @@ function VehiclePanel({ row, position, drawerOpen, onToggleDrawer, onOpen, onRou
         <strong>LKW {row.vehicle.vehicleNumber}</strong>
         <span className={`status-pill status-pill-${status.tone}`}><span className={`status-dot status-dot-${status.tone}`} aria-hidden="true" />{status.label}{speed}</span>
         <span className={`source-tag source-tag-${source.kind}`}>{source.kind === 'calculated' ? 'Расчётная позиция' : source.long}</span>
+        {row.restAtStop ? <span className="rest-at-stop">{restNote(row)}</span> : null}
       </div>
       <button type="button" className="vehicle-panel-tour route-stops-drawer-trigger" onClick={onToggleDrawer} aria-expanded={drawerOpen}>
         <span className="sr-only">Точки маршрута · {progress.stops.length}. </span>
@@ -406,12 +409,12 @@ function VehiclePanel({ row, position, drawerOpen, onToggleDrawer, onOpen, onRou
       <div className="vehicle-panel-metric">
         <span className="vehicle-panel-label">{termin ? `Termin ${terminStop?.type === 'LOAD' ? 'загрузки' : 'выгрузки'}` : 'ETA'}</span>
         <strong className={termin ? 'text-termin' : undefined}>{termin ? termin.label.replace(/^Termin /, '') : row.eta ? formatDateTime(row.eta) : '–'}</strong>
-        <span>{termin && row.eta ? <>ETA {formatTime(row.eta)}{margin !== null ? <> · <span className={margin < 0 ? 'timing-late' : 'timing-ok'}>{margin < 0 ? `опоздание ${formatDurationMinutes(-margin)}` : `запас ${formatDurationMinutes(margin)}`}</span></> : null}</> : termin ? 'ETA нет' : 'Termin нет'}</span>
+        <span className="vehicle-panel-note">{termin && row.eta ? <><span>ETA {formatTime(row.eta)}</span>{margin !== null ? <span className={margin < 0 ? 'timing-late' : 'timing-ok'}>{margin < 0 ? `опоздание ${formatDurationMinutes(-margin)}` : `запас ${formatDurationMinutes(margin)}`}</span> : null}</> : <span>{termin ? 'ETA нет' : 'Termin нет'}</span>}</span>
       </div>
       <div className="vehicle-panel-metric">
         <span className="vehicle-panel-label">Осталось</span>
         <strong>{typeof row.remainingKm === 'number' ? `≈ ${Math.round(row.remainingKm)} км` : '–'}</strong>
-        <span>{etaMinutes !== null ? `≈ ${formatDurationMinutes(etaMinutes)} до точки` : 'время неизвестно'}{row.etaSource === 'GPS' ? ' · от GPS' : ' · расчёт'}</span>
+        <span className="vehicle-panel-note"><span>{etaMinutes !== null ? `≈ ${formatDurationMinutes(etaMinutes)} до точки` : 'время неизвестно'}</span><span>{row.etaSource === 'GPS' ? 'от GPS' : 'расчёт'}</span></span>
       </div>
       {clock && (typeof clock.breakInMinutes === 'number' || typeof clock.remainingDrivingMinutes === 'number') ? <div className="vehicle-panel-metric">
         <span className="vehicle-panel-label">Часы водителя{clock.preliminary ? ' · предв.' : ''}</span>
