@@ -25,6 +25,14 @@ model Vehicle {
   truckProfile   String?
   assignedDispatcherId String?
   assignedAt     DateTime?
+  /// Customer line: SCHNELLECKE | WALTER_TESLA | OTHER. Only SCHNELLECKE trucks get the 07:00 status list.
+  line           String?
+  /// Block in the status list: NORD | SUED | LUFE.
+  statusGroup    String?
+  /// The truck's service phone for the status list, never a driver's personal number.
+  servicePhone   String?
+  aSchild        Boolean  @default(false)
+  appSped        Boolean  @default(false)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -34,8 +42,10 @@ model Vehicle {
   alerts Alert[]
   integrations VehicleIntegration[]
   telemetry VehicleTelemetry[]
+  dailyStatusRows DailyStatusRow[]
 
   @@index([assignedDispatcherId])
+  @@index([line, statusGroup])
 }
 
 model Tour {
@@ -419,4 +429,63 @@ model AddressRule {
   createdByDispatcherId String?
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
+}
+
+/// The 07:00 status list of one customer line for one Berlin day (owner decision 2026-11-05). The unique (line, date) is the lock against a double run.
+model DailyStatusReport {
+  id                      String    @id @default(cuid())
+  line                    String
+  date                    String
+  status                  String    @default("GENERATING")
+  preliminary             Boolean   @default(false)
+  generatedAt             DateTime?
+  generatedByRole         String
+  generatedByDispatcherId String?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+
+  rows DailyStatusRow[]
+
+  @@unique([line, date])
+}
+
+/// One truck in a status list: a snapshot, so a past list never changes. No driver name or id (DSGVO).
+model DailyStatusRow {
+  id                   String    @id @default(cuid())
+  reportId             String
+  vehicleId            String?
+  vehicleNumber        String
+  statusGroup          String?
+  sortIndex            Int
+  rule                 String
+  ort                  String?
+  ortSource            String?
+  startAt              DateTime?
+  startKind            String
+  ziel                 String?
+  ankunftAt            DateTime?
+  ankunftKind          String
+  bemerkungAuto        String?
+  bemerkung            String?
+  overridesJson        String?
+  weNortheim           String?
+  trailer              String?
+  trailerSource        String?
+  servicePhone         String?
+  aSchild              Boolean   @default(false)
+  appSped              Boolean   @default(false)
+  tourId               String?
+  stopId               String?
+  detailsJson          String?
+  version              Int       @default(0)
+  editedAt             DateTime?
+  editedByDispatcherId String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  report  DailyStatusReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  vehicle Vehicle?          @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+
+  @@unique([reportId, vehicleId])
+  @@index([reportId, sortIndex])
 }
