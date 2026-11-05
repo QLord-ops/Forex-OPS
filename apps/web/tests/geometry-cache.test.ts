@@ -11,4 +11,24 @@ describe('cached route geometry', () => {
       remainingGeometry: [[12, 52], [13, 53]]
     })
   })
+
+  it('joins the GPS point to the line only when the truck is on the route', () => {
+    const route: Array<[number, number]> = [[9.0, 51.0], [9.2, 51.0], [9.4, 51.0]]
+    const onRoute = splitRouteAtCoordinate(route, [9.1, 51.001])
+    expect(onRoute.travelledGeometry).toEqual([[9.0, 51.0], [9.1, 51.001]])
+    expect(onRoute.remainingGeometry).toEqual([[9.1, 51.001], [9.2, 51.0], [9.4, 51.0]])
+
+    // 15 km north of the plan (the truck took the Autobahn instead): the split stays on the line, no straight line to the truck.
+    const offRoute = splitRouteAtCoordinate(route, [9.3, 51.135])
+    expect(offRoute.travelledGeometry).toEqual([[9.0, 51.0], [9.2, 51.0], [9.3, 51.0]])
+    expect(offRoute.remainingGeometry).toEqual([[9.3, 51.0], [9.4, 51.0]])
+    expect(JSON.stringify(offRoute)).not.toContain('51.135')
+  })
+
+  it('cuts between vertices, not at the nearest vertex', () => {
+    const route: Array<[number, number]> = [[9.0, 51.0], [9.4, 51.0]]
+    const split = splitRouteAtCoordinate(route, [9.3, 51.02])
+    expect(split.travelledGeometry).toEqual([[9.0, 51.0], [9.3, 51.0]])
+    expect(split.remainingGeometry[0][0]).toBeCloseTo(9.3, 6)
+  })
 })

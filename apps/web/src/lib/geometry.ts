@@ -69,28 +69,38 @@ export function boundsFor(coordinates: Coordinate[]) {
   ] as const
 }
 
+/** Closer than this the truck is on the route and the line runs to its GPS point; farther, it stays on the plan. */
+export const ON_ROUTE_METERS = 300
+
+/**
+ * Splits the drawn route where the truck is: at the closest point of the line. The GPS point itself joins the line
+ * only when it lies on the route, so a truck that left the plan does not get a straight line drawn to it.
+ */
 export function splitRouteAtCoordinate(route: Coordinate[], coordinate?: Coordinate | null) {
   if (!route.length || !coordinate) return { travelledGeometry: [], remainingGeometry: route }
   if (route.length === 1) return { travelledGeometry: route, remainingGeometry: route }
 
-  let closestIndex = 0
-  let closestDistance = Number.POSITIVE_INFINITY
-  for (let index = 0; index < route.length; index += 1) {
-    const longitude = route[index][0] - coordinate[0]
-    const latitude = route[index][1] - coordinate[1]
-    const distance = longitude * longitude + latitude * latitude
-    if (distance < closestDistance) {
-      closestDistance = distance
-      closestIndex = index
-    }
+  const cosLat = Math.cos(coordinate[1] * Math.PI / 180)
+  const toMeters = (point: Coordinate) => [(point[0] - coordinate[0]) * cosLat * 111_320, (point[1] - coordinate[1]) * 110_574]
+  let best = { index: 0, t: 0, distance: Number.POSITIVE_INFINITY }
+  for (let index = 0; index < route.length - 1; index += 1) {
+    const [ax, ay] = toMeters(route[index])
+    const [bx, by] = toMeters(route[index + 1])
+    const dx = bx - ax, dy = by - ay
+    const length = dx * dx + dy * dy
+    const t = length > 0 ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / length)) : 0
+    const px = ax + dx * t, py = ay + dy * t
+    const distance = Math.hypot(px, py)
+    if (distance < best.distance) best = { index, t, distance }
   }
 
-  const closest = route[closestIndex]
-  const isExactPoint = closest[0] === coordinate[0] && closest[1] === coordinate[1]
-  return {
-    travelledGeometry: isExactPoint ? route.slice(0, closestIndex + 1) : [...route.slice(0, closestIndex + 1), coordinate],
-    remainingGeometry: [coordinate, ...route.slice(closestIndex + 1)]
-  }
+  const [a, b] = [route[best.index], route[best.index + 1]]
+  const onLine: Coordinate = best.t <= 0 ? a : best.t >= 1 ? b : [a[0] + (b[0] - a[0]) * best.t, a[1] + (b[1] - a[1]) * best.t]
+  const cut = best.distance <= ON_ROUTE_METERS ? coordinate : onLine
+  const same = (p: Coordinate, q: Coordinate) => p[0] === q[0] && p[1] === q[1]
+  const before = route.slice(0, best.index + 1).filter((point, index, all) => index < all.length - 1 || !same(point, cut))
+  const after = route.slice(best.index + 1).filter((point, index) => index > 0 || !same(point, cut))
+  return { travelledGeometry: [...before, cut], remainingGeometry: [cut, ...after] }
 }
 
 function isCoordinate(value: unknown): value is Coordinate {
