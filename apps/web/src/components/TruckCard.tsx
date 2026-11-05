@@ -1,4 +1,4 @@
-import { Bell, ClipboardList, History, Loader2, PackageCheck, Route, Trash2, Truck, UserRound, Wrench, X, type LucideIcon } from 'lucide-react'
+import { Bell, ChevronDown, ClipboardList, History, Loader2, PackageCheck, Route, Trash2, Truck, UserRound, Wrench, X, type LucideIcon } from 'lucide-react'
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 
@@ -284,8 +284,10 @@ function TourTab({ vehicleId, row }: { vehicleId: string; row: DashboardVehicle 
   const tours = usePolling(() => api.vehicleTours(vehicleId), 30_000, true, vehicleId)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [error, setError] = useState('')
+  const [openIds, setOpenIds] = useState<string[]>([])
   const current = row?.tour ?? null
   const next = followingTours(tours.data ?? [], current?.id)
+  const toggle = (id: string) => setOpenIds((ids) => ids.includes(id) ? ids.filter((item) => item !== id) : [...ids, id])
 
   async function remove(tour: Pick<Tour, 'id' | 'orderNumber' | 'planVersion'>) {
     if (!window.confirm(`Удалить тур ${tour.orderNumber}? Он пропадёт из цепочки, запись останется в журнале.`)) return
@@ -314,14 +316,28 @@ function TourTab({ vehicleId, row }: { vehicleId: string; row: DashboardVehicle 
                 const stops = sortedStops(tour)
                 const first = stops[0]
                 const last = stops.at(-1)
-                return <li key={tour.id}>
+                const open = openIds.includes(tour.id)
+                const detailsId = `queued-tour-${tour.id}`
+                return <li key={tour.id} className={classNames(open && 'truck-card-tour-open')}>
                   <span className="truck-card-stop-seq">{index + 1}</span>
-                  <span className="min-w-0">
-                    <strong>{tour.orderNumber}</strong>
-                    <span className="truck-card-muted">{first ? shortAddress(first) : '–'} → {last && last !== first ? shortAddress(last) : '–'}</span>
-                    <span className="truck-card-muted">{tour.plannedStartAt ? `старт ${formatDateTime(tour.plannedStartAt)}` : 'без даты'}</span>
-                  </span>
+                  <button type="button" className="truck-card-tour-toggle" aria-expanded={open} aria-controls={detailsId} onClick={() => toggle(tour.id)}>
+                    <span className="min-w-0">
+                      <strong>{tour.orderNumber}</strong>
+                      <span className="truck-card-muted">{first ? shortAddress(first) : '–'} → {last && last !== first ? shortAddress(last) : '–'}</span>
+                      <span className="truck-card-muted">{tour.plannedStartAt ? `старт ${formatDateTime(tour.plannedStartAt)}` : 'без даты'}{stops.length ? ` · точек: ${stops.length}` : ''}</span>
+                    </span>
+                    <ChevronDown className="truck-card-tour-chevron" aria-hidden="true" />
+                  </button>
                   {tourCancellable(tour) ? <RemoveButton busy={busyId === tour.id} orderNumber={tour.orderNumber} onClick={() => void remove(tour)} /> : null}
+                  {open ? <div id={detailsId} className="truck-card-tour-details">
+                    {tour.trailerPlate || tour.tourRemarks ? <p className="truck-card-muted">{[tour.trailerPlate ? `Прицеп ${tour.trailerPlate}` : null, tour.tourRemarks].filter(Boolean).join(' · ')}</p> : null}
+                    {stops.length ? <ol className="truck-card-stops">
+                      {stops.map((stop) => <li key={stop.id}>
+                        <span className="truck-card-stop-seq">{stop.sequence}</span>
+                        <span className="min-w-0"><strong>{stopTypeLabel(stop.type)} · {shortAddress(stop)}</strong><span className="truck-card-muted">{stopState(stop)}</span></span>
+                      </li>)}
+                    </ol> : <p className="truck-card-note">Точек в туре нет.</p>}
+                  </div> : null}
                 </li>
               })}
             </ol>}

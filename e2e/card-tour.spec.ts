@@ -56,6 +56,18 @@ test('вкладка «Тур»: следующая точка, следующи
   await expect(next).toContainText('20570001')
   await expect(next).toContainText('20570002')
 
+  const toggle = next.locator('.truck-card-tour-toggle', { hasText: '20570001' })
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false')
+  await expect(next).not.toContainText('Загрузка · ')
+  await toggle.click()
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+  await expect(next.locator('.truck-card-tour-details')).toContainText('Загрузка · Bocholt')
+  await expect(next.locator('.truck-card-tour-details')).toContainText('Выгрузка · Kassel')
+  await expect(next.locator('.truck-card-tour-details')).toContainText('впереди · без срока')
+  await page.screenshot({ path: 'test-results/queued-tour-open.png', clip: { x: 0, y: 0, width: 1280, height: 900 } })
+  await toggle.click()
+  await expect(next.locator('.truck-card-tour-details')).toHaveCount(0)
+
   await next.getByRole('button', { name: 'Удалить тур 20570001' }).click()
   await expect.poll(() => cancelled).toEqual({ status: 'CANCELLED', version: 1 })
   await expect(next).not.toContainText('20570001')
