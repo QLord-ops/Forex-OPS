@@ -5,8 +5,10 @@ import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 import { assistantApi } from '../lib/assistant-api'
 import { previewGeometry, setRoutePreview } from '../lib/route-preview'
+import { resultTitle } from '../lib/termin-plan'
 import type { AssistantConversation, AssistantMessage, AssistantProposal } from '../types/assistant'
 import type { Vehicle } from '../types/domain'
+import { AssistantResultCard, Preview } from './AssistantResultCard'
 import { FloatingWindow } from './FloatingWindow'
 import { QuickOrderPanel } from './QuickOrderPanel'
 import './dispatcher-assistant.css'
@@ -25,7 +27,7 @@ export function DispatcherAssistant() {
   const [text, setText] = useState(() => { try { return sessionStorage.getItem('ops-assistant-composer') || '' } catch { return '' } })
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
-  const [scenario, setScenario] = useState<unknown>(null)
+  const [results, setResults] = useState<unknown[]>([])
   const generation = useRef(0)
   const bottom = useRef<HTMLDivElement>(null)
   function showOnMap(value: unknown, label = 'Расчёт ИИ') {
@@ -46,7 +48,7 @@ export function DispatcherAssistant() {
   useEffect(() => { bottom.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }) }, [messages, proposals, busy])
   async function selectConversation(id: string) {
     const version = ++generation.current
-    setConversationId(id); setMessages([]); setProposals([]); setScenario(null); setError('')
+    setConversationId(id); setMessages([]); setProposals([]); setResults([]); setError('')
     if (!id) return
     setBusy(true)
     try { const result = await assistantApi.messages(id); if (generation.current === version) { setMessages(result.messages); setProposals(result.proposals) } }
@@ -63,8 +65,9 @@ export function DispatcherAssistant() {
       const response = await assistantApi.send(id, { text: content, vehicleId: vehicleId || undefined, draft })
       const thread = await assistantApi.messages(id)
       if (generation.current !== version) return
-      setMessages(thread.messages); setProposals(thread.proposals); setScenario(response.scenario ?? null); setText('')
-      const mapResult = response.scenario ?? response.proposals.find((proposal) => previewGeometry(proposal.preview).length > 1)?.preview
+      const fresh = response.results ?? (response.scenario ? [response.scenario] : [])
+      setMessages(thread.messages); setProposals(thread.proposals); setResults(fresh); setText('')
+      const mapResult = fresh.find((result) => previewGeometry(result).length > 1) ?? response.proposals.find((proposal) => previewGeometry(proposal.preview).length > 1)?.preview
       if (mapResult) showOnMap(mapResult)
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Не удалось отправить сообщение'); throw cause }
     finally { setBusy(false) }
@@ -91,10 +94,13 @@ export function DispatcherAssistant() {
             {!messages.length ? <div className="dispatcher-welcome"><Bot size={28} /><h3>Что нужно сделать?</h3><p>Опишите ситуацию или прикрепите Auftrag. Перед изменением данных я покажу предложение для подтверждения.</p><button type="button" onClick={() => setText('Только расчёт: успеет ли машина сегодня после текущего тура посетить точки ')}>Рассчитать маршрут без добавления</button><button type="button" onClick={() => setText('Машина сломалась. ')}>Сообщить о поломке</button></div> : null}
             {messages.map((message) => {
               const savedScenario = message.role.toLowerCase() === 'scenario' ? parseScenario(message.content) : null
-              return <article key={message.id} className={`dispatcher-message ${message.role.toLowerCase() === 'user' ? 'from-user' : ''}`}><small>{message.role.toLowerCase() === 'user' ? 'Вы' : 'ИИ-диспетчер'}</small>{savedScenario ? <><Preview value={savedScenario} />{previewGeometry(savedScenario).length > 1 ? <button type="button" className="secondary-button" onClick={() => showOnMap(savedScenario)}>Показать на карте</button> : null}</> : <p>{message.content}</p>}</article>
+              if (savedScenario) return <article key={message.id} className="dispatcher-proposal"><strong>{resultTitle(savedScenario)}</strong><AssistantResultCard value={savedScenario} onShowMap={showOnMap} /></article>
+              return <article key={message.id} className={`dispatcher-message ${message.role.toLowerCase() === 'user' ? 'from-user' : ''}`}><small>{message.role.toLowerCase() === 'user' ? 'Вы' : 'ИИ-диспетчер'}</small><p>{message.content}</p></article>
             })}
             {proposals.map((proposal) => <article className="dispatcher-proposal" key={proposal.id}><strong>{proposal.summary}</strong>{proposal.vehicleId ? <p>LKW {vehicles.find((vehicle) => vehicle.id === proposal.vehicleId)?.vehicleNumber || proposal.vehicleId}</p> : null}<Preview value={proposal.preview} /><small>{statusLabel(proposal.status)}</small>{['PENDING', 'PREPARED', 'READY'].includes(proposal.status.toUpperCase()) ? <div className="dispatcher-proposal-actions"><button type="button" disabled={busy} onClick={() => void act(proposal, false)}>Отменить</button><button type="button" className="primary-button" disabled={busy} onClick={() => void act(proposal, true)}>Подтвердить изменения</button></div> : null}</article>)}
-            {scenario ? <article className="dispatcher-proposal"><strong>Черновой расчёт · рабочий маршрут не изменён</strong><Preview value={scenario} />{previewGeometry(scenario).length > 1 ? <button type="button" className="secondary-button" onClick={() => showOnMap(scenario)}>Показать на карте</button> : <p>Путь не построен: проверьте доступность исходной позиции и адресов.</p>}</article> : null}
+            {/* The fresh results of this message: the thread above already holds their stored copies only after a reload. */}
+            {results.filter((result) => !messages.some((message) => message.role.toLowerCase() === 'scenario' && sameResult(message.content, result))).map((result, index) =>
+              <article key={`result-${index}`} className="dispatcher-proposal"><strong>{resultTitle(result)}</strong><AssistantResultCard value={result} onShowMap={showOnMap} /></article>)}
             {busy ? <p className="dispatcher-working"><LoaderCircle size={16} className="animate-spin" />Обрабатываю запрос…</p> : null}<div ref={bottom} />
           </div>
           <form className="dispatcher-compose" onSubmit={(event) => { event.preventDefault(); void sendMessage(text).catch(() => {}) }}><label className="sr-only" htmlFor="dispatcher-message">Сообщение помощнику</label><textarea id="dispatcher-message" value={text} onChange={(event) => setText(event.target.value)} placeholder="7490: дозагрузка в Берлине… или только просчитай маршрут" maxLength={12000} onKeyDown={(event) => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); void sendMessage(text).catch(() => {}) } }} /><div><span>Ctrl / ⌘ + Enter — отправить</span><button type="submit" disabled={busy || !text.trim()} aria-label="Отправить сообщение"><Send size={18} /></button></div></form>
@@ -106,12 +112,11 @@ export function DispatcherAssistant() {
 }
 
 function parseScenario(content: string): unknown { try { return JSON.parse(content) } catch { return null } }
+/** The thread stores the same JSON the reply carried; the stored copy wins so a result is not drawn twice. */
+function sameResult(content: string, result: unknown): boolean {
+  const stored = parseScenario(content) as { kind?: unknown; generatedAt?: unknown } | null
+  const fresh = result as { kind?: unknown; generatedAt?: unknown } | null
+  return Boolean(stored && fresh && stored.kind !== undefined && stored.kind === fresh.kind && stored.generatedAt === fresh.generatedAt)
+}
 
 function statusLabel(status: string) { return ({ PENDING: 'Ожидает подтверждения', PREPARED: 'Ожидает подтверждения', READY: 'Ожидает подтверждения', APPLIED: 'Выполнено', CONFIRMED: 'Подтверждено', CANCELLED: 'Отменено', FAILED: 'Ошибка выполнения', STALE: 'Исходные данные изменились — нужен новый расчёт' } as Record<string, string>)[status.toUpperCase()] || status }
-function Preview({ value }: { value: unknown }) {
-  if (value === null || value === undefined) return null
-  if (typeof value !== 'object') return <span>{String(value)}</span>
-  if (Array.isArray(value)) return <div className="dispatcher-preview-list">{value.map((item, index) => <div key={index}><Preview value={item} /></div>)}</div>
-  const labels: Record<string, string> = { before: 'Было', after: 'Станет', vehicle: 'Машина', vehicleNumber: 'Номер машины', address: 'Адрес', city: 'Город', stops: 'Точки', appointmentAt: 'Термин', estimatedArrivalAt: 'ETA', arrivalEarliestAt: 'Прибытие от', arrivalLatestAt: 'Прибытие до', departureEarliestAt: 'Выезд от', departureLatestAt: 'Выезд до', warnings: 'Предупреждения', summary: 'Итог', finishToday: 'Завершение сегодня', assumptions: 'Условия расчёта', notes: 'Примечания', reason: 'Причина', message: 'Сообщение', distanceMeters: 'Расстояние, м', durationSeconds: 'Время, сек', startAt: 'Начало', status: 'Статус', type: 'Тип', orderNumber: 'Auftrag', instructions: 'Примечания' }
-  return <dl className="dispatcher-preview">{Object.entries(value as Record<string, unknown>).filter(([key]) => !['geometry', 'payload', 'version', 'id', 'vehicleId', 'tourId', 'stopId', 'snapshot', 'expectedVersion'].includes(key)).map(([key, item]) => <div key={key}><dt>{labels[key] || key}</dt><dd><Preview value={item} /></dd></div>)}</dl>
-}

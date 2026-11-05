@@ -409,8 +409,8 @@ export async function buildVehicleCard(
   const objectNo = active?.externalNumber ?? null;
   const info = active ? store.vehicleInfo(objectUid) : null;
   const driver = active ? store.driverOn(objectUid, now) : undefined;
-  const times = driver?.driverUid ? store.drivingTimes(driver.driverUid) : null;
-  const activity = driver?.driverUid ? store.activity(driver.driverUid) : null;
+  const hours = driverHoursOf(store, driver);
+  const { times, activity } = hours;
   const coupling = active ? store.coupling(objectUid) : null;
   const optiDrive = driver?.driverUid ? store.optiDriveScore(driver.driverUid) : null;
   const events = active ? store.eventsFor(objectUid, objectNo) : [];
@@ -459,16 +459,43 @@ export async function buildVehicleCard(
       status: 'SIGNED_ON' as const,
       name: driver.name ?? times?.name ?? null,
       workState: driver.workState,
-      activitySince: activity && activity.workState === driver.workState ? activity.since : null,
+      activitySince: hours.activitySince,
       checkedAt: new Date(store.objectsAt).toISOString(),
       drivingTimes: times,
-      drivingTimesStatus: times ? 'OK' as const : store.drivingFeed.error ? 'UNAVAILABLE' as const : store.drivingFeed.at ? 'NO_DATA' as const : 'WAITING' as const,
+      drivingTimesStatus: hours.timesStatus,
       optiDrive: optiDrive !== null ? Math.round(optiDrive * 1000) / 100 : null
     },
     events: !active ? null : { status: feedStatus(store.eventFeed), unresolved: events.filter((event) => !event.resolved).length, items: events.slice(0, 100) },
     trips: !active ? null : { status: feedStatus(store.tripFeed), items: store.tripsFor(objectUid, objectNo).slice(0, 50) },
     maintenance: !active ? null : { status: feedStatus(store.maintenanceFeed), items: store.maintenanceFor(objectUid, objectNo) }
   };
+}
+
+export type DriverHours = {
+  /** NO_WEBFLEET: the truck is not bound; WAITING: no fresh object report yet; NONE: nobody signed on. */
+  status: 'SIGNED_ON' | 'NONE' | 'WAITING' | 'NO_WEBFLEET';
+  workState: number | null; activitySince: string | null;
+  times: WebfleetDrivingTimes | null;
+  timesStatus: 'OK' | 'NO_DATA' | 'UNAVAILABLE' | 'WAITING';
+};
+
+function driverHoursOf(store: WebfleetLiveStore, driver: WebfleetDriverOnObject | null | undefined) {
+  const times = driver?.driverUid ? store.drivingTimes(driver.driverUid) : null;
+  const activity = driver?.driverUid ? store.activity(driver.driverUid) : null;
+  return {
+    times, activity,
+    activitySince: activity && driver && activity.workState === driver.workState ? activity.since : null,
+    timesStatus: times ? 'OK' as const : store.drivingFeed.error ? 'UNAVAILABLE' as const : store.drivingFeed.at ? 'NO_DATA' as const : 'WAITING' as const
+  };
+}
+
+/** The signed-on driver's tachograph figures for a truck, from server memory only; no name, no driver id. */
+export async function readDriverHours(db: PrismaClient, store: WebfleetLiveStore, vehicleId: string, now: Date): Promise<DriverHours> {
+  const binding = await db.vehicleIntegration.findUnique({ where: { provider_vehicleId: { provider: PROVIDER, vehicleId } } });
+  if (!binding || binding.status !== 'ACTIVE') return { status: 'NO_WEBFLEET', workState: null, activitySince: null, times: null, timesStatus: 'NO_DATA' };
+  const driver = store.driverOn(binding.externalId, now);
+  const hours = driverHoursOf(store, driver);
+  return { status: driver === undefined ? 'WAITING' : driver === null ? 'NONE' : 'SIGNED_ON', workState: driver?.workState ?? null, activitySince: hours.activitySince, times: hours.times, timesStatus: hours.timesStatus };
 }
 
 export async function vehicleObjectUid(db: PrismaClient, vehicleId: string) {
