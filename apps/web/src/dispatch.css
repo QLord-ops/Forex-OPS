@@ -275,6 +275,18 @@ button.decision-card-title:focus-visible { outline: 2px solid var(--focus); outl
 
 /* ---- Selected truck panel ---- */
 .vehicle-panel { container-type: inline-size; container-name: panel; position: absolute; z-index: 6; right: 16px; bottom: 16px; left: 16px; overflow: hidden; border: 1px solid rgb(var(--ln-e3e8ef)); border-radius: 16px; background: rgb(var(--bg-ffffff)); box-shadow: 0 12px 32px rgb(var(--shadow-rgb) / 0.14); }
+/* The "brow" on top of the panel: slides it down to a thin strip and back up. */
+.vehicle-panel { overflow: visible; }
+.vehicle-panel-handle { position: absolute; z-index: 1; top: -14px; left: 50%; display: inline-flex; height: 22px; align-items: center; gap: 4px; border: 1px solid rgb(var(--ln-e3e8ef)); border-bottom: 0; border-radius: 10px 10px 0 0; padding: 0 12px; background: rgb(var(--bg-ffffff)); color: rgb(var(--tx-64748b)); transform: translateX(-50%); box-shadow: 0 -4px 10px rgb(var(--shadow-rgb) / 0.08); }
+.vehicle-panel-handle:hover { color: rgb(var(--tx-0f172a)); }
+.vehicle-panel-handle:focus-visible, .vehicle-panel-strip:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.vehicle-panel-grip { width: 28px; height: 4px; border-radius: 2px; background: rgb(var(--tx-94a3b8) / 0.7); }
+.vehicle-panel > #vehicle-panel-body { overflow: hidden; border-radius: 16px; }
+.vehicle-panel-collapsed { right: auto; left: 50%; width: min(560px, calc(100% - 32px)); transform: translateX(-50%); }
+.vehicle-panel-strip { display: flex; width: 100%; min-width: 0; align-items: center; gap: 12px; border-radius: 16px; padding: 10px 16px; text-align: left; }
+.vehicle-panel-strip strong { font-size: 1rem; font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.vehicle-panel-strip-text { min-width: 0; overflow: hidden; color: rgb(var(--tx-64748b)); font-size: .8125rem; text-overflow: ellipsis; white-space: nowrap; }
+@media (prefers-reduced-motion: no-preference) { .vehicle-panel { transition: transform .18s ease; } }
 .vehicle-panel-bar { display: grid; grid-template-columns: auto minmax(150px, 1fr) repeat(3, auto) auto; align-items: center; gap: 16px 24px; padding: 16px 20px; }
 .vehicle-panel-id { display: grid; justify-items: start; gap: 6px; }
 .vehicle-panel-id strong { font-size: 1.5rem; font-weight: 600; line-height: 1.1; font-variant-numeric: tabular-nums; }

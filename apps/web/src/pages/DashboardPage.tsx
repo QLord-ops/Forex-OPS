@@ -1,4 +1,4 @@
-import { Check, ChevronRight, Clock3, GitFork, ListFilter, Loader2, MapPin, PackageCheck, PauseCircle, Pin, PinOff, PlayCircle, Route, Search, Truck, X } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, ChevronUp, Clock3, GitFork, ListFilter, Loader2, MapPin, PackageCheck, PauseCircle, Pin, PinOff, PlayCircle, Route, Search, Truck, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 
@@ -43,6 +43,13 @@ export function DashboardPage() {
   const [sort, setSort] = useState<FleetSort>(() => readSort())
   const [scope, setScope] = useState<FleetScope | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
+  // The bottom panel slides down to a thin strip so the map is free; the choice is remembered in this browser.
+  const [panelCollapsed, setPanelCollapsed] = useState(() => { try { return localStorage.getItem('ops-panel-collapsed') === '1' } catch { return false } })
+  const togglePanel = () => setPanelCollapsed((value) => {
+    try { localStorage.setItem('ops-panel-collapsed', value ? '0' : '1') } catch { /* Storage may be unavailable. */ }
+    if (!value) setDrawerOpen(false)
+    return !value
+  })
   const [pinned, setPinned] = useState<string[]>(() => readPinnedVehicles())
   const [actingId, setActingId] = useState<string | null>(null)
   const [actionVehicleId, setActionVehicleId] = useState<string | null>(null)
@@ -254,7 +261,7 @@ export function DashboardPage() {
           <button type="button" aria-label="Скрыть варианты маршрута" onClick={() => { setRouteOptions(null); setOptionsError('') }}><X size={16} /></button>
         </div> : null}
         {draftRoute ? <div className="map-draft-banner"><span>{draftRoute.label} · черновик</span><button type="button" aria-label="Убрать черновой маршрут с карты" onClick={() => setRoutePreview(null)}><X size={16} /></button></div> : null}
-        {selected ? <VehiclePanel row={selected} position={position.data} drawerOpen={drawerOpen} onToggleDrawer={() => setDrawerOpen((value) => !value)} onOpen={() => openCard(selected.vehicle.id)}
+        {selected ? <VehiclePanel row={selected} position={position.data} drawerOpen={drawerOpen} onToggleDrawer={() => setDrawerOpen((value) => !value)} collapsed={panelCollapsed} onToggleCollapsed={togglePanel} onOpen={() => openCard(selected.vehicle.id)}
           onRouteOptions={() => void openRouteOptions(selected.vehicle.id)} optionsBusy={optionsBusy} onFocusStop={(stop) => setMapFocus([stop.longitude, stop.latitude] as Coordinate)} /> : null}
         <QuickOrderPanel row={selected} vehicles={vehicles.map((item) => item.vehicle)} onAddressFound={setMapFocus} onRoutePreview={setRoutePreview} onCreated={async (vehicleId) => { selectVehicle(vehicleId); await refetch() }} />
         {cardId ? <TruckCard vehicleId={cardId} row={cardRow} onClose={closeCard} onTrack={setTrack} /> : null}
@@ -376,8 +383,9 @@ function MapLegend() {
 }
 
 /** The selected truck at the bottom of the map: status, tour, Termin against ETA, distance, driver hours. */
-function VehiclePanel({ row, position, drawerOpen, onToggleDrawer, onOpen, onRouteOptions, optionsBusy, onFocusStop }: {
+function VehiclePanel({ row, position, drawerOpen, onToggleDrawer, collapsed, onToggleCollapsed, onOpen, onRouteOptions, optionsBusy, onFocusStop }: {
   row: DashboardVehicle; position?: CurrentPosition | null; drawerOpen: boolean; onToggleDrawer: () => void; onOpen: () => void
+  collapsed: boolean; onToggleCollapsed: () => void
   onRouteOptions: () => void; optionsBusy: boolean; onFocusStop: (stop: Stop) => void
 }) {
   const progress = useMemo(() => routeProgress(row.tour?.stops, row, position), [row, position])
@@ -391,7 +399,21 @@ function VehiclePanel({ row, position, drawerOpen, onToggleDrawer, onOpen, onRou
   const clock = row.clockSummary
   const fromStop = progress.currentIndex > 0 ? progress.stops[progress.currentIndex - 1]?.stop : row.from
   const toStop = progress.currentIndex >= 0 ? progress.stops[progress.currentIndex]?.stop : row.to
+  const handle = <button type="button" className="vehicle-panel-handle" onClick={onToggleCollapsed} aria-expanded={!collapsed} aria-controls="vehicle-panel-body"
+    aria-label={collapsed ? 'Развернуть панель машины' : 'Свернуть панель машины'} title={collapsed ? 'Развернуть' : 'Свернуть'}>
+    <span className="vehicle-panel-grip" aria-hidden="true" />{collapsed ? <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" /> : <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />}
+  </button>
+  if (collapsed) return <section className="vehicle-panel vehicle-panel-collapsed" aria-label={`LKW ${row.vehicle.vehicleNumber}`}>
+    {handle}
+    <button type="button" className="vehicle-panel-strip" onClick={onToggleCollapsed} aria-label={`Развернуть панель LKW ${row.vehicle.vehicleNumber}`}>
+      <strong>LKW {row.vehicle.vehicleNumber}</strong>
+      <span className={`status-pill status-pill-${status.tone}`}><span className={`status-dot status-dot-${status.tone}`} aria-hidden="true" />{status.label}{speed}</span>
+      <span className="vehicle-panel-strip-text">{termin ? `${termin.label}${margin !== null && margin < 0 ? ` · опоздание ${formatDurationMinutes(-margin)}` : ''}` : row.eta ? `ETA ${formatDateTime(row.eta)}` : progress.stops.length ? shortAddress(toStop) : 'Без тура'}</span>
+    </button>
+  </section>
   return <section className={classNames('vehicle-panel', drawerOpen && 'vehicle-panel-open')} aria-label={`LKW ${row.vehicle.vehicleNumber}`}>
+    {handle}
+    <div id="vehicle-panel-body">
     {drawerOpen ? <RouteStopsTrack row={row} position={position} onFocusStop={onFocusStop} /> : null}
     <div className="vehicle-panel-bar">
       <div className="vehicle-panel-id">
@@ -426,6 +448,7 @@ function VehiclePanel({ row, position, drawerOpen, onToggleDrawer, onOpen, onRou
         <button type="button" className="secondary-button" onClick={onToggleDrawer} aria-expanded={drawerOpen} aria-label={drawerOpen ? 'Скрыть точки маршрута' : 'Показать точки маршрута'} disabled={!progress.stops.length}><Route className="h-4 w-4" aria-hidden="true" />Маршрут</button>
         <button type="button" className="primary-button" onClick={onOpen}>Открыть<ChevronRight className="h-4 w-4" aria-hidden="true" /></button>
       </div>
+    </div>
     </div>
   </section>
 }
