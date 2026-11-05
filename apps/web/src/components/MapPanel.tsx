@@ -141,7 +141,7 @@ export function MapPanel({
   const initialTrafficRef = useRef(traffic)
   const clusterMarkersRef = useRef<Marker[]>([])
   // On the dashboard the controls sit on top and the selected-truck panel at the bottom: keep routes clear of both.
-  const fitPaddingRef = useRef<Padding>(fill ? { top: 96, right: 80, bottom: 220, left: 88 } : 64)
+  const fillRef = useRef(fill)
   const reclusterRef = useRef<() => void>(() => undefined)
   const [theme, setThemeState] = useState<Theme>(() => currentTheme())
   const initialThemeRef = useRef(theme)
@@ -294,7 +294,7 @@ export function MapPanel({
       if (fitKey && fittedTourRef.current !== fitKey && !previewRoute?.length) {
         fittedTourRef.current = fitKey
         const points = [...(position?.coordinate ? [position.coordinate] : []), ...fullRoute, ...stopCoordinates(stops)]
-        if (points.length) fitRoute(map, points, FIT_MAX_ZOOM - 1, 0, fitPaddingRef.current)
+        if (points.length) fitRoute(map, points, FIT_MAX_ZOOM - 1, 0, fitPadding(containerRef.current, fillRef.current))
       }
     }
     render()
@@ -451,7 +451,7 @@ export function MapPanel({
   const previewFitKey = previewKey ?? previewRoute
   useEffect(() => {
     const map = mapRef.current
-    if (map && previewRoute?.length) fitRoute(map, [...previewRoute, ...(previewAlternatives ?? []).flatMap((item) => item.geometry), ...(previewStops ?? []).map((stop) => stop.coordinate)], FIT_MAX_ZOOM, 350, fitPaddingRef.current)
+    if (map && previewRoute?.length) fitRoute(map, [...previewRoute, ...(previewAlternatives ?? []).flatMap((item) => item.geometry), ...(previewStops ?? []).map((stop) => stop.coordinate)], FIT_MAX_ZOOM, 350, fitPadding(containerRef.current, fillRef.current))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [previewFitKey, previewStops])
 
@@ -463,7 +463,7 @@ export function MapPanel({
       setCameraRequest(null)
       return
     }
-    fitRoute(map, previewRoute?.length ? previewRoute : [...fullRoute, ...stopCoordinates(stops)], FIT_MAX_ZOOM, 260, fitPaddingRef.current)
+    fitRoute(map, previewRoute?.length ? previewRoute : [...fullRoute, ...stopCoordinates(stops)], FIT_MAX_ZOOM, 260, fitPadding(containerRef.current, fillRef.current))
     setCameraRequest(null)
   }, [cameraRequest, fullRoute, position?.coordinate, previewRoute, stops])
 
@@ -479,7 +479,7 @@ export function MapPanel({
     }
     if (track && track.length > 1) {
       const bounds = boundsFor(track)
-      if (bounds) map.fitBounds([bounds[0], bounds[1]], { padding: fitPaddingRef.current, maxZoom: FIT_MAX_ZOOM, duration: 400 })
+      if (bounds) map.fitBounds([bounds[0], bounds[1]], { padding: fitPadding(containerRef.current, fillRef.current), maxZoom: FIT_MAX_ZOOM, duration: 400 })
     }
   }, [track, styleVersion])
 
@@ -711,6 +711,13 @@ function tomTomMapKey(): string | undefined {
 }
 
 type Padding = number | { top: number; right: number; bottom: number; left: number }
+
+/** The bottom panel's height changes (strip, open, route stops): it is measured each time the map fits a route. */
+function fitPadding(container: HTMLElement | null, fill: boolean | undefined): Padding {
+  if (!fill) return 64
+  const panel = container?.closest('.dashboard-stage')?.querySelector<HTMLElement>('.vehicle-panel')
+  return { top: 96, right: 80, bottom: panel ? Math.max(96, panel.offsetHeight + 40) : 96, left: 88 }
+}
 
 function fitRoute(map: Map | null, coordinates: Coordinate[], maxZoom: number, duration: number, padding: Padding = 64) {
   if (!map) return

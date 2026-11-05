@@ -449,7 +449,7 @@ test('карточка машины: компактная строка, вкла
   await expect(dialog).toContainText(/по тахографу · с \d\d:\d\d \(1 ч 6 мин\)/)
   await expect(dialog.getByRole('meter', { name: 'Остаток вождения' }).first()).toHaveAttribute('aria-valuetext', '6 ч 46 мин из 10 ч')
   await expect(dialog).toContainText('Рабочее время всего4 ч 48 мин')
-  await expect(dialog).toContainText(/Следующий перерывдо \d\d:\d\d \(не меньше 30 мин\)/)
+  await expect(dialog).toContainText(/Следующий перерывдо (\d\d\.\d\d, )?\d\d:\d\d \(не меньше 30 мин\)/)
   await expect(dialog).toContainText(/Ежедневный отдыхдо .*\d\d:\d\d \(не меньше 9 ч\)/)
   await expect(dialog.getByRole('meter', { name: 'Остаток вождения' }).nth(1)).toHaveAttribute('aria-valuetext', '47 ч 54 мин из 56 ч')
   await expect(dialog.getByLabel('Удлинённое вождение: доступно 2 из 2')).toBeVisible()

@@ -86,6 +86,8 @@ test('уведомление в фоне: окно Windows, звук и счёт
     }
     Object.assign(window, { Notification: FakeNotification, shownNotifications: shown })
     Object.defineProperty(document, 'hasFocus', { value: () => false })
+    // Working day around the clock: outside it only urgent alerts ring, and the test must not depend on the hour it runs.
+    localStorage.setItem('ops-work-hours', JSON.stringify({ days: [0, 1, 2, 3, 4, 5, 6], start: '00:00', end: '23:59' }))
   })
   let notifications: Array<Record<string, unknown>> = []
   await page.route('**/api/**', async (route) => {

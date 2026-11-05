@@ -165,3 +165,35 @@ export function compareVehicles(a: DashboardVehicle, b: DashboardVehicle, pinned
   const delayDifference = (b.delayMinutes ?? 0) - (a.delayMinutes ?? 0)
   return delayDifference || byNumber
 }
+
+type HoursPart = { label: string; value: string; warn?: boolean }
+/**
+ * The driver's day in one line for the bottom panel: from the Webfleet tachograph when it is there,
+ * otherwise from the calculated vehicle clock, always saying which one.
+ */
+export function driverHoursLine(
+  times: { referenceTime: string | null; remainDrivingTodayMs: number | null; nextBreakAt: string | null; nextRestAt: string | null; latestShiftEndAt: string | null } | null | undefined,
+  clock: DashboardVehicle['clockSummary'] | undefined,
+  now = Date.now()
+): { parts: HoursPart[]; source: string; stale: boolean } | null {
+  const at = (iso: string) => berlinDay(new Date(iso).getTime()) === berlinDay(now) ? formatTime(iso) : formatDateTime(iso)
+  const left = (iso: string | null) => iso ? Math.round((new Date(iso).getTime() - now) / 60_000) : null
+  if (times?.referenceTime) {
+    const age = Math.max(0, Math.round((now - new Date(times.referenceTime).getTime()) / 60_000))
+    const parts: HoursPart[] = []
+    if (times.remainDrivingTodayMs !== null) parts.push({ label: 'Вождение: осталось', value: formatDurationMinutes(Math.max(0, Math.floor(times.remainDrivingTodayMs / 60_000))), warn: times.remainDrivingTodayMs <= 30 * 60_000 })
+    const breakIn = left(times.nextBreakAt)
+    if (breakIn !== null) parts.push({ label: 'До перерыва', value: breakIn > 0 ? formatDurationMinutes(breakIn) : 'сейчас', warn: breakIn <= 15 })
+    if (times.nextRestAt) parts.push({ label: 'Суточный отдых не позже', value: at(times.nextRestAt), warn: (left(times.nextRestAt) ?? 1) <= 0 })
+    if (times.latestShiftEndAt) parts.push({ label: 'Смена до', value: at(times.latestShiftEndAt), warn: (left(times.latestShiftEndAt) ?? 1) <= 0 })
+    if (parts.length) return { parts, source: `по тахографу Webfleet, ${age} мин назад`, stale: age > 30 }
+  }
+  if (clock && (typeof clock.remainingDrivingMinutes === 'number' || typeof clock.breakInMinutes === 'number')) {
+    const parts: HoursPart[] = []
+    if (typeof clock.remainingDrivingMinutes === 'number') parts.push({ label: 'Вождение: осталось', value: formatDurationMinutes(clock.remainingDrivingMinutes) })
+    if (typeof clock.breakInMinutes === 'number') parts.push({ label: 'До перерыва', value: formatDurationMinutes(clock.breakInMinutes) })
+    if (typeof clock.remainingDutyMinutes === 'number') parts.push({ label: 'До конца смены', value: formatDurationMinutes(clock.remainingDutyMinutes) })
+    return { parts, source: 'расчёт OPS, предварительно', stale: false }
+  }
+  return null
+}
