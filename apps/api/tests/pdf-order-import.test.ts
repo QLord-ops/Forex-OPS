@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { importImagePreview, importPdfPreview, parseTourRemarksRoute, tourRemarksZuladung } from "../src/services/pdf-order-import.js";
+import { compactAddress, importImagePreview, importPdfPreview, parseTourRemarksRoute, tourRemarksZuladung } from "../src/services/pdf-order-import.js";
 
 describe("PDF Auftrag import", () => {
   it("sends the PDF as an OpenAI file input and validates the structured preview", async () => {
@@ -308,6 +308,49 @@ describe("PDF Auftrag import", () => {
     expect(result.drafts[0].stops).toHaveLength(2);
     expect(result.drafts[0].tourRemarks).toBe("Werk Berlin für Hafen Hamburg\nZuladung möglich");
     expect(result.drafts[0].warnings.map((warning) => warning.code)).toContain("ZULADUNG_POSSIBLE");
+  });
+
+  it("reads 'MB Düsseldorf 477339 070A & 070D LG --> Lager': MB is Mercedes-Benz, codes are references, LG is the cargo (Schnellecke 71123727, 06.11.2026)", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ output_text: JSON.stringify({
+      drafts: [{
+        orderNumber: "71123727", vehicleNumber: null, vehiclePlate: "B-CY3010", trailerPlate: "Z-S3241",
+        departmentCompany: "Schnellecke Transportlogistik GmbH", departmentAddress: "Rudolf-Diesel-Straße 2 D 14974 Ludwigsfelde, 14974 D 14974 Ludwigsfelde", departmentCity: "Ludwigsfelde", departmentSourcePage: 1,
+        tourRemarks: "MB Düsseldorf 477339 070A & 070D LG --> Lager", tourRemarksSourcePage: 1,
+        stops: [
+          { sequence: 1, type: "LOAD", company: "ELSTER WERKE gemeinnützige GmbH", address: "An den Steinenden 11, 04916 Herzberg (Elster)", city: "Herzberg (Elster)", appointmentDateLocal: "2026-11-10",
+            sourceExcerpt: "09.11.2026 10.11.2026 710686727 070A Herzberg (Elster) 6100477339/ 1 ldm", referenceNumbers: ["6100477339-16507485", "710686727"], loadingMeters: 1, sourcePage: 2, confidence: 0.8 },
+          { sequence: 2, type: "LOAD", company: "LG", address: "070D LG", city: null, sourceExcerpt: "070D LG", sourcePage: 1, confidence: 0.3 },
+          { sequence: 3, type: "LOAD", company: "Mercedes-Benz AG / Werk 065", address: "Toulouser Allee, Tor 26/27, 40476 Düsseldorf", city: "Düsseldorf", appointmentDateLocal: "2026-11-09",
+            sourceExcerpt: "Mercedes-Benz AG / Werk 065 Toulouser Allee, Tor 26/27 D 40476 Düsseldorf 6100477339-12315370", referenceNumbers: ["6100477339-12315370"], loadingMeters: 2, sourcePage: 1, confidence: 0.85 },
+          { sequence: 4, type: "UNLOAD", company: "Webasto Roof & Components SE", address: "Werner-Baier-Straße 1, 17033 Neubrandenburg", city: "Neubrandenburg", sourcePage: 1, confidence: 0.8 },
+          { sequence: 5, type: "UNLOAD", company: "Schnellecke Transportlogistik GmbH", address: "Rudolf-Diesel-Straße 2 D 14974 Ludwigsfelde, 14974 D 14974 Ludwigsfelde", city: "Ludwigsfelde", sourceExcerpt: "Abteilung: Schnellecke Transportlogistik GmbH, Rudolf-Diesel-Straße 2", sourcePage: 1, confidence: 0.7 }
+        ], warnings: []
+      }], warnings: []
+    }) }), { status: 200 })) as unknown as typeof fetch;
+
+    const result = await importPdfPreview(Buffer.from("%PDF-1.7"), "transportauftrag.pdf", { apiKey: "test-key", fetchImpl, now: new Date("2026-11-06T12:00:00Z") });
+    const draft = result.drafts[0];
+    expect(draft.stops.map((stop) => [stop.type, stop.company, stop.address])).toEqual([
+      ["LOAD", "Mercedes-Benz AG / Werk 065", "Toulouser Allee, Tor 26/27, 40476 Düsseldorf"],
+      ["UNLOAD", "Schnellecke Transportlogistik GmbH", "Rudolf-Diesel-Straße 2 D 14974 Ludwigsfelde"]
+    ]);
+    expect(draft.stops[0].referenceNumbers).toEqual(["6100477339-12315370", "070A", "070D"]);
+    expect(draft.stops[0].instructions).toBe("Leergut");
+    expect(draft.stops.some((stop) => /\bLG\b/.test(`${stop.company} ${stop.address} ${stop.city}`))).toBe(false);
+    const codes = draft.warnings.map((warning) => warning.code);
+    expect(codes).not.toContain("TOUR_REMARKS_STOP_NOT_FOUND");
+    expect(codes).toContain("TABLE_STOPS_NOT_IN_TOUR_REMARKS");
+  });
+
+  it("takes codes and cargo words out of Tourbemerkung places", () => {
+    const route = parseTourRemarksRoute("MB Düsseldorf 477339 070A & 070D LG --> Lager")!;
+    expect(route.map((stop) => [stop.type, stop.label, stop.cityHint])).toEqual([["LOAD", "MB Düsseldorf", "Düsseldorf"], ["UNLOAD", "Lager", ""]]);
+    expect(route[0]).toMatchObject({ references: ["477339", "070A", "070D"], cargo: "Leergut" });
+    expect(parseTourRemarksRoute("Seifert & BLG Bremen für VW Kassel 4711")?.map((stop) => [stop.label, stop.references])).toEqual([
+      ["Seifert Bremen", []], ["BLG Bremen", []], ["VW Kassel", ["4711"]]
+    ]);
+    expect(compactAddress("Rudolf-Diesel-Straße 2 D 14974 Ludwigsfelde, 14974 D 14974 Ludwigsfelde")).toBe("Rudolf-Diesel-Straße 2 D 14974 Ludwigsfelde");
+    expect(compactAddress("Mercedesstraße 1, 28309 Bremen")).toBe("Mercedesstraße 1, 28309 Bremen");
   });
 
   it("uses Abteilung for vorladen and ignores a parenthetical city after the unload destination", async () => {
