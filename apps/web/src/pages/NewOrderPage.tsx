@@ -285,9 +285,9 @@ export function NewOrderPage() {
       const importedFile = appliedImportSelection ? importItems.find((item) => item.id === appliedImportSelection.itemId) : undefined
       // An imported Auftrag goes through the idempotent confirm, so a retry after a lost response never creates it twice.
       const tour = createNewVehicle
-        ? (await api.createTourWithVehicle({ vehicle: { vehicleNumber: newVehicleNumber.trim(), licensePlate: newVehiclePlate.trim() || undefined }, tour: tourInput })).tour
+        ? (await api.createTourWithVehicle({ vehicle: { vehicleNumber: newVehicleNumber.trim(), licensePlate: newVehiclePlate.trim() || undefined }, tour: { ...tourInput, documentId: importedFile?.preview?.documentId ?? null } })).tour
         : appliedImportSelection && importedFile
-          ? (await api.confirmImportedTour({ ...tourInput, vehicleId,
+          ? (await api.confirmImportedTour({ ...tourInput, vehicleId, documentId: importedFile.preview?.documentId ?? null,
               importAttemptId: `${importedFile.id}:${appliedImportSelection.draftIndex}`,
               importFingerprint: await importFingerprint({
                 fileName: importedFile.fileName.trim().toLocaleLowerCase('de-DE'),

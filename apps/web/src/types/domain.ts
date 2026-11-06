@@ -83,6 +83,8 @@ export interface Tour {
   orderNumber: string
   trailerPlate?: string | null
   tourRemarks?: string | null
+  /** The saved Auftrag file of this tour; opened through documentFileUrl(). */
+  document?: { id: string; filename: string; mimeType: string } | null
   approachDurationSeconds?: number | null
   approachDistanceMeters?: number | null
   approachGeometry?: RouteGeometry | null
@@ -526,6 +528,8 @@ export interface ImportedOrderDraft {
   trailerPlate?: string | null
   tourRemarks?: string | null
   tourRemarksSourcePage?: number | null
+  /** Server id of the uploaded file this draft came from; sent back when the tour is saved. */
+  documentId?: string | null
   stops: ImportedStopDraft[]
   warnings: ImportWarning[]
 }
@@ -541,6 +545,11 @@ export interface OrderImportPreview {
   drafts: ImportedOrderDraft[]
   warnings: ImportWarning[]
   aiAvailable: boolean
+  /** The uploaded file is kept on the server under this id until the tour is saved. */
+  documentId?: string | null
+  documentReused?: boolean
+  /** Set when the same file was already saved with a tour. */
+  attachedTourId?: string | null
 }
 
 /** A recognised Termin slip; times are Berlin wall-clock "YYYY-MM-DDTHH:mm". */
