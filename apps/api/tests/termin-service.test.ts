@@ -69,6 +69,13 @@ describe('Termin service', () => {
     expect(free.target).toMatchObject({ stopId: null, label: 'Выгрузка · Hafen Kiel', type: 'UNLOAD' });
     expect(free.stops).toHaveLength(5);
   });
+  it('warns about an open Zuladung but keeps the times unchanged', async () => {
+    const plain = await fixture({ tours: [activeTour()] }).service.plan({}, 'v1', now);
+    const withZuladung = await fixture({ tours: [activeTour({ tourRemarks: 'Zwönitz für Meerane + Hannover + evt. Zuladung' })] }).service.plan({}, 'v1', now);
+    expect(withZuladung.warnings.some(w => w.includes('Zuladung'))).toBe(true);
+    expect(plain.warnings.some(w => w.includes('Zuladung'))).toBe(false);
+    expect(withZuladung.recommendation.terminAt).toBe(plain.recommendation.terminAt);
+  });
   it('rejects a stop of another truck and explains a completed one', async () => {
     const { service } = fixture({ tours: [activeTour()], stops: { Zwoenitz: { tour: { vehicleId: 'v1' } }, Foreign: { tour: { vehicleId: 'v2' } } } });
     await expect(service.plan({ stopId: 'Foreign' }, 'v1', now)).rejects.toThrow('не принадлежит');

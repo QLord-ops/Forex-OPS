@@ -1,11 +1,16 @@
 import { z } from "zod";
 import { isValidLocalDateTime } from "./excel-order-import.js";
 import { aiDateRules, DATE_ONLY_WINDOW, normalizeAiSchedule, PLANNED_START } from "./order-dates.js";
+import { mentionsZuladung, ZULADUNG_PATTERN } from "./zuladung.js";
+
+export { mentionsZuladung } from "./zuladung.js";
 
 const DEFAULT_TIMEOUT_MS = 45_000;
 const MAX_OPENAI_OUTPUT_CHARS = 100_000;
 const TOUR_REMARKS_ROUTE_RULE =
-  "Interpret Tourbemerkung as German route syntax: every location before the first 'für' (or an arrow '-->', '->', '→', or 'nach') is a LOAD in written order, and every location after it is an UNLOAD in written order. A '+', ',' or 'und' separates additional stops of the same type on that side; '&' joins companies that share the city written after the last of them ('Seifert & BLG Bremen' = Seifert in Bremen and BLG in Bremen, two separate stops). One stop per company and city: several table rows or addresses of the same company in the same city are one stop. Example: 'Hydro Crimmitschau + Voestalpine Schmölln für VW Braunschweig' means exactly 1) LOAD Hydro Crimmitschau, 2) LOAD Voestalpine Schmölln, 3) UNLOAD VW Braunschweig. A trailing parenthetical place after a destination is supplementary information, not the city: 'für Rudolph Großmehring (Győr)' means company Rudolph in city Großmehring. If the loading side says 'vorladen' or 'vorladen/Lager', it is an operational instruction meaning LOAD at the complete postal address printed under Abteilung. 'Lager' or 'divers'/'diverse' on either side always means the warehouse of the Abteilung (for example Schnellecke Zwickau or Ludwigsfelde): on the unloading side it is an UNLOAD at the complete postal address printed under Abteilung. Never create a city or company named vorladen, Lager or divers and never geocode these words as a place. Return only locations explicitly named in Tourbemerkung, except these Abteilung rules. Never add a city merely because it appears in a table, direct-delivery note or address block. If the same loading or unloading location appears in several rows or pages, return exactly one stop for it and combine its supported references and notes. Tourbemerkung determines stop type and order; table rows, Abteilung and address blocks only provide the matching full postal address and stop details.";
+  "Interpret Tourbemerkung as German route syntax: every location before the first 'für' (or an arrow '-->', '->', '→', or 'nach') is a LOAD in written order, and every location after it is an UNLOAD in written order. A '+', ',' or 'und' separates additional stops of the same type on that side; '&' joins companies that share the city written after the last of them ('Seifert & BLG Bremen' = Seifert in Bremen and BLG in Bremen, two separate stops). One stop per company and city: several table rows or addresses of the same company in the same city are one stop. Example: 'Hydro Crimmitschau + Voestalpine Schmölln für VW Braunschweig' means exactly 1) LOAD Hydro Crimmitschau, 2) LOAD Voestalpine Schmölln, 3) UNLOAD VW Braunschweig. A trailing parenthetical place after a destination is supplementary information, not the city: 'für Rudolph Großmehring (Győr)' means company Rudolph in city Großmehring. If the loading side says 'vorladen' or 'vorladen/Lager', it is an operational instruction meaning LOAD at the complete postal address printed under Abteilung. 'Lager' or 'divers'/'diverse' on either side always means the warehouse of the Abteilung (for example Schnellecke Zwickau or Ludwigsfelde): on the unloading side it is an UNLOAD at the complete postal address printed under Abteilung. Never create a city or company named vorladen, Lager or divers and never geocode these words as a place. Return only locations explicitly named in Tourbemerkung, except these Abteilung rules. Never add a city merely because it appears in a table, direct-delivery note or address block. If the same loading or unloading location appears in several rows or pages, return exactly one stop for it and combine its supported references and notes. Tourbemerkung determines stop type and order; table rows, Abteilung and address blocks only provide the matching full postal address and stop details. " +
+  "'Zuladung', 'evt. Zuladung', 'evtl. Zuladung' or 'Zuladung möglich' means a possible extra pick-up before unloading whose place is not known yet: it is NEVER a stop, never a company and never an address; keep it only in tourRemarks. " +
+  "Every unloading location named in Tourbemerkung is its own UNLOAD stop with the receiver's printed postal address (Empfänger, Entladestelle, direct-delivery receiver); never put that address only into the instructions of a loading stop. All warnings must be written in Russian.";
 export const supportedImageMimeTypes = ["image/png", "image/jpeg", "image/webp"] as const;
 // Termin slips (LKWcontrol Fahrtenschein, Deckblatt zur Warenanlieferung, mRoad) share the drop zone with Auftrag.
 const APPOINTMENT_RULE =
@@ -306,7 +311,8 @@ async function importVisualOrderPreview(input: {
       documentKind: appointment ? "APPOINTMENT" : "ORDER",
       appointment,
       drafts: appointment ? [] : parsed.drafts.map((draft) => {
-        const orderedStops = [...draft.stops].sort((left, right) => left.sequence - right.sequence);
+        const zuladung = orderZuladung(draft.tourRemarks, draft.stops);
+        const orderedStops = [...draft.stops].filter((stop) => !isZuladungStop(stop)).sort((left, right) => left.sequence - right.sequence);
         const route = parseTourRemarksRoute(draft.tourRemarks);
         const reconciled = route
           ? reconcileStopsWithTourRemarks(route, orderedStops, draft.tourRemarksSourcePage, {
@@ -338,11 +344,12 @@ async function importVisualOrderPreview(input: {
           vehicleNumber: draft.vehicleNumber,
           vehiclePlate: draft.vehiclePlate,
           trailerPlate: draft.trailerPlate,
-          tourRemarks: draft.tourRemarks,
+          tourRemarks: zuladung.tourRemarks,
           tourRemarksSourcePage: draft.tourRemarksSourcePage,
           stops,
           warnings: [
             ...draft.warnings.map(compactWarning),
+            ...zuladung.warnings,
             ...(layout === "PDF" && !draft.tourRemarks ? [{ code: "TOUR_REMARKS_MISSING", message: "Tourbemerkung не найдено; порядок точек определён по таблице." }] : []),
             ...reconciled.warnings,
             ...dateNotes,
@@ -422,6 +429,44 @@ type DepartmentDetails = {
 // Loading side and unloading side: "A für B", "A --> B", "A -> B", "A → B", "A nach B".
 const ROUTE_SIDES = /\s+für\s+|\s*-+>\s*|\s*→\s*|\s+nach\s+/i;
 
+/** True when the text is only the Zuladung note, optionally with a place ("Zuladung Kassel" → place "Kassel"). */
+function zuladungPart(part: string): { place: string | null } | null {
+  if (!mentionsZuladung(part)) return null;
+  const rest = part.replace(ZULADUNG_PATTERN, " ").replace(/\b(?:in|bei|aus)\b/giu, " ").replace(/[^\p{L}\p{N}-]+/gu, " ").trim();
+  return { place: rest || null };
+}
+
+/** Zuladung named anywhere in the Tourbemerkung, with the place when one is written. */
+export function tourRemarksZuladung(tourRemarks: string | null | undefined): { mentioned: boolean; place: string | null } {
+  if (!tourRemarks || !mentionsZuladung(tourRemarks)) return { mentioned: false, place: null };
+  const parts = tourRemarks.split(ROUTE_SIDES).flatMap((side) => side.split(/\s*(?:\+|,|;|\bund\b|\n)\s*/i));
+  const place = parts.map(zuladungPart).find((part) => part?.place)?.place ?? null;
+  return { mentioned: true, place };
+}
+
+/**
+ * Zuladung from the Tourbemerkung or from any stop note. The tour keeps it in tourRemarks, so the tour card,
+ * Termin and the 07:00 status can warn without a separate column.
+ */
+function orderZuladung(tourRemarks: string | null, stops: ParsedStop[]): { tourRemarks: string | null; warnings: PdfImportWarning[] } {
+  const fromRemarks = tourRemarksZuladung(tourRemarks);
+  const fromStops = stops.some((stop) => [stop.company, stop.address, stop.instructions, stop.sourceExcerpt].some(mentionsZuladung));
+  if (!fromRemarks.mentioned && !fromStops) return { tourRemarks, warnings: [] };
+  const place = fromRemarks.place ? ` (${fromRemarks.place})` : "";
+  return {
+    tourRemarks: fromRemarks.mentioned ? tourRemarks : [tourRemarks?.trim(), "Zuladung möglich"].filter(Boolean).join("\n"),
+    warnings: [{
+      code: "ZULADUNG_POSSIBLE",
+      message: `Возможна Zuladung${place} перед выгрузкой — место пока неизвестно, точка не создана. ETA и Termin считаются без неё; когда место станет известно, добавьте её в карточке «Тур».`
+    }]
+  };
+}
+
+function isZuladungStop(stop: ParsedStop): boolean {
+  const fields = [stop.company, stop.address].filter((value): value is string => Boolean(value?.trim()));
+  return fields.length > 0 && fields.every((value) => zuladungPart(value) !== null && !zuladungPart(value)?.place);
+}
+
 export function parseTourRemarksRoute(tourRemarks: string | null): TourRemarkStop[] | null {
   if (!tourRemarks) return null;
   const match = ROUTE_SIDES.exec(tourRemarks);
@@ -461,7 +506,7 @@ export function splitTourRemarkStops(value: string): string[] {
   return value
     .split(/\s*(?:\+|,|\bund\b)\s*/i)
     .map((part) => part.replace(/\s*\/\/.*$/, "").trim())
-    .filter(Boolean)
+    .filter((part) => part && !zuladungPart(part))
     .flatMap((group) => {
       const members = group.split(/\s*&\s*/).map((member) => member.trim()).filter(Boolean);
       if (members.length < 2) return members;
@@ -502,6 +547,15 @@ function reconcileStopsWithTourRemarks(
       .sort((left, right) => right.score - left.score || right.candidate.confidence - left.candidate.confidence);
     const selected = ranked[0];
     if (!selected || selected.score < 40) {
+      const fromNotes = receiverFromNotes(routeStop, candidates, sequence + 1);
+      if (fromNotes) {
+        warnings.push({
+          code: "TOUR_REMARKS_STOP_FROM_NOTES",
+          message: `Адрес точки «${routeStop.label}» взят из примечания к другой точке Auftrag; проверьте его.`,
+          ...(fromNotes.sourcePage ? { page: fromNotes.sourcePage } : {})
+        });
+        return fromNotes;
+      }
       warnings.push({
         code: "TOUR_REMARKS_STOP_NOT_FOUND",
         message: `Для точки «${routeStop.label}» из Tourbemerkung не найден надёжный адрес; проверьте его вручную.`,
@@ -569,6 +623,36 @@ function mergeDuplicateStopDetails(primary: ParsedStop, duplicates: ParsedStop[]
     referenceNumbers: references,
     instructions: notes.length ? notes.join("\n") : null
   };
+}
+
+/**
+ * The model sometimes keeps a receiver only in the note of the loading row
+ * ("Direktlieferung an Handtmann GmbH, Arno-Schmidt-Str. 5, 09487 Königswalde"). A printed postcode + the city of
+ * the Tourbemerkung stop is enough to recover that address instead of a city-only placeholder.
+ */
+function receiverFromNotes(routeStop: TourRemarkStop, candidates: ParsedStop[], sequence: number): ParsedStop | null {
+  if (!routeStop.cityHint) return null;
+  const city = routeStop.cityHint.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`([^;\\n|]*?)(\\d{5})\\s+(${city})\\b`, "iu");
+  for (const candidate of candidates) {
+    for (const text of [candidate.instructions, candidate.sourceExcerpt]) {
+      const match = text ? pattern.exec(text) : null;
+      if (!match) continue;
+      const parts = match[1]!.split(",").map((part) => part.trim()).filter(Boolean);
+      const street = parts.length && /\d/.test(parts.at(-1)!) ? parts.pop()! : null;
+      if (!street) continue;
+      const company = parts.join(", ").replace(/^.*?\b(?:an|to|nach|für|empfänger:?)\s+/iu, "").trim() || null;
+      return {
+        ...placeholderStop(routeStop, sequence, candidate.sourcePage),
+        company: company ?? placeholderStop(routeStop, sequence, null).company,
+        address: `${street}, ${match[2]} ${match[3]}`,
+        city: match[3]!,
+        sourceExcerpt: match[0].trim().slice(0, 300),
+        confidence: 0.55
+      };
+    }
+  }
+  return null;
 }
 
 function placeholderStop(routeStop: TourRemarkStop, sequence: number, sourcePage: number | null): ParsedStop {

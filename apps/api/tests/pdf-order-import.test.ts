@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { importImagePreview, importPdfPreview } from "../src/services/pdf-order-import.js";
+import { importImagePreview, importPdfPreview, parseTourRemarksRoute, tourRemarksZuladung } from "../src/services/pdf-order-import.js";
 
 describe("PDF Auftrag import", () => {
   it("sends the PDF as an OpenAI file input and validates the structured preview", async () => {
@@ -260,6 +260,54 @@ describe("PDF Auftrag import", () => {
       ["UNLOAD", "Dradenauer Deichweg 3, 21129 Hamburg"],
       ["UNLOAD", "Rudolf-Diesel-Straße 2, 14974 Ludwigsfelde"]
     ]);
+  });
+
+  it("treats 'evt. Zuladung' as a note, not a stop, and recovers the receiver from the loading note (LKW 321, 06.11.2026)", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ output_text: JSON.stringify({
+      drafts: [{
+        orderNumber: "20565801", vehicleNumber: null, vehiclePlate: "GÖ-FX321", trailerPlate: null,
+        departmentCompany: null, departmentAddress: null, departmentCity: null, departmentSourcePage: null,
+        tourRemarks: "Borken für Königswalde + evt. Zuladung", tourRemarksSourcePage: 1,
+        stops: [
+          { sequence: 1, type: "LOAD", company: "Zenda Dienstleistungen GmbH", address: "Industriestraße 12, 46325 Borken", city: "Borken", appointmentDateLocal: "2026-11-06",
+            instructions: "Direktlieferung an Handtmann Leichtmetallgießerei Annaberg GmbH, Arno-Schmidt-Straße 5, 09456 Königswalde", sourcePage: 1, confidence: 0.9 },
+          { sequence: 2, type: "UNLOAD", company: "Zuladung", address: "evt. Zuladung", city: null, sourcePage: 1, confidence: 0.4 }
+        ], warnings: []
+      }], warnings: []
+    }) }), { status: 200 })) as unknown as typeof fetch;
+
+    const result = await importPdfPreview(Buffer.from("%PDF-1.7"), "auftrag.pdf", { apiKey: "test-key", fetchImpl, now: new Date("2026-11-06T08:00:00Z") });
+    const draft = result.drafts[0];
+    expect(draft.stops.map((stop) => [stop.type, stop.company, stop.address])).toEqual([
+      ["LOAD", "Zenda Dienstleistungen GmbH", "Industriestraße 12, 46325 Borken"],
+      ["UNLOAD", "Handtmann Leichtmetallgießerei Annaberg GmbH", "Arno-Schmidt-Straße 5, 09456 Königswalde"]
+    ]);
+    const codes = draft.warnings.map((warning) => warning.code);
+    expect(codes).toContain("ZULADUNG_POSSIBLE");
+    expect(codes).toContain("TOUR_REMARKS_STOP_FROM_NOTES");
+    expect(codes).not.toContain("TOUR_REMARKS_STOP_NOT_FOUND");
+    expect(draft.tourRemarks).toBe("Borken für Königswalde + evt. Zuladung");
+  });
+
+  it("finds Zuladung written outside the route and keeps it on the tour", async () => {
+    expect(parseTourRemarksRoute("Hydro Crimmitschau für VW Emden, Zuladung möglich")?.map((stop) => stop.label)).toEqual(["Hydro Crimmitschau", "VW Emden"]);
+    expect(tourRemarksZuladung("Borken für Königswalde + evtl. Zuladung in Kassel")).toEqual({ mentioned: true, place: "Kassel" });
+    expect(tourRemarksZuladung("Borken für Königswalde")).toEqual({ mentioned: false, place: null });
+
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ output_text: JSON.stringify({
+      drafts: [{
+        orderNumber: "Z-2", vehicleNumber: null, vehiclePlate: null, trailerPlate: null,
+        tourRemarks: "Werk Berlin für Hafen Hamburg", tourRemarksSourcePage: 1,
+        stops: [
+          { sequence: 1, type: "LOAD", company: "Werk Berlin", address: "Alexanderplatz 1, 10178 Berlin", city: "Berlin", sourcePage: 1, confidence: 0.9 },
+          { sequence: 2, type: "UNLOAD", company: "Hafen Hamburg", address: "Am Sandtorkai 1, 20457 Hamburg", city: "Hamburg", instructions: "Zuladung möglich", sourcePage: 1, confidence: 0.9 }
+        ], warnings: []
+      }], warnings: []
+    }) }), { status: 200 })) as unknown as typeof fetch;
+    const result = await importPdfPreview(Buffer.from("%PDF-1.7"), "auftrag.pdf", { apiKey: "test-key", fetchImpl });
+    expect(result.drafts[0].stops).toHaveLength(2);
+    expect(result.drafts[0].tourRemarks).toBe("Werk Berlin für Hafen Hamburg\nZuladung möglich");
+    expect(result.drafts[0].warnings.map((warning) => warning.code)).toContain("ZULADUNG_POSSIBLE");
   });
 
   it("uses Abteilung for vorladen and ignores a parenthetical city after the unload destination", async () => {

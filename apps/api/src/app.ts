@@ -588,6 +588,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
       futureStops: z.array(z.object({
         id: z.string().optional(), type: z.enum(['LOAD', 'UNLOAD']), address: z.string().trim().min(1),
         company: z.string().optional(), city: z.string().nullable().optional(), appointmentAt: z.string().datetime().nullable().optional(),
+        instructions: z.string().trim().max(4000).nullable().optional(),
         latitude: z.number().min(-90).max(90).optional(), longitude: z.number().min(-180).max(180).optional(),
         serviceMinMinutes: z.number().int().min(0).max(10080).optional(), serviceMaxMinutes: z.number().int().min(0).max(10080).optional()
       })).min(1).max(100),

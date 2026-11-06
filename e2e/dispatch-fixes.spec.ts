@@ -232,6 +232,47 @@ test('начатый тур меняется из карточки: будущи
   await expect.poll(() => applied).toEqual({ previewId: 'p1', version: 3 })
 })
 
+test('Auftrag с «evt. Zuladung»: тур помечен, «Добавить Zuladung» ставит загрузку перед выгрузкой', async ({ page }) => {
+  let previewBody: { futureStops?: Array<{ type: string; address: string; instructions?: string | null }> } | null = null
+  const done = { ...stops[0], arrivedAt: '2026-11-06T08:00:00Z', completedAt: '2026-11-06T09:00:00Z' }
+  const unload = { ...stops[1], id: 's2' }
+  const activeTour = { id: 'tour-1', vehicleId: 'v1', orderNumber: '20565801', status: 'ACTIVE', planVersion: 3, tourRemarks: 'Borken für Königswalde + evt. Zuladung', stops: [done, unload] }
+  await dashboard(page, async (route, path) => {
+    if (path === '/dashboard') {
+      await json(route, { vehicles: [{ vehicle: truck('v1', '321'), statusText: 'MOVING', etaSource: 'GPS', operationVersion: 2, tour: activeTour,
+        telemetry: { source: 'WEBFLEET', stale: false, ageSeconds: 60 }, mapPosition: { coordinate: [10.9, 49.4], source: 'WEBFLEET', stale: false, courseDeg: 0, standstill: false } }] }); return true
+    }
+    if (path === '/tours/tour-1') { await json(route, activeTour); return true }
+    if (path === '/tours/tour-1/replan/preview') {
+      previewBody = route.request().postDataJSON()
+      await json(route, { id: 'p1', version: 3, expiresAt: new Date(Date.now() + 600_000).toISOString(), affectedTourIds: [],
+        before: { distanceMeters: 300_000, durationSeconds: 14_400, roads: [] }, after: { distanceMeters: 320_000, durationSeconds: 15_000, roads: [] } }); return true
+    }
+    if (path === '/vehicles/v1/tours') { await json(route, [activeTour]); return true }
+    if (path.endsWith('/card')) { await json(route, { vehicleId: 'v1', vehicleNumber: '321', licensePlate: null, currentTrailerPlate: null, generatedAt: new Date().toISOString(), webfleet: null, current: null, coupling: null, driver: null, events: null, trips: null, maintenance: null }); return true }
+    return false
+  })
+  await page.goto('/?vehicleId=v1&card=v1')
+  await page.evaluate(() => window.localStorage.setItem('ops-truck-card-tab', 'tour'))
+  await page.reload()
+  const card = page.getByRole('dialog', { name: /321/ })
+  await expect(card.getByRole('note').first()).toContainText('Zuladung возможна перед выгрузкой')
+  await expect(card).toContainText('перед ней возможна Zuladung')
+  await card.getByRole('note').first().scrollIntoViewIfNeeded()
+  await page.screenshot({ path: 'test-results/zuladung-card.png' })
+  await card.getByRole('button', { name: 'Добавить Zuladung' }).click()
+  const fields = card.locator('.truck-card-editor fieldset')
+  await expect(fields).toHaveCount(2)
+  await expect(fields.nth(0).locator('legend')).toContainText('Zuladung')
+  await expect(fields.nth(0).getByLabel('Тип')).toHaveValue('LOAD')
+  await fields.nth(0).getByLabel('Адрес').fill('Industriestraße 1, 34117 Kassel')
+  await card.getByRole('button', { name: 'Рассчитать изменения' }).click()
+  await expect.poll(() => previewBody?.futureStops?.map((item) => [item.type, item.address, item.instructions ?? null])).toEqual([
+    ['LOAD', 'Industriestraße 1, 34117 Kassel', 'Zuladung'],
+    ['UNLOAD', unload.address, null]
+  ])
+})
+
 test('машина на суточном отдыхе на загрузке: пометка в списке и панели, уведомление в «Требует решения»', async ({ page }) => {
   const arrivedAt = new Date(Date.now() - 5 * 3600_000).toISOString()
   const until = new Date(Date.now() + 6 * 3600_000)

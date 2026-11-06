@@ -6,6 +6,7 @@ import { dailyRestOf, type DailyRest } from './rest-at-stop.js';
 import { berlinLocal, formatSeconds } from './termin-planner.js';
 import { stopLabel, type DriverHoursReader } from './termin-service.js';
 import type { DriverHours } from './webfleet-live.js';
+import { zuladungState, type ZuladungState } from './zuladung.js';
 
 export type BriefStop = {
   stopId: string; tourId: string; sequence: number; type: string; label: string; company: string | null; city: string | null; address: string;
@@ -17,8 +18,8 @@ export type VehicleBrief = {
   kind: 'VEHICLE_BRIEF'; generatedAt: string; vehicleId: string; vehicleNumber: string; licensePlate: string | null; trailerPlate: string | null;
   manualStoppedAt: string | null; calculatedClockPreliminary: boolean;
   position: { status: CurrentPosition['status']; state: CurrentPosition['state']; address: string | null; source: 'WEBFLEET' | 'CALCULATED' | 'MANUAL' | null; ageMinutes: number | null; stale: boolean; remainingKm: number | null };
-  activeTour: { tourId: string; orderNumber: string; currentStopId: string | null; stops: BriefStop[] } | null;
-  queuedTours: Array<{ tourId: string; orderNumber: string; plannedStartAt: string | null; plannedStartAtLocal: string | null; stops: BriefStop[] }>;
+  activeTour: { tourId: string; orderNumber: string; currentStopId: string | null; zuladung: ZuladungState; stops: BriefStop[] } | null;
+  queuedTours: Array<{ tourId: string; orderNumber: string; plannedStartAt: string | null; plannedStartAtLocal: string | null; zuladung: ZuladungState; stops: BriefStop[] }>;
   driver: {
     status: DriverHours['status']; workStateLabel: string | null; activitySince: string | null; restingNow: DailyRest | null;
     hours: { referenceTime: string; drivenToday: string; leftToday: string; untilBreak: string; breakMin: string; restLatestAt: string | null; restMin: string;
@@ -82,9 +83,9 @@ export class VehicleBriefService {
       position: { status: position.status, state: position.state, address: position.positionSource === 'WEBFLEET' ? address : null, source: position.positionSource ?? null,
         ageMinutes: position.telemetryAgeSeconds != null ? Math.round(position.telemetryAgeSeconds / 60) : null, stale: Boolean(position.telemetryStale),
         remainingKm: position.legId ? Math.round(position.remainingDistanceMeters / 1000) : null },
-      activeTour: active ? { tourId: active.id, orderNumber: active.orderNumber, currentStopId: active.stops.find(stop => !stop.completedAt)?.id ?? null, stops: brief(active) } : null,
+      activeTour: active ? { tourId: active.id, orderNumber: active.orderNumber, currentStopId: active.stops.find(stop => !stop.completedAt)?.id ?? null, zuladung: zuladungState(active), stops: brief(active) } : null,
       queuedTours: tours.filter(tour => tour.status === 'QUEUED').map(tour => ({ tourId: tour.id, orderNumber: tour.orderNumber, plannedStartAt: tour.plannedStartAt?.toISOString() ?? null,
-        plannedStartAtLocal: tour.plannedStartAt ? berlinLocal(tour.plannedStartAt, now) : null, stops: brief(tour) })),
+        plannedStartAtLocal: tour.plannedStartAt ? berlinLocal(tour.plannedStartAt, now) : null, zuladung: zuladungState(tour), stops: brief(tour) })),
       driver: { status: hours.status, workStateLabel, activitySince: hours.activitySince, restingNow, hours: driverHours, summary },
       issues: vehicle.issues.map(issue => ({ id: issue.id, kind: issue.kind, description: issue.description, expectedResolvedAt: issue.expectedResolvedAt?.toISOString() ?? null }))
     };

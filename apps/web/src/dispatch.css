@@ -471,3 +471,4 @@ button.decision-card-title:focus-visible { outline: 2px solid var(--focus); outl
 .vehicle-panel-id .rest-at-stop { font-size: .8125rem; }
 /* A break or waiting at the dock: neutral, the truck goes on today. */
 .rest-at-stop-pause { border-color: rgb(var(--ln-e2e8f0)); background: rgb(var(--bg-f8fafc)); color: rgb(var(--tx-334155)); }
+.vehicle-panel-zuladung { color: rgb(var(--tx-92400e)); font-weight: 500; }
