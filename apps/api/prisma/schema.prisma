@@ -76,6 +76,7 @@ model Tour {
   legs         Leg[]
   events       Event[]
   alerts       Alert[]
+  document     OrderDocument?
 
   @@index([vehicleId, status])
   @@index([previousTourId])
@@ -377,6 +378,7 @@ model Dispatcher {
   passwordHash String
   active Boolean @default(true)
   lastLoginAt DateTime?
+  onboardingCompletedAt DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -512,4 +514,66 @@ model KnownAddress {
 
   @@unique([source, externalId])
   @@index([active])
+}
+
+/// The uploaded Auftrag (PDF, image, XLSX) with what the AI read from it and what the dispatcher saved. Bytes are read only by the file route.
+model OrderDocument {
+  id                     String    @id @default(cuid())
+  sha256                 String    @unique
+  filename               String
+  mimeType               String
+  size                   Int
+  content                Bytes
+  previewJson            String
+  confirmedJson          String?
+  status                 String    @default("PENDING")
+  uploadedByDispatcherId String?
+  vehicleId              String?
+  tourId                 String?   @unique
+  attachedAt             DateTime?
+  createdAt              DateTime  @default(now())
+
+  tour        Tour?              @relation(fields: [tourId], references: [id])
+  corrections ImportCorrection[]
+
+  @@index([status, createdAt])
+  @@index([vehicleId, createdAt])
+}
+
+/// One correction a dispatcher made to an AI-read stop before saving the tour. Never updated or deleted.
+model ImportCorrection {
+  id           String   @id @default(cuid())
+  documentId   String
+  tourId       String?
+  dispatcherId String?
+  kind         String
+  field        String?
+  aiValue      String?
+  finalValue   String?
+  contextJson  String?
+  signature    String
+  createdAt    DateTime @default(now())
+
+  document OrderDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([signature, createdAt])
+  @@index([documentId])
+  @@index([tourId])
+}
+
+/// Import rule learned from repeated corrections (alias, ignored label, stop type); active once the threshold is reached.
+model ImportRule {
+  id         String    @id @default(cuid())
+  kind       String
+  pattern    String
+  value      String?
+  active     Boolean   @default(false)
+  hits       Int       @default(0)
+  applied    Int       @default(0)
+  builtIn    Boolean   @default(false)
+  lastSeenAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@unique([kind, pattern])
 }

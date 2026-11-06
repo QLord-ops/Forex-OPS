@@ -6,6 +6,7 @@ CREATE TABLE "Dispatcher" (
     "passwordHash" TEXT NOT NULL,
     "active" BOOLEAN NOT NULL DEFAULT true,
     "lastLoginAt" DATETIME,
+    "onboardingCompletedAt" DATETIME,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" DATETIME NOT NULL
 );
@@ -395,3 +396,55 @@ CREATE TABLE "KnownAddress" (
 );
 CREATE UNIQUE INDEX "KnownAddress_source_externalId_key" ON "KnownAddress"("source", "externalId");
 CREATE INDEX "KnownAddress_active_idx" ON "KnownAddress"("active");
+CREATE TABLE "OrderDocument" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "sha256" TEXT NOT NULL,
+    "filename" TEXT NOT NULL,
+    "mimeType" TEXT NOT NULL,
+    "size" INTEGER NOT NULL,
+    "content" BLOB NOT NULL,
+    "previewJson" TEXT NOT NULL,
+    "confirmedJson" TEXT,
+    "status" TEXT NOT NULL DEFAULT 'PENDING',
+    "uploadedByDispatcherId" TEXT,
+    "vehicleId" TEXT,
+    "tourId" TEXT,
+    "attachedAt" DATETIME,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "OrderDocument_tourId_fkey" FOREIGN KEY ("tourId") REFERENCES "Tour" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+);
+CREATE UNIQUE INDEX "OrderDocument_sha256_key" ON "OrderDocument"("sha256");
+CREATE UNIQUE INDEX "OrderDocument_tourId_key" ON "OrderDocument"("tourId");
+CREATE INDEX "OrderDocument_status_createdAt_idx" ON "OrderDocument"("status", "createdAt");
+CREATE INDEX "OrderDocument_vehicleId_createdAt_idx" ON "OrderDocument"("vehicleId", "createdAt");
+CREATE TABLE "ImportCorrection" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "documentId" TEXT NOT NULL,
+    "tourId" TEXT,
+    "dispatcherId" TEXT,
+    "kind" TEXT NOT NULL,
+    "field" TEXT,
+    "aiValue" TEXT,
+    "finalValue" TEXT,
+    "contextJson" TEXT,
+    "signature" TEXT NOT NULL,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "ImportCorrection_documentId_fkey" FOREIGN KEY ("documentId") REFERENCES "OrderDocument" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+CREATE INDEX "ImportCorrection_signature_createdAt_idx" ON "ImportCorrection"("signature", "createdAt");
+CREATE INDEX "ImportCorrection_documentId_idx" ON "ImportCorrection"("documentId");
+CREATE INDEX "ImportCorrection_tourId_idx" ON "ImportCorrection"("tourId");
+CREATE TABLE "ImportRule" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "kind" TEXT NOT NULL,
+    "pattern" TEXT NOT NULL,
+    "value" TEXT,
+    "active" BOOLEAN NOT NULL DEFAULT false,
+    "hits" INTEGER NOT NULL DEFAULT 0,
+    "applied" INTEGER NOT NULL DEFAULT 0,
+    "builtIn" BOOLEAN NOT NULL DEFAULT false,
+    "lastSeenAt" DATETIME,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL
+);
+CREATE UNIQUE INDEX "ImportRule_kind_pattern_key" ON "ImportRule"("kind", "pattern");
