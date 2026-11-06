@@ -104,6 +104,7 @@ export const accountsApi = {
 
 export interface AddressRule { id: string; pattern: string; kind: string; company: string | null; street: string | null; postalCode: string | null; city: string | null
   latitude: number | null; longitude: number | null; requiresTermin: boolean; hits: number; updatedAt: string }
+export interface ImportRule { id: string; kind: string; pattern: string; value: string | null; active: boolean; hits: number; applied: number; builtIn: boolean; lastSeenAt: string | null; createdAt: string; updatedAt: string }
 export interface RouteOption { id: string; distanceMeters: number; durationSeconds: number; trafficDelaySeconds: number; mainRoads: string[]; providerStatus: string; geometry: Coordinate[] }
 export interface RouteOptions { vehicleId: string; version: number; legId: string; checkedAt: string; offRouteMeters: number | null
   current: { remainingDistanceMeters: number; eta: string | null; geometry: Coordinate[] }; options: RouteOption[] }
@@ -160,6 +161,10 @@ export const api = {
   updateAddressRule: (id: string, patch: Partial<Pick<AddressRule, 'company' | 'street' | 'postalCode' | 'city' | 'requiresTermin'>>) =>
     request<AddressRule>(`/address-rules/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   deleteAddressRule: (id: string) => request<void>(`/address-rules/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  importRules: () => request<{ rules: ImportRule[]; builtIn: Array<Pick<ImportRule, 'kind' | 'pattern' | 'value'>>; corrections: { last7d: number } }>('/import-rules'),
+  updateImportRule: (id: string, patch: { active?: boolean; value?: string | null }) =>
+    request<ImportRule>(`/import-rules/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  deleteImportRule: (id: string) => request<void>(`/import-rules/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   /** Three routes from the truck's GPS position to its next stop (TomTom). */
   routeOptions: (vehicleId: string) => request<RouteOptions>(`/vehicles/${encodeURIComponent(vehicleId)}/route-options`, { method: 'POST', body: '{}' }),
   applyRouteOption: (vehicleId: string, optionId: string, version: number) =>

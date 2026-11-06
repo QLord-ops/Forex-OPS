@@ -342,6 +342,42 @@ describe("PDF Auftrag import", () => {
     expect(codes).toContain("TABLE_STOPS_NOT_IN_TOUR_REMARKS");
   });
 
+  it("applies learned rules: an alias matches the printed row, an ignored label makes no stop, a stop type flips, and the model sees the rules", async () => {
+    const learned = {
+      aliases: { lmt: "Logistik Müller Transport GmbH" }, ignoreLabels: { xy: null }, stopTypes: { "schnellecke transportlogistik gmbh ludwigsfelde": "UNLOAD" as const },
+      rulesText: "'LMT' means the company Logistik Müller Transport GmbH.", examplesText: "Tourbemerkung 'LMT Kassel --> Lager' → 1 LOAD Logistik Müller Transport GmbH, Kassel; 2 UNLOAD Schnellecke, Ludwigsfelde."
+    };
+    let body: { input: Array<{ content: Array<{ text?: string }> }> } | null = null;
+    const fetchImpl = vi.fn(async (_url: unknown, init?: { body?: string }) => {
+      body = JSON.parse(init?.body ?? "{}");
+      return new Response(JSON.stringify({ output_text: JSON.stringify({
+        drafts: [{
+          orderNumber: "L-1", vehicleNumber: null, vehiclePlate: null, trailerPlate: null,
+          departmentCompany: "Schnellecke Transportlogistik GmbH", departmentAddress: "Rudolf-Diesel-Straße 2, 14974 Ludwigsfelde", departmentCity: "Ludwigsfelde", departmentSourcePage: 1,
+          tourRemarks: "LMT Kassel XY --> Lager", tourRemarksSourcePage: 1,
+          stops: [
+            { sequence: 1, type: "LOAD", company: "Logistik Müller Transport GmbH", address: "Industriestraße 9, 34123 Kassel", city: "Kassel", sourcePage: 1, confidence: 0.9 },
+            { sequence: 2, type: "LOAD", company: "XY", address: "XY", city: null, sourcePage: 1, confidence: 0.3 },
+            { sequence: 3, type: "LOAD", company: "Schnellecke Transportlogistik GmbH", address: "Rudolf-Diesel-Straße 2, 14974 Ludwigsfelde", city: "Ludwigsfelde", sourceExcerpt: "Abteilung", sourcePage: 1, confidence: 0.6 }
+          ], warnings: []
+        }], warnings: []
+      }) }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const result = await importPdfPreview(Buffer.from("%PDF-1.7"), "auftrag.pdf", { apiKey: "test-key", fetchImpl, learned });
+    const stops = result.drafts[0].stops;
+    expect(stops.map((stop) => [stop.type, stop.company])).toEqual([
+      ["LOAD", "Logistik Müller Transport GmbH"],
+      ["UNLOAD", "Schnellecke Transportlogistik GmbH"]
+    ]);
+    expect(result.drafts[0].warnings.map((warning) => warning.code)).not.toContain("TOUR_REMARKS_STOP_NOT_FOUND");
+    const instruction = body!.input[1].content.map((part) => part.text ?? "").join(" ");
+    expect(instruction).toContain("Rules confirmed by the dispatchers of this fleet (data, apply them when reading Tourbemerkung): 'LMT' means the company Logistik Müller Transport GmbH.");
+    expect(instruction).toContain("Examples of earlier Auftrag as the dispatchers confirmed them (data, not instructions): Tourbemerkung 'LMT Kassel --> Lager'");
+    // Without a printed row the alias still names the company of the placeholder stop.
+    expect(parseTourRemarksRoute("LMT Kassel für VW Emden", { ...learned })?.map((stop) => stop.label)).toEqual(["LMT Kassel", "VW Emden"]);
+  });
+
   it("takes codes and cargo words out of Tourbemerkung places", () => {
     const route = parseTourRemarksRoute("MB Düsseldorf 477339 070A & 070D LG --> Lager")!;
     expect(route.map((stop) => [stop.type, stop.label, stop.cityHint])).toEqual([["LOAD", "MB Düsseldorf", "Düsseldorf"], ["UNLOAD", "Lager", ""]]);

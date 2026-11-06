@@ -457,6 +457,8 @@ export interface CreateTourStopInput {
   departureDeadlineAt?: string | null
   /** Imported label whose place the dispatcher corrected; the server remembers the correction. */
   learnLabel?: string | null
+  /** Index of the recognised stop this one came from, so the server sees what was changed. */
+  draftStopIndex?: number | null
   sequence: number
   type: StopType
   company?: string
