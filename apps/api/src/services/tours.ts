@@ -889,7 +889,9 @@ export const tourInclude = {
   stops: { orderBy: { sequence: "asc" } },
   legs: { orderBy: { createdAt: "asc" } },
   events: { orderBy: { timestamp: "asc" } },
-  alerts: { orderBy: { createdAt: "desc" } }
+  alerts: { orderBy: { createdAt: "desc" } },
+  // Only the link to the saved Auftrag: the bytes are served by the file route.
+  document: { select: { id: true, filename: true, mimeType: true } }
 } satisfies Prisma.TourInclude;
 
 export function enrichTour(tour: TourAggregate, now = new Date()) {

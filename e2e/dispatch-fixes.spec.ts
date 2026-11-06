@@ -273,6 +273,30 @@ test('Auftrag с «evt. Zuladung»: тур помечен, «Добавить Zu
   ])
 })
 
+test('сохранённый Auftrag открывается из карточки «Тур» у активного и очередного тура', async ({ page }) => {
+  const activeTour = { id: 'tour-1', vehicleId: 'v1', orderNumber: '71123727', status: 'ACTIVE', planVersion: 1, stops, document: { id: 'doc-1', filename: 'Transportauftrag.pdf', mimeType: 'application/pdf' } }
+  const queuedTour = { id: 'tour-2', vehicleId: 'v1', orderNumber: '71123800', status: 'QUEUED', planVersion: 1, previousTourId: 'tour-1', stops: stops.map((stop) => ({ ...stop, id: `q-${stop.id}`, tourId: 'tour-2' })), document: { id: 'doc-2', filename: 'foto.jpg', mimeType: 'image/jpeg' } }
+  await dashboard(page, async (route, path) => {
+    if (path === '/dashboard') {
+      await json(route, { vehicles: [{ vehicle: truck('v1', '321'), statusText: 'MOVING', etaSource: 'GPS', operationVersion: 1, tour: activeTour,
+        telemetry: { source: 'WEBFLEET', stale: false, ageSeconds: 60 }, mapPosition: { coordinate: [10.9, 49.4], source: 'WEBFLEET', stale: false, courseDeg: 0, standstill: false } }] }); return true
+    }
+    if (path === '/tours/tour-1') { await json(route, activeTour); return true }
+    if (path === '/vehicles/v1/tours') { await json(route, [activeTour, queuedTour]); return true }
+    if (path.endsWith('/card')) { await json(route, { vehicleId: 'v1', vehicleNumber: '321', licensePlate: null, currentTrailerPlate: null, generatedAt: new Date().toISOString(), webfleet: null, current: null, coupling: null, driver: null, events: null, trips: null, maintenance: null }); return true }
+    return false
+  })
+  await page.goto('/?vehicleId=v1&card=v1')
+  await page.evaluate(() => window.localStorage.setItem('ops-truck-card-tab', 'tour'))
+  await page.reload()
+  const card = page.getByRole('dialog', { name: /321/ })
+  const activeLink = card.getByRole('link', { name: 'Auftrag (PDF)' })
+  await expect(activeLink).toHaveAttribute('href', '/api/documents/doc-1/file')
+  await expect(activeLink).toHaveAttribute('target', '_blank')
+  await card.getByRole('button', { name: /71123800/, expanded: false }).click()
+  await expect(card.getByRole('link', { name: 'Auftrag (фото)' })).toHaveAttribute('href', '/api/documents/doc-2/file')
+})
+
 test('машина на суточном отдыхе на загрузке: пометка в списке и панели, уведомление в «Требует решения»', async ({ page }) => {
   const arrivedAt = new Date(Date.now() - 5 * 3600_000).toISOString()
   const until = new Date(Date.now() + 6 * 3600_000)

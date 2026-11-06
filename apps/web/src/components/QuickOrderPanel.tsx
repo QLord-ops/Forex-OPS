@@ -136,8 +136,9 @@ export function QuickOrderPanel({
         return
       }
       if (!result?.drafts.length) throw new Error('В файле не найден ни Auftrag, ни термин.')
-      setPendingDrafts((current) => [...current, ...result.drafts.slice(1).map((item) => ({ draft: item, fileName: file.name }))])
-      const next = result.drafts[0]
+      const documentId = result.documentId ?? null
+      setPendingDrafts((current) => [...current, ...result.drafts.slice(1).map((item) => ({ draft: { ...item, documentId }, fileName: file.name }))])
+      const next = { ...result.drafts[0], documentId, warnings: [...result.warnings.filter((warning) => warning.code === 'DOCUMENT_ALREADY_ATTACHED'), ...result.drafts[0].warnings] }
       const match = vehicleMatch(next.vehiclePlate || next.vehicleNumber, vehicles)
       setImportAttemptId(createImportAttemptId())
       setDraft(next); setOrderNumber(next.orderNumber ?? ''); setVehicleId(match.id ?? '')
@@ -207,7 +208,7 @@ export function QuickOrderPanel({
     setBusy(true); setError('')
     try {
       const resolved = await resolveStops(stops)
-      const metadata = { trailerPlate: draft?.trailerPlate || undefined, tourRemarks: draft?.tourRemarks || undefined }
+      const metadata = { trailerPlate: draft?.trailerPlate || undefined, tourRemarks: draft?.tourRemarks || undefined, documentId: draft?.documentId ?? null }
       const createdVehicleId = createVehicle
         ? (await api.createTourWithVehicle({ vehicle: { vehicleNumber: newVehicleNumber.trim(), licensePlate: newLicensePlate.trim() || undefined }, tour: { orderNumber: orderNumber.trim(), stops: resolved, ...metadata } })).vehicle.id
         : vehicleId
@@ -273,7 +274,7 @@ export function QuickOrderPanel({
         {tab === 'search' ? <div className="map-action-content"><label className="field-label" htmlFor="map-search-address">Полный адрес или город</label><div className="flex gap-2"><AddressInput id="map-search-address" className="field-input min-w-0" value={searchQuery} onChange={setSearchQuery} onKeyDown={(event) => { if (event.key === 'Enter') void findAddress() }} placeholder="Фирма, улица или город"
               onPick={(item) => { setSearchQuery(item.label); setSearchResult(`${item.label}, ${suggestionAddress(item)}`); setError(''); onAddressFound?.([item.longitude, item.latitude]) }} onFreeSearch={() => void findAddress()} /><button type="button" className="primary-button" onClick={() => void findAddress()} disabled={busy}><Search className="h-4 w-4" /></button></div>{searchResult ? <p className="map-action-result"><MapPin className="h-4 w-4" />{searchResult}</p> : null}</div> : null}
         {tab === 'route' ? <RouteBuilder vehicles={vehicles} selectedVehicleNumber={selectedVehicleNumber} onPreview={(preview) => onRoutePreview?.(preview)} /> : null}
-        {tab === 'order' ? <div className="map-action-content"><div className={'quick-order-drop ' + (dragging ? 'dragging' : '')} onDragEnter={(event) => { event.preventDefault(); setDragging(true) }} onDragOver={(event) => event.preventDefault()} onDragLeave={() => setDragging(false)} onDrop={onDrop}><FileUp className="h-7 w-7" /><strong>{busy ? 'Распознаём Auftrag…' : 'Перетащите Auftrag сюда'}</strong><span>PDF, Excel или скриншот</span><label className="secondary-button cursor-pointer">Выбрать файлы<input className="sr-only" type="file" multiple accept=".pdf,.xlsx,.png,.jpg,.jpeg,.webp" onChange={onFileInput} disabled={busy} /></label></div><p className="quick-order-hint">Каждый заказ проверяется отдельно. В очереди: {pendingDrafts.length + pendingFiles.length}. Исходный файл не сохраняется.</p><PendingAppointments version={pendingVersion} onReview={(item: PendingAppointment) => { if (!draft && !termin) setTermin({ document: pendingToDocument(item), fingerprint: item.fingerprint, match: item.match, pendingId: item.id, alreadyApplied: false, fileName: 'Ожидающий термин' }) }} /></div> : null}
+        {tab === 'order' ? <div className="map-action-content"><div className={'quick-order-drop ' + (dragging ? 'dragging' : '')} onDragEnter={(event) => { event.preventDefault(); setDragging(true) }} onDragOver={(event) => event.preventDefault()} onDragLeave={() => setDragging(false)} onDrop={onDrop}><FileUp className="h-7 w-7" /><strong>{busy ? 'Распознаём Auftrag…' : 'Перетащите Auftrag сюда'}</strong><span>PDF, Excel или скриншот</span><label className="secondary-button cursor-pointer">Выбрать файлы<input className="sr-only" type="file" multiple accept=".pdf,.xlsx,.png,.jpg,.jpeg,.webp" onChange={onFileInput} disabled={busy} /></label></div><p className="quick-order-hint">Каждый заказ проверяется отдельно. В очереди: {pendingDrafts.length + pendingFiles.length}. Файл сохраняется вместе с туром.</p><PendingAppointments version={pendingVersion} onReview={(item: PendingAppointment) => { if (!draft && !termin) setTermin({ document: pendingToDocument(item), fingerprint: item.fingerprint, match: item.match, pendingId: item.id, alreadyApplied: false, fileName: 'Ожидающий термин' }) }} /></div> : null}
         {error && !draft ? <p className="quick-order-error"><AlertTriangle className="h-4 w-4" />{error}</p> : null}
       </div> : null}
     </aside>

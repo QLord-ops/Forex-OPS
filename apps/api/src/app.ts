@@ -55,6 +55,8 @@ import { createDispatcherDependencies } from './services/dispatcher-adapters.js'
 import { writeAuditLog, type AuditActor } from './services/audit-log.js';
 import { matchAppointment } from './services/appointment-match.js';
 import { documentFingerprint, PendingAppointmentService } from './services/pending-appointments.js';
+import { OrderDocumentService } from './services/order-documents.js';
+import { registerOrderDocumentRoutes } from './routes/order-documents.js';
 import { registerAppointmentDocumentRoutes } from './routes/appointments.js';
 import type { DocumentImportPreview } from './services/pdf-order-import.js';
 
@@ -83,6 +85,8 @@ const notificationService: NotificationService = new NotificationService(prisma,
 const addressRules = new AddressRuleService(prisma);
 const operationsService = new OperationsService(prisma, tourService);
 const pendingAppointments = new PendingAppointmentService(prisma);
+const orderDocuments = new OrderDocumentService(prisma);
+const ORDER_DOCUMENT_SYSTEM_ACTOR: AuditActor = { role: 'system', sessionId: 'order-documents' };
 
 /** A Termin slip gets its truck and stop match and tells whether the same file was used before. */
 /** A corrected place with a street and coordinates becomes a rule for its imported label. Failures never block the tour. */
@@ -114,6 +118,37 @@ async function withAppointmentMatch<T extends DocumentImportPreview>(preview: T,
   const fingerprint = documentFingerprint(buffer);
   const [match, previous] = await Promise.all([matchAppointment(prisma, preview.appointment), pendingAppointments.findByFingerprint(fingerprint)]);
   return { ...preview, appointment: { ...preview.appointment, fingerprint }, match, previous: previous ? { id: previous.id, status: previous.status, attachedStopId: previous.attachedStopId } : null };
+}
+
+/** Links the saved Auftrag to the tour just created. Another tour already owning it is reported, nothing else breaks. */
+async function attachDocument(documentId: string, tourId: string, vehicleId: string, confirmed: unknown, request: FastifyRequest) {
+  try {
+    await orderDocuments.attach({ documentId, tourId, vehicleId, confirmedJson: confirmed, actor: auditActor(request) });
+  } catch (error) {
+    // A file with several Auftrag stays with its first tour; the preview already warned about a re-upload.
+    request.log.warn({ err: error }, 'Auftrag не прикреплён к туру');
+  }
+}
+
+/** Freshly created tours come back without their document relation; the card needs the link at once. */
+async function withDocument<T extends TourAggregate>(tour: T): Promise<T> {
+  const document = await orderDocuments.forTour(tour.id).catch(() => null);
+  return { ...tour, document: document ? { id: document.id, filename: document.filename, mimeType: document.mimeType } : null };
+}
+
+/** The Auftrag file stays with the tour it will create. A storage failure never costs the dispatcher the parse. */
+async function withStoredDocument<T extends { documentKind?: string; drafts: Array<unknown>; warnings: Array<{ code: string; message: string }> }>(preview: T, file: { buffer: Buffer; filename: string; mimeType: string }, request: FastifyRequest) {
+  if (preview.documentKind === 'APPOINTMENT' || !preview.drafts?.length) return { ...preview, documentId: null, documentReused: false, attachedTourId: null };
+  try {
+    const stored = await orderDocuments.store({ ...file, previewJson: preview, actor: auditActor(request) });
+    const warnings = stored.attachedTourId
+      ? [...preview.warnings, { code: 'DOCUMENT_ALREADY_ATTACHED', message: 'Этот файл уже сохранён с другим туром — проверьте, не дубль ли это.' }]
+      : preview.warnings;
+    return { ...preview, warnings, documentId: stored.id, documentReused: stored.reused, attachedTourId: stored.attachedTourId };
+  } catch (error) {
+    request.log.warn({ err: error }, 'Auftrag не сохранён в базе; разбор отдан без документа');
+    return { ...preview, documentId: null, documentReused: false, attachedTourId: null };
+  }
 }
 // Automatic arrival from fresh Webfleet GPS (zone + standstill); AUTO_ARRIVAL_ENABLED=false keeps it a suggestion.
 const autoArrival: AutoArrivalHandler | undefined = process.env.AUTO_ARRIVAL_ENABLED === 'false' ? undefined
@@ -198,9 +233,11 @@ const createTourSchema = z.object({
   stops: z.array(stopSchema).min(2)
 });
 
+const documentIdSchema = z.string().trim().min(8).max(64).nullable().optional();
 const confirmImportedTourSchema = createTourSchema.extend({
   importAttemptId: z.string().trim().min(8).max(200),
-  importFingerprint: z.string().trim().min(8).max(200)
+  importFingerprint: z.string().trim().min(8).max(200),
+  documentId: documentIdSchema
 });
 
 const patchTourSchema = z.union([
@@ -288,6 +325,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   registerVehicleStatusSettingsRoutes(app, prisma);
   registerDailyStatusRoutes(app, dailyStatus);
   registerAddressBookRoutes(app, prisma, addressBook);
+  registerOrderDocumentRoutes(app, orderDocuments);
   await registerRouteScenarioRoutes(app, { service: scenarioService });
 
   let activeOrderImports = 0;
@@ -349,14 +387,20 @@ export async function buildApp(options: BuildAppOptions = {}) {
       }
     }
   };
+  let documentPurgeTimer: ReturnType<typeof setInterval> | undefined;
+  const purgeDocuments = () => orderDocuments.purge(new Date(), ORDER_DOCUMENT_SYSTEM_ACTOR).catch((error: unknown) => app.log.warn({ err: error }, 'Очистка старых Auftrag не удалась'));
   app.addHook('onListen', async () => {
     if (isServerless) return;
     await refreshNotifications();
     notificationTimer = setInterval(() => { void refreshNotifications(); }, 15_000);
     notificationTimer.unref();
+    void purgeDocuments();
+    documentPurgeTimer = setInterval(() => { void purgeDocuments(); }, 6 * 3600_000);
+    documentPurgeTimer.unref();
   });
   app.addHook('onClose', async () => {
     if (notificationTimer) clearInterval(notificationTimer);
+    if (documentPurgeTimer) clearInterval(documentPurgeTimer);
     for (const client of subscribers) client.end();
     subscribers.clear();
     subscriberSessions.clear();
@@ -649,7 +693,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
         request.log.error({ errorType: error instanceof Error ? error.name : 'unknown' }, "Не удалось разобрать книгу Excel");
         return reply.status(422).send({ error: "Не удалось безопасно прочитать книгу Excel." });
       }
-      return withAddressRules({
+      return withStoredDocument(await withAddressRules({
         source: result.source,
         detectedLayout: result.detectedLayout,
         drafts: result.drafts.map((draft) => ({
@@ -668,7 +712,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
           row: warning.sourceRow
         })),
         aiAvailable: result.aiAvailable
-      });
+      }), { buffer, filename, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }, request);
     } finally {
       activeOrderImports -= 1;
     }
@@ -704,7 +748,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
 
       if (!options.auth?.disabled) await assistantService.consumeUsage(assistantSessionKey(request));
       try {
-        return await withAppointmentMatch(await pdfImport(buffer, filename), buffer);
+        return await withStoredDocument(await withAppointmentMatch(await pdfImport(buffer, filename), buffer), { buffer, filename, mimeType: "application/pdf" }, request);
       } catch (error) {
         if (error instanceof Error && error.message.includes("OPENAI_API_KEY")) {
           return reply.status(503).send({ error: "OpenAI ещё не настроен для импорта PDF." });
@@ -749,7 +793,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
 
       if (!options.auth?.disabled) await assistantService.consumeUsage(assistantSessionKey(request));
       try {
-        return await withAppointmentMatch(await imageImport(buffer, filename, file.mimetype), buffer);
+        return await withStoredDocument(await withAppointmentMatch(await imageImport(buffer, filename, file.mimetype), buffer), { buffer, filename, mimeType: file.mimetype }, request);
       } catch (error) {
         if (error instanceof Error && error.message.includes("OPENAI_API_KEY")) {
           return reply.status(503).send({ error: "OpenAI ещё не настроен для импорта скриншотов." });
@@ -886,11 +930,14 @@ export async function buildApp(options: BuildAppOptions = {}) {
   });
 
   app.post("/imports/tours/confirm", { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request, reply) => {
-    const { importAttemptId, importFingerprint, ...input } = confirmImportedTourSchema.parse(request.body);
+    const { importAttemptId, importFingerprint, documentId, ...input } = confirmImportedTourSchema.parse(request.body);
     const result = await tourService.createImportedTour(input, { importAttemptId, importFingerprint }, auditActor(request));
-    if (result.created) await learnAddressRules(input.stops, auditActor(request));
+    if (result.created) {
+      await learnAddressRules(input.stops, auditActor(request));
+      if (documentId) await attachDocument(documentId, result.tour.id, input.vehicleId, input, request);
+    }
     return reply.status(result.created ? 201 : 200).send({
-      tour: enrichTour(result.tour),
+      tour: enrichTour(await withDocument(result.tour)),
       created: result.created,
       reused: !result.created
     });
@@ -899,11 +946,13 @@ export async function buildApp(options: BuildAppOptions = {}) {
   app.post("/tours/with-new-vehicle", async (request, reply) => {
     const input = z.object({
       vehicle: z.object({ vehicleNumber: z.string().trim().min(1).max(100), licensePlate: z.string().trim().max(100).optional() }),
-      tour: createTourSchema.omit({ vehicleId: true })
+      tour: createTourSchema.omit({ vehicleId: true }).extend({ documentId: documentIdSchema })
     }).parse(request.body);
-    const result = await tourService.createTourForNewVehicle(input, auditActor(request));
-    await learnAddressRules(input.tour.stops, auditActor(request));
-    return reply.status(201).send({ vehicle: toIsoObject(result.vehicle), tour: enrichTour(result.tour) });
+    const { documentId, ...tourInput } = input.tour;
+    const result = await tourService.createTourForNewVehicle({ vehicle: input.vehicle, tour: tourInput }, auditActor(request));
+    await learnAddressRules(tourInput.stops, auditActor(request));
+    if (documentId) await attachDocument(documentId, result.tour.id, result.vehicle.id, { ...tourInput, vehicleId: result.vehicle.id }, request);
+    return reply.status(201).send({ vehicle: toIsoObject(result.vehicle), tour: enrichTour(await withDocument(result.tour)) });
   });
 
   app.post("/tours/preview", { config: { rateLimit: routingRateLimit } }, async (request) => {

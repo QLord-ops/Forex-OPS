@@ -22,6 +22,11 @@ import type {
 import { authHeaders, notifySessionExpired } from './auth'
 const API_BASE = '/api'
 
+/** The saved Auftrag file; the browser opens it with the session cookie. */
+export function documentFileUrl(documentId: string) {
+  return `${API_BASE}/documents/${encodeURIComponent(documentId)}/file`
+}
+
 export class ApiError extends Error {
   status: number
 
@@ -126,12 +131,12 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload)
     }),
-  confirmImportedTour: (payload: CreateTourInput & { importAttemptId: string; importFingerprint: string }) =>
+  confirmImportedTour: (payload: CreateTourInput & { importAttemptId: string; importFingerprint: string; documentId?: string | null }) =>
     request<{ tour: Tour; created: boolean; reused: boolean }>('/imports/tours/confirm', {
       method: 'POST',
       body: JSON.stringify(payload)
     }),
-  createTourWithVehicle: (payload: { vehicle: { vehicleNumber: string; licensePlate?: string }; tour: Omit<CreateTourInput, 'vehicleId'> }) =>
+  createTourWithVehicle: (payload: { vehicle: { vehicleNumber: string; licensePlate?: string }; tour: Omit<CreateTourInput, 'vehicleId'> & { documentId?: string | null } }) =>
     request<{ vehicle: Vehicle; tour: Tour }>('/tours/with-new-vehicle', {
       method: 'POST',
       body: JSON.stringify(payload)
