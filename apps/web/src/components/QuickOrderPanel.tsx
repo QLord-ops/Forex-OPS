@@ -20,7 +20,9 @@ type DockTab = 'search' | 'route' | 'order'
 type TerminReview = { document: AppointmentDocument; fingerprint: string; match: AppointmentMatch; pendingId: string | null; alreadyApplied: boolean; fileName: string }
 type DraftStop = ImportedStopDraft & { city: string; company: string; address: string; appointmentLocal: string; loadingMetersText: string; referenceText: string; instructionsText: string; resolution?: AddressResolution | null
   /** What the import recognised, to notice the dispatcher's correction. */
-  original?: { company: string; address: string; city: string } }
+  original?: { company: string; address: string; city: string }
+  /** Position in the recognised draft; stops the dispatcher added have none. */
+  draftStopIndex?: number | null }
 
 export function QuickOrderPanel({
   row,
@@ -145,7 +147,7 @@ export function QuickOrderPanel({
       setCreateVehicle(false)
       setNewVehicleNumber(next.vehicleNumber && !looksLikePlate(next.vehicleNumber) ? next.vehicleNumber : '')
       setNewLicensePlate(next.vehiclePlate || (next.vehicleNumber && looksLikePlate(next.vehicleNumber) ? next.vehicleNumber : ''))
-      setStops(next.stops.slice().sort((a, b) => a.sequence - b.sequence).map(toDraftStop))
+      setStops(next.stops.slice().sort((a, b) => a.sequence - b.sequence).map((item, index) => toDraftStop(item, index)))
       setEditing(false); setTab('order')
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Не удалось распознать Auftrag.')
@@ -156,7 +158,7 @@ export function QuickOrderPanel({
     setDraft(null); setTermin(null); setEditing(false); setImportAttemptId(createImportAttemptId())
     const queued = pendingDrafts[0]
     if (queued) {
-      setPendingDrafts((current) => current.slice(1)); setDraft(queued.draft); setFileName(queued.fileName); setOrderNumber(queued.draft.orderNumber ?? ''); setVehicleId(vehicleMatch(queued.draft.vehiclePlate || queued.draft.vehicleNumber, vehicles).id ?? ''); setStops(queued.draft.stops.slice().sort((a, b) => a.sequence - b.sequence).map(toDraftStop)); setCreateVehicle(false); setNewVehicleNumber(queued.draft.vehicleNumber ?? ''); setNewLicensePlate(queued.draft.vehiclePlate ?? ''); return
+      setPendingDrafts((current) => current.slice(1)); setDraft(queued.draft); setFileName(queued.fileName); setOrderNumber(queued.draft.orderNumber ?? ''); setVehicleId(vehicleMatch(queued.draft.vehiclePlate || queued.draft.vehicleNumber, vehicles).id ?? ''); setStops(queued.draft.stops.slice().sort((a, b) => a.sequence - b.sequence).map((item, index) => toDraftStop(item, index))); setCreateVehicle(false); setNewVehicleNumber(queued.draft.vehicleNumber ?? ''); setNewLicensePlate(queued.draft.vehiclePlate ?? ''); return
     }
     const next = pendingFiles[0]
     setPendingFiles((current) => current.slice(1))
@@ -187,6 +189,7 @@ export function QuickOrderPanel({
         appointmentWindowEndAt: stop.appointmentWindowEndLocal ? berlinLocalToIso(stop.appointmentWindowEndLocal) : null,
         plannedAt: 'plannedLocal' in stop && stop.plannedLocal && !stop.appointmentLocal ? berlinLocalToIso(stop.plannedLocal as string) : null,
         learnLabel: correctedLabel(stop as DraftStop),
+        draftStopIndex: 'draftStopIndex' in stop ? (stop as DraftStop).draftStopIndex ?? null : null,
         loadingMeters: stop.loadingMetersText ? Number(stop.loadingMetersText.replace(',', '.')) : null,
         referenceNumbers: splitReferences(stop.referenceText ?? ''),
         instructions: stop.instructionsText?.trim() || null,
@@ -287,7 +290,7 @@ export function QuickOrderPanel({
   </>
 }
 
-function toDraftStop(stop: ImportedStopDraft): DraftStop { return { ...stop, city: stop.city ?? '', company: stop.company ?? '', address: stop.address ?? '', appointmentLocal: stop.appointmentLocal ?? '', loadingMetersText: stop.loadingMeters?.toString() ?? '', referenceText: stop.referenceNumbers?.join(', ') ?? '', instructionsText: stop.instructions ?? '',
+function toDraftStop(stop: ImportedStopDraft, draftStopIndex: number): DraftStop { return { ...stop, draftStopIndex, city: stop.city ?? '', company: stop.company ?? '', address: stop.address ?? '', appointmentLocal: stop.appointmentLocal ?? '', loadingMetersText: stop.loadingMeters?.toString() ?? '', referenceText: stop.referenceNumbers?.join(', ') ?? '', instructionsText: stop.instructions ?? '',
   original: { company: stop.company ?? '', address: stop.address ?? '', city: stop.city ?? '' } } }
 
 /** The imported label when the dispatcher changed the place: the server remembers the corrected address for it. */

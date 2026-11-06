@@ -57,6 +57,8 @@ import { matchAppointment } from './services/appointment-match.js';
 import { documentFingerprint, PendingAppointmentService } from './services/pending-appointments.js';
 import { OrderDocumentService } from './services/order-documents.js';
 import { registerOrderDocumentRoutes } from './routes/order-documents.js';
+import { ImportLearningService } from './services/import-learning.js';
+import { registerImportRuleRoutes } from './routes/import-rules.js';
 import { registerAppointmentDocumentRoutes } from './routes/appointments.js';
 import type { DocumentImportPreview } from './services/pdf-order-import.js';
 
@@ -86,6 +88,7 @@ const addressRules = new AddressRuleService(prisma);
 const operationsService = new OperationsService(prisma, tourService);
 const pendingAppointments = new PendingAppointmentService(prisma);
 const orderDocuments = new OrderDocumentService(prisma);
+const importLearning = new ImportLearningService(prisma, addressRules);
 const ORDER_DOCUMENT_SYSTEM_ACTOR: AuditActor = { role: 'system', sessionId: 'order-documents' };
 
 /** A Termin slip gets its truck and stop match and tells whether the same file was used before. */
@@ -120,10 +123,20 @@ async function withAppointmentMatch<T extends DocumentImportPreview>(preview: T,
   return { ...preview, appointment: { ...preview.appointment, fingerprint }, match, previous: previous ? { id: previous.id, status: previous.status, attachedStopId: previous.attachedStopId } : null };
 }
 
-/** Links the saved Auftrag to the tour just created. Another tour already owning it is reported, nothing else breaks. */
-async function attachDocument(documentId: string, tourId: string, vehicleId: string, confirmed: unknown, request: FastifyRequest) {
+/**
+ * Links the saved Auftrag to the tour just created and learns from what the dispatcher changed against the stored
+ * AI preview (the client never sends the original). Another tour already owning the file is logged, nothing else breaks.
+ */
+async function attachDocument(documentId: string, tourId: string, vehicleId: string, confirmed: { orderNumber: string; tourRemarks?: string | null; stops: Array<z.infer<typeof stopSchema>> }, request: FastifyRequest) {
   try {
-    await orderDocuments.attach({ documentId, tourId, vehicleId, confirmedJson: confirmed, actor: auditActor(request) });
+    const attached = await orderDocuments.attach({ documentId, tourId, vehicleId, confirmedJson: confirmed, actor: auditActor(request) });
+    if (!attached || attached.tourId !== tourId) return;
+    const document = await orderDocuments.get(documentId);
+    if (!document) return;
+    await importLearning.recordConfirmation({
+      documentId, tourId, dispatcherId: request.dispatcherSession?.dispatcherId ?? null, preview: JSON.parse(document.previewJson) as unknown,
+      orderNumber: confirmed.orderNumber, confirmedStops: confirmed.stops, tourRemarks: confirmed.tourRemarks ?? null, actor: auditActor(request)
+    });
   } catch (error) {
     // A file with several Auftrag stays with its first tour; the preview already warned about a re-upload.
     request.log.warn({ err: error }, 'Auftrag не прикреплён к туру');
@@ -217,7 +230,9 @@ const stopSchema = z.object({
   plannedAt: z.string().datetime().nullable().optional(),
   departureDeadlineAt: z.string().datetime().nullable().optional(),
   // The imported label the dispatcher corrected ("Seifert Bremen"): the corrected place is remembered for it.
-  learnLabel: z.string().trim().min(2).max(300).nullable().optional()
+  learnLabel: z.string().trim().min(2).max(300).nullable().optional(),
+  /** Index of the preview stop this one came from, so the server can see what the dispatcher changed. */
+  draftStopIndex: z.number().int().min(0).max(199).nullable().optional()
 }).superRefine((stop, context) => {
   if (stop.serviceMaxMinutes < stop.serviceMinMinutes) context.addIssue({ code: "custom", message: "Максимальное время стоянки не может быть меньше минимального." });
   if (Boolean(stop.appointmentWindowStartAt) !== Boolean(stop.appointmentWindowEndAt)) context.addIssue({ code: "custom", message: "Для временного окна нужны начало и конец." });
@@ -326,11 +341,13 @@ export async function buildApp(options: BuildAppOptions = {}) {
   registerDailyStatusRoutes(app, dailyStatus);
   registerAddressBookRoutes(app, prisma, addressBook);
   registerOrderDocumentRoutes(app, orderDocuments);
+  registerImportRuleRoutes(app, importLearning);
   await registerRouteScenarioRoutes(app, { service: scenarioService });
 
   let activeOrderImports = 0;
-  const pdfImport = options.pdfImport ?? importPdfPreview;
-  const imageImport = options.imageImport ?? importImagePreview;
+  const learnedRules = () => importLearning.learned().catch(() => null);
+  const pdfImport = options.pdfImport ?? (async (buffer, filename) => importPdfPreview(buffer, filename, { learned: await learnedRules() }));
+  const imageImport = options.imageImport ?? (async (buffer, filename, mimeType) => importImagePreview(buffer, filename, mimeType, { learned: await learnedRules() }));
   const databaseCheck = options.databaseCheck ?? (() => prisma.$queryRaw`SELECT 1`);
   const subscribers = new Set<import('node:http').ServerResponse>();
   const subscriberSessions = new Map<string, number>();
@@ -933,8 +950,9 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const { importAttemptId, importFingerprint, documentId, ...input } = confirmImportedTourSchema.parse(request.body);
     const result = await tourService.createImportedTour(input, { importAttemptId, importFingerprint }, auditActor(request));
     if (result.created) {
-      await learnAddressRules(input.stops, auditActor(request));
+      // With the stored preview the server learns from the real diff; without it the client's learnLabel still counts.
       if (documentId) await attachDocument(documentId, result.tour.id, input.vehicleId, input, request);
+      else await learnAddressRules(input.stops, auditActor(request));
     }
     return reply.status(result.created ? 201 : 200).send({
       tour: enrichTour(await withDocument(result.tour)),
@@ -950,8 +968,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
     }).parse(request.body);
     const { documentId, ...tourInput } = input.tour;
     const result = await tourService.createTourForNewVehicle({ vehicle: input.vehicle, tour: tourInput }, auditActor(request));
-    await learnAddressRules(tourInput.stops, auditActor(request));
-    if (documentId) await attachDocument(documentId, result.tour.id, result.vehicle.id, { ...tourInput, vehicleId: result.vehicle.id }, request);
+    if (documentId) await attachDocument(documentId, result.tour.id, result.vehicle.id, tourInput, request);
+    else await learnAddressRules(tourInput.stops, auditActor(request));
     return reply.status(201).send({ vehicle: toIsoObject(result.vehicle), tour: enrichTour(await withDocument(result.tour)) });
   });
 
