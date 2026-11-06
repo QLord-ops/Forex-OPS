@@ -839,6 +839,15 @@ export async function buildApp(options: BuildAppOptions = {}) {
     return reply.status(201).send(toIsoObject(vehicle));
   });
 
+  app.patch("/vehicles/:id", async (request, reply) => {
+    const { id } = idParams.parse(request.params);
+    const patch = vehicleSchema.partial().strict().parse(request.body);
+    if (!Object.keys(patch).length) return reply.status(400).send({ error: "Нечего менять." });
+    const result = await vehicleService.update(id, patch);
+    await audit(request, 'VEHICLE_UPDATED', 'Vehicle', id, { vehicleId: id, metadata: { before: result.before, after: result.after } });
+    return toIsoObject(result.vehicle);
+  });
+
   app.get("/vehicles/:id", async (request) => {
     const { id } = z.object({ id: z.string() }).parse(request.params);
     const vehicle = await vehicleService.getDetails(id);
@@ -1094,13 +1103,14 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const { id } = z.object({ id: z.string().trim().min(1).max(64) }).parse(request.params);
     return webfleetTracks.track(await vehicleObjectUid(prisma, id));
   });
-  app.post('/integrations/webfleet/sync', { preHandler: requireDispatcherRoles('admin') }, async (request) => {
+  // Dispatchers connect their own trucks too (owner decision 2026-11-06); only the fleet presets and accounts stay admin.
+  app.post('/integrations/webfleet/sync', { preHandler: requireDispatcherRoles('admin', 'dispatcher') }, async (request) => {
     await webfleetSync.refreshIfDue();
     await audit(request, 'WEBFLEET_SYNC_REQUESTED', 'Integration', 'webfleet');
     return webfleetSync.status();
   });
   app.get('/integrations/webfleet/bindings', async () => listWebfleetBindings(prisma));
-  app.post('/integrations/webfleet/bindings', { preHandler: requireDispatcherRoles('admin') }, async (request) => {
+  app.post('/integrations/webfleet/bindings', { preHandler: requireDispatcherRoles('admin', 'dispatcher') }, async (request) => {
     const body = z.object({
       objectUid: z.string().trim().min(1).max(128),
       vehicleId: z.string().trim().min(1).max(64),
@@ -1115,7 +1125,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     });
     return listWebfleetBindings(prisma);
   });
-  app.delete('/integrations/webfleet/bindings/:vehicleId', { preHandler: requireDispatcherRoles('admin') }, async (request) => {
+  app.delete('/integrations/webfleet/bindings/:vehicleId', { preHandler: requireDispatcherRoles('admin', 'dispatcher') }, async (request) => {
     const { vehicleId } = z.object({ vehicleId: z.string().trim().min(1).max(64) }).parse(request.params);
     const binding = await unbindWebfleetVehicle(prisma, vehicleId);
     await writeAuditLog(prisma, auditActor(request), {

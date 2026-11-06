@@ -36,7 +36,8 @@ export function WebfleetConnectionPanel({ vehicles = [] }: { vehicles?: Vehicle[
   const { data, error, loading, refetch } = usePolling(webfleetApi.status, 30_000)
   const bindings = usePolling(webfleetApi.bindings, 60_000)
   const suggestions = usePolling(webfleetApi.suggestions, 60_000)
-  const isAdmin = currentDispatcherRole() === 'admin'
+  // Both roles connect trucks (owner decision 2026-11-06); the server checks it too.
+  const isAdmin = currentDispatcherRole() === 'admin' || currentDispatcherRole() === 'dispatcher'
   const [selection, setSelection] = useState<Record<string, string>>({})
   const [bindingBusy, setBindingBusy] = useState<string | null>(null)
   const [bindingError, setBindingError] = useState<string | null>(null)

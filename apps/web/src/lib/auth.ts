@@ -1,6 +1,10 @@
 let csrfToken = ''
 let sessionRole: DispatcherSession['role'] | null = null
 let sessionPerson: { id: string; name: string } | null = null
+let sessionOnboarding: string | null | undefined
+/** When this account finished the guided tour; null = never, undefined = shared login (kept in the browser instead). */
+export const currentOnboardingCompletedAt = () => sessionOnboarding
+export const setOnboardingCompletedAt = (value: string | null) => { sessionOnboarding = value }
 /** Role of the current session, for showing admin-only controls. The server still enforces every permission. */
 export const currentDispatcherRole = () => sessionRole
 /** Personal account of the session; null for the shared passwords of the transition period. */
@@ -14,6 +18,7 @@ export interface DispatcherSession {
   csrfToken?: string
   dispatcherId?: string | null
   displayName?: string | null
+  onboardingCompletedAt?: string | null
   /** Personal accounts exist, so the login field is required. */
   accountsEnabled?: boolean
 }
@@ -47,6 +52,7 @@ async function call(path: string, body?: Record<string, string>): Promise<Dispat
   csrfToken = result.csrfToken ?? ''
   sessionRole = result.authenticated ? result.role ?? null : null
   sessionPerson = result.authenticated && result.dispatcherId ? { id: result.dispatcherId, name: result.displayName ?? '' } : null
+  sessionOnboarding = sessionPerson ? result.onboardingCompletedAt ?? null : undefined
   return result
 }
 export const dispatcherAuth = {

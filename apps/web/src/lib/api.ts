@@ -85,6 +85,7 @@ export interface DispatcherAccount {
   id: string
   login: string
   displayName: string
+  onboardingCompletedAt?: string | null
   role: 'admin' | 'dispatcher'
   active: boolean
   lastLoginAt: string | null
@@ -99,7 +100,8 @@ export const accountsApi = {
   create: (input: { login: string; displayName: string; role: 'admin' | 'dispatcher'; password: string }) => request<DispatcherAccount>('/dispatchers', json('POST', input)),
   update: (id: string, input: Partial<Pick<DispatcherAccount, 'displayName' | 'role' | 'active'>>) => request<DispatcherAccount>(`/dispatchers/${encodeURIComponent(id)}`, json('PATCH', input)),
   resetPassword: (id: string, password: string) => request<{ ok: true }>(`/dispatchers/${encodeURIComponent(id)}/password`, json('POST', { password })),
-  changeOwnPassword: (currentPassword: string, newPassword: string) => request<{ ok: true }>('/auth/password', json('POST', { currentPassword, newPassword }))
+  changeOwnPassword: (currentPassword: string, newPassword: string) => request<{ ok: true }>('/auth/password', json('POST', { currentPassword, newPassword })),
+  onboarding: (completed: boolean) => request<{ ok: true; stored: boolean; onboardingCompletedAt?: string | null }>('/auth/onboarding', json('POST', { completed }))
 }
 
 export interface AddressRule { id: string; pattern: string; kind: string; company: string | null; street: string | null; postalCode: string | null; city: string | null
@@ -112,6 +114,8 @@ export interface RouteOptions { vehicleId: string; version: number; legId: strin
 export const api = {
   dashboard: () => request<DashboardResponse>('/dashboard'),
   vehicles: () => request<Vehicle[]>('/vehicles'),
+  updateVehicle: (id: string, payload: { vehicleNumber?: string; licensePlate?: string; maxSpeedKmh?: number }) =>
+    request<Vehicle>(`/vehicles/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   createVehicle: (payload: { vehicleNumber: string; licensePlate?: string; maxSpeedKmh?: number }) =>
     request<Vehicle>('/vehicles', {
       method: 'POST',
