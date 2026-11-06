@@ -1,4 +1,4 @@
-import { ArrowUpRight, RefreshCw } from 'lucide-react'
+import { ArrowUpRight, Pencil, RefreshCw } from 'lucide-react'
 import type { FormEvent } from 'react'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
@@ -17,6 +17,18 @@ export function VehiclesPage() {
   const [maxSpeedKmh, setMaxSpeedKmh] = useState(85)
   const [createError, setCreateError] = useState<Error | null>(null)
   const [creating, setCreating] = useState(false)
+  const [editing, setEditing] = useState<{ id: string; vehicleNumber: string; licensePlate: string; maxSpeedKmh: number; busy: boolean; error: string } | null>(null)
+
+  async function saveEdit(event: FormEvent) {
+    event.preventDefault()
+    if (!editing) return
+    setEditing({ ...editing, busy: true, error: '' })
+    try {
+      await api.updateVehicle(editing.id, { vehicleNumber: editing.vehicleNumber.trim(), licensePlate: editing.licensePlate.trim(), maxSpeedKmh: editing.maxSpeedKmh })
+      setEditing(null)
+      await refetch()
+    } catch (cause) { setEditing({ ...editing, busy: false, error: cause instanceof Error ? cause.message : 'Не удалось сохранить.' }) }
+  }
 
   async function handleCreateVehicle(event: FormEvent) {
     event.preventDefault()
@@ -94,14 +106,30 @@ export function VehiclesPage() {
         <DataTable columns={['Грузовик', 'Госномер', 'Макс. скорость', 'Линия', 'Группа', 'Телефон машины', 'A Schild', 'AppSped', '']}>
           {vehicles.map((vehicle) => (
             <tr key={vehicle.id} className="hover:bg-slate-50">
-              <td className="px-3 py-3 text-lg font-bold tabular-nums">{vehicle.vehicleNumber}</td>
-              <td className="px-3 py-3 text-sm">{vehicle.licensePlate || '–'}</td>
-              <td className="px-3 py-3 text-sm tabular-nums">{vehicle.maxSpeedKmh} км/ч</td>
+              {editing?.id === vehicle.id ? <td className="px-3 py-3" colSpan={3}>
+                <form className="vehicle-edit" onSubmit={(event) => void saveEdit(event)} aria-label={`Изменить грузовик ${vehicle.vehicleNumber}`}>
+                  <label><span className="field-label">Номер</span><input className="field-input" value={editing.vehicleNumber} required onChange={(event) => setEditing({ ...editing, vehicleNumber: event.target.value })} /></label>
+                  <label><span className="field-label">Госномер</span><input className="field-input" value={editing.licensePlate} onChange={(event) => setEditing({ ...editing, licensePlate: event.target.value })} /></label>
+                  <label><span className="field-label">Макс. скорость</span><input className="field-input" type="number" min={1} max={85} value={editing.maxSpeedKmh} required onChange={(event) => setEditing({ ...editing, maxSpeedKmh: Number(event.target.value) })} /></label>
+                  <button type="submit" className="primary-button compact-button" disabled={editing.busy || !editing.vehicleNumber.trim()}>Сохранить</button>
+                  <button type="button" className="secondary-button compact-button" onClick={() => setEditing(null)} disabled={editing.busy}>Отмена</button>
+                  {editing.error ? <p className="quick-order-error" role="alert">{editing.error}</p> : null}
+                </form>
+              </td> : <>
+                <td className="px-3 py-3 text-lg font-bold tabular-nums">{vehicle.vehicleNumber}</td>
+                <td className="px-3 py-3 text-sm">{vehicle.licensePlate || '–'}</td>
+                <td className="px-3 py-3 text-sm tabular-nums">{vehicle.maxSpeedKmh} км/ч</td>
+              </>}
               <VehicleStatusCells vehicle={vehicle} onSaved={() => void refetch()} />
               <td className="px-3 py-3 text-right">
-                <Link className="secondary-button min-h-9 px-2" to={`/vehicles/${vehicle.id}`} aria-label={`Открыть грузовик ${vehicle.vehicleNumber}`}>
-                  <ArrowUpRight className="h-4 w-4" aria-hidden="true" />
-                </Link>
+                <span className="inline-flex gap-1">
+                  <button type="button" className="secondary-button min-h-9 px-2" onClick={() => setEditing({ id: vehicle.id, vehicleNumber: vehicle.vehicleNumber, licensePlate: vehicle.licensePlate ?? '', maxSpeedKmh: vehicle.maxSpeedKmh, busy: false, error: '' })} aria-label={`Изменить грузовик ${vehicle.vehicleNumber}`}>
+                    <Pencil className="h-4 w-4" aria-hidden="true" />
+                  </button>
+                  <Link className="secondary-button min-h-9 px-2" to={`/vehicles/${vehicle.id}`} aria-label={`Открыть грузовик ${vehicle.vehicleNumber}`}>
+                    <ArrowUpRight className="h-4 w-4" aria-hidden="true" />
+                  </Link>
+                </span>
               </td>
             </tr>
           ))}

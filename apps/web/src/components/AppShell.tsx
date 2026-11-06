@@ -6,6 +6,7 @@ import { usePopover } from '../hooks/usePopover'
 import { AccountMenu } from './AccountMenu'
 import { BrandMark, BrandWordmark } from './Brand'
 import { DispatcherAssistant } from './DispatcherAssistant'
+import { GuidedTour } from './GuidedTour'
 import { DecisionGroups, OperationsNotifications } from './OperationsNotifications'
 import { needsAttention } from '../lib/alerts'
 
@@ -17,7 +18,7 @@ const navItems = [
   { to: '/tours', label: 'Туры', icon: Route, also: [] },
   { to: '/status', label: 'Статус', icon: ClipboardList, also: [] },
   { to: '/analytics', label: 'Аналитика', icon: ChartColumn, also: ['/history', '/alerts'] },
-  { to: '/settings', label: 'Настройки', icon: Settings, also: ['/dispatchers'] }
+  { to: '/settings', label: 'Настройки', icon: Settings, also: ['/dispatchers', '/help'] }
 ]
 
 export function AppShell() {
@@ -35,6 +36,7 @@ function Shell() {
         <OperationsNotifications />
       </main>
       <DispatcherAssistant />
+      <GuidedTour />
     </div>
   )
 }

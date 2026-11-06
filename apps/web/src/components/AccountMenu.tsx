@@ -1,9 +1,11 @@
-import { Bot, ChevronDown, KeyRound, UserRound, X } from 'lucide-react'
+import { Bot, ChevronDown, CircleHelp, GraduationCap, KeyRound, UserRound, X } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 
 import { accountsApi } from '../lib/api'
 import { usePopover } from '../hooks/usePopover'
 import { currentDispatcher, currentDispatcherRole } from '../lib/auth'
+import { ONBOARDING_EVENT } from '../lib/onboarding-steps'
 import { AlertToggle } from './AlertToggle'
 import { DispatcherLogout } from './AuthGate'
 import { ThemeToggle } from './ThemeToggle'
@@ -31,6 +33,8 @@ export function AccountMenu() {
       <ThemeToggle className="account-menu-item" />
       <AlertToggle className="account-menu-item" />
       <button type="button" className="account-menu-item" onClick={() => { menu.close(); window.dispatchEvent(new CustomEvent('ops:assistant-context', { detail: { open: true } })) }}><Bot className="h-5 w-5" aria-hidden="true" /><span>ИИ-диспетчер</span></button>
+      <button type="button" className="account-menu-item" onClick={() => { menu.close(); window.dispatchEvent(new CustomEvent(ONBOARDING_EVENT, { detail: { start: 0 } })) }}><GraduationCap className="h-5 w-5" aria-hidden="true" /><span>Обучение</span></button>
+      <Link to="/help" className="account-menu-item" onClick={menu.close}><CircleHelp className="h-5 w-5" aria-hidden="true" /><span>Справка</span></Link>
       {person ? <button type="button" className="account-menu-item" onClick={() => { menu.close(); setPasswordOpen(true) }}><KeyRound className="h-5 w-5" aria-hidden="true" /><span>Сменить пароль</span></button> : null}
       <DispatcherLogout className="account-menu-item account-menu-logout" />
     </div> : null}

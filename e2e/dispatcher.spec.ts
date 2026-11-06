@@ -20,10 +20,10 @@ async function json(route: Route, body: unknown, status = 200) {
   await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
 }
 
-async function authenticated(page: Page, handler: (route: Route, path: string) => Promise<boolean>) {
+async function authenticated(page: Page, handler: (route: Route, path: string) => Promise<boolean>, role: 'admin' | 'dispatcher' = 'admin') {
   await page.route('**/api/**', async route => {
     const path = new URL(route.request().url()).pathname.replace(/^\/api/, '')
-    if (path === '/auth/session') return json(route, { authenticated: true, role: 'admin', csrfToken: 'e2e' })
+    if (path === '/auth/session') return json(route, { authenticated: true, role, csrfToken: 'e2e' })
     if (path === '/notifications') return json(route, { notifications: [] })
     if (await handler(route, path)) return
     return json(route, { error: `Unhandled e2e endpoint: ${path}` }, 404)
@@ -171,7 +171,7 @@ test('редактирует будущий тур', async ({ page }) => {
   expect(updatedPayload).toMatchObject({ vehicleId: 'veh-1', orderNumber: 'A-301', version: 1, stops: [{ id: 'stop-load' }, { id: 'stop-unload' }] })
 })
 
-test('показывает причину ошибки Webfleet и привязывает объект к грузовику', async ({ page }) => {
+test('показывает причину ошибки Webfleet, и диспетчер сам привязывает объект к грузовику', async ({ page }) => {
   let bound: Record<string, unknown> | null = null
   const status = (unmatched: unknown[]) => ({
     configured: true, mode: 'READ_ONLY', pollingIntervalSeconds: 60, lastSnapshotAt: new Date().toISOString(),
@@ -189,7 +189,7 @@ test('показывает причину ошибки Webfleet и привяз�
       await json(route, [binding]); return true
     }
     return false
-  })
+  }, 'dispatcher')
 
   await page.goto('/vehicles')
   const panel = page.getByRole('region', { name: 'Подключение Webfleet' })

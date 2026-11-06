@@ -97,7 +97,7 @@ export function DispatchersPage() {
         {loading && !data ? <LoadingState /> : error && !data ? <ErrorState error={error} onRetry={refetch} /> : !data?.length ? <EmptyState label="Аккаунтов пока нет. Создайте первый — после этого общий пароль диспетчера перестанет работать." /> : (
           <table className="w-full text-left text-sm">
             <thead className="border-b border-slate-200 text-xs text-slate-500">
-              <tr><th className="px-4 py-2 font-medium">Имя</th><th className="px-4 py-2 font-medium">Логин</th><th className="px-4 py-2 font-medium">Роль</th><th className="px-4 py-2 font-medium">Последний вход</th><th className="px-4 py-2 font-medium">Статус</th><th className="px-4 py-2" /></tr>
+              <tr><th className="px-4 py-2 font-medium">Имя</th><th className="px-4 py-2 font-medium">Логин</th><th className="px-4 py-2 font-medium">Роль</th><th className="px-4 py-2 font-medium">Последний вход</th><th className="px-4 py-2 font-medium">Обучение</th><th className="px-4 py-2 font-medium">Статус</th><th className="px-4 py-2" /></tr>
             </thead>
             <tbody>
               {data.map((account) => {
@@ -114,6 +114,7 @@ export function DispatchersPage() {
                       </select>
                     </td>
                     <td className="px-4 py-3 tabular-nums">{account.lastLoginAt ? formatDateTime(account.lastLoginAt) : 'ещё не входил'}</td>
+                    <td className="px-4 py-3">{account.onboardingCompletedAt ? 'пройдено' : 'нет'}</td>
                     <td className="px-4 py-3">{account.active ? 'Активен' : 'Отключён'}</td>
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap justify-end gap-2">

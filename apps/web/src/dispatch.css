@@ -349,6 +349,31 @@ button.decision-card-title:focus-visible { outline: 2px solid var(--focus); outl
 .stat-tile dt { color: rgb(var(--tx-475569)); font-size: .8125rem; }
 .stat-tile dd { color: rgb(var(--tx-0f172a)); font-size: 1.75rem; font-weight: 600; line-height: 1.1; font-variant-numeric: tabular-nums; }
 .stat-tile span { color: rgb(var(--tx-64748b)); font-size: .75rem; }
+/* Guided tour for a new dispatcher: dimmed screen, one framed element, a card with the explanation. */
+.guided-tour { position: fixed; inset: 0; z-index: 90; }
+.guided-tour-backdrop { position: absolute; inset: 0; background: rgb(var(--shadow-rgb) / 0.42); }
+.guided-tour-frame { position: fixed; border: 2px solid var(--acc); border-radius: 10px; box-shadow: 0 0 0 9999px rgb(var(--shadow-rgb) / 0.42); pointer-events: none; }
+.guided-tour .guided-tour-backdrop:has(+ .guided-tour-frame) { background: transparent; }
+.guided-tour-card { position: fixed; z-index: 91; display: grid; gap: 8px; width: min(360px, calc(100vw - 32px)); border: 1px solid rgb(var(--ln-e3e8ef)); border-radius: 12px; background: rgb(var(--bg-ffffff)); padding: 14px 16px; box-shadow: 0 16px 40px rgb(var(--shadow-rgb) / 0.24); outline: none; }
+.guided-tour-card:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.guided-tour-count { color: rgb(var(--tx-64748b)); font-size: .75rem; }
+.guided-tour-title { color: rgb(var(--tx-0f172a)); font-size: 1rem; font-weight: 600; }
+.guided-tour-text { color: rgb(var(--tx-334155)); font-size: .875rem; line-height: 1.45; }
+.guided-tour-note { color: rgb(var(--tx-92400e)); font-size: .8125rem; }
+.guided-tour-actions { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.guided-tour-spacer { flex: 1; }
+
+/* Help page: the tour as a list. */
+.help-steps { display: grid; gap: 8px; max-width: 760px; }
+.help-step { display: flex; align-items: flex-start; gap: 12px; border: 1px solid rgb(var(--ln-e3e8ef)); border-radius: 12px; background: rgb(var(--bg-ffffff)); padding: 12px 14px; }
+.help-step-number { display: inline-flex; width: 28px; height: 28px; flex: none; align-items: center; justify-content: center; border-radius: 999px; background: rgb(var(--bg-f1f5f9)); color: rgb(var(--tx-334155)); font-size: .8125rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.help-step-title { color: rgb(var(--tx-0f172a)); font-size: .9375rem; font-weight: 600; }
+.help-step-text { margin-top: 2px; color: rgb(var(--tx-334155)); font-size: .875rem; line-height: 1.45; }
+
+/* Inline edit of a truck's number, plate and speed limit. */
+.vehicle-edit { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; }
+.vehicle-edit label { display: grid; gap: 2px; min-width: 120px; }
+
 .settings-card { display: grid; gap: 10px; max-width: 720px; border: 1px solid rgb(var(--ln-e3e8ef)); border-radius: 12px; background: rgb(var(--bg-ffffff)); padding: 16px 18px; }
 .settings-segment { justify-self: start; box-shadow: none; }
 .settings-toggle { display: inline-flex; min-height: 40px; justify-self: start; align-items: center; gap: 8px; border: 1px solid rgb(var(--ln-dbe2ea)); border-radius: 10px; padding: 0 14px; color: rgb(var(--tx-0f172a)); font-size: .875rem; }

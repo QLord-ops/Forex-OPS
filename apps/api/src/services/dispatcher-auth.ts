@@ -13,9 +13,11 @@ export interface DispatcherSession {
   /** Personal account; null for the shared-password sessions of the transition period. */
   dispatcherId: string | null;
   displayName: string | null;
+  /** When the guided tour was finished; only known for personal accounts. */
+  onboardingCompletedAt?: Date | null;
 }
 
-export type DispatcherAccount = { id: string; login: string; displayName: string; role: string; passwordHash: string; active: boolean };
+export type DispatcherAccount = { id: string; login: string; displayName: string; role: string; passwordHash: string; active: boolean; onboardingCompletedAt?: Date | null };
 type AccountStore = {
   findUnique(args: { where: { login: string } | { id: string } }): Promise<DispatcherAccount | null>;
   count(args: { where: { active: boolean } }): Promise<number>;
@@ -128,7 +130,7 @@ export function registerDispatcherAuth(app: FastifyInstance, prisma: QuotaStore,
     if (!found.dispatcherId) return found;
     const account = await accountById(found.dispatcherId);
     if (!account || !account.active || account.role !== found.role) return null;
-    return { ...found, displayName: account.displayName };
+    return { ...found, displayName: account.displayName, onboardingCompletedAt: account.onboardingCompletedAt ?? null };
   };
   const cookie = (token: string, maxAge: number) => `${COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${process.env.NODE_ENV === 'production' || process.env.VERCEL ? '; Secure' : ''}`;
 
@@ -170,7 +172,7 @@ export function registerDispatcherAuth(app: FastifyInstance, prisma: QuotaStore,
     const current = await resolve(session(request));
     reply.header('Cache-Control', 'no-store');
     return current
-      ? { authenticated: true, role: current.role, csrfToken: csrf(current.token), expiresAt: new Date(current.expiresAt).toISOString(), dispatcherId: current.dispatcherId, displayName: current.displayName }
+      ? { authenticated: true, role: current.role, csrfToken: csrf(current.token), expiresAt: new Date(current.expiresAt).toISOString(), dispatcherId: current.dispatcherId, displayName: current.displayName, onboardingCompletedAt: current.onboardingCompletedAt?.toISOString() ?? null }
       : { authenticated: false, accountsEnabled: await anyAccounts() };
   });
   app.post('/auth/login', { bodyLimit: 4096 }, async (request, reply) => {
@@ -209,7 +211,7 @@ export function registerDispatcherAuth(app: FastifyInstance, prisma: QuotaStore,
     const token = `${payload}.${sign(payload)}`;
     if (account) await accounts?.update({ where: { id: account.id }, data: { lastLoginAt: new Date(now()) } });
     reply.header('Set-Cookie', cookie(token, SESSION_MS / 1000));
-    return { authenticated: true, role, csrfToken: csrf(token), expiresAt: new Date(expiresAt).toISOString(), dispatcherId: account?.id ?? null, displayName: account?.displayName ?? null };
+    return { authenticated: true, role, csrfToken: csrf(token), expiresAt: new Date(expiresAt).toISOString(), dispatcherId: account?.id ?? null, displayName: account?.displayName ?? null, onboardingCompletedAt: account?.onboardingCompletedAt?.toISOString() ?? null };
   });
   app.post('/auth/logout', async (request, reply) => {
     const sessionId = request.dispatcherSession?.sessionId;

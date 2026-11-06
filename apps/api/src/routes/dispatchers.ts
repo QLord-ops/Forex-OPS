@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { hashDispatcherPassword, LOGIN_PATTERN, MIN_PASSWORD_LENGTH, requireDispatcherRoles, verifyDispatcherPassword } from '../services/dispatcher-auth.js';
 import { writeAuditLog } from '../services/audit-log.js';
 
-const publicFields = { id: true, login: true, displayName: true, role: true, active: true, lastLoginAt: true, createdAt: true } as const;
+const publicFields = { id: true, login: true, displayName: true, role: true, active: true, lastLoginAt: true, onboardingCompletedAt: true, createdAt: true } as const;
 const password = z.string().min(MIN_PASSWORD_LENGTH, `Пароль — не меньше ${MIN_PASSWORD_LENGTH} символов.`).max(1024);
 const displayName = z.string().trim().min(2).max(80);
 const role = z.enum(['admin', 'dispatcher']);
@@ -67,6 +67,17 @@ export function registerDispatcherRoutes(app: FastifyInstance, prisma: PrismaCli
     await prisma.dispatcher.update({ where: { id }, data: { passwordHash: hashDispatcherPassword(body.password) } });
     await writeAuditLog(prisma, actor(request), { action: 'DISPATCHER_PASSWORD_RESET', entityType: 'Dispatcher', entityId: id });
     return { ok: true };
+  });
+
+  /** The guided tour was finished or skipped; a shared login keeps that in the browser instead. */
+  app.post('/auth/onboarding', async (request) => {
+    const body = z.object({ completed: z.boolean() }).strict().parse(request.body);
+    const dispatcherId = request.dispatcherSession?.dispatcherId;
+    if (!dispatcherId) return { ok: true, stored: false };
+    const completedAt = body.completed ? new Date() : null;
+    await prisma.dispatcher.update({ where: { id: dispatcherId }, data: { onboardingCompletedAt: completedAt } });
+    await writeAuditLog(prisma, actor(request), { action: body.completed ? 'ONBOARDING_COMPLETED' : 'ONBOARDING_RESET', entityType: 'Dispatcher', entityId: dispatcherId });
+    return { ok: true, stored: true, onboardingCompletedAt: completedAt?.toISOString() ?? null };
   });
 
   app.post('/auth/password', async (request) => {
