@@ -93,6 +93,15 @@ describe('status row rules', () => {
     expect(buildStatusRow(base({ tours: [tour([{ type: 'LOAD', arrivedAt: new Date('2026-11-04T17:40:00Z') }])] })).bemerkungAuto).toBe(STATUS_TEXT_DE.STUCK_LOAD_YESTERDAY);
     expect(buildStatusRow(base({ tours: [tour([{ arrivedAt: new Date('2026-11-03T12:00:00Z') }])] })).bemerkungAuto).toBe('Fahrzeug steht seit dem 03.11. und konnte noch nicht entladen werden');
   });
+  it('adds "Zuladung möglich" while the order names a Zuladung that was not added yet', () => {
+    const remarks = { tourRemarks: 'Borken für Königswalde + evt. Zuladung' };
+    const enRoute = buildStatusRow(base({ tours: [tour([{ type: 'LOAD', completedAt: new Date('2026-11-05T05:00:00Z') }, {}], remarks)] }));
+    expect(enRoute.bemerkungAuto).toBe('Zuladung möglich');
+    const atLoad = buildStatusRow(base({ tours: [tour([{ type: 'LOAD', arrivedAt: new Date('2026-11-05T05:30:00Z') }, {}], remarks)] }));
+    expect(atLoad.bemerkungAuto).toBe(`${STATUS_TEXT_DE.AT_LOAD}; Zuladung möglich`);
+    const added = buildStatusRow(base({ tours: [tour([{ type: 'LOAD', completedAt: new Date('2026-11-05T05:00:00Z') }, { type: 'LOAD', instructions: 'Zuladung' }, {}], remarks)] }));
+    expect(added.bemerkungAuto).toBeNull();
+  });
   it('empty without a next tour: only the place and "leer"', () => {
     expect(buildStatusRow(base({ place: { city: 'Ingolstadt', source: 'WEBFLEET' } }))).toMatchObject({
       rule: 'EMPTY', ort: 'Ingolstadt', startAt: null, ziel: null, ankunftAt: null, bemerkungAuto: 'Fahrzeug ist leer' });

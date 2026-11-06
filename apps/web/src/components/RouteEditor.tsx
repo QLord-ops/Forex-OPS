@@ -1,16 +1,17 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AddressInput } from './AddressInput'
 import { suggestionAddress } from '../lib/address-book'
+import { withZuladungStop } from '../lib/zuladung'
 import { formatDateTime, formatDurationMinutes, metersToKm } from '../lib/format'
 import type { Stop, Tour } from '../types/domain'
 import { localDateTime, operationsRequest } from './VehicleOperationsPanel'
 
-interface DraftStop { id?: string; type: 'LOAD' | 'UNLOAD'; address: string; city?: string | null; company?: string | null; appointmentAt?: string | null; serviceMinMinutes?: number; serviceMaxMinutes?: number; latitude?: number; longitude?: number; arrivedAt?: string | null }
+interface DraftStop { id?: string; type: 'LOAD' | 'UNLOAD'; address: string; instructions?: string | null; city?: string | null; company?: string | null; appointmentAt?: string | null; serviceMinMinutes?: number; serviceMaxMinutes?: number; latitude?: number; longitude?: number; arrivedAt?: string | null }
 interface Summary { distanceMeters: number; durationSeconds: number; roads: string[]; etaWindows?: { stopId: string; earliest: string; latest: string }[] }
 interface Preview { id: string; version: number; expiresAt: string; before: Summary; after: Summary; affectedTourIds: string[] }
 const draft = (stop: Stop): DraftStop => ({ ...stop, serviceMinMinutes: stop.serviceMinMinutes ?? 60, serviceMaxMinutes: stop.serviceMaxMinutes ?? 120 })
 
-export function RouteEditor({ tour, onChange }: { tour: Tour; onChange: () => Promise<unknown> }) {
+export function RouteEditor({ tour, onChange, zuladungRequest = 0 }: { tour: Tour; onChange: () => Promise<unknown>; zuladungRequest?: number }) {
   const [open, setOpen] = useState(false)
   const [stops, setStops] = useState<DraftStop[]>([])
   const [version, setVersion] = useState(0)
@@ -18,17 +19,29 @@ export function RouteEditor({ tour, onChange }: { tour: Tour; onChange: () => Pr
   const [origin, setOrigin] = useState({ latitude: '', longitude: '' })
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
-  async function start() {
+  const sectionRef = useRef<HTMLElement>(null)
+  async function start(zuladung = false) {
     setBusy(true); setError('')
-    try { const fresh = await operationsRequest<Tour & { planVersion: number }>(`/tours/${tour.id}`); setStops((fresh.stops ?? []).filter(stop => !stop.completedAt).map(draft)); setVersion(fresh.planVersion); setPreview(null); setOpen(true) }
+    try {
+      const fresh = await operationsRequest<Tour & { planVersion: number }>(`/tours/${tour.id}`)
+      const future = (fresh.stops ?? []).filter(stop => !stop.completedAt).map(draft)
+      setStops(zuladung ? withZuladungStop<DraftStop>(future, { type: 'LOAD', address: '', instructions: 'Zuladung', appointmentAt: null, serviceMinMinutes: 60, serviceMaxMinutes: 120 }) : future)
+      setVersion(fresh.planVersion); setPreview(null); setOpen(true)
+      if (zuladung) requestAnimationFrame(() => sectionRef.current?.scrollIntoView({ block: 'nearest' }))
+    }
     catch (e) { setError((e as Error).message) } finally { setBusy(false) }
   }
+  // The card's «Добавить Zuladung» opens the editor with the pick-up already in place.
+  useEffect(() => {
+    if (zuladungRequest > 0) void start(true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [zuladungRequest])
   function change(index: number, patch: Partial<DraftStop>) { setPreview(null); setStops(previous => previous.map((stop, i) => i === index ? { ...stop, ...patch } : stop)) }
   function move(index: number, direction: number) { setPreview(null); setStops(previous => { const result = [...previous]; [result[index], result[index + direction]] = [result[index + direction], result[index]]; return result }) }
   async function calculate() {
     setBusy(true); setError(''); setPreview(null)
     try {
-      const result = await operationsRequest<Preview>(`/tours/${tour.id}/replan/preview`, 'POST', { version, futureStops: stops.map(stop => ({ id: stop.id, type: stop.type, address: stop.address, city: stop.city, company: stop.company, appointmentAt: stop.appointmentAt, serviceMinMinutes: stop.serviceMinMinutes, serviceMaxMinutes: stop.serviceMaxMinutes, latitude: stop.latitude, longitude: stop.longitude })), ...(origin.latitude || origin.longitude ? { origin: { latitude: Number(origin.latitude), longitude: Number(origin.longitude) } } : {}) })
+      const result = await operationsRequest<Preview>(`/tours/${tour.id}/replan/preview`, 'POST', { version, futureStops: stops.map(stop => ({ id: stop.id, type: stop.type, address: stop.address, instructions: stop.instructions ?? null, city: stop.city, company: stop.company, appointmentAt: stop.appointmentAt, serviceMinMinutes: stop.serviceMinMinutes, serviceMaxMinutes: stop.serviceMaxMinutes, latitude: stop.latitude, longitude: stop.longitude })), ...(origin.latitude || origin.longitude ? { origin: { latitude: Number(origin.latitude), longitude: Number(origin.longitude) } } : {}) })
       setPreview(result)
     } catch (e) { setError((e as Error).message) } finally { setBusy(false) }
   }
@@ -38,13 +51,13 @@ export function RouteEditor({ tour, onChange }: { tour: Tour; onChange: () => Pr
     try { await operationsRequest(`/tours/${tour.id}/replan/apply`, 'POST', { previewId: preview.id, version }); setOpen(false); await onChange() }
     catch (e) { setError((e as Error).message); setPreview(null) } finally { setBusy(false) }
   }
-  return <section id="route-editor" className="work-surface min-w-0 p-4">
+  return <section ref={sectionRef} id="route-editor" className="work-surface min-w-0 p-4">
     <button className="secondary-button" disabled={busy} onClick={() => open ? setOpen(false) : void start()}>{open ? 'Закрыть редактирование' : 'Изменить тур'}</button>
     {error && <p role="alert" className="mt-2 text-sm text-red-700">{error}</p>}
     {open && <form className="mt-3 space-y-3" onSubmit={event => { event.preventDefault(); void calculate() }}>
       <p className="text-sm text-slate-600">Можно менять только будущие точки. Подтверждённые прибытия и завершённые точки сохраняются. Изменения вступят в силу после предварительного расчёта и подтверждения.</p>
       {stops.map((stop, index) => <fieldset key={stop.id ?? `new-${index}`} className="space-y-2 rounded border p-3" disabled={busy || Boolean(stop.arrivedAt)}>
-        <legend className="px-1 text-sm font-semibold">Точка {index + 1}{stop.arrivedAt ? ' · прибытие подтверждено (изменение запрещено)' : ''}</legend>
+        <legend className="px-1 text-sm font-semibold">Точка {index + 1}{stop.type === 'LOAD' && /zuladung/i.test(stop.instructions ?? '') ? ' · Zuladung' : ''}{stop.arrivedAt ? ' · прибытие подтверждено (изменение запрещено)' : ''}</legend>
         <label className="block text-sm">Тип<select className="input" value={stop.type} onChange={e => change(index, { type: e.target.value as DraftStop['type'] })}><option value="LOAD">Загрузка</option><option value="UNLOAD">Выгрузка</option></select></label>
         <label className="block text-sm">Адрес<AddressInput className="input" required value={stop.address} onChange={value => change(index, { address: value, latitude: undefined, longitude: undefined })} placeholder="Фирма, улица или город"
           onPick={item => change(index, { address: suggestionAddress(item), city: item.city ?? stop.city, company: stop.company || item.company, latitude: item.latitude, longitude: item.longitude })} /></label>

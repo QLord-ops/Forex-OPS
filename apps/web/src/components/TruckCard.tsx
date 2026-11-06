@@ -8,6 +8,7 @@ import { RouteEditor } from './RouteEditor'
 import { api } from '../lib/api'
 import { classNames, formatDateTime, formatDelay, shortAddress, statusLabel, stopTypeLabel } from '../lib/format'
 import { currentStopOf, followingTours, sortedStops, terminOf, tourCancellable } from '../lib/tours'
+import { ZULADUNG_NOTE, zuladungBeforeStopId, zuladungState } from '../lib/zuladung'
 import { berlinClock, courseText, durationBetween, formatDurationMs, formatFuel, formatWholeKm, share, tripsWithParking, workState } from '../lib/telemetry-format'
 import type { CardFeedStatus, Coordinate, DashboardVehicle, DrivingTimes, Stop, Tour, VehicleCardData } from '../types/domain'
 import './truck-card.css'
@@ -331,6 +332,7 @@ function TourTab({ vehicleId, row }: { vehicleId: string; row: DashboardVehicle 
                   {tourCancellable(tour) ? <RemoveButton busy={busyId === tour.id} orderNumber={tour.orderNumber} onClick={() => void remove(tour)} /> : null}
                   {open ? <div id={detailsId} className="truck-card-tour-details">
                     {tour.trailerPlate || tour.tourRemarks ? <p className="truck-card-muted">{[tour.trailerPlate ? `Прицеп ${tour.trailerPlate}` : null, tour.tourRemarks].filter(Boolean).join(' · ')}</p> : null}
+                    {zuladungState(tour) === 'OPEN' ? <p className="truck-card-zuladung" role="note">{ZULADUNG_NOTE}</p> : null}
                     {stops.length ? <ol className="truck-card-stops">
                       {stops.map((stop) => <li key={stop.id}>
                         <span className="truck-card-stop-seq">{stop.sequence}</span>
@@ -363,6 +365,9 @@ function CurrentTour({ tour, row, busy, onRemove }: { tour: Tour; row: Dashboard
   }
   const removable = tourCancellable(tour)
   const termin = terminOf(tour)
+  const zuladung = zuladungState(tour)
+  const zuladungBefore = zuladung === 'OPEN' ? zuladungBeforeStopId(tour) : null
+  const [zuladungRequest, setZuladungRequest] = useState(0)
   return <>
     <Section title="Auftrag">
       <div className="truck-card-tour-head">
@@ -375,12 +380,17 @@ function CurrentTour({ tour, row, busy, onRemove }: { tour: Tour; row: Dashboard
         <Cell label="Срок" value={target?.appointmentAt ? formatDateTime(target.appointmentAt) : 'без срока'} />
         <Cell label="Отклонение" value={formatDelay(row.delayMinutes)} warn={(row.delayMinutes ?? 0) > 0} />
       </div>
+      {zuladung === 'OPEN' ? <div className="truck-card-zuladung" role="note">
+        <span>{ZULADUNG_NOTE}</span>
+        {tour.status === 'ACTIVE' ? <button type="button" className="secondary-button compact-button" onClick={() => setZuladungRequest((value) => value + 1)}>Добавить Zuladung</button> : null}
+      </div> : zuladung === 'ADDED' ? <p className="truck-card-muted">Zuladung добавлена в тур.</p> : null}
     </Section>
     {stops.length ? <Section title="Точки">
       <ol className="truck-card-stops">
         {stops.map((stop) => <li key={stop.id} className={classNames(stop.completedAt && 'truck-card-stop-done', stop.id === target?.id && 'truck-card-stop-current')}>
           <span className="truck-card-stop-seq">{stop.sequence}</span>
-          <span className="min-w-0"><strong>{stopTypeLabel(stop.type)} · {shortAddress(stop)}</strong><span className="truck-card-muted">{stopState(stop)}</span>
+          <span className="min-w-0"><strong>{stopTypeLabel(stop.type)} · {shortAddress(stop)}</strong><span className="truck-card-muted">{stopState(stop)}{stop.type === 'LOAD' && /zuladung/i.test(stop.instructions ?? '') ? ' · Zuladung' : ''}</span>
+            {stop.id === zuladungBefore ? <span className="truck-card-zuladung-tag">перед ней возможна Zuladung</span> : null}
             {stop.id === target?.id && marking?.stopId === stop.id ? <form className="truck-card-mark" onSubmit={(event) => { event.preventDefault(); void markStop(stop) }}>
               <label className="truck-card-muted">Фактическое время<input className="field-input h-8" type="datetime-local" value={marking.time} required onChange={(event) => setMarking({ ...marking, time: event.target.value })} /></label>
               {!stop.arrivedAt ? <span className="truck-card-muted">Прибытия по GPS нет: запишется вручную этим временем, с пометкой «без GPS».</span> : null}
@@ -392,7 +402,7 @@ function CurrentTour({ tour, row, busy, onRemove }: { tour: Tour; row: Dashboard
         </li>)}
       </ol>
       {/* Future stops of a started tour can change; done stops and confirmed arrivals stay as recorded. */}
-      {tour.status === 'ACTIVE' || tour.status === 'QUEUED' ? <div className="truck-card-editor"><RouteEditor key={`${tour.id}-${tour.planVersion}`} tour={tour}
+      {tour.status === 'ACTIVE' || tour.status === 'QUEUED' ? <div className="truck-card-editor"><RouteEditor key={`${tour.id}-${tour.planVersion}`} tour={tour} zuladungRequest={zuladungRequest}
         onChange={async () => { window.dispatchEvent(new CustomEvent('ops:data-changed')) }} /></div> : null}
     </Section> : null}
   </>

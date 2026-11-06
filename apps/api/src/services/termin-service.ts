@@ -9,6 +9,7 @@ import { driverBudgetFromWebfleet, planTermin, type DriverBudget, type PlannerSt
 import { breakdownTiming, snapshotVehicleClock } from './tours.js';
 import type { TruckRouteProfile } from './traffic-routing.js';
 import type { DriverHours } from './webfleet-live.js';
+import { ZULADUNG_WARNING, zuladungState } from './zuladung.js';
 
 /** Live routing requests per plan: the active tour drives on its stored legs, only stops without a leg are routed. */
 const MAX_ROUTING_CALLS = 4;
@@ -121,6 +122,10 @@ export class TerminService {
       if (targetIndex < 0) targetIndex = stops.length - 1;
     }
     if (!stops.length || targetIndex < 0) throw new AssistantError('Нет точек для расчёта Termin: у машины нет активного тура. Назовите адрес точки.');
+    // An open Zuladung of this tour or of a tour driven before it can still delay the target: warn, never add time.
+    const targetTour = tours.findIndex(t => t.id === stops[targetIndex]!.tourId);
+    const upTo = targetTour >= 0 ? tours.slice(0, targetTour + 1) : tours;
+    if (upTo.some(t => zuladungState(t) === 'OPEN')) warnings.add(`${ZULADUNG_WARNING} Termin может сдвинуться.`);
 
     return planTermin({
       now, startAt, stops, targetIndex, driver, clock: snapshot.clockState,

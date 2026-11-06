@@ -10,6 +10,7 @@ import { buildPlannerStops, type DriveEstimate } from './termin-service.js';
 import { snapshotVehicleClock } from './tours.js';
 import { distanceMeters } from './webfleet.js';
 import type { DriverHours, WebfleetDrivingTimes } from './webfleet-live.js';
+import { withZuladungNote } from './zuladung.js';
 
 export const STATUS_LINE = 'SCHNELLECKE';
 export const STATUS_GROUP_ORDER = ['NORD', 'SUED', 'LUFE'] as const;
@@ -154,8 +155,9 @@ export function estimateStart(input: { now: Date; dayKey: string; hours: DriverH
 
 type StopLite = {
   id: string; type: string; city: string | null; address: string; arrivedAt: Date | null; completedAt: Date | null; appointmentAt: Date | null;
+  sequence?: number; instructions?: string | null;
 };
-type TourLite = { id: string; status: string; trailerPlate: string | null; stops: StopLite[] };
+type TourLite = { id: string; status: string; trailerPlate: string | null; tourRemarks?: string | null; stops: StopLite[] };
 export type StatusInput = {
   dayKey: string; dayStart: Date;
   vehicle: { id: string; vehicleNumber: string; statusGroup: string | null; servicePhone: string | null; aSchild: boolean; appSped: boolean; currentTrailerPlate: string | null };
@@ -204,7 +206,7 @@ export function buildStatusRow(input: StatusInput): StatusRowDraft {
     const since = BERLIN_DATE.format(current.arrivedAt);
     return { ...base, rule: 'STUCK', ort: stopCity(current), ortSource: 'STOP', startAt: input.start.at, startKind: input.start.kind,
       ziel: stopCity(current), ankunftAt: current.arrivedAt, ankunftKind: 'ARRIVED',
-      bemerkungAuto: yesterday ? (unload ? STATUS_TEXT_DE.STUCK_UNLOAD_YESTERDAY : STATUS_TEXT_DE.STUCK_LOAD_YESTERDAY) : (unload ? STATUS_TEXT_DE.STUCK_UNLOAD_SINCE(since) : STATUS_TEXT_DE.STUCK_LOAD_SINCE(since)),
+      bemerkungAuto: withZuladungNote(yesterday ? (unload ? STATUS_TEXT_DE.STUCK_UNLOAD_YESTERDAY : STATUS_TEXT_DE.STUCK_LOAD_YESTERDAY) : (unload ? STATUS_TEXT_DE.STUCK_UNLOAD_SINCE(since) : STATUS_TEXT_DE.STUCK_LOAD_SINCE(since)), active),
       tourId: active?.id ?? null, stopId: current.id, flags: [...flags] };
   }
   if (!active && !queued) {
@@ -215,7 +217,7 @@ export function buildStatusRow(input: StatusInput): StatusRowDraft {
   if (current?.arrivedAt) {
     return { ...base, rule: 'AT_STOP', ort: stopCity(current), ortSource: 'STOP', startAt: input.start.at, startKind: input.start.kind,
       ziel: stopCity(current), ankunftAt: current.arrivedAt, ankunftKind: 'ARRIVED',
-      bemerkungAuto: current.type === 'UNLOAD' ? STATUS_TEXT_DE.AT_UNLOAD : STATUS_TEXT_DE.AT_LOAD, tourId: active?.id ?? null, stopId: current.id, flags: [...flags] };
+      bemerkungAuto: withZuladungNote(current.type === 'UNLOAD' ? STATUS_TEXT_DE.AT_UNLOAD : STATUS_TEXT_DE.AT_LOAD, active), tourId: active?.id ?? null, stopId: current.id, flags: [...flags] };
   }
   if (!place.ort) flags.add('NO_GPS');
   const termin = next?.appointmentAt ?? null;
@@ -228,7 +230,7 @@ export function buildStatusRow(input: StatusInput): StatusRowDraft {
   }
   return { ...base, ...place, rule: 'EN_ROUTE', startAt: input.start.at, startKind: input.start.kind,
     ziel: next ? stopCity(next) : null, ankunftAt: termin ?? eta, ankunftKind: termin ? 'TERMIN' : eta ? 'ETA' : 'NONE',
-    bemerkungAuto, tourId: (current ? active?.id : queued?.id) ?? null, stopId: next?.id ?? null, flags: [...flags] };
+    bemerkungAuto: withZuladungNote(bemerkungAuto, current ? active : queued), tourId: (current ? active?.id : queued?.id) ?? null, stopId: next?.id ?? null, flags: [...flags] };
 }
 
 /** Values as shown on the page and in Excel: estimates carry "~", a Termin and a real arrival do not. */
@@ -366,7 +368,7 @@ export class DailyStatusService {
       : { city: position.positionSource === 'MANUAL' ? cityOf(vehicle.manualPositionAddress) : null, source: 'NONE' as const };
     return buildStatusRow({ dayKey, dayStart,
       vehicle: { id: vehicle.id, vehicleNumber: vehicle.vehicleNumber, statusGroup: vehicle.statusGroup, servicePhone: vehicle.servicePhone, aSchild: vehicle.aSchild, appSped: vehicle.appSped, currentTrailerPlate: vehicle.currentTrailerPlate },
-      tours: tours.map((tour) => ({ id: tour.id, status: tour.status, trailerPlate: tour.trailerPlate, stops: tour.stops })),
+      tours: tours.map((tour) => ({ id: tour.id, status: tour.status, trailerPlate: tour.trailerPlate, tourRemarks: tour.tourRemarks, stops: tour.stops })),
       place, start, nextEta, coupledTrailerNo: coupled, flags: [...flags] });
   }
 

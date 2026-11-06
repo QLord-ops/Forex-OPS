@@ -169,3 +169,7 @@
 .truck-card-editor { margin-top: 12px; border-top: 1px solid rgb(var(--ln-e3e8ef)); padding-top: 12px; }
 .truck-card-editor > .work-surface { border: 0; background: transparent; box-shadow: none; padding: 0; }
 .truck-card-editor fieldset { border-color: rgb(var(--ln-e3e8ef)); }
+
+/* Possible Zuladung: an open question on the tour, amber like other import warnings, with the text next to the colour. */
+.truck-card-zuladung { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-top: 10px; padding: 8px 12px; border: 1px solid rgb(var(--ln-fde68a)); border-radius: 8px; background: rgb(var(--bg-fffbeb)); color: rgb(var(--tx-92400e)); font-size: .8125rem; line-height: 1.4; }
+.truck-card-zuladung-tag { display: block; margin-top: 2px; color: rgb(var(--tx-92400e)); font-size: .75rem; font-weight: 500; }

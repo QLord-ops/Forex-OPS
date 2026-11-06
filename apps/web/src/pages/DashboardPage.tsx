@@ -19,6 +19,7 @@ import { etaText, routeProgress, type StopState } from '../lib/route-progress'
 import { currentStopOf, terminOf } from '../lib/tours'
 import { classNames, formatAppointment, formatDateTime, formatDurationMinutes, formatTime, shortAddress, statusLabel, stopTypeLabel } from '../lib/format'
 import type { Coordinate, CurrentPosition, DashboardVehicle, Stop } from '../types/domain'
+import { zuladungState } from '../lib/zuladung'
 
 const PIN_STORAGE_KEY = 'ops-dashboard-pinned-vehicles'
 const SORT_STORAGE_KEY = 'ops-dashboard-sort'
@@ -458,7 +459,7 @@ function VehiclePanel({ row, position, drawerOpen, onToggleDrawer, collapsed, on
       <div className="vehicle-panel-metric">
         <span className="vehicle-panel-label">{termin ? `Termin ${terminStop?.type === 'LOAD' ? 'загрузки' : 'выгрузки'}` : 'ETA'}</span>
         <strong className={termin ? 'text-termin' : undefined}>{termin ? termin.label.replace(/^Termin /, '') : row.eta ? formatDateTime(row.eta) : '–'}</strong>
-        <span className="vehicle-panel-note">{termin && row.eta ? <><span>ETA {formatTime(row.eta)}</span>{margin !== null ? <span className={margin < 0 ? 'timing-late' : 'timing-ok'}>{margin < 0 ? `опоздание ${formatDurationMinutes(-margin)}` : `запас ${formatDurationMinutes(margin)}`}</span> : null}</> : <span>{termin ? 'ETA нет' : 'Termin нет'}</span>}</span>
+        <span className="vehicle-panel-note">{termin && row.eta ? <><span>ETA {formatTime(row.eta)}</span>{margin !== null ? <span className={margin < 0 ? 'timing-late' : 'timing-ok'}>{margin < 0 ? `опоздание ${formatDurationMinutes(-margin)}` : `запас ${formatDurationMinutes(margin)}`}</span> : null}</> : <span>{termin ? 'ETA нет' : 'Termin нет'}</span>}{zuladungState(row.tour) === 'OPEN' ? <span className="vehicle-panel-zuladung" title="По Auftrag перед выгрузкой возможна Zuladung, место неизвестно">без учёта Zuladung</span> : null}</span>
       </div>
       <div className="vehicle-panel-metric">
         <span className="vehicle-panel-label">Осталось</span>

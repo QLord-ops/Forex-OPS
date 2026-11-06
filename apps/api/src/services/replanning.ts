@@ -7,7 +7,7 @@ import { TourService, snapshotVehicleClock, rebaseActiveLeg } from './tours.js';
 import { forecastDrive, applyStopTime, type ClockState } from './vehicle-clock.js';
 import { writeAuditLog, type AuditActor } from './audit-log.js';
 
-export type ReplanStop = { id?: string; type: 'LOAD' | 'UNLOAD'; address: string; company?: string | null; city?: string | null; appointmentAt?: string | null; serviceMinMinutes?: number; serviceMaxMinutes?: number; latitude?: number; longitude?: number };
+export type ReplanStop = { id?: string; type: 'LOAD' | 'UNLOAD'; address: string; instructions?: string | null; company?: string | null; city?: string | null; appointmentAt?: string | null; serviceMinMinutes?: number; serviceMaxMinutes?: number; latitude?: number; longitude?: number };
 export type ReplanInput = { version: number; futureStops: ReplanStop[]; origin?: Coordinate };
 type ResolvedStop = ReplanStop & Coordinate & { id: string };
 type PlannedLeg = { tourId: string; fromStopId: string; toStopId: string; route: RouteResult; duration: number; active: boolean };
