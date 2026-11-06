@@ -61,6 +61,10 @@ const modelOrder = [
   "dailyStatusReport",
   "dailyStatusRow",
   "knownAddress",
+  // The Auftrag file references its tour; corrections reference the document.
+  "orderDocument",
+  "importCorrection",
+  "importRule",
 ];
 
 async function readAll(client) {
@@ -95,6 +99,13 @@ function assertRelations(data) {
     if (row.previousTourId) {
       requireId(tourIds.has(row.previousTourId), `Tour ${row.id} has missing previous tour ${row.previousTourId}`);
     }
+  }
+  const documentIds = ids("orderDocument");
+  for (const row of data.orderDocument) {
+    if (row.tourId) requireId(tourIds.has(row.tourId), `OrderDocument ${row.id} has missing tour ${row.tourId}`);
+  }
+  for (const row of data.importCorrection) {
+    requireId(documentIds.has(row.documentId), `ImportCorrection ${row.id} has missing document ${row.documentId}`);
   }
   for (const row of data.stop) {
     requireId(tourIds.has(row.tourId), `Stop ${row.id} has missing tour ${row.tourId}`);
