@@ -38,6 +38,7 @@ const modelOrder = [
   "customer",
   "customerLine",
   "dispatcherLine",
+  "pushSubscription",
   "vehicle",
   "tour",
   "stop",
