@@ -7,6 +7,7 @@ CREATE TABLE "Dispatcher" (
     "active" BOOLEAN NOT NULL DEFAULT true,
     "lastLoginAt" DATETIME,
     "onboardingCompletedAt" DATETIME,
+    "locale" TEXT,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" DATETIME NOT NULL
 );
@@ -31,9 +32,11 @@ CREATE TABLE "Vehicle" (
     "servicePhone" TEXT,
     "aSchild" BOOLEAN NOT NULL DEFAULT false,
     "appSped" BOOLEAN NOT NULL DEFAULT false,
+    "customerLineId" TEXT,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" DATETIME NOT NULL,
-    CONSTRAINT "Vehicle_assignedDispatcherId_fkey" FOREIGN KEY ("assignedDispatcherId") REFERENCES "Dispatcher" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+    CONSTRAINT "Vehicle_assignedDispatcherId_fkey" FOREIGN KEY ("assignedDispatcherId") REFERENCES "Dispatcher" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
+    CONSTRAINT "Vehicle_customerLineId_fkey" FOREIGN KEY ("customerLineId") REFERENCES "CustomerLine" ("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
 CREATE TABLE "Tour" (
     "id" TEXT NOT NULL PRIMARY KEY,
@@ -43,6 +46,8 @@ CREATE TABLE "Tour" (
     "importFingerprint" TEXT,
     "trailerPlate" TEXT,
     "tourRemarks" TEXT,
+    "customerId" TEXT,
+    "customerLineId" TEXT,
     "approachDurationSeconds" INTEGER,
     "approachDistanceMeters" INTEGER,
     "approachGeometry" TEXT,
@@ -56,7 +61,9 @@ CREATE TABLE "Tour" (
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" DATETIME NOT NULL,
     CONSTRAINT "Tour_vehicleId_fkey" FOREIGN KEY ("vehicleId") REFERENCES "Vehicle" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
-    CONSTRAINT "Tour_previousTourId_fkey" FOREIGN KEY ("previousTourId") REFERENCES "Tour" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+    CONSTRAINT "Tour_previousTourId_fkey" FOREIGN KEY ("previousTourId") REFERENCES "Tour" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
+    CONSTRAINT "Tour_customerId_fkey" FOREIGN KEY ("customerId") REFERENCES "Customer" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
+    CONSTRAINT "Tour_customerLineId_fkey" FOREIGN KEY ("customerLineId") REFERENCES "CustomerLine" ("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
 CREATE TABLE "Stop" (
     "id" TEXT NOT NULL PRIMARY KEY,
@@ -159,6 +166,7 @@ CREATE TABLE "Notification" (
     "type" TEXT NOT NULL,
     "message" TEXT NOT NULL,
     "payloadJson" TEXT NOT NULL,
+    "paramsJson" TEXT,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "acknowledgedAt" DATETIME
 );
@@ -323,6 +331,7 @@ CREATE INDEX "Vehicle_line_statusGroup_idx" ON "Vehicle"("line", "statusGroup");
 CREATE TABLE "DailyStatusReport" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "line" TEXT NOT NULL,
+    "customerId" TEXT,
     "date" TEXT NOT NULL,
     "status" TEXT NOT NULL DEFAULT 'GENERATING',
     "preliminary" BOOLEAN NOT NULL DEFAULT false,
@@ -408,6 +417,7 @@ CREATE TABLE "OrderDocument" (
     "status" TEXT NOT NULL DEFAULT 'PENDING',
     "uploadedByDispatcherId" TEXT,
     "vehicleId" TEXT,
+    "customerId" TEXT,
     "tourId" TEXT,
     "attachedAt" DATETIME,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -422,6 +432,7 @@ CREATE TABLE "ImportCorrection" (
     "documentId" TEXT NOT NULL,
     "tourId" TEXT,
     "dispatcherId" TEXT,
+    "customerId" TEXT,
     "kind" TEXT NOT NULL,
     "field" TEXT,
     "aiValue" TEXT,
@@ -436,6 +447,7 @@ CREATE INDEX "ImportCorrection_documentId_idx" ON "ImportCorrection"("documentId
 CREATE INDEX "ImportCorrection_tourId_idx" ON "ImportCorrection"("tourId");
 CREATE TABLE "ImportRule" (
     "id" TEXT NOT NULL PRIMARY KEY,
+    "scope" TEXT NOT NULL DEFAULT 'global',
     "kind" TEXT NOT NULL,
     "pattern" TEXT NOT NULL,
     "value" TEXT,
@@ -447,4 +459,47 @@ CREATE TABLE "ImportRule" (
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" DATETIME NOT NULL
 );
-CREATE UNIQUE INDEX "ImportRule_kind_pattern_key" ON "ImportRule"("kind", "pattern");
+CREATE UNIQUE INDEX "ImportRule_scope_kind_pattern_key" ON "ImportRule"("scope", "kind", "pattern");
+CREATE INDEX "Vehicle_customerLineId_idx" ON "Vehicle"("customerLineId");
+CREATE INDEX "Tour_customerId_status_idx" ON "Tour"("customerId", "status");
+CREATE INDEX "Tour_customerLineId_idx" ON "Tour"("customerLineId");
+CREATE INDEX "OrderDocument_customerId_createdAt_idx" ON "OrderDocument"("customerId", "createdAt");
+CREATE INDEX "ImportCorrection_customerId_createdAt_idx" ON "ImportCorrection"("customerId", "createdAt");
+CREATE TABLE "Customer" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "name" TEXT NOT NULL,
+    "slug" TEXT NOT NULL,
+    "category" TEXT NOT NULL DEFAULT 'OTHER',
+    "aliasesJson" TEXT NOT NULL DEFAULT '[]',
+    "color" TEXT,
+    "active" BOOLEAN NOT NULL DEFAULT true,
+    "profileJson" TEXT NOT NULL DEFAULT '{}',
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL
+);
+CREATE UNIQUE INDEX "Customer_slug_key" ON "Customer"("slug");
+CREATE TABLE "CustomerLine" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "customerId" TEXT NOT NULL,
+    "code" TEXT NOT NULL,
+    "name" TEXT NOT NULL,
+    "departmentCompany" TEXT,
+    "departmentAddress" TEXT,
+    "departmentCity" TEXT,
+    "sortIndex" INTEGER NOT NULL DEFAULT 0,
+    "active" BOOLEAN NOT NULL DEFAULT true,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL,
+    CONSTRAINT "CustomerLine_customerId_fkey" FOREIGN KEY ("customerId") REFERENCES "Customer" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+CREATE UNIQUE INDEX "CustomerLine_customerId_code_key" ON "CustomerLine"("customerId", "code");
+CREATE TABLE "DispatcherLine" (
+    "dispatcherId" TEXT NOT NULL,
+    "lineId" TEXT NOT NULL,
+    "isPrimary" BOOLEAN NOT NULL DEFAULT false,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY ("dispatcherId", "lineId"),
+    CONSTRAINT "DispatcherLine_dispatcherId_fkey" FOREIGN KEY ("dispatcherId") REFERENCES "Dispatcher" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT "DispatcherLine_lineId_fkey" FOREIGN KEY ("lineId") REFERENCES "CustomerLine" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+CREATE INDEX "DispatcherLine_lineId_idx" ON "DispatcherLine"("lineId");

@@ -102,7 +102,7 @@ describe('ImportLearningService', () => {
     expect(await confirm(first.id)).toMatchObject({ corrections: 3, rules: [{ kind: 'ALIAS', pattern: 'mb' }, { kind: 'IGNORE_LABEL', pattern: 'lg' }] });
     expect(await confirm(first.id)).toEqual({ corrections: 0, rules: [] });
     expect(await db.importCorrection.count()).toBe(3);
-    let rule = await db.importRule.findUniqueOrThrow({ where: { kind_pattern: { kind: 'ALIAS', pattern: 'mb' } } });
+    let rule = await db.importRule.findUniqueOrThrow({ where: { scope_kind_pattern: { scope: 'global', kind: 'ALIAS', pattern: 'mb' } } });
     expect(rule).toMatchObject({ hits: 1, active: false, value: 'Mercedes-Benz AG / Werk 065' });
     expect((await service.learned()).aliases.mb).toBe('Mercedes-Benz AG');
 
@@ -123,7 +123,7 @@ describe('ImportLearningService', () => {
   it('keeps a rule off once a dispatcher switched it off, and drops rules on request', async () => {
     const [a, b, c] = await Promise.all([document('a'), document('b'), document('c')]);
     await confirm(a.id); await confirm(b.id);
-    const rule = await db.importRule.findUniqueOrThrow({ where: { kind_pattern: { kind: 'ALIAS', pattern: 'mb' } } });
+    const rule = await db.importRule.findUniqueOrThrow({ where: { scope_kind_pattern: { scope: 'global', kind: 'ALIAS', pattern: 'mb' } } });
     await service.update(rule.id, { active: false }, actor);
     await confirm(c.id);
     expect(await db.importRule.findUniqueOrThrow({ where: { id: rule.id } })).toMatchObject({ hits: 3, active: false });
