@@ -2,6 +2,7 @@ import { LogOut, ArrowRight, Cog, Eye, EyeOff, LockKeyhole, UserRound } from 'lu
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { DispatcherAuthError, dispatcherAuth } from '../lib/auth'
 import './auth-gate.css'
+import { disablePush } from '../lib/push'
 
 type AuthPhase = 'checking' | 'idle' | 'submitting' | 'success'
 
@@ -33,7 +34,8 @@ function isPasswordError(cause: unknown): boolean {
 
 export function DispatcherLogout({ className = 'dispatcher-logout' }: { className?: string }) {
   const [error, setError] = useState('')
-  return <><button type="button" className={className} title="Выйти из диспетчерской" onClick={() => { void dispatcherAuth.logout().then(() => window.dispatchEvent(new Event('ops:logged-out'))).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Не удалось выйти')) }}><LogOut className="h-5 w-5 shrink-0" aria-hidden="true" /><span>Выйти</span></button>{error && <span role="alert" className="dispatcher-logout-error">{error}</span>}</>
+  // This phone stops receiving push for the account on logout (DSGVO); a failure there never blocks the logout.
+  return <><button type="button" className={className} title="Выйти из диспетчерской" onClick={() => { void disablePush().catch(() => undefined).then(() => dispatcherAuth.logout()).then(() => window.dispatchEvent(new Event('ops:logged-out'))).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Не удалось выйти')) }}><LogOut className="h-5 w-5 shrink-0" aria-hidden="true" /><span>Выйти</span></button>{error && <span role="alert" className="dispatcher-logout-error">{error}</span>}</>
 }
 
 export function AuthGate({ children }: { children: ReactNode }) {

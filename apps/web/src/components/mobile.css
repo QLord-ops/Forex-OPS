@@ -1,6 +1,11 @@
 /* Phone layout (≤ 767 px), the installed app: bottom tabs instead of the top bar and the bell, the truck list and the map
    as two tabs, the truck card as a sheet. Targets 44 px, fields 16 px (no iOS zoom), safe areas, no sideways scroll. */
 .mobile-tabbar, .mobile-only, .truck-sheet-handle { display: none; }
+.push-toggle { display: flex; align-items: center; gap: 12px; text-align: left; }
+.push-toggle .more-item-note { margin-left: auto; color: rgb(var(--tx-64748b)); font-size: .8125rem; }
+.push-toggle[aria-checked='true'] .more-item-note { color: rgb(var(--tx-065f46)); }
+.push-toggle:disabled { cursor: default; opacity: .75; }
+.push-toggle-error { margin: 4px 16px 8px; color: rgb(var(--tx-b91c1c)); font-size: .75rem; }
 
 @media (max-width: 767px) {
   :root { --tabbar-h: 58px; --safe-top: env(safe-area-inset-top, 0px); --safe-bottom: env(safe-area-inset-bottom, 0px); }

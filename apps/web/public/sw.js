@@ -44,6 +44,21 @@ self.addEventListener('fetch', (event) => {
   if (url.pathname.startsWith('/assets/')) event.respondWith(cachedAsset(request))
 })
 
+// A push from the server (app closed or in the background): one notification per truck, a click opens the truck.
+self.addEventListener('push', (event) => {
+  let data = {}
+  try { data = event.data ? event.data.json() : {} } catch { data = { body: event.data ? event.data.text() : '' } }
+  const url = typeof data.url === 'string' && data.url.startsWith('/') ? data.url : '/'
+  event.waitUntil(self.registration.showNotification(typeof data.title === 'string' ? data.title : 'OPS FOREX', {
+    body: typeof data.body === 'string' ? data.body : '',
+    tag: typeof data.tag === 'string' ? data.tag : undefined,
+    renotify: typeof data.tag === 'string',
+    icon: '/icons/icon-192.png',
+    badge: '/icons/icon-192.png',
+    data: { url }
+  }))
+})
+
 // A click on a notification opens the truck in the running app, or starts the app there.
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()

@@ -58,6 +58,8 @@ import { documentFingerprint, PendingAppointmentService } from './services/pendi
 import { OrderDocumentService } from './services/order-documents.js';
 import { registerOrderDocumentRoutes, registerOrderReparseRoute } from './routes/order-documents.js';
 import { CustomerService, isMine } from './services/customers.js';
+import { PushService } from './services/push.js';
+import { registerPushRoutes } from './routes/push.js';
 import { resolveImportCustomer, vehicleKey, type ImportCustomer } from './services/customer-resolver.js';
 import { scoreDraft } from './services/field-confidence.js';
 import { berlinToday } from './services/order-dates.js';
@@ -95,6 +97,21 @@ const pendingAppointments = new PendingAppointmentService(prisma);
 const orderDocuments = new OrderDocumentService(prisma);
 const importLearning = new ImportLearningService(prisma, addressRules);
 const customerService = new CustomerService(prisma);
+const pushService = new PushService(prisma);
+
+/**
+ * The trucks a dispatcher follows in pop-ups and on the phone: not those a colleague took, and not free trucks on lines
+ * other dispatchers work on, once the dispatcher has lines of their own. The shared login sees everything.
+ */
+async function visibleTo(dispatcherId: string | null | undefined): Promise<(vehicleId: string) => boolean> {
+  if (!dispatcherId) return () => true;
+  const myLines = await customerService.linesOf(dispatcherId);
+  const others = new Set((await prisma.vehicle.findMany({ where: { OR: [
+    { assignedDispatcherId: { not: null, notIn: [dispatcherId] } },
+    ...(myLines.length ? [{ assignedDispatcherId: null, customerLineId: { not: null, notIn: myLines }, customerLine: { dispatchers: { some: {} } } }] : [])
+  ] }, select: { id: true } })).map((vehicle) => vehicle.id));
+  return (vehicleId) => !others.has(vehicleId);
+}
 const ORDER_DOCUMENT_SYSTEM_ACTOR: AuditActor = { role: 'system', sessionId: 'order-documents' };
 
 /** A Termin slip gets its truck and stop match and tells whether the same file was used before. */
@@ -386,6 +403,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   registerOrderDocumentRoutes(app, orderDocuments);
   registerImportRuleRoutes(app, importLearning);
   registerCustomerRoutes(app, customerService);
+  registerPushRoutes(app, pushService);
   await registerRouteScenarioRoutes(app, { service: scenarioService });
 
   let activeOrderImports = 0;
@@ -437,6 +455,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
       await refreshAllAlerts();
       await trafficService.tick();
       await dailyStatus.runIfDue(new Date()).catch((error) => app.log.error(error));
+      // New decisions reach the dispatchers' phones even when the app is closed.
+      await pushService.sweep(() => notificationService.list(), visibleTo).catch((error) => app.log.warn({ errorType: error instanceof Error ? error.name : 'unknown' }, 'Push не отправлен'));
       lastNotificationRefreshAt = Date.now();
       for (const client of subscribers) client.write(`event: operations\ndata: ${JSON.stringify({ at: Date.now() })}\n\n`);
     } catch (error) { app.log.error(error); }
@@ -473,15 +493,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
     if (isServerless && Date.now() - lastNotificationRefreshAt >= 25_000) await refreshNotifications();
     const notifications = await notificationService.list();
     // Pop-ups follow the dispatcher's own and free trucks; the alerts page still lists everything.
-    const me = request.dispatcherSession?.dispatcherId;
-    if (!me) return { notifications };
-    const myLines = await customerService.linesOf(me);
-    const others = new Set((await prisma.vehicle.findMany({ where: { OR: [
-      { assignedDispatcherId: { not: null, notIn: [me] } },
-      // A free truck on a line that other dispatchers work on is theirs to watch, once I have lines of my own.
-      ...(myLines.length ? [{ assignedDispatcherId: null, customerLineId: { not: null, notIn: myLines }, customerLine: { dispatchers: { some: {} } } }] : [])
-    ] }, select: { id: true } })).map((vehicle) => vehicle.id));
-    return { notifications: notifications.filter((notification) => !others.has(notification.vehicleId)) };
+    const visible = await visibleTo(request.dispatcherSession?.dispatcherId);
+    return { notifications: notifications.filter((notification) => visible(notification.vehicleId)) };
   });
   app.post('/notifications/:id/ack', async (request) => {
     const { id } = z.object({ id: z.string() }).parse(request.params);
