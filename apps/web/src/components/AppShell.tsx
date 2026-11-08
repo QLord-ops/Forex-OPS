@@ -9,6 +9,8 @@ import { AccountMenu } from './AccountMenu'
 import { BrandMark, BrandWordmark } from './Brand'
 import { DispatcherAssistant } from './DispatcherAssistant'
 import { GuidedTour } from './GuidedTour'
+import { MobileTabBar } from './MobileTabBar'
+import './mobile.css'
 import { DecisionGroups, OperationsNotifications } from './OperationsNotifications'
 import { needsAttention } from '../lib/alerts'
 
@@ -38,6 +40,7 @@ function Shell() {
         <Outlet />
         <OperationsNotifications />
       </main>
+      <MobileTabBar />
       <DispatcherAssistant />
       <GuidedTour />
     </div>

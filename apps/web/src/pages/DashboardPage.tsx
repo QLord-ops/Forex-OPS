@@ -2,6 +2,8 @@ import { Check, ChevronDown, ChevronRight, ChevronUp, Clock3, GitFork, ListFilte
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 
+import { isPhone, useIsPhone } from '../hooks/useIsPhone'
+
 import { LazyMapPanel } from '../components/LazyMapPanel'
 import { DecisionGroups } from '../components/OperationsNotifications'
 import { needsAttention } from '../lib/alerts'
@@ -48,7 +50,8 @@ export function DashboardPage() {
   const [scope, setScope] = useState<FleetScope | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
   // The bottom panel slides down to a thin strip so the map is free; the choice is remembered in this browser.
-  const [panelCollapsed, setPanelCollapsed] = useState(() => { try { return localStorage.getItem('ops-panel-collapsed') === '1' } catch { return false } })
+  // Collapsed by default on a phone, where the map is small; the choice is remembered either way.
+  const [panelCollapsed, setPanelCollapsed] = useState(() => { try { const stored = localStorage.getItem('ops-panel-collapsed'); return stored === null ? isPhone() : stored === '1' } catch { return false } })
   // While the truck card is open the panel steps aside to a strip; the dispatcher's own choice stays as it was.
   const [openWithCard, setOpenWithCard] = useState(false)
   const togglePanel = () => {
@@ -86,6 +89,9 @@ export function DashboardPage() {
   const selectedId = searchParams.get('vehicleId') ?? ''
   const selected = vehicles.find((row) => row.vehicle.id === selectedId) ?? orderedVehicles[0] ?? null
   const cardId = searchParams.get('card')
+  // Phone: the truck list and the map are two tabs (?view=map); every change of the selection keeps the tab.
+  const view = searchParams.get('view') === 'map' ? 'map' : 'list'
+  const phone = useIsPhone()
   const cardRow = cardId ? vehicles.find((row) => row.vehicle.id === cardId) ?? null : null
   cardIdRef.current = cardId
   useEffect(() => { setOpenWithCard(false) }, [cardId])
@@ -99,8 +105,8 @@ export function DashboardPage() {
 
   useEffect(() => {
     if (!orderedVehicles.length || vehicles.some((row) => row.vehicle.id === selectedId)) return
-    setSearchParams({ vehicleId: orderedVehicles[0].vehicle.id }, { replace: true })
-  }, [orderedVehicles, selectedId, setSearchParams, vehicles])
+    setSearchParams(withView({ vehicleId: orderedVehicles[0].vehicle.id }, view), { replace: true })
+  }, [orderedVehicles, selectedId, setSearchParams, vehicles, view])
   useEffect(() => { setDrawerOpen(false); setRouteOptions(null); setOptionsError('') }, [selected?.vehicle.id])
   useEffect(() => {
     window.dispatchEvent(new CustomEvent('ops:assistant-context', { detail: { vehicleId: selected?.vehicle.id } }))
@@ -149,9 +155,10 @@ export function DashboardPage() {
   // «Варианты маршрута» from a deviation notice opens this page with ?routes=1.
   useEffect(() => {
     if (searchParams.get('routes') !== '1' || !selectedId) return
-    setSearchParams({ vehicleId: selectedId }, { replace: true })
+    // On a phone the options are on the map tab.
+    setSearchParams(withView({ vehicleId: selectedId }, phone ? 'map' : view), { replace: true })
     void openRouteOptions(selectedId)
-  }, [openRouteOptions, searchParams, selectedId, setSearchParams])
+  }, [openRouteOptions, phone, searchParams, selectedId, setSearchParams, view])
   async function selectRouteOption(optionId: string) {
     if (!routeOptions) return
     const option = routeOptions.options.find((item) => item.id === optionId)
@@ -172,9 +179,9 @@ export function DashboardPage() {
     : undefined, [routeOptions])
 
   // With the card open, picking another truck switches the card to it.
-  function selectVehicle(vehicleId: string) { setSearchParams(cardId ? { vehicleId, card: vehicleId } : { vehicleId }, { replace: true }) }
-  const openCard = useCallback((vehicleId: string) => setSearchParams({ vehicleId, card: vehicleId }, { replace: true }), [setSearchParams])
-  const closeCard = useCallback(() => setSearchParams(selectedId ? { vehicleId: selectedId } : {}, { replace: true }), [selectedId, setSearchParams])
+  function selectVehicle(vehicleId: string) { setSearchParams(withView(cardId ? { vehicleId, card: vehicleId } : { vehicleId }, view), { replace: true }) }
+  const openCard = useCallback((vehicleId: string) => setSearchParams(withView({ vehicleId, card: vehicleId }, view), { replace: true }), [setSearchParams, view])
+  const closeCard = useCallback(() => setSearchParams(withView(selectedId ? { vehicleId: selectedId } : {}, view), { replace: true }), [selectedId, setSearchParams, view])
   function focusVehicle(vehicleId: string) {
     selectVehicle(vehicleId)
     const row = vehicles.find((item) => item.vehicle.id === vehicleId)
@@ -225,7 +232,7 @@ export function DashboardPage() {
   if (error && !data) return <div className="dashboard-loading"><ErrorState error={error} onRetry={refetch} /></div>
 
   return (
-    <div className="dashboard-screen">
+    <div className={`dashboard-screen dashboard-view-${view}`}>
       <aside className="fleet-rail" aria-label="Список грузовиков">
         <div className="fleet-controls">
           <div className="fleet-search-row">
@@ -294,10 +301,11 @@ export function DashboardPage() {
         {selected ? <VehiclePanel row={selected} position={position.data} drawerOpen={drawerOpen} onToggleDrawer={() => setDrawerOpen((value) => !value)} collapsed={cardId ? !openWithCard : panelCollapsed} onToggleCollapsed={togglePanel} onOpen={() => openCard(selected.vehicle.id)}
           onRouteOptions={() => void openRouteOptions(selected.vehicle.id)} optionsBusy={optionsBusy} onFocusStop={(stop) => setMapFocus([stop.longitude, stop.latitude] as Coordinate)} /> : null}
         <QuickOrderPanel row={selected} vehicles={vehicles.map((item) => item.vehicle)} onAddressFound={setMapFocus} onRoutePreview={setRoutePreview} onCreated={async (vehicleId) => { selectVehicle(vehicleId); await refetch() }} />
-        {cardId ? <TruckCard vehicleId={cardId} row={cardRow} onClose={closeCard} onTrack={setTrack} /> : null}
+        {cardId && !phone ? <TruckCard vehicleId={cardId} row={cardRow} onClose={closeCard} onTrack={setTrack} /> : null}
         {position.error ? <button type="button" className="map-error" onClick={() => void position.refetch()}>Позиция временно недоступна · повторить</button> : null}
         {error ? <div className="dashboard-sync-warning">Данные автопарка не обновлены. Повторим автоматически.</div> : null}
       </section>
+      {cardId && phone ? <TruckCard vehicleId={cardId} row={cardRow} onClose={closeCard} onTrack={setTrack} sheet /> : null}
     </div>
   )
 }
@@ -565,3 +573,8 @@ function localDateTime(date = new Date()) {
 
 function readSort(): FleetSort { try { const value = window.localStorage.getItem(SORT_STORAGE_KEY); return value === 'NUMBER' || value === 'TERMIN' ? value : 'URGENCY' } catch { return 'URGENCY' } }
 function readPinnedVehicles(key = PIN_STORAGE_KEY): string[] { try { const parsed = JSON.parse(window.localStorage.getItem(key) ?? '[]'); return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === 'string') : [] } catch { return [] } }
+
+/** URL state of the Disposition with the phone tab kept. */
+function withView(params: Record<string, string>, view: 'list' | 'map'): Record<string, string> {
+  return view === 'map' ? { ...params, view: 'map' } : params
+}

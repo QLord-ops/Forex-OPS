@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, CheckCircle2, ChevronRight, Clock3, FileText, LoaderCircle, Pencil, Plus, Sparkles, Trash2, Upload } from 'lucide-react'
+import { AlertTriangle, Camera, Check, CheckCircle2, ChevronRight, Clock3, FileText, LoaderCircle, Pencil, Plus, Sparkles, Trash2, Upload } from 'lucide-react'
 import type { ChangeEvent, DragEvent, FormEvent } from 'react'
 import { AddressInput } from '../components/AddressInput'
 import { suggestionAddress } from '../lib/address-book'
@@ -17,6 +17,7 @@ import { ImportCustomerNote, ImportCustomerSelect } from '../components/ImportCu
 import { ConfidenceSummary, FieldNote, FieldNotes } from '../components/FieldConfidence'
 import { openCounts, orderViews, stateClass, stopViews, type FieldScore, type StopField } from '../lib/field-confidence'
 import { useImportCustomers } from '../hooks/useImportCustomers'
+import { useIsPhone } from '../hooks/useIsPhone'
 
 interface StopDraft {
   id: string
@@ -157,6 +158,8 @@ export function NewOrderPage() {
   const [error, setError] = useState<Error | null>(null)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const importCustomers = useImportCustomers(null)
+  // The camera button only where there is a camera to point: the phone layout.
+  const phone = useIsPhone()
   /** Fields in doubt the dispatcher confirmed with «Верно». */
   const [verified, setVerified] = useState<string[]>([])
 
@@ -374,6 +377,7 @@ export function NewOrderPage() {
         {importCustomers.customers.length ? <div className="max-w-xs px-4 pt-4"><ImportCustomerSelect customers={importCustomers.customers} value={importCustomers.customerId} onChange={importCustomers.setCustomerId} disabled={importing} /></div> : null}
         <div className={`m-4 rounded-xl border-2 border-dashed px-5 py-7 transition-colors ${isImportDragging ? 'border-sky-500 bg-sky-50' : 'border-slate-300 bg-slate-50/70'}`} onDragEnter={(event) => { event.preventDefault(); setIsImportDragging(true) }} onDragOver={(event) => event.preventDefault()} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setIsImportDragging(false) }} onDrop={(event) => void handleImportDrop(event)}>
           <div className="flex flex-wrap items-center justify-between gap-5"><div className="flex min-w-0 items-start gap-4"><div className="rounded-xl bg-sky-100 p-3 text-sky-700"><Upload className="h-6 w-6" /></div><div><h3 className="text-lg font-bold text-slate-950">Перетащите Auftrag сюда</h3><p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">PDF, Excel или скриншот. Адреса, города и термины распознаются автоматически; файлы можно добавлять очередью.</p><p className="mt-1 text-xs text-slate-500">PDF до 20 МБ · Excel до 5 МБ · PNG, JPG или WebP до 10 МБ</p></div></div>
+            {phone ? <label className={`primary-button mobile-only cursor-pointer ${importing ? 'pointer-events-none opacity-60' : ''}`}><Camera className="h-4 w-4" aria-hidden="true" />Снять фото<input className="sr-only" type="file" accept="image/*" capture="environment" aria-label="Снять Auftrag камерой" onChange={(event) => void handleOrderImport(event)} disabled={importing} /></label> : null}
             <label className={`primary-button cursor-pointer ${importing ? 'pointer-events-none opacity-60' : ''}`}>{importing ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}{importing ? 'Распознаём…' : 'Выбрать файлы'}<input className="sr-only" type="file" multiple accept=".pdf,.xlsx,.png,.jpg,.jpeg,.webp,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,image/png,image/jpeg,image/webp" onChange={(event) => void handleOrderImport(event)} disabled={importing} /></label>
           </div>
         </div>
