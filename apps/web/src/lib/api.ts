@@ -122,6 +122,8 @@ export interface Customer {
 export interface CustomerOverview {
   vehicles: number; activeTours: number; tours30d: number; documents: number; documentsWithoutCorrections: number
   mostCorrected: Array<{ field: string; count: number }>; learnedRules: number
+  /** Of the fields shown as fine / check / doubt in the last 30 saved Auftrag, how many the dispatchers changed. Null before the first one. */
+  accuracy: Record<'OK' | 'CHECK' | 'DOUBT', { fields: number; changed: number }> | null
   recentDocuments: Array<{ id: string; filename: string; mimeType: string; status: string; tourId: string | null; createdAt: string }>
 }
 export interface CustomerMigrationItem { slug: string; name: string; exists: boolean; statusList: boolean; lines: Array<{ code: string; name: string; vehicles: string[] }> }

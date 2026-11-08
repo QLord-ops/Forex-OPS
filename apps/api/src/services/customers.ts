@@ -1,6 +1,8 @@
 import type { Prisma, PrismaClient } from '@prisma/client';
 import { writeAuditLog, type AuditActor } from './audit-log.js';
 import { mergeProfile, OEM_TOUR_REMARKS_TEMPLATE, parseProfile, SCHNELLECKE_PROFILE, type CustomerCategory, type CustomerProfile } from './customer-profile.js';
+import { calibrate, fieldOutcomes } from './field-confidence.js';
+import { pickDraft } from './import-learning.js';
 import type { ImportCustomerContext } from './pdf-order-import.js';
 
 const DAY_MS = 24 * 3600_000;
@@ -111,8 +113,28 @@ export class CustomerService {
     return {
       vehicles, activeTours, tours30d, documents,
       documentsWithoutCorrections: documents - correctedDocuments,
-      mostCorrected: corrected, learnedRules: rules, recentDocuments
+      mostCorrected: corrected, learnedRules: rules, recentDocuments,
+      accuracy: await this.accuracy(customerId)
     };
+  }
+
+  /**
+   * How well the field levels matched reality over the last 30 saved Auftrag: of the fields shown as fine / check /
+   * doubt, how many the dispatchers changed before saving. Null until a scored Auftrag was saved.
+   */
+  private async accuracy(customerId: string) {
+    const documents = await this.db.orderDocument.findMany({
+      where: { customerId, status: 'ATTACHED', confirmedJson: { not: null } }, orderBy: { attachedAt: 'desc' }, take: 30,
+      select: { previewJson: true, confirmedJson: true }
+    });
+    const outcomes = documents.flatMap((document) => {
+      try {
+        const confirmed = JSON.parse(document.confirmedJson ?? 'null') as { orderNumber?: string; stops?: Parameters<typeof fieldOutcomes>[1] } | null;
+        const draft = pickDraft(JSON.parse(document.previewJson) as unknown, confirmed?.orderNumber ?? '');
+        return draft && confirmed?.stops ? fieldOutcomes(draft.stops as Parameters<typeof fieldOutcomes>[0], confirmed.stops) : [];
+      } catch { return []; }
+    });
+    return outcomes.length ? calibrate(outcomes) : null;
   }
 
   async create(input: CustomerInput, actor?: AuditActor) {
