@@ -36,7 +36,7 @@ interface NotificationsState {
   termin: PendingAppointment | null
   hide: (id: string) => void
   answerDeparture: (item: AlertNotification, answer: DepartureAnswer) => Promise<void>
-  resolve: (item: AlertNotification, action: 'ack' | 'revert') => Promise<void>
+  resolve: (item: AlertNotification, action: 'ack' | 'revert' | 'revert-event') => Promise<void>
   reviewTermin: (item: AlertNotification) => Promise<void>
   acceptTermin: (item: AlertNotification) => Promise<void>
   closeTermin: (applied: boolean) => Promise<void>
@@ -129,11 +129,20 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
     })
   }, [changed, run])
 
-  const resolve = useCallback(async (item: AlertNotification, action: 'ack' | 'revert') => {
+  const resolve = useCallback(async (item: AlertNotification, action: 'ack' | 'revert' | 'revert-event') => {
     if (action === 'revert' && (!item.stopId || !window.confirm('Отменить автоматическое прибытие? Точка снова станет «в пути».'))) return
+    if (action === 'revert-event') {
+      const label = autoEventOf(item.payloadJson)?.stopType === 'UNLOAD' ? 'ENTLADEN' : 'BELADEN'
+      if (!item.stopId || !window.confirm(`Отменить автоматический ${label}? Машина снова будет стоять на точке, в истории останутся обе записи.`)) return
+    }
     await run(item, async () => {
       if (action === 'revert') {
         await operationsRequest(`/stops/${item.stopId}/arrival/revert`, 'POST', { reason: 'Отменено из уведомления об автоприбытии' })
+        await changed()
+        return
+      }
+      if (action === 'revert-event') {
+        await operationsRequest(`/stops/${item.stopId}/auto-event/revert`, 'POST', { reason: 'Отменено из уведомления: машина не загружена или не выгружена' })
         await changed()
         return
       }
@@ -222,6 +231,19 @@ export function departureOf(payloadJson?: string | null): Departure | null {
     if (!payload.leftAt || (payload.stopType !== 'LOAD' && payload.stopType !== 'UNLOAD')) return null
     const time = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit' }).format(new Date(payload.leftAt))
     return { stopType: payload.stopType, leftAt: payload.leftAt, time }
+  } catch { return null }
+}
+
+export type AutoStopEvent = { stopType: 'LOAD' | 'UNLOAD'; at: string; time: string; stayMinutes: number | null }
+
+/** BELADEN/ENTLADEN the system recorded after the truck stood at the stop and left the town. */
+// eslint-disable-next-line react-refresh/only-export-components
+export function autoEventOf(payloadJson?: string | null): AutoStopEvent | null {
+  try {
+    const payload = JSON.parse(payloadJson ?? '{}') as { stopType?: string; at?: string; stayMinutes?: number }
+    if (!payload.at || (payload.stopType !== 'LOAD' && payload.stopType !== 'UNLOAD')) return null
+    const time = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit' }).format(new Date(payload.at))
+    return { stopType: payload.stopType, at: payload.at, time, stayMinutes: typeof payload.stayMinutes === 'number' ? payload.stayMinutes : null }
   } catch { return null }
 }
 

@@ -13,6 +13,7 @@ it('validates the arrival zone and revert input before touching data', async () 
   expect((await radius({ radiusMeters: 'wide' })).statusCode).toBe(400);
   const revert = await app.inject({ method: 'POST', url: '/stops/s1/arrival/revert', payload: { reason: 'x'.repeat(301) } });
   expect(revert.statusCode).toBe(400);
+  expect((await app.inject({ method: 'POST', url: '/stops/s1/auto-event/revert', payload: { reason: 'x'.repeat(301) } })).statusCode).toBe(400);
 });
 
 it('requires a dispatcher session for revert and zone changes', async () => {
@@ -22,6 +23,7 @@ it('requires a dispatcher session for revert and zone changes', async () => {
   expect((await app.inject({ method: 'POST', url: '/stops/s1/arrival/revert', headers, payload: {} })).statusCode).toBe(401);
   expect((await app.inject({ method: 'PUT', url: '/stops/s1/arrival-radius', headers, payload: { radiusMeters: 500 } })).statusCode).toBe(401);
   expect((await app.inject({ method: 'POST', url: '/stops/s1/departure/keep', headers, payload: {} })).statusCode).toBe(401);
+  expect((await app.inject({ method: 'POST', url: '/stops/s1/auto-event/revert', headers, payload: {} })).statusCode).toBe(401);
 });
 
 it('has no manual arrival route any more: the arrival comes from the GPS zone', async () => {

@@ -103,3 +103,36 @@ test('на Диспозиции вопросы стоят в «Требует р
   await expect.poll(() => acked).toBe(true)
   await expect(decisions.getByRole('article')).toHaveCount(1)
 })
+
+test('BELADEN записан сам после выезда из города: уведомление «для сведения» с «Отменить»', async ({ page }) => {
+  let reverted: unknown = null
+  let notifications = [{ id: 'n-auto', vehicleId: 'v1', stopId: 'stop-l', type: 'AUTO_STOP_EVENT', createdAt: new Date().toISOString(),
+    priority: 'INFO', urgent: false, resolved: false, resolvedReason: null, leadId: 'n-auto', stackSize: 1,
+    message: 'LKW 949 выехала из Zwickau — вероятно загружена. BELADEN записан автоматически на 15:42 (выезд с точки по GPS Webfleet). Если это ошибка, отмените.',
+    payloadJson: JSON.stringify({ stopType: 'LOAD', at: '2026-11-03T14:42:00.000Z', stayMinutes: 47, source: 'WEBFLEET_AUTO' }) }]
+  await page.route('**/api/**', async (route) => {
+    const path = new URL(route.request().url()).pathname.replace(/^\/api/, '')
+    if (path === '/auth/session') return json(route, { authenticated: true, role: 'dispatcher', csrfToken: 'e2e' })
+    if (path === '/notifications') return json(route, { notifications })
+    if (path === '/stops/stop-l/auto-event/revert') { reverted = route.request().postDataJSON(); notifications = []; return json(route, { ok: true }) }
+    if (path === '/dashboard') return json(route, { vehicles: [
+      { vehicle: truck('v1', '949'), statusText: 'MOVING', operationVersion: 1, tour: { id: 't-a', vehicleId: 'v1', orderNumber: 'A-1', status: 'ACTIVE',
+        stops: [stop('stop-l', { type: 'LOAD', city: 'Zwickau', arrivedAt: '2026-11-03T13:55:00Z', completedAt: '2026-11-03T14:42:00Z' }), stop('stop-u', { sequence: 2 })] } }
+    ] })
+    if (path.endsWith('/current-position')) return json(route, { status: 'MOVING' })
+    return json(route, { error: 'not mocked' }, 404)
+  })
+  await page.route('https://tile.openstreetmap.org/**', (route) => route.abort())
+  page.on('dialog', (dialog) => void dialog.accept())
+  await page.goto('/')
+  // Nothing to decide: no toast, the note waits under «Для сведения».
+  await expect(page.locator('.operations-toast')).toHaveCount(0)
+  const decisions = page.getByRole('region', { name: 'Требует решения' })
+  await decisions.getByText('Для сведения').click()
+  const card = decisions.getByRole('article').filter({ hasText: 'выехала из города' })
+  await expect(card).toContainText('LKW 949 выехала из города — вероятно загружена')
+  await expect(card).toContainText(/BELADEN записан автоматически на 15:42, Zwickau · стояла 47 мин · GPS Webfleet/)
+  await card.getByRole('button', { name: 'Отменить BELADEN' }).click()
+  await expect.poll(() => reverted).toMatchObject({ reason: expect.stringContaining('Отменено') })
+  await expect(decisions.getByRole('article')).toHaveCount(0)
+})
