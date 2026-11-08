@@ -35,6 +35,7 @@ import {
   splitGeometryAtProgress
 } from "./simulation.js";
 import { writeAuditLog, type AuditActor } from "./audit-log.js";
+import type { AutoStopEventInput } from "./webfleet.js";
 
 export type TourAggregate = Prisma.TourGetPayload<{
   include: {
@@ -321,6 +322,60 @@ export class TourService {
     return this.recordStopEvent(stopId, "UNLOADED", now, note, actor, options);
   }
 
+  /**
+   * Real GPS: the truck stood at the stop and then left the town. BELADEN/ENTLADEN is recorded at the moment it left the
+   * stop's zone; the dispatcher gets a note with «Отменить».
+   */
+  async recordAutoStopEvent(input: AutoStopEventInput, actor?: AuditActor): Promise<TourAggregate> {
+    const stop = await this.db.stop.findUniqueOrThrow({ where: { id: input.stopId } });
+    return this.recordStopEvent(input.stopId, stop.type === "LOAD" ? "LOADED" : "UNLOADED", input.at, undefined, actor, { auto: { detectedAt: input.now, meta: input.meta } });
+  }
+
+  /**
+   * Undo an automatic BELADEN/ENTLADEN while nothing has happened since: the stop, its legs and the tours go back to how they
+   * were. History stays: the event remains and a compensating «…_REVERTED» event is written.
+   */
+  async revertAutoStopEvent(stopId: string, now = new Date(), actor?: AuditActor, reason?: string) {
+    await this.db.$transaction(async (tx) => {
+      const auto = await tx.operationEvent.findFirst({ where: { stopId, type: "STOP_EVENT_AUTO" }, orderBy: { createdAt: "desc" } });
+      if (!auto) throw new TourPlanConflictError("Эту отметку поставил диспетчер, здесь её отменить нельзя.");
+      const record = JSON.parse(auto.payloadJson) as AutoStopEventRecord;
+      const at = new Date(record.at);
+      const stop = await tx.stop.findUniqueOrThrow({ where: { id: stopId }, include: { tour: true } });
+      if (!stop.completedAt || stop.completedAt.getTime() !== at.getTime()) throw new TourPlanConflictError("Автоотметка уже отменена или точка изменилась.");
+      const vehicleId = stop.tour.vehicleId;
+      const later = await tx.event.count({ where: { vehicleId, id: { not: record.eventId }, timestamp: { gte: at } } });
+      const arrivedSince = await tx.stop.count({ where: { id: { not: stopId }, arrivedAt: { gte: at }, tour: { vehicleId } } });
+      if (later || arrivedSince) throw new TourPlanConflictError("После автоотметки машина уже прибыла на следующую точку. Исправьте тур вручную.");
+      const expected = record.activated ? "COMPLETED" : "ACTIVE";
+      if (stop.tour.status !== expected) throw new TourPlanConflictError("Тур изменился после автоотметки. Исправьте его вручную.");
+      if (record.activated) {
+        const activated = await tx.tour.findUnique({ where: { id: record.activated.tourId } });
+        if (activated?.status !== "ACTIVE") throw new TourPlanConflictError("Следующий тур изменился после автоотметки. Исправьте его вручную.");
+      }
+
+      const reopened = await tx.stop.updateMany({ where: { id: stopId, completedAt: at }, data: { completedAt: null } });
+      if (!reopened.count) throw new TourPlanConflictError("Точка изменилась. Обновите страницу.");
+      for (const leg of [...record.before.legs, ...(record.activated?.transferLeg ? [record.activated.transferLeg] : [])]) {
+        await tx.leg.update({ where: { id: leg.id }, data: { status: leg.status, startedAt: leg.startedAt ? new Date(leg.startedAt) : null,
+          finishedAt: leg.finishedAt ? new Date(leg.finishedAt) : null, drivePlan: leg.drivePlan } });
+      }
+      if (record.activated) await tx.tour.update({ where: { id: record.activated.tourId }, data: { status: "QUEUED", planVersion: { increment: 1 } } });
+      await tx.tour.update({ where: { id: stop.tourId }, data: { status: record.before.tour.status, planVersion: { increment: 1 },
+        completedAt: record.before.tour.completedAt ? new Date(record.before.tour.completedAt) : null,
+        actualStartAt: record.before.tour.actualStartAt ? new Date(record.before.tour.actualStartAt) : null } });
+      await tx.vehicle.update({ where: { id: vehicleId }, data: { clockState: record.before.clockState, currentTrailerPlate: record.before.trailerPlate, operationVersion: { increment: 1 } } });
+      const note = reason?.trim() || "Автоматическая отметка отменена диспетчером";
+      await tx.event.create({ data: { vehicleId, tourId: stop.tourId, stopId, type: `${record.eventType}_REVERTED`, timestamp: now, note } });
+      await tx.notification.updateMany({ where: { stopId, type: "AUTO_STOP_EVENT", acknowledgedAt: null }, data: { acknowledgedAt: now } });
+      await tx.operationEvent.create({ data: { vehicleId, tourId: stop.tourId, stopId, type: "STOP_EVENT_REVERTED", reason: note,
+        payloadJson: JSON.stringify({ autoEventId: auto.id, eventType: record.eventType, at: record.at }), createdAt: now } });
+      await writeAuditLog(tx, actor, { action: "STOP_EVENT_REVERTED", entityType: "Stop", entityId: stopId, vehicleId, tourId: stop.tourId, stopId,
+        metadata: { event: record.eventType, at: record.at, reason: reason?.trim() || null }, createdAt: now });
+    });
+    return { ok: true };
+  }
+
   async getCurrentPosition(vehicleId: string, now = new Date(), gps?: GpsFix | null): Promise<CurrentPosition> {
     const [vehicle, activeTour, activeLeg] = await Promise.all([
       this.db.vehicle.findUniqueOrThrow({ where: { id: vehicleId }, include: { issues: { where: { resolvedAt: null } } } }),
@@ -498,6 +553,12 @@ export class TourService {
       if (stop.tour.stops.some((candidate) => candidate.sequence < stop.sequence && !candidate.completedAt)) {
         throw new TourPlanConflictError("Сначала необходимо завершить предыдущие точки.");
       }
+      // What the automatic event changes, so that «Отменить» can put it back exactly.
+      const before: AutoStopEventRecord["before"] | null = options.auto ? {
+        clockState: stop.tour.vehicle.clockState, trailerPlate: stop.tour.vehicle.currentTrailerPlate,
+        tour: { status: stop.tour.status, completedAt: stop.tour.completedAt?.toISOString() ?? null, actualStartAt: stop.tour.actualStartAt?.toISOString() ?? null },
+        legs: stop.tour.legs.filter((leg) => leg.toStopId === stop.id || leg.fromStopId === stop.id).map(legState)
+      } : null;
       if (arriveNow) {
         const arrived = await tx.stop.updateMany({ where: { id: stop.id, arrivedAt: null }, data: { arrivedAt: now } });
         if (!arrived.count) throw new TourPlanConflictError("Прибытие уже зафиксировано. Обновите страницу.");
@@ -522,18 +583,19 @@ export class TourService {
       await tx.stop.update({ where: { id: stop.id }, data: { completedAt: now } });
       // The question «loaded after leaving?» is answered once the event is recorded.
       await tx.notification.updateMany({ where: { stopId: stop.id, type: 'STOP_DEPARTED', acknowledgedAt: null }, data: { acknowledgedAt: now } });
-      await tx.event.create({
+      const recorded = await tx.event.create({
         data: {
           vehicleId: stop.tour.vehicleId,
           tourId: stop.tourId,
           stopId: stop.id,
           type: eventType,
           timestamp: now,
-          note
+          note: options.auto ? "Автоматически по GPS Webfleet: машина выехала из города" : note
         }
       });
       await writeAuditLog(tx, actor, { action: eventType, entityType: "Stop", entityId: stop.id,
-        vehicleId: stop.tour.vehicleId, tourId: stop.tourId, stopId: stop.id, metadata: note ? { note } : undefined, createdAt: now });
+        vehicleId: stop.tour.vehicleId, tourId: stop.tourId, stopId: stop.id,
+        metadata: options.auto ? { source: "WEBFLEET_AUTO", ...options.auto.meta } : note ? { note } : undefined, createdAt: now });
 
       if (eventType === "LOADED" && !stop.tour.actualStartAt) {
         await tx.tour.update({ where: { id: stop.tourId }, data: { actualStartAt: now } });
@@ -548,6 +610,7 @@ export class TourService {
       }
 
       const outgoingLeg = stop.tour.legs.find((leg) => leg.fromStopId === stop.id);
+      let activated: Awaited<ReturnType<typeof activateNextQueuedTour>> = null;
       if (outgoingLeg) {
         await tx.leg.update({
           where: { id: outgoingLeg.id },
@@ -555,7 +618,21 @@ export class TourService {
         });
       } else {
         await tx.tour.update({ where: { id: stop.tourId }, data: { status: "COMPLETED", completedAt: now } });
-        await activateNextQueuedTour(tx, stop.tour.vehicleId, now);
+        activated = await activateNextQueuedTour(tx, stop.tour.vehicleId, now);
+      }
+
+      if (options.auto && before) {
+        const record: AutoStopEventRecord = { eventId: recorded.id, eventType, at: now.toISOString(), before,
+          activated: activated ? { tourId: activated.tour.id, transferLeg: activated.transferLeg } : null, meta: options.auto.meta };
+        await tx.operationEvent.create({ data: { vehicleId: stop.tour.vehicleId, tourId: stop.tourId, stopId: stop.id, type: "STOP_EVENT_AUTO",
+          reason: "Выехала из города после стоянки на точке", payloadJson: JSON.stringify(record), createdAt: options.auto.detectedAt } });
+        const done = eventType === "LOADED" ? "BELADEN" : "ENTLADEN";
+        const place = stop.city || stop.address;
+        await tx.notification.create({ data: {
+          dedupKey: `auto-stop-event:${stop.id}:${recorded.id}`, vehicleId: stop.tour.vehicleId, stopId: stop.id, type: "AUTO_STOP_EVENT",
+          message: `LKW ${stop.tour.vehicle.vehicleNumber} выехала из ${place} — вероятно ${eventType === "LOADED" ? "загружена" : "выгружена"}. ${done} записан автоматически на ${berlinClock(now)} (выезд с точки по GPS Webfleet). Если это ошибка, отмените.`,
+          payloadJson: JSON.stringify({ stopType: stop.type, at: now.toISOString(), source: "WEBFLEET_AUTO", ...options.auto.meta })
+        } });
       }
 
       return tx.tour.findUniqueOrThrow({ where: { id: stop.tourId }, include: tourInclude });
@@ -563,7 +640,25 @@ export class TourService {
   }
 }
 
-export type StopEventOptions = { arriveWithEvent?: boolean };
+export type StopEventOptions = { arriveWithEvent?: boolean; auto?: { detectedAt: Date; meta: AutoStopEventInput["meta"] } };
+
+type LegState = { id: string; status: string; startedAt: string | null; finishedAt: string | null; drivePlan: string | null };
+type AutoStopEventRecord = {
+  eventId: string;
+  eventType: "LOADED" | "UNLOADED";
+  at: string;
+  before: { clockState: string | null; trailerPlate: string | null; tour: { status: string; completedAt: string | null; actualStartAt: string | null }; legs: LegState[] };
+  activated: { tourId: string; transferLeg: LegState | null } | null;
+  meta: AutoStopEventInput["meta"];
+};
+
+function legState(leg: { id: string; status: string; startedAt: Date | null; finishedAt: Date | null; drivePlan: string | null }): LegState {
+  return { id: leg.id, status: leg.status, startedAt: leg.startedAt?.toISOString() ?? null, finishedAt: leg.finishedAt?.toISOString() ?? null, drivePlan: leg.drivePlan };
+}
+
+function berlinClock(value: Date) {
+  return new Intl.DateTimeFormat("de-DE", { timeZone: "Europe/Berlin", hour: "2-digit", minute: "2-digit" }).format(value);
+}
 
 async function readDepartureContext(db: Prisma.TransactionClient, stopId: string) {
   const stop = await db.stop.findUniqueOrThrow({ where: { id: stopId }, include: {
@@ -952,7 +1047,7 @@ export function toIsoObject<T extends Record<string, unknown>>(value: T): T {
   ) as T;
 }
 
-async function activateNextQueuedTour(tx: Prisma.TransactionClient, vehicleId: string, startedAt: Date): Promise<Tour | null> {
+async function activateNextQueuedTour(tx: Prisma.TransactionClient, vehicleId: string, startedAt: Date): Promise<{ tour: Tour; transferLeg: LegState | null } | null> {
   const queuedTours = await tx.tour.findMany({
     where: { vehicleId, status: "QUEUED" },
     orderBy: [{ queueIndex: "asc" }, { plannedStartAt: "asc" }, { createdAt: "asc" }]
@@ -974,9 +1069,10 @@ async function activateNextQueuedTour(tx: Prisma.TransactionClient, vehicleId: s
         where: { id: transferLeg.id },
         data: { status: "ACTIVE", startedAt, drivePlan: JSON.stringify(makePersistedDrivePlan(parseClockState((await tx.vehicle.findUniqueOrThrow({ where: { id: vehicleId } })).clockState, startedAt), transferLeg.simulatedDurationSeconds, startedAt)) }
       });
+      return { tour: activatedTour, transferLeg: legState(transferLeg) };
     }
   }
-  return activatedTour;
+  return { tour: activatedTour, transferLeg: null };
 }
 
 async function updateCurrentTrailer(tx: Prisma.TransactionClient, vehicleId: string, tourId: string, trailerPlate: string): Promise<void> {

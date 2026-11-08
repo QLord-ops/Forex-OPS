@@ -318,7 +318,8 @@ export interface EventRecord {
   vehicleId: string
   tourId: string
   stopId?: string | null
-  type: 'LOADED' | 'UNLOADED'
+  /** «…_REVERTED»: an automatic BELADEN/ENTLADEN the dispatcher undid; the original event stays in the history. */
+  type: 'LOADED' | 'UNLOADED' | 'LOADED_REVERTED' | 'UNLOADED_REVERTED'
   timestamp: string
   note?: string | null
   vehicle?: Vehicle

@@ -32,7 +32,7 @@ import { RouteDeviationService } from './services/route-deviation.js';
 import { RestAtStopService } from './services/rest-at-stop.js';
 import { AddressRuleService, applyRulesToStop, BUILT_IN_RULES } from './services/address-rules.js';
 import { VEHICLE_CLOCK_LIMITS } from './services/vehicle-clock.js';
-import { bindWebfleetObject, listWebfleetBindings, unbindWebfleetVehicle, WebfleetSyncService, WebfleetTelemetryService, distanceMeters, DEFAULT_ARRIVAL_RADIUS_METERS, type AutoArrivalHandler } from './services/webfleet.js';
+import { bindWebfleetObject, listWebfleetBindings, unbindWebfleetVehicle, WebfleetSyncService, WebfleetTelemetryService, distanceMeters, DEFAULT_ARRIVAL_RADIUS_METERS, type AutoArrivalHandler, type AutoStopEventHandler } from './services/webfleet.js';
 import { buildVehicleCard, readDriverHours, suggestWebfleetBindings, vehicleObjectUid, WebfleetDetailsSync, WebfleetLiveStore, WebfleetTrackService } from './services/webfleet-live.js';
 import { TerminService } from './services/termin-service.js';
 import { VehicleBriefService } from './services/vehicle-brief.js';
@@ -227,11 +227,14 @@ async function withFieldConfidence<T extends ScorablePreview>(preview: T): Promi
 const autoArrival: AutoArrivalHandler | undefined = process.env.AUTO_ARRIVAL_ENABLED === 'false' ? undefined
   : (input) => operationsService.confirmArrival(input.stopId, input.arrivedAt, input.now, SYSTEM_WEBFLEET_ACTOR, { source: 'WEBFLEET_AUTO', meta: input.meta });
 const webfleetLive = new WebfleetLiveStore();
-const webfleetSync = new WebfleetSyncService(prisma, undefined, undefined, autoArrival, (positions, now) => webfleetLive.setObjects(positions, now));
+// BELADEN/ENTLADEN by itself once the truck stood at the stop and left the town (real GPS); AUTO_STOP_EVENT_ENABLED=false keeps asking.
+const autoStopEvent: AutoStopEventHandler | undefined = process.env.AUTO_STOP_EVENT_ENABLED === 'false' ? undefined
+  : (input) => tourService.recordAutoStopEvent(input, SYSTEM_WEBFLEET_ACTOR);
+const webfleetSync = new WebfleetSyncService(prisma, undefined, undefined, autoArrival, (positions, now) => webfleetLive.setObjects(positions, now), autoStopEvent);
 const webfleetDetails = new WebfleetDetailsSync(webfleetLive);
 const addressBook = new AddressBookSync(prisma);
 const webfleetTracks = new WebfleetTrackService();
-const webfleetTelemetry = new WebfleetTelemetryService(prisma, autoArrival);
+const webfleetTelemetry = new WebfleetTelemetryService(prisma, autoArrival, autoStopEvent);
 const currentPosition = async (id: string, now = new Date()) => {
   const telemetry = await webfleetTelemetry.latest(id, now);
   return withWebfleetPosition(await tourService.getCurrentPosition(id, now, gpsFixOf(telemetry)), telemetry);
@@ -683,6 +686,14 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const input = z.object({ reason: z.string().trim().max(300).optional() }).parse(request.body ?? {});
     const { id } = idParams.parse(request.params);
     const result = await operationsService.revertArrival(id, new Date(), auditActor(request), input.reason || undefined);
+    const stop = await prisma.stop.findUniqueOrThrow({ where: { id }, select: { tour: { select: { vehicleId: true } } } });
+    await refreshAlertsForVehicle(stop.tour.vehicleId);
+    return result;
+  });
+  app.post('/stops/:id/auto-event/revert', { preHandler: requireDispatcherRoles('admin', 'dispatcher') }, async request => {
+    const input = z.object({ reason: z.string().trim().max(300).optional() }).parse(request.body ?? {});
+    const { id } = idParams.parse(request.params);
+    const result = await tourService.revertAutoStopEvent(id, new Date(), auditActor(request), input.reason || undefined);
     const stop = await prisma.stop.findUniqueOrThrow({ where: { id }, select: { tour: { select: { vehicleId: true } } } });
     await refreshAlertsForVehicle(stop.tour.vehicleId);
     return result;

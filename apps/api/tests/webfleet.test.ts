@@ -60,17 +60,18 @@ const HAMBURG = { latitude: 53.55, longitude: 9.99 };
 // ~111 m per 0.001 degree of latitude.
 const north = (meters: number) => ({ latitude: BERLIN.latitude + meters / 111_000, longitude: BERLIN.longitude });
 
-async function arrivalScenario(name: string, options: { radius?: number } = {}) {
+async function arrivalScenario(name: string, options: { radius?: number; autoStopEvent?: boolean; unloadAt?: { latitude: number; longitude: number } } = {}) {
   const vehicle = await db.vehicle.create({ data: { vehicleNumber: name, licensePlate: `B-${name}` } });
   const tours = new TourService(asAppDatabase(db), new MockRoutingProvider());
   const tour = await tours.createTour({ vehicleId: vehicle.id, orderNumber: `ORD-${name}`, stops: [
     { sequence: 1, type: 'LOAD', address: 'Berlin', city: 'Berlin', ...BERLIN },
-    { sequence: 2, type: 'UNLOAD', address: 'Hamburg', city: 'Hamburg', ...HAMBURG }
+    { sequence: 2, type: 'UNLOAD', address: 'Hamburg', city: 'Hamburg', ...(options.unloadAt ?? HAMBURG) }
   ] });
   if (options.radius) await db.stop.update({ where: { id: tour.stops[0].id }, data: { arrivalRadiusMeters: options.radius } });
   const operations = new OperationsService(asAppDatabase(db), tours);
   const auto = new WebfleetTelemetryService(db as unknown as PostgresPrismaClient, (input) =>
-    operations.confirmArrival(input.stopId, input.arrivedAt, input.now, SYSTEM_WEBFLEET_ACTOR, { source: 'WEBFLEET_AUTO', meta: input.meta }));
+    operations.confirmArrival(input.stopId, input.arrivedAt, input.now, SYSTEM_WEBFLEET_ACTOR, { source: 'WEBFLEET_AUTO', meta: input.meta }),
+  options.autoStopEvent ? (input) => tours.recordAutoStopEvent(input, SYSTEM_WEBFLEET_ACTOR) : undefined);
   const feed = async (minute: number, point: { latitude: number; longitude: number }, standstill: boolean, receivedLagSeconds = 30) =>
     auto.applyPosition({ objectUid: `wf-${name}`, objectNo: name, ...point, standstill, recordedAt: at(minute) }, new Date(at(minute).getTime() + receivedLagSeconds * 1000));
   return { vehicle, tour, stopId: tour.stops[0].id, operations, tours, feed };
@@ -385,6 +386,144 @@ describe('leaving a stop without BELADEN/ENTLADEN', () => {
     await service.applyPosition({ objectUid: 'wf-DEP-6', objectNo: 'DEP-6', ...north(1500), standstill: false, speedKmh: 55, recordedAt: at(4) }, new Date(at(4).getTime() + 20_000));
     expect(await departures()).toHaveLength(1);
     expect(stopId).toBeTruthy();
+  });
+});
+
+describe('leaving the town after a real stay at the stop', () => {
+  const dispatcher = { role: 'dispatcher' as const, sessionId: 's1' };
+  const notes = (stopId: string) => db.notification.findMany({ where: { stopId, type: { in: ['STOP_DEPARTED', 'AUTO_STOP_EVENT'] } }, orderBy: { createdAt: 'asc' } });
+  const legsOf = async (tourId: string) => (await db.leg.findMany({ where: { tourId }, orderBy: { id: 'asc' } }))
+    .map(({ id, status, startedAt, finishedAt, drivePlan }) => ({ id, status, startedAt, finishedAt, drivePlan }));
+  type Feed = (minute: number, point: { latitude: number; longitude: number }, standstill: boolean) => Promise<unknown>;
+  async function stood(name: string, minutes = 25, options: { unloadAt?: { latitude: number; longitude: number } } = {}) {
+    const scenario = await arrivalScenario(name, { autoStopEvent: true, ...options });
+    for (let minute = 0; minute <= minutes; minute += 1) await scenario.feed(minute, north(100), true);
+    expect((await db.stop.findUniqueOrThrow({ where: { id: scenario.stopId } })).arrivedAt).toEqual(at(0));
+    return scenario;
+  }
+  async function leaveTown(feed: Feed, from = 26) {
+    await feed(from, north(2000), false);
+    await feed(from + 1, north(5000), false);
+    await feed(from + 2, north(10_500), false);
+    await feed(from + 3, north(12_000), false);
+  }
+
+  it('records BELADEN at the zone exit once the truck is 10 km away: a note to read, no question', async () => {
+    const { stopId, tour, feed } = await stood('TOWN-1');
+    await feed(26, north(2000), false);
+    await feed(27, north(5000), false);
+    // Out of the zone but still in town: nothing yet.
+    expect(await notes(stopId)).toHaveLength(0);
+    await feed(28, north(10_500), false);
+    // One far point could be a GPS jump.
+    expect((await db.stop.findUniqueOrThrow({ where: { id: stopId } })).completedAt).toBeNull();
+    await feed(29, north(12_000), false);
+
+    expect((await db.stop.findUniqueOrThrow({ where: { id: stopId } })).completedAt).toEqual(at(25));
+    const found = await notes(stopId);
+    expect(found.map((item) => item.type)).toEqual(['AUTO_STOP_EVENT']);
+    expect(found[0].message).toContain('вероятно загружена');
+    expect(found[0].message).toContain('BELADEN записан автоматически');
+    expect(JSON.parse(found[0].payloadJson)).toMatchObject({ stopType: 'LOAD', at: at(25).toISOString(), stayMinutes: 25, source: 'WEBFLEET_AUTO' });
+    const event = await db.event.findFirstOrThrow({ where: { stopId } });
+    expect(event).toMatchObject({ type: 'LOADED', timestamp: at(25) });
+    expect(event.note).toContain('Автоматически');
+    expect(await db.auditLog.findFirstOrThrow({ where: { stopId, action: 'LOADED' } })).toMatchObject({ actorRole: 'system' });
+    const next = await db.leg.findFirstOrThrow({ where: { tourId: tour.id, fromStopId: stopId } });
+    expect(next).toMatchObject({ status: 'ACTIVE', startedAt: at(25) });
+
+    await feed(30, north(14_000), false);
+    expect(await notes(stopId)).toHaveLength(1);
+  });
+
+  it('a short stop still asks the dispatcher and is never recorded by itself', async () => {
+    const { stopId, feed } = await stood('TOWN-2', 10);
+    await leaveTown(feed, 11);
+    expect((await notes(stopId)).map((item) => item.type)).toEqual(['STOP_DEPARTED']);
+    expect((await db.stop.findUniqueOrThrow({ where: { id: stopId } })).completedAt).toBeNull();
+  });
+
+  it('a truck parked nearby is asked after 30 min, and is recorded if it leaves the town later', async () => {
+    const { stopId, feed } = await stood('TOWN-3');
+    await feed(26, north(2000), false);
+    await feed(27, north(3000), true);
+    await feed(50, north(3000), true);
+    expect(await notes(stopId)).toHaveLength(0);
+    await feed(56, north(3000), true);
+    const [question] = await notes(stopId);
+    expect(question.type).toBe('STOP_DEPARTED');
+    expect(JSON.parse(question.payloadJson)).toMatchObject({ leftAt: at(25).toISOString() });
+
+    await feed(70, north(11_000), false);
+    await feed(71, north(13_000), false);
+    expect((await db.stop.findUniqueOrThrow({ where: { id: stopId } })).completedAt).toEqual(at(25));
+    const after = await notes(stopId);
+    expect(after.map((item) => item.type)).toEqual(['STOP_DEPARTED', 'AUTO_STOP_EVENT']);
+    expect(after[0].acknowledgedAt).not.toBeNull();
+  });
+
+  it('with the next stop in the same town the dispatcher is asked as before', async () => {
+    const { stopId, feed } = await stood('TOWN-4', 25, { unloadAt: north(5000) });
+    await feed(26, north(2000), false);
+    await feed(27, north(3000), false);
+    expect((await notes(stopId)).map((item) => item.type)).toEqual(['STOP_DEPARTED']);
+  });
+
+  it('«Отменить» puts the stop and its legs back as they were and keeps both events in the history', async () => {
+    const { stopId, tour, tours, feed } = await stood('TOWN-5');
+    const legsBefore = await legsOf(tour.id);
+    const tourBefore = await db.tour.findUniqueOrThrow({ where: { id: tour.id } });
+    await leaveTown(feed);
+    expect((await db.stop.findUniqueOrThrow({ where: { id: stopId } })).completedAt).toEqual(at(25));
+
+    await tours.revertAutoStopEvent(stopId, new Date(at(29).getTime() + 60_000), dispatcher, 'Не загружена');
+    expect((await db.stop.findUniqueOrThrow({ where: { id: stopId } })).completedAt).toBeNull();
+    expect(await legsOf(tour.id)).toEqual(legsBefore);
+    expect(await db.tour.findUniqueOrThrow({ where: { id: tour.id } })).toMatchObject({ status: 'ACTIVE', actualStartAt: tourBefore.actualStartAt, completedAt: null });
+    expect((await db.event.findMany({ where: { stopId }, orderBy: { timestamp: 'asc' } })).map((item) => item.type)).toEqual(['LOADED', 'LOADED_REVERTED']);
+    expect((await notes(stopId))[0].acknowledgedAt).not.toBeNull();
+    expect(await db.auditLog.findFirstOrThrow({ where: { stopId, action: 'STOP_EVENT_REVERTED' } })).toMatchObject({ actorRole: 'dispatcher' });
+
+    // The dispatcher said it is not loaded: the same trip away neither records it again nor asks.
+    await feed(31, north(15_000), false);
+    await feed(32, north(17_000), false);
+    expect((await db.stop.findUniqueOrThrow({ where: { id: stopId } })).completedAt).toBeNull();
+    expect(await notes(stopId)).toHaveLength(1);
+    await expect(tours.revertAutoStopEvent(stopId, at(33), dispatcher)).rejects.toThrow(/уже отменена/);
+  });
+
+  it('undoes the end of the tour too: the next tour waits again', async () => {
+    const { vehicle, tour, tours, operations, stopId: loadId, feed } = await arrivalScenario('TOWN-6', { autoStopEvent: true });
+    const unloadId = tour.stops[1].id;
+    const nearHamburg = (meters: number) => ({ latitude: HAMBURG.latitude + meters / 111_000, longitude: HAMBURG.longitude });
+    for (const minute of [0, 1, 2, 3]) await feed(minute, north(100), true);
+    await tours.recordLoaded(loadId, at(5));
+    const next = await tours.createTour({ vehicleId: vehicle.id, orderNumber: 'ORD-TOWN-6-NEXT', stops: [
+      { sequence: 1, type: 'LOAD', address: 'Leipzig', city: 'Leipzig', latitude: 51.34, longitude: 12.37 },
+      { sequence: 2, type: 'UNLOAD', address: 'Berlin', city: 'Berlin', ...BERLIN }
+    ] });
+    expect(next.status).toBe('QUEUED');
+    await operations.confirmArrival(unloadId, at(200), at(203), SYSTEM_WEBFLEET_ACTOR, { source: 'WEBFLEET_AUTO' });
+    for (let minute = 200; minute <= 225; minute += 1) await feed(minute, nearHamburg(100), true);
+    const legsBefore = [...await legsOf(tour.id), ...await legsOf(next.id)];
+
+    for (const [minute, meters] of [[226, 2000], [227, 5000], [228, 10_500], [229, 12_000]] as const) await feed(minute, nearHamburg(meters), false);
+    expect(await db.tour.findUniqueOrThrow({ where: { id: tour.id } })).toMatchObject({ status: 'COMPLETED', completedAt: at(225) });
+    expect((await db.tour.findUniqueOrThrow({ where: { id: next.id } })).status).toBe('ACTIVE');
+
+    await tours.revertAutoStopEvent(unloadId, new Date(at(229).getTime() + 60_000), dispatcher);
+    expect(await db.tour.findUniqueOrThrow({ where: { id: tour.id } })).toMatchObject({ status: 'ACTIVE', completedAt: null });
+    expect((await db.tour.findUniqueOrThrow({ where: { id: next.id } })).status).toBe('QUEUED');
+    expect([...await legsOf(tour.id), ...await legsOf(next.id)]).toEqual(legsBefore);
+    expect((await db.stop.findUniqueOrThrow({ where: { id: unloadId } })).completedAt).toBeNull();
+  });
+
+  it('cannot be undone once the truck has arrived at the next stop', async () => {
+    const { stopId, tour, tours, operations, feed } = await stood('TOWN-7');
+    await leaveTown(feed);
+    await operations.confirmArrival(tour.stops[1].id, at(300), at(301), dispatcher);
+    await expect(tours.revertAutoStopEvent(stopId, at(302), dispatcher)).rejects.toThrow(/прибыла на следующую точку/);
+    expect((await db.stop.findUniqueOrThrow({ where: { id: stopId } })).completedAt).toEqual(at(25));
   });
 });
 

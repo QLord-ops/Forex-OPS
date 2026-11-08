@@ -1,11 +1,11 @@
-import { CalendarCheck, CalendarDays, LogOut, MapPinCheck, MessageSquareText, Moon, Route, TriangleAlert } from 'lucide-react'
+import { CalendarCheck, CalendarDays, LogOut, MapPinCheck, MessageSquareText, Moon, PackageCheck, Route, TriangleAlert } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 
-import { departureOf, useNotifications } from '../context/notifications'
+import { autoEventOf, departureOf, useNotifications } from '../context/notifications'
 import { alertPermission, answerRequired, bannerDismissed, dismissBanner, needsAttention, nightItems, requestAlertPermission, type AlertNotification, type AlertPermission } from '../lib/alerts'
 import { pendingToDocument } from '../lib/appointments'
-import { formatTime } from '../lib/format'
+import { formatDurationMinutes, formatTime } from '../lib/format'
 import { terminText } from '../lib/tours'
 import type { Stop } from '../types/domain'
 import { AppointmentReview } from './AppointmentReview'
@@ -47,9 +47,20 @@ export function DecisionCard({ item, stop, onSelect, openLink = false, nested = 
   } else if (item.type === 'AUTO_ARRIVAL') {
     tone = 'arrival'; Icon = MapPinCheck
     title = `${vehicle ? `LKW ${vehicle} прибыла` : 'Машина прибыла'} ${stop?.type === 'UNLOAD' ? 'на выгрузку' : stop?.type === 'LOAD' ? 'на загрузку' : 'на точку'}`
-    detail = place ? `${place}${stop?.arrivedAt ? `, ${formatTime(stop.arrivedAt)}` : ''} · GPS Webfleet, автоматически. BELADEN/ENTLADEN подтверждаете вы` : item.message
+    detail = place ? `${place}${stop?.arrivedAt ? `, ${formatTime(stop.arrivedAt)}` : ''} · GPS Webfleet, автоматически. BELADEN/ENTLADEN запишется сам, когда машина уедет из города` : item.message
     actions = [{ label: 'Понятно', primary: true, run: () => void state.resolve(item, 'ack') }]
     if (item.stopId) actions.push({ label: 'Отменить прибытие', run: () => void state.resolve(item, 'revert') })
+  } else if (item.type === 'AUTO_STOP_EVENT') {
+    const event = autoEventOf(item.payloadJson)
+    const load = (event?.stopType ?? stop?.type) === 'LOAD'
+    const done = load ? 'BELADEN' : 'ENTLADEN'
+    tone = 'ok'; Icon = PackageCheck
+    title = `${vehicle ? `LKW ${vehicle}` : 'Машина'} выехала из города — вероятно ${load ? 'загружена' : 'выгружена'}`
+    detail = event
+      ? `${done} записан автоматически на ${event.time}${place ? `, ${place}` : ''}${event.stayMinutes ? ` · стояла ${formatDurationMinutes(event.stayMinutes)}` : ''} · GPS Webfleet`
+      : item.message
+    actions = [{ label: 'Понятно', primary: true, run: () => void state.resolve(item, 'ack') }]
+    if (item.stopId && !item.resolved) actions.push({ label: `Отменить ${done}`, run: () => void state.resolve(item, 'revert-event') })
   } else if (item.type === 'ROUTE_DEVIATION') {
     tone = 'late'; Icon = Route
     title = `${vehicle ? `LKW ${vehicle}` : 'Машина'} отклонилась от маршрута`

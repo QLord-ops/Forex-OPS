@@ -8,6 +8,10 @@ import { api } from '../lib/api'
 import { formatAppointment, formatDateTime, formatDelay, formatElapsedMinutes, operationEventLabel, statusLabel, stopTypeLabel } from '../lib/format'
 import type { Stop, Tour } from '../types/domain'
 
+const EVENT_LABEL: Record<string, string> = {
+  LOADED: 'ЗАГРУЖЕНО', UNLOADED: 'ВЫГРУЖЕНО', LOADED_REVERTED: 'ОТМЕНА ЗАГРУЗКИ', UNLOADED_REVERTED: 'ОТМЕНА ВЫГРУЗКИ'
+}
+
 export function HistoryPage() {
   const vehicles = usePolling(api.vehicles, 0)
   const [vehicleId, setVehicleId] = useState('')
@@ -128,12 +132,12 @@ export function HistoryPage() {
                 <td className="px-3 py-3 text-sm tabular-nums">{formatDateTime(event.timestamp)}</td>
                 <td className="px-3 py-3 text-lg font-bold tabular-nums">{event.vehicle?.vehicleNumber ?? event.vehicleId}</td>
                 <td className="px-3 py-3 text-sm">{event.tour?.orderNumber ?? event.tourId}</td>
-                <td className="px-3 py-3 text-sm font-semibold">{event.type === 'LOADED' ? 'ЗАГРУЖЕНО' : 'ВЫГРУЖЕНО'}</td>
+                <td className="px-3 py-3 text-sm font-semibold">{EVENT_LABEL[event.type] ?? event.type}</td>
                 <td className="px-3 py-3 text-sm">
                   {event.stop ? `${stopTypeLabel(event.stop.type)} · ${event.stop.address}` : event.stopId ?? '–'}
                 </td>
                 <td className="px-3 py-3 text-sm tabular-nums">{formatAppointment(event.stop?.appointmentAt)}</td>
-                <td className="px-3 py-3 text-sm tabular-nums">{formatElapsedMinutes(event.stop?.arrivedAt, event.stop?.completedAt ?? event.timestamp, now)}</td>
+                <td className="px-3 py-3 text-sm tabular-nums">{event.type.endsWith('_REVERTED') ? '–' : formatElapsedMinutes(event.stop?.arrivedAt, event.stop?.completedAt ?? event.timestamp, now)}</td>
                 <td className="px-3 py-3 text-sm">{event.note || '–'}</td>
               </tr>
             ))}

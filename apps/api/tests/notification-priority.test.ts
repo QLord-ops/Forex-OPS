@@ -45,6 +45,16 @@ describe('notification priority after the night', () => {
     ]);
   });
 
+  it('an automatic BELADEN/ENTLADEN is information to read; once undone it says so', () => {
+    const list = prioritize([
+      note('auto', 'AUTO_STOP_EVENT', { stopId: 's1' }),
+      note('undone', 'AUTO_STOP_EVENT', { stopId: 's2' })
+    ], facts([stop('s1', { arrivedAt: night(0), completedAt: night(1) }), stop('s2', { arrivedAt: night(0) })]), now);
+    expect(Object.fromEntries(list.map((item) => [item.id, [item.priority, item.urgent, item.resolvedReason]]))).toEqual({
+      auto: ['INFO', false, null], undone: ['INFO', false, 'отметка отменена']
+    });
+  });
+
   it('marks what the night already settled: BELADEN after the arrival, the truck on the stop after a jam or a deviation, the rest that ended', () => {
     const list = prioritize([
       note('arrival', 'AUTO_ARRIVAL', { stopId: 's1' }),
