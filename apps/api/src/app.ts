@@ -56,6 +56,7 @@ import { writeAuditLog, type AuditActor } from './services/audit-log.js';
 import { matchAppointment } from './services/appointment-match.js';
 import { documentFingerprint, PendingAppointmentService } from './services/pending-appointments.js';
 import { OrderDocumentService } from './services/order-documents.js';
+import { TelemetryRetention, TELEMETRY_SYSTEM_ACTOR } from './services/telemetry-retention.js';
 import { registerOrderDocumentRoutes, registerOrderReparseRoute } from './routes/order-documents.js';
 import { CustomerService, isMine } from './services/customers.js';
 import { PushService } from './services/push.js';
@@ -95,6 +96,7 @@ const addressRules = new AddressRuleService(prisma);
 const operationsService = new OperationsService(prisma, tourService);
 const pendingAppointments = new PendingAppointmentService(prisma);
 const orderDocuments = new OrderDocumentService(prisma);
+const telemetryRetention = new TelemetryRetention(prisma);
 const importLearning = new ImportLearningService(prisma, addressRules);
 const customerService = new CustomerService(prisma);
 const pushService = new PushService(prisma);
@@ -475,6 +477,20 @@ export async function buildApp(options: BuildAppOptions = {}) {
   };
   let documentPurgeTimer: ReturnType<typeof setInterval> | undefined;
   const purgeDocuments = () => orderDocuments.purge(new Date(), ORDER_DOCUMENT_SYSTEM_ACTOR).catch((error: unknown) => app.log.warn({ err: error }, 'Очистка старых Auftrag не удалась'));
+  // GPS older than TELEMETRY_RETENTION_DAYS (5) goes hourly; a big backlog continues after 5 min instead of in one heavy run.
+  let telemetryPurgeTimer: ReturnType<typeof setInterval> | undefined;
+  let telemetryPurging = false;
+  const purgeTelemetry = async (): Promise<void> => {
+    if (telemetryPurging) return;
+    telemetryPurging = true;
+    try {
+      const result = await telemetryRetention.purge(new Date(), TELEMETRY_SYSTEM_ACTOR);
+      if (result.deleted) app.log.info({ deleted: result.deleted, more: result.more }, 'Старые GPS-позиции удалены');
+      if (result.more) setTimeout(() => { void purgeTelemetry(); }, 5 * 60_000).unref();
+    } catch (error) {
+      app.log.warn({ errorType: error instanceof Error ? error.name : 'unknown' }, 'Очистка старых GPS-позиций не удалась');
+    } finally { telemetryPurging = false; }
+  };
   app.addHook('onListen', async () => {
     if (isServerless) return;
     await refreshNotifications();
@@ -483,10 +499,14 @@ export async function buildApp(options: BuildAppOptions = {}) {
     void purgeDocuments();
     documentPurgeTimer = setInterval(() => { void purgeDocuments(); }, 6 * 3600_000);
     documentPurgeTimer.unref();
+    void purgeTelemetry();
+    telemetryPurgeTimer = setInterval(() => { void purgeTelemetry(); }, 3600_000);
+    telemetryPurgeTimer.unref();
   });
   app.addHook('onClose', async () => {
     if (notificationTimer) clearInterval(notificationTimer);
     if (documentPurgeTimer) clearInterval(documentPurgeTimer);
+    if (telemetryPurgeTimer) clearInterval(telemetryPurgeTimer);
     for (const client of subscribers) client.end();
     subscribers.clear();
     subscriberSessions.clear();
