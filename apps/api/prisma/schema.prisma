@@ -33,10 +33,13 @@ model Vehicle {
   servicePhone   String?
   aSchild        Boolean  @default(false)
   appSped        Boolean  @default(false)
+  /// The truck's customer line; replaces the line/statusGroup strings above once customers are set up.
+  customerLineId String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
   assignedDispatcher Dispatcher? @relation(fields: [assignedDispatcherId], references: [id], onDelete: SetNull)
+  customerLine CustomerLine? @relation(fields: [customerLineId], references: [id], onDelete: SetNull)
   tours  Tour[]
   events Event[]
   alerts Alert[]
@@ -46,6 +49,7 @@ model Vehicle {
 
   @@index([assignedDispatcherId])
   @@index([line, statusGroup])
+  @@index([customerLineId])
 }
 
 model Tour {
@@ -56,6 +60,9 @@ model Tour {
   importFingerprint String? @unique
   trailerPlate   String?
   tourRemarks    String?
+  /// Customer and line the tour is driven for (from the import or the truck's line).
+  customerId     String?
+  customerLineId String?
   approachDurationSeconds Int?
   approachDistanceMeters Int?
   approachGeometry String?
@@ -70,6 +77,8 @@ model Tour {
   updatedAt      DateTime   @updatedAt
 
   vehicle      Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  customer     Customer?     @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  customerLine CustomerLine? @relation(fields: [customerLineId], references: [id], onDelete: SetNull)
   previousTour Tour?   @relation("TourChain", fields: [previousTourId], references: [id])
   nextTours    Tour[]  @relation("TourChain")
   stops        Stop[]
@@ -80,6 +89,8 @@ model Tour {
 
   @@index([vehicleId, status])
   @@index([previousTourId])
+  @@index([customerId, status])
+  @@index([customerLineId])
 }
 
 model Stop {
@@ -209,6 +220,8 @@ model Notification {
   type String
   message String
   payloadJson String
+  /// Parameters to render the message in the reader's language; older rows only have message.
+  paramsJson String?
   createdAt DateTime @default(now())
   acknowledgedAt DateTime?
   @@index([acknowledgedAt, createdAt])
@@ -379,10 +392,13 @@ model Dispatcher {
   active Boolean @default(true)
   lastLoginAt DateTime?
   onboardingCompletedAt DateTime?
+  /// Interface language: ru | de | en.
+  locale String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   vehicles Vehicle[]
+  lines    DispatcherLine[]
 }
 
 /// Appointment slip (Termin) recognised from a document before a matching stop exists. Never deleted: only the status changes.
@@ -433,6 +449,7 @@ model AddressRule {
 model DailyStatusReport {
   id                      String    @id @default(cuid())
   line                    String
+  customerId              String?
   date                    String
   status                  String    @default("GENERATING")
   preliminary             Boolean   @default(false)
@@ -529,6 +546,7 @@ model OrderDocument {
   status                 String    @default("PENDING")
   uploadedByDispatcherId String?
   vehicleId              String?
+  customerId             String?
   tourId                 String?   @unique
   attachedAt             DateTime?
   createdAt              DateTime  @default(now())
@@ -538,6 +556,7 @@ model OrderDocument {
 
   @@index([status, createdAt])
   @@index([vehicleId, createdAt])
+  @@index([customerId, createdAt])
 }
 
 /// One correction a dispatcher made to an AI-read stop before saving the tour. Never updated or deleted.
@@ -546,6 +565,7 @@ model ImportCorrection {
   documentId   String
   tourId       String?
   dispatcherId String?
+  customerId   String?
   kind         String
   field        String?
   aiValue      String?
@@ -559,11 +579,14 @@ model ImportCorrection {
   @@index([signature, createdAt])
   @@index([documentId])
   @@index([tourId])
+  @@index([customerId, createdAt])
 }
 
 /// Import rule learned from repeated corrections (alias, ignored label, stop type); active once the threshold is reached.
 model ImportRule {
   id         String    @id @default(cuid())
+  /// global, or the id of the customer whose corrections taught the rule.
+  scope      String    @default("global")
   kind       String
   pattern    String
   value      String?
@@ -575,5 +598,62 @@ model ImportRule {
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
 
-  @@unique([kind, pattern])
+  @@unique([scope, kind, pattern])
+}
+
+/// A customer the fleet drives for (Schnellecke, Walter …): its Auftrag format, import rules and status list live in profileJson.
+model Customer {
+  id          String   @id @default(cuid())
+  name        String
+  /// Stable key; SCHNELLECKE keeps the history of the existing 07:00 lists (DailyStatusReport.line).
+  slug        String   @unique
+  /// OEM_LOGISTICS | WAREHOUSE | SPOT | OTHER
+  category    String   @default("OTHER")
+  /// How the customer is written in an Auftrag (letterhead, Abteilung), JSON string array.
+  aliasesJson String   @default("[]")
+  color       String?
+  active      Boolean  @default(true)
+  profileJson String   @default("{}")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  lines CustomerLine[]
+  tours Tour[]
+}
+
+/// A line of a customer (Schnellecke Nord, Süd, LuFe): trucks and dispatchers are assigned to lines.
+model CustomerLine {
+  id                String   @id @default(cuid())
+  customerId        String
+  code              String
+  name              String
+  /// Warehouse printed under Abteilung for this line, used when the Auftrag says Lager/vorladen.
+  departmentCompany String?
+  departmentAddress String?
+  departmentCity    String?
+  sortIndex         Int      @default(0)
+  active            Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  customer    Customer         @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  vehicles    Vehicle[]
+  tours       Tour[]
+  dispatchers DispatcherLine[]
+
+  @@unique([customerId, code])
+}
+
+/// Which lines a dispatcher works on; the primary line sets the default customer of an import.
+model DispatcherLine {
+  dispatcherId String
+  lineId       String
+  isPrimary    Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  dispatcher Dispatcher   @relation(fields: [dispatcherId], references: [id], onDelete: Cascade)
+  line       CustomerLine @relation(fields: [lineId], references: [id], onDelete: Cascade)
+
+  @@id([dispatcherId, lineId])
+  @@index([lineId])
 }

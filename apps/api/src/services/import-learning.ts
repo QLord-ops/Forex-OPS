@@ -7,6 +7,8 @@ import {
 } from './pdf-order-import.js';
 
 export type ImportRuleKind = 'ALIAS' | 'IGNORE_LABEL' | 'STOP_TYPE';
+/** Rules learned before customers existed, and the built-in ones, apply to every customer. */
+export const GLOBAL_SCOPE = 'global';
 export type CorrectionKind = 'STOP_REMOVED' | 'STOP_ADDED' | 'FIELD_CHANGED';
 export type CorrectionField = 'company' | 'address' | 'city' | 'type';
 
@@ -233,12 +235,12 @@ export class ImportLearningService {
   }
 
   private async countRule(candidate: RuleCandidate, actor: AuditActor | undefined, now: Date) {
-    const existing = await this.db.importRule.findUnique({ where: { kind_pattern: { kind: candidate.kind, pattern: candidate.pattern } } });
+    const existing = await this.db.importRule.findUnique({ where: { scope_kind_pattern: { scope: GLOBAL_SCOPE, kind: candidate.kind, pattern: candidate.pattern } } });
     const hits = (existing?.hits ?? 0) + 1;
     // Activation happens exactly at the threshold: a rule an admin switched off later stays off however often it recurs.
     const activate = !existing?.builtIn && hits === this.threshold && !existing?.active;
     const saved = await this.db.importRule.upsert({
-      where: { kind_pattern: { kind: candidate.kind, pattern: candidate.pattern } },
+      where: { scope_kind_pattern: { scope: GLOBAL_SCOPE, kind: candidate.kind, pattern: candidate.pattern } },
       create: { kind: candidate.kind, pattern: candidate.pattern, value: candidate.value, hits, lastSeenAt: now, active: activate },
       update: { hits, lastSeenAt: now, ...(activate ? { active: true } : {}), ...(existing && !existing.active && candidate.value ? { value: candidate.value } : {}) }
     });

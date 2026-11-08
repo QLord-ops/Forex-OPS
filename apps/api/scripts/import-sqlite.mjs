@@ -34,6 +34,10 @@ const postgres = new PostgresClient({
 const modelOrder = [
   // Vehicles reference their dispatcher, so accounts come first.
   "dispatcher",
+  // Trucks and tours reference a customer line, lines reference their customer.
+  "customer",
+  "customerLine",
+  "dispatcherLine",
   "vehicle",
   "tour",
   "stop",
@@ -89,12 +93,24 @@ function assertRelations(data) {
     if (!condition) problems.push(message);
   };
 
+  const customerIds = ids("customer");
+  const lineIds = ids("customerLine");
+  for (const row of data.customerLine) {
+    requireId(customerIds.has(row.customerId), `CustomerLine ${row.id} has missing customer ${row.customerId}`);
+  }
+  for (const row of data.dispatcherLine) {
+    requireId(dispatcherIds.has(row.dispatcherId), `DispatcherLine has missing dispatcher ${row.dispatcherId}`);
+    requireId(lineIds.has(row.lineId), `DispatcherLine has missing line ${row.lineId}`);
+  }
   for (const row of data.vehicle) {
+    if (row.customerLineId) requireId(lineIds.has(row.customerLineId), `Vehicle ${row.id} has missing customer line ${row.customerLineId}`);
     if (row.assignedDispatcherId) {
       requireId(dispatcherIds.has(row.assignedDispatcherId), `Vehicle ${row.id} has missing dispatcher ${row.assignedDispatcherId}`);
     }
   }
   for (const row of data.tour) {
+    if (row.customerId) requireId(customerIds.has(row.customerId), `Tour ${row.id} has missing customer ${row.customerId}`);
+    if (row.customerLineId) requireId(lineIds.has(row.customerLineId), `Tour ${row.id} has missing customer line ${row.customerLineId}`);
     requireId(vehicleIds.has(row.vehicleId), `Tour ${row.id} has missing vehicle ${row.vehicleId}`);
     if (row.previousTourId) {
       requireId(tourIds.has(row.previousTourId), `Tour ${row.id} has missing previous tour ${row.previousTourId}`);
