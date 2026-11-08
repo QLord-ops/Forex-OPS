@@ -59,6 +59,8 @@ import { OrderDocumentService } from './services/order-documents.js';
 import { registerOrderDocumentRoutes, registerOrderReparseRoute } from './routes/order-documents.js';
 import { CustomerService, isMine } from './services/customers.js';
 import { resolveImportCustomer, vehicleKey, type ImportCustomer } from './services/customer-resolver.js';
+import { scoreDraft } from './services/field-confidence.js';
+import { berlinToday } from './services/order-dates.js';
 import { registerCustomerRoutes } from './routes/customers.js';
 import { ImportLearningService } from './services/import-learning.js';
 import { registerImportRuleRoutes } from './routes/import-rules.js';
@@ -114,9 +116,9 @@ async function withAddressRules<T extends { drafts: Array<{ stops: Array<{ compa
   const rules = await addressRules.all();
   return { ...preview, drafts: preview.drafts.map((draft) => {
     const stops = draft.stops.map((stop) => applyRulesToStop(stop, rules));
-    const missing = stops.filter((stop) => !stop.ruleApplied && (stop.address ?? "").trim() === (stop.city ?? "").trim() && stop.company);
-    return { ...draft, stops, warnings: [...draft.warnings, ...missing.map((stop) => ({ code: "ADDRESS_FROM_RULE_MISSING",
-      message: `Адрес ${stop.company}, ${stop.city ?? ""} не указан в Auftrag — введите его, он запомнится для следующих Auftrag.` }))] };
+    const missing = stops.flatMap((stop, index) => !stop.ruleApplied && (stop.address ?? "").trim() === (stop.city ?? "").trim() && stop.company ? [{ code: "ADDRESS_FROM_RULE_MISSING", stopIndex: index, field: "address" as const,
+      message: `Адрес ${stop.company}, ${stop.city ?? ""} не указан в Auftrag — введите его, он запомнится для следующих Auftrag.` }] : []);
+    return { ...draft, stops, warnings: [...draft.warnings, ...missing] };
   }) };
 }
 
@@ -192,6 +194,16 @@ async function withCustomer<T extends { documentKind?: string; drafts: Array<{ v
   const vehicles = await vehicleCustomerIds(preview.drafts).catch(() => []);
   const { customer, warnings } = resolveImportCustomer({ cards: context.cards, selectedId: context.selected?.id ?? null, evidence: preview.customerEvidence, vehicleCustomerIds: vehicles });
   return { ...preview, customer, warnings: [...preview.warnings.filter((warning) => !warning.code.startsWith('CUSTOMER_')), ...warnings] };
+}
+
+type ScorablePreview = { documentKind?: string; detectedLayout?: string; customer?: ImportCustomer | null; drafts: Array<Parameters<typeof scoreDraft>[0]> };
+
+/** Every recognised field gets a level the check shows; the customer's correction history makes often-wrong fields stricter. */
+async function withFieldConfidence<T extends ScorablePreview>(preview: T): Promise<T> {
+  if (preview.documentKind === 'APPOINTMENT' || !preview.drafts?.length) return preview;
+  const correctionRate = preview.customer?.id ? await importLearning.fieldHistory(preview.customer.id).catch(() => ({})) : {};
+  const context = { ai: preview.detectedLayout === 'PDF' || preview.detectedLayout === 'IMAGE', today: berlinToday(), correctionRate };
+  return { ...preview, drafts: preview.drafts.map((draft) => scoreDraft(draft, context)) };
 }
 
 // Automatic arrival from fresh Webfleet GPS (zone + standstill); AUTO_ARRIVAL_ENABLED=false keeps it a suggestion.
@@ -750,7 +762,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
         request.log.error({ errorType: error instanceof Error ? error.name : 'unknown' }, "Не удалось разобрать книгу Excel");
         return reply.status(422).send({ error: "Не удалось безопасно прочитать книгу Excel." });
       }
-      return withStoredDocument(await withCustomer(await withAddressRules({
+      return withStoredDocument(await withFieldConfidence(await withCustomer(await withAddressRules({
         source: result.source,
         detectedLayout: result.detectedLayout,
         drafts: result.drafts.map((draft) => ({
@@ -769,7 +781,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
           row: warning.sourceRow
         })),
         aiAvailable: result.aiAvailable
-      }), customerContext), { buffer, filename, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }, request);
+      }), customerContext)), { buffer, filename, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }, request);
     } finally {
       activeOrderImports -= 1;
     }
@@ -784,14 +796,14 @@ export async function buildApp(options: BuildAppOptions = {}) {
       try {
         // Excel is read by its columns, not by a profile: only the customer of the stored parse changes.
         if (file.mimeType !== "application/pdf" && !isSupportedImageMimeType(file.mimeType)) {
-          return { preview: await withCustomer(JSON.parse(previewJson) as Parameters<typeof withCustomer>[0], customerContext) };
+          return { preview: await withFieldConfidence(await withCustomer(JSON.parse(previewJson) as ScorablePreview & { warnings: Array<{ code: string; message: string }> }, customerContext)) };
         }
         if (!options.auth?.disabled) await assistantService.consumeUsage(assistantSessionKey(request));
         try {
           const read = file.mimeType === "application/pdf"
             ? await pdfImport(file.content, file.filename, customerContext)
             : await imageImport(file.content, file.filename, file.mimeType as "image/png" | "image/jpeg" | "image/webp", customerContext);
-          return { preview: await withCustomer(await withAppointmentMatch(read, file.content), customerContext) };
+          return { preview: await withFieldConfidence(await withCustomer(await withAppointmentMatch(read, file.content), customerContext)) };
         } catch (error) {
           if (error instanceof AssistantError) throw error;
           request.log.error({ errorType: error instanceof Error ? error.name : "unknown" }, "Не удалось заново разобрать Auftrag");
@@ -834,7 +846,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
       const customerContext = await importCustomerContext(request);
       if (!options.auth?.disabled) await assistantService.consumeUsage(assistantSessionKey(request));
       try {
-        return await withStoredDocument(await withCustomer(await withAppointmentMatch(await pdfImport(buffer, filename, customerContext), buffer), customerContext), { buffer, filename, mimeType: "application/pdf" }, request);
+        return await withStoredDocument(await withFieldConfidence(await withCustomer(await withAppointmentMatch(await pdfImport(buffer, filename, customerContext), buffer), customerContext)), { buffer, filename, mimeType: "application/pdf" }, request);
       } catch (error) {
         if (error instanceof Error && error.message.includes("OPENAI_API_KEY")) {
           return reply.status(503).send({ error: "OpenAI ещё не настроен для импорта PDF." });
@@ -880,7 +892,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
       const customerContext = await importCustomerContext(request);
       if (!options.auth?.disabled) await assistantService.consumeUsage(assistantSessionKey(request));
       try {
-        return await withStoredDocument(await withCustomer(await withAppointmentMatch(await imageImport(buffer, filename, file.mimetype, customerContext), buffer), customerContext), { buffer, filename, mimeType: file.mimetype }, request);
+        return await withStoredDocument(await withFieldConfidence(await withCustomer(await withAppointmentMatch(await imageImport(buffer, filename, file.mimetype, customerContext), buffer), customerContext)), { buffer, filename, mimeType: file.mimetype }, request);
       } catch (error) {
         if (error instanceof Error && error.message.includes("OPENAI_API_KEY")) {
           return reply.status(503).send({ error: "OpenAI ещё не настроен для импорта скриншотов." });

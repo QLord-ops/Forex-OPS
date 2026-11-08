@@ -499,3 +499,20 @@ button.decision-card-title:focus-visible { outline: 2px solid var(--focus); outl
 /* A break or waiting at the dock: neutral, the truck goes on today. */
 .rest-at-stop-pause { border-color: rgb(var(--ln-e2e8f0)); background: rgb(var(--bg-f8fafc)); color: rgb(var(--tx-334155)); }
 .vehicle-panel-zuladung { color: rgb(var(--tx-92400e)); font-weight: 500; }
+
+/* Confidence per recognised field: amber = check, red = doubt (blocks «Подтвердить» until changed or «Верно»). Text always says it, not only the colour. */
+.field-state-check .field-input { border-color: rgb(var(--ln-d97706)); }
+.field-state-doubt .field-input { border-color: rgb(var(--ln-dc2626)); box-shadow: 0 0 0 1px rgb(var(--ln-dc2626)); }
+.field-notes { display: grid; gap: 4px; margin: 6px 0 0; padding: 0; list-style: none; }
+.field-note { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-top: 4px; font-size: .75rem; line-height: 1.35; }
+.field-note strong { font-weight: 600; }
+.field-note-check { color: rgb(var(--tx-b45309)); }
+.field-note-doubt { color: rgb(var(--tx-b91c1c)); }
+.field-note-evidence { color: rgb(var(--tx-64748b)); }
+.field-verify { display: inline-flex; align-items: center; gap: 3px; min-height: 24px; border: 1px solid currentColor; border-radius: 6px; background: transparent; padding: 0 7px; color: inherit; font-size: .75rem; font-weight: 600; cursor: pointer; }
+.field-verify:hover { background: rgb(var(--bg-fff1f2)); }
+.field-verify:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.field-summary { display: flex; align-items: flex-start; gap: 6px; margin: 0 0 10px; border: 1px solid rgb(var(--ln-fde68a)); border-radius: 8px; background: rgb(var(--bg-fffbeb)); padding: 8px 10px; color: rgb(var(--tx-92400e)); font-size: .8125rem; }
+.field-summary-doubt { border-color: rgb(var(--ln-fecaca)); background: rgb(var(--bg-fff1f2)); color: rgb(var(--tx-9f1239)); }
+.field-stop-doubt { border-color: rgb(var(--ln-dc2626)) !important; }
+.field-gate { margin: 0; color: rgb(var(--tx-9f1239)); font-size: .75rem; }

@@ -121,7 +121,35 @@ function Overview({ customer }: { customer: Detail }) {
         </li>)}
       </ul> : <p className="page-subtitle">Правок ещё нет: статистика появится после первых подтверждённых Auftrag этого заказчика.</p>}
     </section>
+    <Accuracy accuracy={overview.accuracy} />
   </div>
+}
+
+const ACCURACY_ROWS = [
+  { level: 'OK', label: 'Без пометки' },
+  { level: 'CHECK', label: 'Жёлтые «проверьте»' },
+  { level: 'DOUBT', label: 'Красные «под сомнением»' }
+] as const
+
+/** How often the dispatchers changed fields of each level before saving: the levels can be tuned by facts. */
+function Accuracy({ accuracy }: { accuracy: Detail['overview']['accuracy'] }) {
+  return <section className="work-surface customer-section" aria-labelledby="customer-accuracy">
+    <h3 id="customer-accuracy" className="section-title">Точность разбора по уровням</h3>
+    {accuracy ? <>
+      <p className="page-subtitle">Последние 30 сохранённых Auftrag: сколько полей каждого уровня диспетчеры исправили перед сохранением.</p>
+      <table className="customer-table">
+        <thead><tr><th>Уровень поля</th><th>Полей</th><th>Исправили</th></tr></thead>
+        <tbody>{ACCURACY_ROWS.map((row) => {
+          const item = accuracy[row.level]
+          return <tr key={row.level}>
+            <th scope="row">{row.label}</th>
+            <td className="tabular-nums">{item.fields}</td>
+            <td className="tabular-nums">{item.fields ? `${Math.round(item.changed / item.fields * 100)} % (${item.changed})` : '—'}</td>
+          </tr>
+        })}</tbody>
+      </table>
+    </> : <p className="page-subtitle">Появится после первого сохранённого Auftrag, разобранного с оценкой полей.</p>}
+  </section>
 }
 
 function Lines({ customer, isAdmin, onSaved }: { customer: Detail; isAdmin: boolean; onSaved: () => void }) {

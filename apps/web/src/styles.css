@@ -208,6 +208,16 @@ button:disabled {
   background: var(--acc-hover);
 }
 
+/* A locked action looks locked (e.g. «Подтвердить» while a field is in doubt). */
+.primary-button:disabled,
+.secondary-button:disabled {
+  opacity: 0.55;
+}
+
+.primary-button:disabled:hover {
+  background: var(--acc);
+}
+
 .secondary-button {
   border-color: rgb(var(--ln-cbd5e1));
   background: rgb(var(--bg-ffffff));

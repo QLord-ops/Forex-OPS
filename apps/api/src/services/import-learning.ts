@@ -1,6 +1,7 @@
 import type { PrismaClient } from '@prisma/client';
 import { normalizePattern, type AddressRuleService } from './address-rules.js';
 import { writeAuditLog, type AuditActor } from './audit-log.js';
+import { correctionRates } from './field-confidence.js';
 import {
   BUILT_IN_IMPORT_RULES, cleanCity, inferCityFromAddress, normalizeRouteText, parseTourRemarksRoute, tourRemarkCompanyTokens,
   withBuiltInImportRules, type LearnedImportRules
@@ -343,6 +344,17 @@ export class ImportLearningService {
     });
     this.cache.clear();
     return saved;
+  }
+
+  /** Share of the customer's last 30 saved Auftrag in which each field was corrected; the scoring makes such fields stricter. */
+  async fieldHistory(customerId: string) {
+    const documents = await this.db.orderDocument.findMany({
+      where: { customerId, status: 'ATTACHED' }, orderBy: { attachedAt: 'desc' }, take: 30,
+      select: { corrections: { where: { kind: 'FIELD_CHANGED' }, select: { field: true } } }
+    });
+    const counts = new Map<string, number>();
+    for (const document of documents) for (const field of new Set(document.corrections.map((row) => row.field).filter((value): value is string => Boolean(value)))) counts.set(field, (counts.get(field) ?? 0) + 1);
+    return correctionRates(documents.length, [...counts].map(([field, count]) => ({ field, documents: count })));
   }
 
   async correctionsSince(since: Date, customerId?: string | null) {

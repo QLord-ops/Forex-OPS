@@ -1,3 +1,4 @@
+import type { FieldScore, OrderField, StopField } from '../lib/field-confidence'
 export type TourStatus = 'DRAFT' | 'QUEUED' | 'ACTIVE' | 'COMPLETED' | 'CANCELLED'
 export type StopType = 'LOAD' | 'UNLOAD'
 export type LegStatus = 'WAITING' | 'ACTIVE' | 'ARRIVED' | 'COMPLETED'
@@ -505,9 +506,13 @@ export interface ImportWarning {
   row?: number
   page?: number
   field?: string
+  /** The stop (0-based, in the preview's order) the warning is about. */
+  stopIndex?: number
 }
 
 export interface ImportedStopDraft {
+  /** Score, level and reasons per recognised field (server: field-confidence.ts). */
+  fieldConfidence?: Partial<Record<StopField, FieldScore>>
   sequence: number
   type: StopType
   company: string | null
@@ -532,6 +537,8 @@ export interface ImportedStopDraft {
 }
 
 export interface ImportedOrderDraft {
+  orderConfidence?: Partial<Record<OrderField, FieldScore>>
+  confidenceSummary?: { doubt: number; check: number }
   orderNumber: string | null
   vehicleNumber: string | null
   vehiclePlate?: string | null

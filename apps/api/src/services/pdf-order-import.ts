@@ -3,6 +3,7 @@ import { isValidLocalDateTime } from "./excel-order-import.js";
 import { aiDateRules, DATE_ONLY_WINDOW, normalizeAiSchedule, PLANNED_START } from "./order-dates.js";
 import { mentionsZuladung, ZULADUNG_PATTERN } from "./zuladung.js";
 import { OEM_TOUR_REMARKS_TEMPLATE, SCHNELLECKE_PROFILE, type CustomerProfile } from "./customer-profile.js";
+import type { AiField, OrderField, StopField, StopProvenance } from "./field-confidence.js";
 
 export { mentionsZuladung } from "./zuladung.js";
 
@@ -15,6 +16,8 @@ const ROUTE_SOURCE_RULE =
 const ROUTE_DETAILS_RULE =
   "Every unloading location named in Tourbemerkung is its own UNLOAD stop with the receiver's printed postal address (Empfänger, Entladestelle, direct-delivery receiver); never put that address only into the instructions of a loading stop. " +
   "Abbreviations: 'MB' is Mercedes-Benz, so 'MB Düsseldorf' is the Mercedes-Benz AG plant (Werk) in Düsseldorf printed as Absender or Abladestelle; 'VW' is Volkswagen. Codes written next to a place ('MB Düsseldorf 477339 070A & 070D': the Sendungsnummer suffix 477339, the Abladestelle or Entladezone codes 070A and 070D) are registration references of that stop: put them into its referenceNumbers, never into company, address or city, and never make a stop out of a code alone. 'LG' or 'Leergut' (empties) and 'VG' or 'Vollgut' describe the cargo, never a place: mention them in the stop instructions. All warnings must be written in Russian.";
+const FIELD_CONFIDENCE_RULE =
+  "For every stop fill fieldConfidence and for every order fill orderFieldConfidence: for each field c is your certainty from 0 to 1 that the value is exactly what the document states (1: printed clearly and unambiguous; 0.7: printed but partly unreadable or matched from another row; 0.4: inferred; 0.1: guessed or absent), and evidence is the shortest verbatim quote of at most 120 characters that shows the value, or null when nothing printed shows it. A field without a value has c 0 and evidence null. When a warning concerns one stop, set its stopSequence to that stop's sequence and field to the field it is about; otherwise both are null.";
 export const supportedImageMimeTypes = ["image/png", "image/jpeg", "image/webp"] as const;
 // Termin slips (LKWcontrol Fahrtenschein, Deckblatt zur Warenanlieferung, mRoad) share the drop zone with Auftrag.
 const appointmentRule = (carriers: string[]) =>
@@ -23,6 +26,12 @@ const appointmentRule = (carriers: string[]) =>
   "plate is the truck registration (Kennzeichen, LKW-Kennzeichen Zugfahrzeug, Fahrzeug-Kennzeichen); trailerPlate the trailer registration; null when the field is empty. " +
   "Time: a single planned arrival (Geplante Ankunft, Anlieferdatum with time, Termin) is appointmentLocal. A slot with from and to (Von/Bis) or a delivery time together with a latest arrival (Späteste Ankunft) is the window windowStartLocal/windowEndLocal and appointmentLocal stays null. A date without time goes to appointmentDateLocal. 'Standgeld ab' is only standgeldFromLocal, never the appointment. The printing time of the document (e.g. a timestamp in the header) is never the appointment. " +
   "stopType: UNLOAD when the slip is for unloading or incoming goods (Entladung, Warenanlieferung), LOAD when only for loading; if both Entladung and Beladung (empties, Leergut) appear, stopType is UNLOAD and positions list them. references: every identifier with its printed label, e.g. Fahrt-ID, Borderonummer, Leergut-Auftrags-Nr, Leergut-Abholavisierungs-Nr, Relation, ZF-Code; never a phone number. positions: short lines like 'A36 Entladung 4 LE'. Never copy a driver phone number anywhere.";
+
+const aiFieldSchema = z.object({ c: z.number().min(0).max(1), evidence: z.string().trim().max(300).nullable().default(null) });
+const aiStopFieldsSchema = z.object({
+  type: aiFieldSchema, company: aiFieldSchema, address: aiFieldSchema, city: aiFieldSchema, time: aiFieldSchema, loadingMeters: aiFieldSchema, references: aiFieldSchema
+}).partial();
+const aiOrderFieldsSchema = z.object({ orderNumber: aiFieldSchema, vehicle: aiFieldSchema, trailer: aiFieldSchema }).partial();
 
 const stopSchema = z.object({
   sequence: z.number().int().positive(),
@@ -54,7 +63,8 @@ const stopSchema = z.object({
   instructions: z.string().trim().max(4000).nullable().default(null),
   sourcePage: z.number().int().positive().nullable().default(null),
   sourceExcerpt: z.string().trim().max(1000).nullable().default(null),
-  confidence: z.number().min(0).max(1).default(0.65)
+  confidence: z.number().min(0).max(1).default(0.65),
+  fieldConfidence: aiStopFieldsSchema.optional()
 }).superRefine((stop, context) => {
   if ((stop.appointmentWindowStartLocal === null) !== (stop.appointmentWindowEndLocal === null)) {
     context.addIssue({ code: "custom", message: "Временное окно должно содержать начало и конец" });
@@ -68,7 +78,9 @@ const stopSchema = z.object({
 const warningSchema = z.object({
   code: z.string().trim().min(1).max(80),
   message: z.string().trim().min(1).max(500),
-  sourcePage: z.number().int().positive().nullable().default(null)
+  sourcePage: z.number().int().positive().nullable().default(null),
+  stopSequence: z.number().int().positive().nullable().default(null),
+  field: z.enum(["type", "company", "address", "city", "time", "loadingMeters", "references"]).nullable().default(null)
 });
 
 const draftSchema = z.object({
@@ -83,7 +95,8 @@ const draftSchema = z.object({
   tourRemarks: z.string().trim().max(4000).nullable().default(null),
   tourRemarksSourcePage: z.number().int().positive().nullable().default(null),
   stops: z.array(stopSchema).min(1).max(20),
-  warnings: z.array(warningSchema).max(20).default([])
+  warnings: z.array(warningSchema).max(20).default([]),
+  orderFieldConfidence: aiOrderFieldsSchema.optional()
 });
 
 const localDateTime = z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/).refine(isValidLocalDateTime, "Некорректные дата и время");
@@ -120,6 +133,9 @@ export interface PdfImportWarning {
   code: string;
   message: string;
   page?: number;
+  /** The stop (0-based, in the order of the preview) and field the warning is about, so it shows next to that field. */
+  stopIndex?: number;
+  field?: StopField;
 }
 
 export interface PdfImportedStopDraft {
@@ -137,6 +153,10 @@ export interface PdfImportedStopDraft {
   sourcePage: number | null;
   sourceExcerpt?: string | null;
   confidence: number;
+  /** The model's own certainty and quote per field; services/field-confidence.ts turns them into scored fields. */
+  aiConfidence?: Partial<Record<StopField, AiField>> | null;
+  provenance?: StopProvenance;
+  aliasApplied?: boolean;
 }
 
 export interface PdfImportedOrderDraft {
@@ -148,6 +168,7 @@ export interface PdfImportedOrderDraft {
   tourRemarksSourcePage?: number | null;
   stops: PdfImportedStopDraft[];
   warnings: PdfImportWarning[];
+  orderAiConfidence?: Partial<Record<OrderField, AiField>> | null;
 }
 
 /** A recognised Termin slip. Times are Berlin wall-clock strings, like the Auftrag drafts. */
@@ -336,7 +357,7 @@ export async function importPdfPreview(
         detail: "high"
       },
     instruction:
-      `${appointmentRule(profile.carrierNames)} For an ORDER: read every PDF page. ${step.first} ${tourRemarksRouteRule(profile, departments)} ${learnedBlock(options.learned)}${customerBlock(options.customer)} Record its exact relevant text in tourRemarks and page in tourRemarksSourcePage. Independently copy the complete Abteilung block into departmentCompany, departmentAddress, departmentCity and departmentSourcePage, because vorladen may refer to it. SECOND find those same locations and named destinations in tables or address blocks elsewhere in the PDF and copy the complete printed postal address, including street, house number, postcode and city when visible. Match by place/company/reference; never replace a printed street with city-only geocoding and never infer an unprinted street. ${step.missing} For each stop extract references from its row, nearby text, right-hand unloading notes, or Tourbemerkung only when attribution is supported; otherwise retain ambiguous text in tourRemarks and warn. Extract loadingMeters specifically from the LM column (German Lademeter), NOT adjacent RM or LMJ columns; use an explicitly labeled LDM value only when no LM column value is available and warn if values conflict. Read LKW and Trailer/Kennzeichen above Abteilung: vehicleNumber is the printed internal LKW identifier if present, vehiclePlate the truck registration, trailerPlate the trailer registration. Never treat Fahrer/SZM MEGA as a driver's identity. ${aiDateRules(options.now)} Include a brief sourceExcerpt and sourcePage for each stop. Return city separately when visible or unambiguous. Missing fields must be null; add Russian warnings for uncertain or conflicting data. Never invent facts.`,
+      `${appointmentRule(profile.carrierNames)} For an ORDER: read every PDF page. ${step.first} ${tourRemarksRouteRule(profile, departments)} ${learnedBlock(options.learned)}${customerBlock(options.customer)} Record its exact relevant text in tourRemarks and page in tourRemarksSourcePage. Independently copy the complete Abteilung block into departmentCompany, departmentAddress, departmentCity and departmentSourcePage, because vorladen may refer to it. SECOND find those same locations and named destinations in tables or address blocks elsewhere in the PDF and copy the complete printed postal address, including street, house number, postcode and city when visible. Match by place/company/reference; never replace a printed street with city-only geocoding and never infer an unprinted street. ${step.missing} For each stop extract references from its row, nearby text, right-hand unloading notes, or Tourbemerkung only when attribution is supported; otherwise retain ambiguous text in tourRemarks and warn. Extract loadingMeters specifically from the LM column (German Lademeter), NOT adjacent RM or LMJ columns; use an explicitly labeled LDM value only when no LM column value is available and warn if values conflict. Read LKW and Trailer/Kennzeichen above Abteilung: vehicleNumber is the printed internal LKW identifier if present, vehiclePlate the truck registration, trailerPlate the trailer registration. Never treat Fahrer/SZM MEGA as a driver's identity. ${aiDateRules(options.now)} Include a brief sourceExcerpt and sourcePage for each stop. Return city separately when visible or unambiguous. ${FIELD_CONFIDENCE_RULE} Missing fields must be null; add Russian warnings for uncertain or conflicting data. Never invent facts.`,
     options
   }) as Promise<PdfImportPreview>;
 }
@@ -364,7 +385,7 @@ export async function importImagePreview(
       detail: "high"
     },
     instruction:
-      `${appointmentRule(profile.carrierNames)} For an ORDER: read this screenshot. It may be an Auftrag, a photographed order, or an Excel/table screenshot. ${step.first.replace("FIRST locate and read Tourbemerkung", "If Tourbemerkung is visible, use it FIRST")} ${tourRemarksRouteRule(profile, departments)}${learnedBlock(options.learned)}${customerBlock(options.customer)} Independently copy a visible Abteilung block into departmentCompany, departmentAddress and departmentCity; departmentSourcePage is null for an image. Then match every named stop to its full printed street address in the table; otherwise use the visible stop table. ${aiDateRules(options.now)} Read truck and trailer plates when visible. Never invent an unprinted street. Put a short supporting text in sourceExcerpt; set sourcePage and tourRemarksSourcePage to null. Missing optional metadata is null and unclear fields receive Russian warnings.`,
+      `${appointmentRule(profile.carrierNames)} For an ORDER: read this screenshot. It may be an Auftrag, a photographed order, or an Excel/table screenshot. ${step.first.replace("FIRST locate and read Tourbemerkung", "If Tourbemerkung is visible, use it FIRST")} ${tourRemarksRouteRule(profile, departments)}${learnedBlock(options.learned)}${customerBlock(options.customer)} Independently copy a visible Abteilung block into departmentCompany, departmentAddress and departmentCity; departmentSourcePage is null for an image. Then match every named stop to its full printed street address in the table; otherwise use the visible stop table. ${aiDateRules(options.now)} Read truck and trailer plates when visible. Never invent an unprinted street. Put a short supporting text in sourceExcerpt; set sourcePage and tourRemarksSourcePage to null. ${FIELD_CONFIDENCE_RULE} Missing optional metadata is null and unclear fields receive Russian warnings.`,
     options
   }) as Promise<ImageImportPreview>;
 }
@@ -457,26 +478,32 @@ async function importVisualOrderPreview(input: {
               city: draft.departmentCity,
               sourcePage: draft.departmentSourcePage
             }, learned)
-          : { stops: orderedStops.map((stop) => withLearnedStopType(stop, learned)), warnings: [] as PdfImportWarning[] };
+          : { stops: orderedStops.map((stop) => ({ ...withLearnedStopType(stop, learned), provenance: "TABLE" as const })), warnings: [] as PdfImportWarning[] };
         const dateNotes: PdfImportWarning[] = [];
         const stops = reconciled.stops.map((stop, index) => {
-          const { appointmentDateLocal, ...rest } = stop as typeof stop & { appointmentDateLocal?: string | null };
+          const { appointmentDateLocal, fieldConfidence: aiConfidence, ...rest } = stop as typeof stop & { appointmentDateLocal?: string | null };
           // An exact time wins over a window; a date alone becomes the working-hours window.
           const schedule = normalizeAiSchedule({ ...rest, appointmentDateLocal }, { dateOnly });
-          if (schedule.note === "DATE_ONLY") dateNotes.push({ code: "DATE_ONLY", message: dateOnly === "planned"
+          if (schedule.note === "DATE_ONLY") dateNotes.push({ code: "DATE_ONLY", stopIndex: index, field: "time", message: dateOnly === "planned"
             ? `Точка ${index + 1}: указана только дата, плановое время ${PLANNED_START} — это не Termin.`
             : `Точка ${index + 1}: указана только дата, принято окно ${DATE_ONLY_WINDOW.start}–${DATE_ONLY_WINDOW.end} — это не Termin.` });
-          if (rest.appointmentLocal && rest.appointmentWindowStartLocal) dateNotes.push({ code: "APPOINTMENT_CONFLICT", message: `Точка ${index + 1}: указаны и точное время, и окно — оставлено точное время.` });
+          if (rest.appointmentLocal && rest.appointmentWindowStartLocal) dateNotes.push({ code: "APPOINTMENT_CONFLICT", stopIndex: index, field: "time", message: `Точка ${index + 1}: указаны и точное время, и окно — оставлено точное время.` });
           return {
             ...rest,
             appointmentLocal: schedule.appointmentLocal,
             appointmentWindowStartLocal: schedule.appointmentWindowStartLocal,
             appointmentWindowEndLocal: schedule.appointmentWindowEndLocal,
             plannedLocal: schedule.plannedLocal ?? null,
+            aiConfidence: aiConfidence ?? null,
             sequence: index + 1,
             city: cleanCity(stop.city) ?? inferCityFromAddress(stop.address)
           };
         });
+        // A warning the model tied to its own stop sequence points at the final stop made from that row.
+        const finalIndexOf = (sequence: number | null) => {
+          const raw = sequence ? draft.stops.find((item) => item.sequence === sequence) : undefined;
+          return raw ? stops.findIndex((stop) => stopMatches(stop, raw)) : -1;
+        };
         return {
           orderNumber: draft.orderNumber,
           vehicleNumber: draft.vehicleNumber,
@@ -484,15 +511,16 @@ async function importVisualOrderPreview(input: {
           trailerPlate: draft.trailerPlate,
           tourRemarks: zuladung.tourRemarks,
           tourRemarksSourcePage: draft.tourRemarksSourcePage,
+          orderAiConfidence: draft.orderFieldConfidence ?? null,
           stops,
           warnings: [
-            ...draft.warnings.map(compactWarning),
+            ...draft.warnings.map((warning) => compactWarning(warning, finalIndexOf(warning.stopSequence))),
             ...zuladung.warnings,
             ...(layout === "PDF" && !draft.tourRemarks && profile.routeSource === "TOUR_REMARKS" ? [{ code: "TOUR_REMARKS_MISSING", message: "Tourbemerkung не найдено; порядок точек определён по таблице." }] : []),
             ...reconciled.warnings,
             ...dateNotes,
-            ...stops.flatMap((stop) => isCityOnlyAddress(stop.address, stop.city)
-              ? [{ code: "ADDRESS_INCOMPLETE", message: `Для точки ${stop.sequence} найден только город; улицу нужно проверить вручную.`, ...(stop.sourcePage ? { page: stop.sourcePage } : {}) }]
+            ...stops.flatMap((stop, index) => isCityOnlyAddress(stop.address, stop.city)
+              ? [{ code: "ADDRESS_INCOMPLETE", stopIndex: index, field: "address" as const, message: `Для точки ${stop.sequence} найден только город; улицу нужно проверить вручную.`, ...(stop.sourcePage ? { page: stop.sourcePage } : {}) }]
               : [])
           ]
         };
@@ -725,14 +753,14 @@ function reconcileStopsWithTourRemarks(
       const candidate = candidateIndex >= 0 ? candidates[candidateIndex] : null;
       if (candidateIndex >= 0) used.add(candidateIndex);
       if (department.address || candidate?.address) {
-        return withTourRemarkDetails(departmentLoadStop(routeStop, sequence + 1, department, candidate), routeStop);
+        return { ...withTourRemarkDetails(departmentLoadStop(routeStop, sequence + 1, department, candidate), routeStop), provenance: "DEPARTMENT" as const };
       }
       warnings.push({
-        code: "DEPARTMENT_ADDRESS_NOT_FOUND",
+        code: "DEPARTMENT_ADDRESS_NOT_FOUND", stopIndex: sequence, field: "address",
         message: `Tourbemerkung содержит «${routeStop.label}» (склад Abteilung), но полный адрес Abteilung не найден; проверьте ${routeStop.type === "LOAD" ? "загрузку" : "выгрузку"} вручную.`,
         ...(department.sourcePage ?? tourRemarksSourcePage ? { page: department.sourcePage ?? tourRemarksSourcePage ?? undefined } : {})
       });
-      return placeholderStop({ ...routeStop, label: "Abteilung" }, sequence + 1, department.sourcePage ?? tourRemarksSourcePage);
+      return { ...placeholderStop({ ...routeStop, label: "Abteilung" }, sequence + 1, department.sourcePage ?? tourRemarksSourcePage), provenance: "PLACEHOLDER" as const };
     }
     const companyTokens = tourRemarkCompanyTokens(routeStop);
     const ranked = candidates
@@ -745,27 +773,28 @@ function reconcileStopsWithTourRemarks(
       const fromNotes = receiverFromNotes(routeStop, candidates, sequence + 1);
       if (fromNotes) {
         warnings.push({
-          code: "TOUR_REMARKS_STOP_FROM_NOTES",
+          code: "TOUR_REMARKS_STOP_FROM_NOTES", stopIndex: sequence, field: "address",
           message: `Адрес точки «${routeStop.label}» взят из примечания к другой точке Auftrag; проверьте его.`,
           ...(fromNotes.sourcePage ? { page: fromNotes.sourcePage } : {})
         });
-        return withLearnedStopType(withTourRemarkDetails(fromNotes, routeStop), learned);
+        return { ...withLearnedStopType(withTourRemarkDetails(fromNotes, routeStop), learned), provenance: "OTHER_STOP_NOTE" as const };
       }
       warnings.push({
-        code: "TOUR_REMARKS_STOP_NOT_FOUND",
+        code: "TOUR_REMARKS_STOP_NOT_FOUND", stopIndex: sequence, field: "address",
         message: `Для точки «${routeStop.label}» из Tourbemerkung не найден надёжный адрес; проверьте его вручную.`,
         ...(tourRemarksSourcePage ? { page: tourRemarksSourcePage } : {})
       });
-      return withLearnedStopType(withTourRemarkDetails(placeholderStop(routeStop, sequence + 1, tourRemarksSourcePage, learned), routeStop), learned);
+      const placeholder = placeholderStop(routeStop, sequence + 1, tourRemarksSourcePage, learned);
+      return { ...withLearnedStopType(withTourRemarkDetails(placeholder, routeStop), learned), provenance: "PLACEHOLDER" as const, aliasApplied: placeholder.company !== shortLabel(routeStop) };
     }
     used.add(selected.index);
     const duplicates = ranked.filter((match) =>
       match.index !== selected.index && sameTourRemarkCity(routeStop, match.candidate) && (!companyTokens.length || mentionsCompany(match.candidate, companyTokens, learned)));
     duplicates.forEach((match) => used.add(match.index));
-    return withLearnedStopType(withTourRemarkDetails(
+    return { ...withLearnedStopType(withTourRemarkDetails(
       mergeDuplicateStopDetails({ ...selected.candidate, type: routeStop.type }, duplicates.map((match) => match.candidate)),
       routeStop
-    ), learned);
+    ), learned), provenance: "TOUR_REMARKS" as const };
   });
   // Rows the Tourbemerkung does not name are not dropped silently: the dispatcher sees them.
   const unnamed = candidates.filter((candidate, index) => !used.has(index) && candidate.type === "UNLOAD")
@@ -893,9 +922,14 @@ function receiverFromNotes(routeStop: TourRemarkStop, candidates: ParsedStop[], 
   return null;
 }
 
+/** "Seifert Bremen" → "Seifert": the label without the city written after it. */
+function shortLabel(routeStop: TourRemarkStop): string {
+  return routeStop.cityHint && routeStop.label.endsWith(routeStop.cityHint) ? routeStop.label.slice(0, -routeStop.cityHint.length).trim() || routeStop.label : routeStop.label;
+}
+
 function placeholderStop(routeStop: TourRemarkStop, sequence: number, sourcePage: number | null, learned: LearnedImportRules = BUILT_IN_IMPORT_RULES): ParsedStop {
   // "Seifert Bremen" → company "Seifert", city Bremen; the address is completed from the address rules or by the dispatcher.
-  const shortName = routeStop.cityHint && routeStop.label.endsWith(routeStop.cityHint) ? routeStop.label.slice(0, -routeStop.cityHint.length).trim() || routeStop.label : routeStop.label;
+  const shortName = shortLabel(routeStop);
   const companyName = learned.aliases[normalizeRouteText(shortName)] ?? shortName;
   return {
     sequence,
@@ -1036,7 +1070,7 @@ function responseJsonSchema(): Record<string, unknown> {
         items: {
           type: "object",
           additionalProperties: false,
-          required: ["orderNumber", "vehicleNumber", "vehiclePlate", "trailerPlate", "departmentCompany", "departmentAddress", "departmentCity", "departmentSourcePage", "tourRemarks", "tourRemarksSourcePage", "stops", "warnings"],
+          required: ["orderNumber", "vehicleNumber", "vehiclePlate", "trailerPlate", "departmentCompany", "departmentAddress", "departmentCity", "departmentSourcePage", "tourRemarks", "tourRemarksSourcePage", "stops", "warnings", "orderFieldConfidence"],
           properties: {
             orderNumber: { type: ["string", "null"], maxLength: 200 },
             vehicleNumber: { type: ["string", "null"], maxLength: 200 },
@@ -1055,7 +1089,7 @@ function responseJsonSchema(): Record<string, unknown> {
               items: {
                 type: "object",
                 additionalProperties: false,
-                required: ["sequence", "type", "company", "address", "city", "appointmentLocal", "appointmentWindowStartLocal", "appointmentWindowEndLocal", "appointmentDateLocal", "loadingMeters", "referenceNumbers", "instructions", "sourcePage", "sourceExcerpt", "confidence"],
+                required: ["sequence", "type", "company", "address", "city", "appointmentLocal", "appointmentWindowStartLocal", "appointmentWindowEndLocal", "appointmentDateLocal", "loadingMeters", "referenceNumbers", "instructions", "sourcePage", "sourceExcerpt", "confidence", "fieldConfidence"],
                 properties: {
                   sequence: { type: "integer", minimum: 1 },
                   type: { type: "string", enum: ["LOAD", "UNLOAD"] },
@@ -1083,11 +1117,13 @@ function responseJsonSchema(): Record<string, unknown> {
                   instructions: { type: ["string", "null"], maxLength: 4000 },
                   sourcePage: { type: ["integer", "null"], minimum: 1 },
                   sourceExcerpt: { type: ["string", "null"], maxLength: 1000 },
-                  confidence: { type: "number", minimum: 0, maximum: 1 }
+                  confidence: { type: "number", minimum: 0, maximum: 1 },
+                  fieldConfidence: aiFieldsJsonSchema(["type", "company", "address", "city", "time", "loadingMeters", "references"])
                 }
               }
             },
-            warnings: { type: "array", maxItems: 20, items: warningJsonSchema() }
+            warnings: { type: "array", maxItems: 20, items: warningJsonSchema() },
+            orderFieldConfidence: aiFieldsJsonSchema(["orderNumber", "vehicle", "trailer"])
           }
         }
       },
@@ -1096,25 +1132,39 @@ function responseJsonSchema(): Record<string, unknown> {
   };
 }
 
+function aiFieldsJsonSchema(fields: string[]): Record<string, unknown> {
+  const field = { type: "object", additionalProperties: false, required: ["c", "evidence"], properties: { c: { type: "number", minimum: 0, maximum: 1 }, evidence: { type: ["string", "null"], maxLength: 300 } } };
+  return { type: "object", additionalProperties: false, required: fields, properties: Object.fromEntries(fields.map((name) => [name, field])) };
+}
+
 function warningJsonSchema(): Record<string, unknown> {
   return {
     type: "object",
     additionalProperties: false,
-    required: ["code", "message", "sourcePage"],
+    required: ["code", "message", "sourcePage", "stopSequence", "field"],
     properties: {
       code: { type: "string", minLength: 1, maxLength: 80 },
       message: { type: "string", minLength: 1, maxLength: 500 },
-      sourcePage: { type: ["integer", "null"], minimum: 1 }
+      sourcePage: { type: ["integer", "null"], minimum: 1 },
+      stopSequence: { type: ["integer", "null"], minimum: 1 },
+      field: { type: ["string", "null"], enum: ["type", "company", "address", "city", "time", "loadingMeters", "references", null] }
     }
   };
 }
 
-function compactWarning(warning: z.infer<typeof warningSchema>): PdfImportWarning {
+function compactWarning(warning: z.infer<typeof warningSchema>, stopIndex = -1): PdfImportWarning {
   return {
     code: warning.code,
     message: warning.message,
-    ...(warning.sourcePage ? { page: warning.sourcePage } : {})
+    ...(warning.sourcePage ? { page: warning.sourcePage } : {}),
+    ...(stopIndex >= 0 ? { stopIndex } : {}),
+    ...(stopIndex >= 0 && warning.field ? { field: warning.field } : {})
   };
+}
+
+/** The final stop that came from this raw stop of the model (same place and type), for warnings the model tied to a stop. */
+function stopMatches(final: { type: string; company: string | null; address: string | null }, raw: ParsedStop): boolean {
+  return final.type === raw.type && (normalizeRouteText(final.address ?? "") === normalizeRouteText(raw.address ?? "") || normalizeRouteText(final.company ?? "") === normalizeRouteText(raw.company ?? ""));
 }
 
 export function cleanCity(city: string | null | undefined): string | null {
