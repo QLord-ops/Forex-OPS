@@ -14,10 +14,30 @@ export interface AlertNotification {
   /** No longer applies (BELADEN done, a newer jam); stays until the dispatcher reads it. */
   resolved?: boolean
   resolvedReason?: string | null
+  /** The notification that stands for this truck; the truck's others fold under it (one card per truck). */
+  leadId?: string
+  /** Open notifications of this truck, the lead included. */
+  stackSize?: number
 }
 
 /** Counts in the title and on the bell: only what still asks for the dispatcher. */
 export const needsAttention = (item: AlertNotification) => !item.resolved && item.priority !== 'INFO'
+
+/** The card shown for a truck. Without stack data (an older server) every notification is its own card. */
+export const isLead = (item: AlertNotification) => !item.leadId || item.leadId === item.id
+
+/** Settled only by its own buttons (BELADEN/ENTLADEN, attaching a Termin): «Понятно» on another card never closes it. */
+export const answerRequired = (item: AlertNotification) => !item.resolved && (item.type === 'STOP_DEPARTED' || item.type === 'APPOINTMENT_MATCH')
+
+/** The other open notifications of the lead's truck, newest first. */
+export function stackOf(items: AlertNotification[], lead: AlertNotification): AlertNotification[] {
+  return items.filter((item) => item.leadId === lead.id && item.id !== lead.id).sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+}
+
+/** What «Понятно» on a truck's card closes: the card and everything under it except decisions that wait for an answer. */
+export function closableWith(items: AlertNotification[], lead: AlertNotification): string[] {
+  return [lead.id, ...stackOf(items, lead).filter((item) => !answerRequired(item)).map((item) => item.id)]
+}
 
 const SEEN_KEY = 'ops-alerted-notifications'
 const SOUND_KEY = 'ops-alert-sound'

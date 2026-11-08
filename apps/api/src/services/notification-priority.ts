@@ -116,3 +116,36 @@ export function prioritize<T extends PriorityInput>(items: T[], facts: PriorityF
       || terminOf(a.stopId ? facts.stops.get(a.stopId) : null) - terminOf(b.stopId ? facts.stops.get(b.stopId) : null)
       || a.createdAt.getTime() - b.createdAt.getTime());
 }
+
+/** Decisions that only their own buttons settle: recording BELADEN/ENTLADEN, attaching a Termin. «Понятно» elsewhere never closes them. */
+export const ANSWER_REQUIRED_TYPES = new Set(["STOP_DEPARTED", "APPOINTMENT_MATCH"]);
+
+export type Stacked<T> = T & {
+  /** The notification that represents this truck; the others of the truck fold under it. */
+  leadId: string;
+  /** Open notifications of this truck, the lead included. */
+  stackSize: number;
+};
+
+type Stackable = { id: string; vehicleId: string; type: string; createdAt: Date; priority: NotificationPriority; resolved: boolean };
+
+function leadRank(item: Stackable) {
+  if (item.resolved) return 2;
+  if (ANSWER_REQUIRED_TYPES.has(item.type)) return 0;
+  return item.priority === "ACTION" ? 1 : 2;
+}
+
+/**
+ * One card per truck (owner, 08.11): an open decision that needs an answer leads, then any open decision, else simply
+ * the newest notification; the rest of the truck folds under it. Nothing is closed here and the order stays.
+ */
+export function stackByTruck<T extends Stackable>(items: T[]): Array<Stacked<T>> {
+  const lead = new Map<string, T>();
+  const size = new Map<string, number>();
+  for (const item of items) {
+    size.set(item.vehicleId, (size.get(item.vehicleId) ?? 0) + 1);
+    const current = lead.get(item.vehicleId);
+    if (!current || leadRank(item) < leadRank(current) || (leadRank(item) === leadRank(current) && item.createdAt > current.createdAt)) lead.set(item.vehicleId, item);
+  }
+  return items.map((item) => ({ ...item, leadId: lead.get(item.vehicleId)!.id, stackSize: size.get(item.vehicleId)! }));
+}
