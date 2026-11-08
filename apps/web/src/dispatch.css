@@ -516,3 +516,50 @@ button.decision-card-title:focus-visible { outline: 2px solid var(--focus); outl
 .field-summary-doubt { border-color: rgb(var(--ln-fecaca)); background: rgb(var(--bg-fff1f2)); color: rgb(var(--tx-9f1239)); }
 .field-stop-doubt { border-color: rgb(var(--ln-dc2626)) !important; }
 .field-gate { margin: 0; color: rgb(var(--tx-9f1239)); font-size: .75rem; }
+
+/* Top bar: nothing may run under the bell. Font widths differ per system, so the bar measures itself
+   (hooks/useTopbarFit.ts) and steps down: 1) only the account's initials, 2) no wordmark and tighter sections,
+   3) sections in «Меню». The 1180 px rule above stays as the first paint before the measurement. */
+.topbar-fit-1 .account-menu-name { display: none; }
+.topbar-fit-2 { gap: 12px; }
+.topbar-fit-2 .topbar-brand .brand-wordmark { display: none; }
+.topbar-fit-2 .topbar-brand { padding-right: 12px; }
+.topbar-fit-2 .topbar-link { padding: 0 10px; }
+.topbar-fit-3 .topbar-nav { display: none; }
+.topbar-fit-3 .topbar-menu { display: block; }
+
+/* The truck list stays put (owner, 08.11): nothing in it scrolls sideways. Filters wrap onto the next line, the
+   «Мои / Весь парк / Свободные» switch drops below the title when the panel is narrow, the truck number is never cut. */
+.fleet-chips { flex-wrap: wrap; margin: 12px 0 0; overflow: visible; padding: 0; }
+.fleet-rail .fleet-customers { margin-top: 6px; }
+.fleet-scroll { overflow-x: hidden; }
+.fleet-section-head { flex-wrap: wrap; row-gap: 6px; }
+.fleet-section-name { display: flex; min-width: 0; align-items: baseline; gap: 8px; }
+.fleet-section-name .fleet-sort-label { margin-left: 0; }
+.fleet-scope { margin-left: auto; }
+
+/* Truck card: the number line spans the whole card; the action buttons and the GPS tag take a fixed column from the
+   second line down (BELADEN, ENTLADEN, «Продолжить» fit), so a long number never slides under a button. */
+.vehicle-card { display: grid; grid-template-columns: minmax(0, 1fr) 148px; grid-template-rows: 26px auto; align-items: start; gap: 0; }
+.vehicle-card > .vehicle-row-main { grid-column: 1 / -1; grid-row: 1 / span 2; }
+.vehicle-card > .vehicle-card-side { z-index: 1; grid-column: 2; grid-row: 2; padding-left: 10px; }
+.vehicle-card > .vehicle-action-popover { grid-column: 1 / -1; grid-row: 3; }
+.vehicle-row-main .vehicle-row-line, .vehicle-row-main .vehicle-row-meta, .vehicle-row-main .vehicle-row-owner { margin-right: 148px; }
+.vehicle-row-title { min-height: 24px; }
+.vehicle-row-title strong { flex: none; }
+.vehicle-row-title .vehicle-row-muted, .vehicle-row-title .vehicle-row-customer { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vehicle-card-tags { display: flex; align-items: center; gap: 4px; }
+.vehicle-card-tags .icon-button.vehicle-pin-button { width: 26px; height: 26px; border-radius: 6px; }
+
+/* A narrow panel (laptop at 1280 px): chips a little tighter so the filters take fewer lines. */
+.fleet-rail { container: fleet / inline-size; }
+@media (min-width: 768px) { .dashboard-screen { grid-template-columns: clamp(360px, 28vw, 440px) minmax(0, 1fr); } }
+@container fleet (max-width: 400px) {
+  .fleet-chips, .fleet-customers { gap: 4px; }
+  .filter-chip { padding: 0 10px; }
+}
+/* On a phone the list panel is short: each chip row stays one line and swipes on its own; the panel itself never moves. */
+@media (max-width: 767px) {
+  .fleet-rail .fleet-chips, .fleet-rail .fleet-customers { flex-wrap: nowrap; margin-right: -16px; overflow-x: auto; padding-right: 16px; scrollbar-width: none; }
+  .fleet-rail .fleet-chips::-webkit-scrollbar, .fleet-rail .fleet-customers::-webkit-scrollbar { display: none; }
+}

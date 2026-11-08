@@ -1,8 +1,10 @@
 import { Bell, Building2, ChartColumn, ClipboardList, FileText, Map as MapIcon, Menu, Route, Settings, Truck } from 'lucide-react'
+import { useRef } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 
 import { NotificationsProvider, useNotifications } from '../context/notifications'
 import { usePopover } from '../hooks/usePopover'
+import { useTopbarFit } from '../hooks/useTopbarFit'
 import { AccountMenu } from './AccountMenu'
 import { BrandMark, BrandWordmark } from './Brand'
 import { DispatcherAssistant } from './DispatcherAssistant'
@@ -47,6 +49,8 @@ function TopBar() {
   const { pending } = useNotifications()
   const menu = usePopover()
   const termin = pending.length
+  const headerRef = useRef<HTMLElement>(null)
+  useTopbarFit(headerRef, termin > 0)
   const isActive = (item: (typeof navItems)[number]) => item.to === '/'
     ? location.pathname === '/'
     : location.pathname.startsWith(item.to) || item.also.some((path) => location.pathname.startsWith(path))
@@ -58,7 +62,7 @@ function TopBar() {
     </NavLink>
   ))
   return (
-    <header className="topbar">
+    <header className="topbar" ref={headerRef}>
       <NavLink to="/" className="topbar-brand" aria-label="OPS FOREX Disponent, Диспозиция">
         <BrandMark size={36} />
         <BrandWordmark />

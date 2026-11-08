@@ -238,7 +238,7 @@ export function DashboardPage() {
             <SortMenu sort={sort} onChange={changeSort} />
           </div>
           <div className="fleet-chips" role="group" aria-label="Фильтр автопарка">
-            {filters.map((item) => <button key={item.value} type="button" aria-pressed={filter === item.value}
+            {filters.filter((item) => item.value === 'ALL' || item.value === filter || counts[item.value] > 0).map((item) => <button key={item.value} type="button" aria-pressed={filter === item.value}
               className={classNames('filter-chip', filter === item.value && 'filter-chip-active', item.value === 'DECIDE' && counts.DECIDE > 0 && 'filter-chip-alert')}
               onClick={() => setFilter(item.value)}>{item.label}<span className="filter-chip-count">{counts[item.value]}</span></button>)}
           </div>
@@ -255,13 +255,15 @@ export function DashboardPage() {
             <DecisionGroups items={notifications.open} stopOf={(item) => item.stopId ? stopsById.get(item.stopId) : null} onSelect={focusVehicle} />
           </section> : null}
           <div className="fleet-section-head">
-            <h2 className="fleet-section-title">Машины</h2>
+            <div className="fleet-section-name">
+              <h2 className="fleet-section-title">Машины</h2>
+              <span className="fleet-sort-label">{sorts.find((item) => item.value === sort)?.label}</span>
+            </div>
             {me ? <div className="fleet-scope" role="group" aria-label="Чьи машины показать">
               {scopes.map((item) => <button key={item.value} type="button" aria-pressed={activeScope === item.value} className={classNames('fleet-scope-button', activeScope === item.value && 'fleet-scope-button-active')} onClick={() => setScope(item.value)}>
                 {item.label}<span className="fleet-scope-count">{item.value === 'MINE' ? vehicles.filter((row) => row.mine).length : item.value === 'FREE' ? vehicles.filter((row) => !row.assignedTo).length : vehicles.length}</span>
               </button>)}
             </div> : null}
-            <span className="fleet-sort-label">{sorts.find((item) => item.value === sort)?.label}</span>
           </div>
           {me && activeScope === 'MINE' && !hasMine ? <p className="fleet-scope-hint">У вас пока нет машин. Откройте «Весь парк» или «Свободные» и нажмите «Взять себе» в карточке машины.</p> : null}
           <div className="fleet-list">
@@ -333,7 +335,7 @@ function VehicleRow({ row, selected, open, pinned, owner, busy, onOpen, onRoute,
       <button type="button" className="vehicle-row-main" aria-current={selected ? 'true' : undefined} aria-expanded={open} onClick={onOpen}>
         <span className="vehicle-row-icon" aria-hidden="true"><Truck className="h-4 w-4" /></span>
         <span className="block min-w-0 flex-1">
-          <span className="vehicle-row-title"><strong>{number}</strong>{plate ? <span className="vehicle-row-muted">{plate}</span> : null}{row.customer ? <span className="vehicle-row-customer"><span className="customer-swatch" style={{ background: customerColor(row.customer) }} aria-hidden="true" />{row.customer.name}{row.line ? ` · ${row.line.name}` : ''}</span> : null}</span>
+          <span className="vehicle-row-title"><strong>{number}</strong>{plate && plate !== row.vehicle.vehicleNumber ? <span className="vehicle-row-muted">{plate}</span> : null}{row.customer ? <span className="vehicle-row-customer"><span className="customer-swatch" style={{ background: customerColor(row.customer) }} aria-hidden="true" />{row.customer.name}{row.line ? ` · ${row.line.name}` : ''}</span> : null}</span>
           <span className="vehicle-row-line"><span className={`status-dot status-dot-${status.tone}`} aria-hidden="true" /><span className={`vehicle-row-status status-text-${status.tone}`}>{status.label}</span>{place ? <span className="truncate">· {place}</span> : null}</span>
           <span className="vehicle-row-meta">
             {dwell ? <span>На точке {formatDurationMinutes(dwell)}</span> : null}
@@ -351,9 +353,11 @@ function VehicleRow({ row, selected, open, pinned, owner, busy, onOpen, onRoute,
         <div className="vehicle-card-actions">
           <VehicleActionButton row={row} busy={busy} onClick={onAction} />
           <button type="button" className="icon-button vehicle-route-button" onClick={onRoute} aria-label={`Маршрут ${number}`} title="Показать маршрут на карте"><Route className="h-4 w-4" aria-hidden="true" /></button>
-          <button type="button" className="icon-button vehicle-pin-button" onClick={onPin} aria-label={pinned ? `Открепить ${number}` : `Закрепить ${number}`} title={pinned ? 'Открепить' : 'Закрепить сверху'}>{pinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}</button>
         </div>
-        <span className={`source-tag source-tag-${source.kind}`} title={source.long}>{source.short}</span>
+        <div className="vehicle-card-tags">
+          <button type="button" className="icon-button vehicle-pin-button" onClick={onPin} aria-label={pinned ? `Открепить ${number}` : `Закрепить ${number}`} title={pinned ? 'Открепить' : 'Закрепить сверху'}>{pinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}</button>
+          <span className={`source-tag source-tag-${source.kind}`} title={source.long}>{source.short}</span>
+        </div>
       </div>
       {popover}
     </article>
