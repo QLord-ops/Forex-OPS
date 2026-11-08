@@ -503,3 +503,19 @@ CREATE TABLE "DispatcherLine" (
     CONSTRAINT "DispatcherLine_lineId_fkey" FOREIGN KEY ("lineId") REFERENCES "CustomerLine" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 CREATE INDEX "DispatcherLine_lineId_idx" ON "DispatcherLine"("lineId");
+
+CREATE TABLE "PushSubscription" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "endpoint" TEXT NOT NULL,
+    "p256dh" TEXT NOT NULL,
+    "auth" TEXT NOT NULL,
+    "dispatcherId" TEXT,
+    "workHoursJson" TEXT,
+    "failures" INTEGER NOT NULL DEFAULT 0,
+    "lastSentAt" DATETIME,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL,
+    CONSTRAINT "PushSubscription_dispatcherId_fkey" FOREIGN KEY ("dispatcherId") REFERENCES "Dispatcher" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+CREATE UNIQUE INDEX "PushSubscription_endpoint_key" ON "PushSubscription"("endpoint");
+CREATE INDEX "PushSubscription_dispatcherId_idx" ON "PushSubscription"("dispatcherId");

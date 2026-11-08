@@ -403,6 +403,26 @@ model Dispatcher {
 
   vehicles Vehicle[]
   lines    DispatcherLine[]
+  pushSubscriptions PushSubscription[]
+}
+
+/// A phone or browser that receives push notifications for a dispatcher. Endpoint and keys only (no device data);
+/// deleted on logout, when the dispatcher turns push off, or when the push service says it is gone.
+model PushSubscription {
+  id String @id @default(cuid())
+  endpoint String @unique
+  p256dh String
+  auth String
+  dispatcherId String?
+  dispatcher Dispatcher? @relation(fields: [dispatcherId], references: [id], onDelete: Cascade)
+  /// The working hours of that device: outside them only urgent decisions are pushed.
+  workHoursJson String?
+  failures Int @default(0)
+  lastSentAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([dispatcherId])
 }
 
 /// Appointment slip (Termin) recognised from a document before a matching stop exists. Never deleted: only the status changes.
