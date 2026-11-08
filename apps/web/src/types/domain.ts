@@ -540,6 +540,8 @@ export interface ImportedOrderDraft {
   tourRemarksSourcePage?: number | null
   /** Server id of the uploaded file this draft came from; sent back when the tour is saved. */
   documentId?: string | null
+  /** Whose Auftrag it is, as the server decided; the profile was applied only when `profileApplied`. */
+  customer?: ImportCustomer | null
   stops: ImportedStopDraft[]
   warnings: ImportWarning[]
 }
@@ -560,6 +562,20 @@ export interface OrderImportPreview {
   documentReused?: boolean
   /** Set when the same file was already saved with a tour. */
   attachedTourId?: string | null
+  customer?: ImportCustomer | null
+}
+
+/** How the customer of an Auftrag was found: picked by the dispatcher, printed in the letterhead, named by the AI, or the truck's line. */
+export type ImportCustomerSource = 'SELECTED' | 'DOCUMENT' | 'AI' | 'VEHICLE'
+export interface ImportCustomer {
+  id: string
+  key: string
+  name: string
+  source: ImportCustomerSource
+  confidence: number
+  /** False: the Auftrag was read without this customer's profile; it can be read again with it. */
+  profileApplied: boolean
+  detected: { id: string; key: string; name: string; source: ImportCustomerSource; confidence: number } | null
 }
 
 /** A recognised Termin slip; times are Berlin wall-clock "YYYY-MM-DDTHH:mm". */

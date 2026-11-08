@@ -181,7 +181,8 @@ export type ImportLearningOptions = { threshold?: number; exampleLimit?: number 
  * confirmed examples back into the next import. Nothing here ever blocks a tour: callers catch and log.
  */
 export class ImportLearningService {
-  private cache: { at: number; learned: LearnedImportRules } | null = null;
+  /** Learned rules per scope ('global' or a customer id), 30 s each. */
+  private cache = new Map<string, { at: number; learned: LearnedImportRules }>();
   private readonly threshold: number;
   private readonly exampleLimit: number;
 
@@ -194,6 +195,8 @@ export class ImportLearningService {
   async recordConfirmation(input: {
     documentId: string; tourId: string | null; dispatcherId: string | null; preview: unknown; orderNumber: string;
     confirmedStops: ConfirmedStopLike[]; tourRemarks: string | null; actor?: AuditActor;
+    /** The customer of the Auftrag: its corrections teach only its own rules. Null: rules for everyone (before customers). */
+    customerId?: string | null;
   }, now = new Date()) {
     const draft = pickDraft(input.preview, input.orderNumber);
     if (!draft) return { corrections: 0, rules: [] as RuleCandidate[] };
@@ -204,7 +207,7 @@ export class ImportLearningService {
     if (!fresh.length) return { corrections: 0, rules: [] };
     await this.db.importCorrection.createMany({
       data: fresh.map((correction) => ({
-        documentId: input.documentId, tourId: input.tourId, dispatcherId: input.dispatcherId, kind: correction.kind, field: correction.field,
+        documentId: input.documentId, tourId: input.tourId, dispatcherId: input.dispatcherId, customerId: input.customerId ?? null, kind: correction.kind, field: correction.field,
         aiValue: correction.aiValue?.slice(0, 500) ?? null, finalValue: correction.finalValue?.slice(0, 500) ?? null,
         contextJson: JSON.stringify(correction.context), signature: correction.signature.slice(0, 400), createdAt: now
       }))
@@ -215,10 +218,10 @@ export class ImportLearningService {
       for (const candidate of deriveRuleCandidates(correction)) {
         if (rules.some((rule) => rule.kind === candidate.kind && rule.pattern === candidate.pattern)) continue;
         rules.push(candidate);
-        await this.countRule(candidate, input.actor, now);
+        await this.countRule(candidate, input.customerId ?? GLOBAL_SCOPE, input.actor, now);
       }
     }
-    this.cache = null;
+    this.cache.clear();
     return { corrections: fresh.length, rules };
   }
 
@@ -234,24 +237,31 @@ export class ImportLearningService {
       postalCode: address.match(/\b\d{5}\b/)?.[0] ?? null, city: context.city, latitude: context.latitude, longitude: context.longitude }, actor, now).catch(() => undefined);
   }
 
-  private async countRule(candidate: RuleCandidate, actor: AuditActor | undefined, now: Date) {
-    const existing = await this.db.importRule.findUnique({ where: { scope_kind_pattern: { scope: GLOBAL_SCOPE, kind: candidate.kind, pattern: candidate.pattern } } });
+  /** The threshold counts inside one scope: two corrections at one customer teach that customer, not the others. */
+  private async countRule(candidate: RuleCandidate, scope: string, actor: AuditActor | undefined, now: Date) {
+    const existing = await this.db.importRule.findUnique({ where: { scope_kind_pattern: { scope, kind: candidate.kind, pattern: candidate.pattern } } });
     const hits = (existing?.hits ?? 0) + 1;
     // Activation happens exactly at the threshold: a rule an admin switched off later stays off however often it recurs.
     const activate = !existing?.builtIn && hits === this.threshold && !existing?.active;
     const saved = await this.db.importRule.upsert({
-      where: { scope_kind_pattern: { scope: GLOBAL_SCOPE, kind: candidate.kind, pattern: candidate.pattern } },
-      create: { kind: candidate.kind, pattern: candidate.pattern, value: candidate.value, hits, lastSeenAt: now, active: activate },
+      where: { scope_kind_pattern: { scope, kind: candidate.kind, pattern: candidate.pattern } },
+      create: { scope, kind: candidate.kind, pattern: candidate.pattern, value: candidate.value, hits, lastSeenAt: now, active: activate },
       update: { hits, lastSeenAt: now, ...(activate ? { active: true } : {}), ...(existing && !existing.active && candidate.value ? { value: candidate.value } : {}) }
     });
-    if (activate) await writeAuditLog(this.db, actor, { action: 'IMPORT_RULE_ACTIVATED', entityType: 'ImportRule', entityId: saved.id, metadata: { kind: candidate.kind, pattern: candidate.pattern, value: candidate.value, hits }, createdAt: now });
+    if (activate) await writeAuditLog(this.db, actor, { action: 'IMPORT_RULE_ACTIVATED', entityType: 'ImportRule', entityId: saved.id, metadata: { scope, kind: candidate.kind, pattern: candidate.pattern, value: candidate.value, hits }, createdAt: now });
   }
 
-  /** Active rules merged over the built-in ones; the import reads this on every preview (cached 30 s). */
-  async learned(): Promise<LearnedImportRules> {
-    if (this.cache && Date.now() - this.cache.at < 30_000) return this.cache.learned;
-    const rows = await this.db.importRule.findMany({ where: { active: true }, orderBy: { hits: 'desc' } }).catch(() => null);
-    if (!rows) return BUILT_IN_IMPORT_RULES;
+  /**
+   * Active rules merged over the built-in ones; the import reads this on every preview (cached 30 s). With a customer:
+   * the common rules plus that customer's, which win on the same pattern, and examples of that customer only.
+   */
+  async learned(customerId: string | null = null): Promise<LearnedImportRules> {
+    const scope = customerId ?? GLOBAL_SCOPE;
+    const cached = this.cache.get(scope);
+    if (cached && Date.now() - cached.at < 30_000) return cached.learned;
+    const found = await this.db.importRule.findMany({ where: { active: true, scope: { in: customerId ? [GLOBAL_SCOPE, customerId] : [GLOBAL_SCOPE] } }, orderBy: { hits: 'desc' } }).catch(() => null);
+    if (!found) return BUILT_IN_IMPORT_RULES;
+    const rows = [...found.filter((row) => row.scope === GLOBAL_SCOPE), ...found.filter((row) => row.scope !== GLOBAL_SCOPE)];
     const aliases: Record<string, string> = {};
     const ignoreLabels: Record<string, string | null> = {};
     const stopTypes: Record<string, 'LOAD' | 'UNLOAD'> = {};
@@ -260,17 +270,24 @@ export class ImportLearningService {
       else if (row.kind === 'IGNORE_LABEL') ignoreLabels[row.pattern] = row.value;
       else if (row.kind === 'STOP_TYPE' && (row.value === 'LOAD' || row.value === 'UNLOAD')) stopTypes[row.pattern] = row.value;
     }
-    const learned = withBuiltInImportRules({ aliases, ignoreLabels, stopTypes, rulesText: rulesText(rows), examplesText: await this.examplesText() });
-    this.cache = { at: Date.now(), learned };
+    const learned = withBuiltInImportRules({ aliases, ignoreLabels, stopTypes, rulesText: rulesText([...rows.filter((row) => row.scope !== GLOBAL_SCOPE), ...rows.filter((row) => row.scope === GLOBAL_SCOPE)]), examplesText: await this.examplesText(customerId) });
+    this.cache.set(scope, { at: Date.now(), learned });
     return learned;
   }
 
-  /** Up to a few recent tours the dispatchers corrected, as compact text: Tourbemerkung and the stops they saved. */
-  private async examplesText(): Promise<string> {
-    const documents = await this.db.orderDocument.findMany({
-      where: { status: 'ATTACHED', confirmedJson: { not: null }, corrections: { some: {} } },
-      orderBy: { attachedAt: 'desc' }, take: this.exampleLimit, select: { confirmedJson: true }
+  /**
+   * A few recent tours as compact text: Tourbemerkung and the stops the dispatchers saved. Without a customer the
+   * corrected ones of the whole fleet; with one, that customer's latest confirmed Auftrag, corrected ones first.
+   */
+  private async examplesText(customerId: string | null = null): Promise<string> {
+    const found = await this.db.orderDocument.findMany({
+      where: customerId
+        ? { customerId, status: 'ATTACHED', confirmedJson: { not: null } }
+        : { status: 'ATTACHED', confirmedJson: { not: null }, corrections: { some: {} } },
+      orderBy: { attachedAt: 'desc' }, take: customerId ? this.exampleLimit * 3 : this.exampleLimit,
+      select: { confirmedJson: true, _count: { select: { corrections: true } } }
     }).catch(() => []);
+    const documents = customerId ? [...found.filter((row) => row._count.corrections > 0), ...found.filter((row) => !row._count.corrections)].slice(0, this.exampleLimit) : found;
     const examples: string[] = [];
     let length = 0;
     for (const document of documents) {
@@ -282,21 +299,67 @@ export class ImportLearningService {
     return examples.join(' ');
   }
 
-  list() { return this.db.importRule.findMany({ orderBy: [{ active: 'desc' }, { hits: 'desc' }, { pattern: 'asc' }] }); }
+  /**
+   * Rules with their customer. `promotable`: the same rule is switched on at two or more customers and not yet
+   * common, so an admin may make it apply to everyone.
+   */
+  async list(customerId?: string | null) {
+    const rows = await this.db.importRule.findMany({
+      where: customerId ? { scope: { in: [GLOBAL_SCOPE, customerId] } } : {},
+      orderBy: [{ active: 'desc' }, { hits: 'desc' }, { pattern: 'asc' }]
+    });
+    const all = customerId ? await this.db.importRule.findMany({ where: { active: true } }) : rows;
+    const customers = new Map((await this.db.customer.findMany({ select: { id: true, name: true } })).map((customer) => [customer.id, customer]));
+    const key = (row: { kind: string; pattern: string; value: string | null }) => `${row.kind}:${row.pattern}:${row.value ?? ''}`;
+    const common = new Set(all.filter((row) => row.active && row.scope === GLOBAL_SCOPE).map(key));
+    const scopes = new Map<string, Set<string>>();
+    for (const row of all) if (row.active && row.scope !== GLOBAL_SCOPE) scopes.set(key(row), (scopes.get(key(row)) ?? new Set()).add(row.scope));
+    return rows.map((row) => ({
+      ...row,
+      customer: row.scope === GLOBAL_SCOPE ? null : customers.get(row.scope) ?? { id: row.scope, name: row.scope },
+      promotable: row.active && row.scope !== GLOBAL_SCOPE && !common.has(key(row)) && (scopes.get(key(row))?.size ?? 0) >= 2
+    }));
+  }
 
-  async correctionsSince(since: Date) { return this.db.importCorrection.count({ where: { createdAt: { gte: since } } }); }
+  /** The same rule learned at two customers becomes one common rule; the customer copies go (they would only repeat it). */
+  async promote(id: string, actor?: AuditActor, now = new Date()) {
+    const rule = await this.db.importRule.findUnique({ where: { id } });
+    if (!rule) throw Object.assign(new Error('Правило не найдено.'), { statusCode: 404 });
+    if (rule.scope === GLOBAL_SCOPE) throw Object.assign(new Error('Правило уже общее для всех заказчиков.'), { statusCode: 409 });
+    const copies = (await this.db.importRule.findMany({ where: { kind: rule.kind, pattern: rule.pattern, active: true, scope: { not: GLOBAL_SCOPE } } }))
+      .filter((row) => (row.value ?? '') === (rule.value ?? ''));
+    if (new Set(copies.map((row) => row.scope)).size < 2) throw Object.assign(new Error('Правило включено только у одного заказчика — общим его делать рано.'), { statusCode: 409 });
+    const hits = copies.reduce((sum, row) => sum + row.hits, 0);
+    const saved = await this.db.$transaction(async (tx) => {
+      const common = await tx.importRule.upsert({
+        where: { scope_kind_pattern: { scope: GLOBAL_SCOPE, kind: rule.kind, pattern: rule.pattern } },
+        create: { scope: GLOBAL_SCOPE, kind: rule.kind, pattern: rule.pattern, value: rule.value, hits, active: true, lastSeenAt: now },
+        update: { value: rule.value, active: true, hits: { increment: hits }, lastSeenAt: now }
+      });
+      await tx.importRule.deleteMany({ where: { id: { in: copies.map((row) => row.id) } } });
+      await writeAuditLog(tx, actor, { action: 'IMPORT_RULE_PROMOTED', entityType: 'ImportRule', entityId: common.id,
+        metadata: { kind: rule.kind, pattern: rule.pattern, value: rule.value, customers: copies.map((row) => row.scope) }, createdAt: now });
+      return common;
+    });
+    this.cache.clear();
+    return saved;
+  }
+
+  async correctionsSince(since: Date, customerId?: string | null) {
+    return this.db.importCorrection.count({ where: { createdAt: { gte: since }, ...(customerId ? { customerId } : {}) } });
+  }
 
   async update(id: string, patch: { active?: boolean; value?: string | null }, actor?: AuditActor) {
     const saved = await this.db.importRule.update({ where: { id }, data: patch });
     await writeAuditLog(this.db, actor, { action: 'IMPORT_RULE_UPDATED', entityType: 'ImportRule', entityId: id, metadata: { fields: Object.keys(patch), ...patch } });
-    this.cache = null;
+    this.cache.clear();
     return saved;
   }
 
   async remove(id: string, actor?: AuditActor) {
     const removed = await this.db.importRule.delete({ where: { id } });
-    await writeAuditLog(this.db, actor, { action: 'IMPORT_RULE_DELETED', entityType: 'ImportRule', entityId: id, metadata: { kind: removed.kind, pattern: removed.pattern } });
-    this.cache = null;
+    await writeAuditLog(this.db, actor, { action: 'IMPORT_RULE_DELETED', entityType: 'ImportRule', entityId: id, metadata: { kind: removed.kind, pattern: removed.pattern, scope: removed.scope } });
+    this.cache.clear();
   }
 }
 

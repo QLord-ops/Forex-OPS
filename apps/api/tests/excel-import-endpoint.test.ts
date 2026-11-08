@@ -148,7 +148,7 @@ describe("POST /imports/pdf/preview", () => {
       detectedLayout: "PDF",
       drafts: [{ orderNumber: "PDF-1", vehicleNumber: "936" }]
     });
-    expect(pdfImport).toHaveBeenCalledWith(file, "auftrag.pdf");
+    expect(pdfImport).toHaveBeenCalledWith(file, "auftrag.pdf", { cards: [], selected: null });
   });
 
   it("rejects disguised and malformed PDF uploads before calling OpenAI", async () => {
@@ -241,7 +241,7 @@ describe("POST /imports/image/preview", () => {
       detectedLayout: "IMAGE",
       drafts: [{ orderNumber: "IMG-1", stops: [{ city: "Berlin" }, { city: "Hamburg" }] }]
     });
-    expect(imageImport).toHaveBeenCalledWith(png, "auftrag.png", "image/png");
+    expect(imageImport).toHaveBeenCalledWith(png, "auftrag.png", "image/png", { cards: [], selected: null });
   });
 
   it("accepts valid JPEG and WebP screenshot signatures", async () => {
@@ -272,8 +272,8 @@ describe("POST /imports/image/preview", () => {
       expect(response.statusCode).toBe(200);
     }
 
-    expect(imageImport).toHaveBeenNthCalledWith(1, jpeg, "auftrag.jpg", "image/jpeg");
-    expect(imageImport).toHaveBeenNthCalledWith(2, webp, "auftrag.webp", "image/webp");
+    expect(imageImport).toHaveBeenNthCalledWith(1, jpeg, "auftrag.jpg", "image/jpeg", { cards: [], selected: null });
+    expect(imageImport).toHaveBeenNthCalledWith(2, webp, "auftrag.webp", "image/webp", { cards: [], selected: null });
   });
 
   it("rejects disguised screenshot uploads before calling OpenAI", async () => {

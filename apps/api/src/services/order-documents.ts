@@ -7,7 +7,7 @@ const DAY_MS = 24 * 3600_000;
 /** Everything about a document except its bytes: lists and tour cards never carry the file. */
 export const DOCUMENT_SELECT = {
   id: true, sha256: true, filename: true, mimeType: true, size: true, status: true,
-  uploadedByDispatcherId: true, vehicleId: true, tourId: true, attachedAt: true, createdAt: true
+  uploadedByDispatcherId: true, vehicleId: true, tourId: true, customerId: true, attachedAt: true, createdAt: true
 } satisfies Prisma.OrderDocumentSelect;
 
 export type OrderDocumentMeta = Prisma.OrderDocumentGetPayload<{ select: typeof DOCUMENT_SELECT }>;
@@ -42,20 +42,20 @@ export class OrderDocumentService {
     this.options = { ...readDocumentOptions(), ...options };
   }
 
-  async store(input: { buffer: Buffer; filename: string; mimeType: string; previewJson: unknown; actor?: AuditActor }) {
+  async store(input: { buffer: Buffer; filename: string; mimeType: string; previewJson: unknown; customerId?: string | null; actor?: AuditActor }) {
     const sha256 = sha256Of(input.buffer);
     const existing = await this.db.orderDocument.findUnique({ where: { sha256 }, select: DOCUMENT_SELECT });
     if (existing) {
       // A new parse of a still-unattached file replaces the old one; an attached file keeps the parse its tour was made from.
       if (existing.status === 'PENDING') {
-        await this.db.orderDocument.update({ where: { id: existing.id }, data: { previewJson: JSON.stringify(input.previewJson), filename: input.filename.slice(0, 300), createdAt: new Date() } });
+        await this.db.orderDocument.update({ where: { id: existing.id }, data: { previewJson: JSON.stringify(input.previewJson), filename: input.filename.slice(0, 300), customerId: input.customerId ?? null, createdAt: new Date() } });
       }
       return { id: existing.id, sha256, reused: true, attachedTourId: existing.tourId };
     }
     const created = await this.db.orderDocument.create({
       data: {
         sha256, filename: input.filename.slice(0, 300), mimeType: input.mimeType, size: input.buffer.length, content: input.buffer,
-        previewJson: JSON.stringify(input.previewJson), uploadedByDispatcherId: input.actor?.dispatcherId ?? null
+        previewJson: JSON.stringify(input.previewJson), customerId: input.customerId ?? null, uploadedByDispatcherId: input.actor?.dispatcherId ?? null
       },
       select: { id: true }
     });

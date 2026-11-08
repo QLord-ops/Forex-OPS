@@ -13,6 +13,8 @@ import type { CreateTourStopInput, GeocodeResult, ImportedOrderDraft, OrderImpor
 import { importFingerprint } from '../lib/import-fingerprint'
 import { berlinLocalToIso } from '../lib/berlin-time'
 import { AppointmentReview } from '../components/AppointmentReview'
+import { ImportCustomerNote, ImportCustomerSelect } from '../components/ImportCustomer'
+import { useImportCustomers } from '../hooks/useImportCustomers'
 
 interface StopDraft {
   id: string
@@ -142,6 +144,7 @@ export function NewOrderPage() {
   const geocodeGeneration = useRef(new Map<string, number>())
   const [error, setError] = useState<Error | null>(null)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
+  const importCustomers = useImportCustomers(null)
 
   const selectedVehicle = vehicles.data?.find((vehicle) => vehicle.id === vehicleId)
   const selectedImportItem = importItems.find((item) => item.id === importSelection?.itemId)
@@ -213,6 +216,7 @@ export function NewOrderPage() {
     const queuedItems: ImportQueueItem[] = newFiles.map(({ file, key }) => ({ id: crypto.randomUUID(), key, fileName: file.name, fileType: classifyImportFile(file), status: 'queued', completedDraftIndexes: [] }))
     setImportItems((current) => [...current, ...queuedItems]); setImporting(true)
     let selectionClaimed = Boolean(importSelection)
+    const customerId = importCustomers.customerId
     try {
       for (const [index, { file }] of newFiles.entries()) {
         const item = queuedItems[index]
@@ -220,7 +224,7 @@ export function NewOrderPage() {
         try {
           validateImportFile(file)
           const kind = classifyImportFile(file)
-          const preview = kind === 'PDF' ? await api.importPdf(file) : kind === 'EXCEL' ? await api.importExcel(file) : kind === 'IMAGE' ? await api.importImage(file) : null
+          const preview = kind === 'PDF' ? await api.importPdf(file, customerId) : kind === 'EXCEL' ? await api.importExcel(file, customerId) : kind === 'IMAGE' ? await api.importImage(file, customerId) : null
           // A Termin slip is not an order: it opens its own review and creates no tour.
           if (preview?.documentKind === 'APPOINTMENT' && preview.appointment?.fingerprint && preview.match) {
             const termin = { preview, fileName: file.name }
@@ -236,6 +240,22 @@ export function NewOrderPage() {
           setImportItems((current) => current.map((candidate) => candidate.id === item.id ? { ...candidate, status: 'error', error: message } : candidate))
         }
       }
+    } finally { setImporting(false) }
+  }
+
+  /** The stored file read again for another customer; the open draft is replaced by the new reading. */
+  async function reparseItem(itemId: string, customerId: string | null) {
+    const documentId = importItems.find((item) => item.id === itemId)?.preview?.documentId
+    if (!documentId) return
+    setImporting(true); setError(null)
+    try {
+      const preview = await api.reparseDocument(documentId, customerId)
+      if (!preview.drafts.length) throw new Error('В файле не найден Auftrag.')
+      setImportItems((current) => current.map((item) => item.id === itemId ? { ...item, preview } : item))
+      const index = Math.min(importSelection?.itemId === itemId ? importSelection.draftIndex : 0, preview.drafts.length - 1)
+      hydrateDraft({ itemId, draftIndex: index }, preview.drafts[index])
+    } catch (err) {
+      setError(err instanceof Error ? err : new Error('Не удалось разобрать Auftrag заново.'))
     } finally { setImporting(false) }
   }
 
@@ -330,6 +350,7 @@ export function NewOrderPage() {
       </div>
 
       {!manualMode ? <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        {importCustomers.customers.length ? <div className="max-w-xs px-4 pt-4"><ImportCustomerSelect customers={importCustomers.customers} value={importCustomers.customerId} onChange={importCustomers.setCustomerId} disabled={importing} /></div> : null}
         <div className={`m-4 rounded-xl border-2 border-dashed px-5 py-7 transition-colors ${isImportDragging ? 'border-sky-500 bg-sky-50' : 'border-slate-300 bg-slate-50/70'}`} onDragEnter={(event) => { event.preventDefault(); setIsImportDragging(true) }} onDragOver={(event) => event.preventDefault()} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setIsImportDragging(false) }} onDrop={(event) => void handleImportDrop(event)}>
           <div className="flex flex-wrap items-center justify-between gap-5"><div className="flex min-w-0 items-start gap-4"><div className="rounded-xl bg-sky-100 p-3 text-sky-700"><Upload className="h-6 w-6" /></div><div><h3 className="text-lg font-bold text-slate-950">Перетащите Auftrag сюда</h3><p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">PDF, Excel или скриншот. Адреса, города и термины распознаются автоматически; файлы можно добавлять очередью.</p><p className="mt-1 text-xs text-slate-500">PDF до 20 МБ · Excel до 5 МБ · PNG, JPG или WebP до 10 МБ</p></div></div>
             <label className={`primary-button cursor-pointer ${importing ? 'pointer-events-none opacity-60' : ''}`}>{importing ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}{importing ? 'Распознаём…' : 'Выбрать файлы'}<input className="sr-only" type="file" multiple accept=".pdf,.xlsx,.png,.jpg,.jpeg,.webp,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,image/png,image/jpeg,image/webp" onChange={(event) => void handleOrderImport(event)} disabled={importing} /></label>
@@ -343,6 +364,8 @@ export function NewOrderPage() {
       {vehicles.data && hasOrderDraft ? <section className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
         <div className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-4"><div><h3 className="text-lg font-bold">Маршрут Auftrag</h3><p className="text-sm text-slate-500">Загрузка идёт первой, выгрузка — следующей. Норма точки: 60 минут.</p></div>{selectedImportItem ? <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">{selectedImportItem.fileName}</span> : null}</div>
+          {selectedImportItem?.preview && importCustomers.customers.length ? <div className="px-4 pt-4 sm:px-5"><ImportCustomerNote customer={selectedImportItem.preview.customer} customers={importCustomers.customers} busy={importing}
+            canReparse={Boolean(selectedImportItem.preview.documentId)} onReparse={(customerId) => void reparseItem(selectedImportItem.id, customerId)} /></div> : null}
           <div className="space-y-3 p-4 sm:p-5">{stops.map((stop, index) => {
             const isActive = editing && activeStopId === stop.id; const geocoding = geocodingStopIds.includes(stop.id)
             return <article id={`order-stop-${stop.id}`} key={stop.id} className={`overflow-hidden rounded-xl border transition ${stop.geocodeError ? 'border-red-400 bg-red-50/40' : isActive ? 'border-sky-500 ring-2 ring-sky-100' : 'border-slate-200'}`}>

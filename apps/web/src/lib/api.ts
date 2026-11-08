@@ -95,6 +95,14 @@ export interface DispatcherAccount {
 
 const json = (method: string, body: unknown): RequestInit => ({ method, body: JSON.stringify(body) })
 
+/** An Auftrag upload; `customerId` picks the customer profile the AI reads it with ('auto' or nothing: detected after reading). */
+function importFile(path: string, file: File, customerId?: string | null) {
+  const body = new FormData()
+  body.append('file', file)
+  const query = customerId ? `?customerId=${encodeURIComponent(customerId)}` : ''
+  return request<OrderImportPreview>(`${path}${query}`, { method: 'POST', body })
+}
+
 export type CustomerCategory = 'OEM_LOGISTICS' | 'WAREHOUSE' | 'SPOT' | 'OTHER'
 export interface CustomerProfile {
   version: 1
@@ -148,7 +156,14 @@ export const accountsApi = {
 
 export interface AddressRule { id: string; pattern: string; kind: string; company: string | null; street: string | null; postalCode: string | null; city: string | null
   latitude: number | null; longitude: number | null; requiresTermin: boolean; hits: number; updatedAt: string }
-export interface ImportRule { id: string; kind: string; pattern: string; value: string | null; active: boolean; hits: number; applied: number; builtIn: boolean; lastSeenAt: string | null; createdAt: string; updatedAt: string }
+export interface ImportRule {
+  id: string; kind: string; pattern: string; value: string | null; active: boolean; hits: number; applied: number; builtIn: boolean; lastSeenAt: string | null; createdAt: string; updatedAt: string
+  /** 'global' or the customer id the rule was learned for. */
+  scope: string
+  customer: { id: string; name: string } | null
+  /** Switched on at two or more customers: an admin may make it common. */
+  promotable: boolean
+}
 export interface RouteOption { id: string; distanceMeters: number; durationSeconds: number; trafficDelaySeconds: number; mainRoads: string[]; providerStatus: string; geometry: Coordinate[] }
 export interface RouteOptions { vehicleId: string; version: number; legId: string; checkedAt: string; offRouteMeters: number | null
   current: { remainingDistanceMeters: number; eta: string | null; geometry: Coordinate[] }; options: RouteOption[] }
@@ -207,7 +222,9 @@ export const api = {
   updateAddressRule: (id: string, patch: Partial<Pick<AddressRule, 'company' | 'street' | 'postalCode' | 'city' | 'requiresTermin'>>) =>
     request<AddressRule>(`/address-rules/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   deleteAddressRule: (id: string) => request<void>(`/address-rules/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-  importRules: () => request<{ rules: ImportRule[]; builtIn: Array<Pick<ImportRule, 'kind' | 'pattern' | 'value'>>; corrections: { last7d: number } }>('/import-rules'),
+  importRules: (customerId?: string | null) => request<{ rules: ImportRule[]; builtIn: Array<Pick<ImportRule, 'kind' | 'pattern' | 'value'>>; corrections: { last7d: number } }>(
+    customerId ? `/import-rules?customerId=${encodeURIComponent(customerId)}` : '/import-rules'),
+  promoteImportRule: (id: string) => request<ImportRule>(`/import-rules/${encodeURIComponent(id)}/promote`, { method: 'POST', body: '{}' }),
   updateImportRule: (id: string, patch: { active?: boolean; value?: string | null }) =>
     request<ImportRule>(`/import-rules/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   deleteImportRule: (id: string) => request<void>(`/import-rules/${encodeURIComponent(id)}`, { method: 'DELETE' }),
@@ -258,21 +275,12 @@ export const api = {
   alerts: () => request<Alert[]>('/alerts'),
   history: (vehicleId?: string) =>
     request<HistoryResponse>(vehicleId ? `/history?vehicleId=${encodeURIComponent(vehicleId)}` : '/history'),
-  importExcel: (file: File) => {
-    const body = new FormData()
-    body.append('file', file)
-    return request<OrderImportPreview>('/imports/excel/preview', { method: 'POST', body })
-  },
-  importPdf: (file: File) => {
-    const body = new FormData()
-    body.append('file', file)
-    return request<OrderImportPreview>('/imports/pdf/preview', { method: 'POST', body })
-  },
-  importImage: (file: File) => {
-    const body = new FormData()
-    body.append('file', file)
-    return request<OrderImportPreview>('/imports/image/preview', { method: 'POST', body })
-  },
+  importExcel: (file: File, customerId?: string | null) => importFile('/imports/excel/preview', file, customerId),
+  importPdf: (file: File, customerId?: string | null) => importFile('/imports/pdf/preview', file, customerId),
+  importImage: (file: File, customerId?: string | null) => importFile('/imports/image/preview', file, customerId),
+  /** The stored Auftrag read again with another customer's profile (null: automatic detection). */
+  reparseDocument: (documentId: string, customerId: string | null) =>
+    request<OrderImportPreview>(`/documents/${encodeURIComponent(documentId)}/reparse`, { method: 'POST', body: JSON.stringify({ customerId }) }),
   geocode: (address: string) => request<GeocodeResult>(`/geocode?address=${encodeURIComponent(address)}`),
   resolveAddress: (payload: { address: string; city?: string | null; company?: string | null }) =>
     request<AddressResolution>('/geocode/resolve', { method: 'POST', body: JSON.stringify(payload) })

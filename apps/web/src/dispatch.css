@@ -467,7 +467,9 @@ button.decision-card-title:focus-visible { outline: 2px solid var(--focus); outl
 .rules-table th { border-bottom: 1px solid rgb(var(--ln-e3e8ef)); padding: 6px 8px; color: rgb(var(--tx-64748b)); font-size: .75rem; font-weight: 500; text-align: left; }
 .rules-table td { border-bottom: 1px solid rgb(var(--ln-eef1f5)); padding: 8px; vertical-align: top; }
 .rules-table td strong { display: block; font-weight: 600; }
-.rules-table td span { color: rgb(var(--tx-64748b)); font-size: .75rem; }
+.rules-table td span { display: block; color: rgb(var(--tx-64748b)); font-size: .75rem; }
+.rules-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; white-space: nowrap; }
+.rules-filter { display: grid; gap: 4px; max-width: 280px; margin-bottom: 12px; }
 .rules-toggle { display: inline-flex; align-items: center; gap: 6px; }
 .rules-builtin summary { cursor: pointer; color: rgb(var(--tx-334155)); font-size: .875rem; }
 .rules-builtin p { margin-top: 6px; color: rgb(var(--tx-475569)); font-size: .8125rem; line-height: 1.5; }

@@ -49,6 +49,8 @@ export type TourAggregate = Prisma.TourGetPayload<{
 export type CreateTourInput = {
   vehicleId: string;
   orderNumber: string;
+  /** The customer the Auftrag was read for (set by the server from the stored document, never by the client). */
+  customerId?: string | null;
   trailerPlate?: string | null;
   tourRemarks?: string | null;
   stops: Array<{
@@ -155,10 +157,13 @@ export class TourService {
         for (const tour of later) await tx.tour.update({ where: { id: tour.id }, data: { queueIndex: { increment: 1 } } });
       }
 
+      const customer = await tourCustomer(tx, context.vehicle.customerLineId, input.customerId);
       const tour = await tx.tour.create({
         data: {
           vehicleId: context.vehicle.id,
           orderNumber: input.orderNumber,
+          customerId: customer.customerId,
+          customerLineId: customer.customerLineId,
           importAttemptId: metadata?.importAttemptId,
           importFingerprint: metadata?.importFingerprint,
           trailerPlate: input.trailerPlate?.trim() || null,
@@ -201,6 +206,7 @@ export class TourService {
       const tour = await tx.tour.create({ data: {
         vehicleId: vehicle.id,
         orderNumber: input.tour.orderNumber.trim(),
+        customerId: input.tour.customerId ?? null,
         trailerPlate: input.tour.trailerPlate?.trim() || null,
         tourRemarks: input.tour.tourRemarks?.trim() || null,
         status: "ACTIVE",
@@ -621,6 +627,13 @@ function parseReferenceNumbers(value: string | null): string[] | null {
   } catch {
     return null;
   }
+}
+
+/** The tour's customer: the one its Auftrag was read for, else the customer of the truck's line; the line only when it is that customer's. */
+async function tourCustomer(tx: Prisma.TransactionClient, customerLineId: string | null | undefined, customerId: string | null | undefined) {
+  const line = customerLineId ? await tx.customerLine.findUnique({ where: { id: customerLineId }, select: { id: true, customerId: true } }) : null;
+  const customer = customerId ?? line?.customerId ?? null;
+  return { customerId: customer, customerLineId: line && line.customerId === customer ? line.id : null };
 }
 
 async function readPlanningContext(db: Prisma.TransactionClient, input: CreateTourInput, tourId?: string) {
