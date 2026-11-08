@@ -3,6 +3,7 @@
  * They work while OPS is open in a browser tab, also in the background.
  */
 import { isWorkTime, lastShiftEnd, type WorkHours } from './work-hours'
+import { showWorkerNotification } from './pwa'
 
 export type AlertPriority = 'ACTION' | 'RISK' | 'INFO'
 export interface AlertNotification {
@@ -176,13 +177,18 @@ export function cardLink(vehicleId: string) {
 }
 
 export function showSystemAlert(item: AlertNotification, onOpen: (path: string) => void) {
-  if (alertPermission() !== 'granted') return null
-  try {
-    // One window per notification id; requireInteraction keeps it on screen until the dispatcher reacts.
-    const shown = new window.Notification(alertHeading(item.type), { body: item.message, tag: item.id, requireInteraction: true })
-    shown.onclick = () => { window.focus(); onOpen(cardLink(item.vehicleId)); shown.close() }
-    return shown
-  } catch { return null }
+  if (alertPermission() !== 'granted') return
+  const title = alertHeading(item.type)
+  const url = cardLink(item.vehicleId)
+  // One window per notification id; requireInteraction keeps it on screen until the dispatcher reacts.
+  // The installed app and Android only allow notifications through the service worker; a desktop tab uses the page.
+  void showWorkerNotification(title, { body: item.message, tag: item.id, requireInteraction: true, icon: '/icons/icon-192.png', data: { url } }).then((shown) => {
+    if (shown) return
+    try {
+      const page = new window.Notification(title, { body: item.message, tag: item.id, requireInteraction: true })
+      page.onclick = () => { window.focus(); onOpen(url); page.close() }
+    } catch { /* notifications are optional */ }
+  })
 }
 
 export function summaryText(summary: { total: number; decisions: number; night: boolean }) {
@@ -192,7 +198,10 @@ export function summaryText(summary: { total: number; decisions: number; night: 
 
 export function showSummaryAlert(summary: { total: number; decisions: number; night: boolean }) {
   if (alertPermission() !== 'granted' || summary.total <= 0) return
-  try { new window.Notification(BASE_TITLE, { body: summaryText(summary), tag: 'ops-summary' }).onclick = () => window.focus() } catch { /* ignore */ }
+  void showWorkerNotification(BASE_TITLE, { body: summaryText(summary), tag: 'ops-summary', icon: '/icons/icon-192.png', data: { url: '/' } }).then((shown) => {
+    if (shown) return
+    try { new window.Notification(BASE_TITLE, { body: summaryText(summary), tag: 'ops-summary' }).onclick = () => window.focus() } catch { /* ignore */ }
+  })
 }
 
 let audio: AudioContext | null = null

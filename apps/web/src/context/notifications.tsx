@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import { usePolling } from '../hooks/usePolling'
 import { closableWith, isLead, needsAttention, planAlerts, playAlertSound, readDeferred, readSeen, showSummaryAlert, showSystemAlert, stackOf as stackIn, titleWithCount, writeDeferred, writeSeen, type AlertNotification } from '../lib/alerts'
 import { readWorkHours, WORK_HOURS_EVENT, type WorkHours } from '../lib/work-hours'
+import { onServiceWorkerOpen } from '../lib/pwa'
 import { api } from '../lib/api'
 import { pendingToDocument } from '../lib/appointments'
 import type { PendingAppointment } from '../types/domain'
@@ -65,6 +66,9 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
     stream.addEventListener('open', refetch)
     return () => stream.close()
   }, [refetch])
+
+  // «Открыть» on a notification shown by the service worker lands on the truck in this window.
+  useEffect(() => onServiceWorkerOpen((path) => navigate(path)), [navigate])
 
   const [workHours, setWorkHours] = useState<WorkHours>(readWorkHours)
   useEffect(() => {
