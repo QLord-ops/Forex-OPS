@@ -31,10 +31,19 @@ type Props = {
   row: DashboardVehicle | null
   onClose: () => void
   onTrack: (points: Coordinate[] | null) => void
+  /** Phone: a sheet over the current tab with a handle — strip, half, full screen. */
+  sheet?: boolean
 }
 
+type SheetSize = 'strip' | 'half' | 'full'
+const SHEET_SIZES: SheetSize[] = ['strip', 'half', 'full']
+
 /** Truck card: the same tabs and calculations a dispatcher knows from the telematics portal, in OPS styling. */
-export function TruckCard({ vehicleId, row, onClose, onTrack }: Props) {
+export function TruckCard({ vehicleId, row, onClose, onTrack, sheet = false }: Props) {
+  const [size, setSize] = useState<SheetSize>('half')
+  const drag = useRef<{ start: number; moved: boolean } | null>(null)
+  // A tap on the handle goes one step up (full → back to half); a drag of 40 px up or down moves one step that way.
+  const step = (direction: 1 | -1) => setSize((current) => SHEET_SIZES[Math.min(2, Math.max(0, SHEET_SIZES.indexOf(current) + direction))])
   const { data, error, loading, refetch } = usePolling(() => api.vehicleCard(vehicleId), 30_000, true, vehicleId)
   const [tab, setTab] = useState<TabId>(readTab)
   const [track, setTrack] = useState<'off' | 'loading' | 'on'>('off')
@@ -87,7 +96,19 @@ export function TruckCard({ vehicleId, row, onClose, onTrack }: Props) {
   const unresolved = data?.events?.unresolved ?? 0
 
   return (
-    <aside className="truck-card" role="dialog" aria-modal="false" aria-labelledby="truck-card-title">
+    <aside className={sheet ? `truck-card truck-card-sheet truck-card-sheet-${size}` : 'truck-card'} role="dialog" aria-modal="false" aria-labelledby="truck-card-title">
+      {sheet ? <button type="button" className="truck-sheet-handle" aria-label={size === 'full' ? 'Свернуть карточку наполовину' : 'Развернуть карточку'}
+        onPointerDown={(event) => { drag.current = { start: event.clientY, moved: false } }}
+        onPointerUp={(event) => {
+          if (!drag.current) return
+          const moved = event.clientY - drag.current.start
+          if (Math.abs(moved) > 40) { step(moved < 0 ? 1 : -1); drag.current.moved = true }
+        }}
+        onClick={() => {
+          const dragged = drag.current?.moved
+          drag.current = null
+          if (!dragged) setSize((current) => current === 'half' ? 'full' : 'half')
+        }} /> : null}
       <header className="truck-card-header">
         <div className="min-w-0">
           <h2 id="truck-card-title" ref={headingRef} tabIndex={-1} className="truck-card-title">{title}</h2>

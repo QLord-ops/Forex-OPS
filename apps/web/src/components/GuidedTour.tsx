@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { accountsApi } from '../lib/api'
 import { currentDispatcher, currentOnboardingCompletedAt, setOnboardingCompletedAt } from '../lib/auth'
 import { ONBOARDING_EVENT, ONBOARDING_LOCAL_KEY, ONBOARDING_STEPS, type OnboardingStep } from '../lib/onboarding-steps'
+import { isPhone } from '../hooks/useIsPhone'
 
 type Box = { top: number; left: number; width: number; height: number }
 const PAD = 6
@@ -51,7 +52,8 @@ export function GuidedTour() {
     let tries = 0
     const find = () => {
       if (cancelled) return
-      const element = step.selector ? document.querySelector<HTMLElement>(step.selector) : null
+      const selector = isPhone() && step.mobileSelector !== undefined ? step.mobileSelector : step.selector
+      const element = selector ? document.querySelector<HTMLElement>(selector) : null
       if (element) {
         element.scrollIntoView({ block: 'center', inline: 'nearest' })
         const rect = element.getBoundingClientRect()

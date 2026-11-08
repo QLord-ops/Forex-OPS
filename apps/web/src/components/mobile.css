@@ -1,0 +1,66 @@
+/* Phone layout (≤ 767 px), the installed app: bottom tabs instead of the top bar and the bell, the truck list and the map
+   as two tabs, the truck card as a sheet. Targets 44 px, fields 16 px (no iOS zoom), safe areas, no sideways scroll. */
+.mobile-tabbar, .mobile-only, .truck-sheet-handle { display: none; }
+
+@media (max-width: 767px) {
+  :root { --tabbar-h: 58px; --safe-top: env(safe-area-inset-top, 0px); --safe-bottom: env(safe-area-inset-bottom, 0px); }
+  .topbar { display: none; }
+  .mobile-only { display: inline-flex; }
+  .app-shell { padding-top: var(--safe-top); padding-bottom: calc(var(--tabbar-h) + var(--safe-bottom)); }
+  .page-main { padding: 16px 16px 24px; }
+  .dashboard-main { height: calc(100dvh - var(--tabbar-h) - var(--safe-bottom) - var(--safe-top)); padding: 0; }
+  .app-shell input:not([type='checkbox']):not([type='radio']), .app-shell select, .app-shell textarea { font-size: 16px; }
+
+  .mobile-tabbar {
+    position: fixed; z-index: 45; right: 0; bottom: 0; left: 0;
+    display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
+    height: calc(var(--tabbar-h) + var(--safe-bottom)); padding: 0 4px var(--safe-bottom);
+    border-top: 1px solid rgb(var(--ln-e3e8ef)); background: rgb(var(--bg-ffffff));
+  }
+  .mobile-tab { display: grid; min-height: 44px; place-items: center; align-content: center; gap: 2px; color: rgb(var(--tx-64748b)); font-size: .6875rem; font-weight: 500; }
+  .mobile-tab-active { color: rgb(var(--tx-0f172a)); font-weight: 600; }
+  .mobile-tab-active .mobile-tab-icon { color: var(--acc); }
+  .mobile-tab:focus-visible { outline: 2px solid var(--focus); outline-offset: -4px; border-radius: 10px; }
+  .mobile-tab-icon { position: relative; display: inline-flex; }
+  .mobile-tab-badge { position: absolute; top: -7px; right: -12px; display: grid; min-width: 18px; height: 18px; place-items: center; border: 2px solid rgb(var(--ln-ffffff)); border-radius: 999px; background: rgb(var(--bg-dc2626)); padding: 0 4px; color: #fff; font-size: .625rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  /* Disposition: the list or the map, never both squeezed. */
+  .dashboard-screen { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 0; }
+  .dashboard-view-list .dashboard-stage, .dashboard-view-map .fleet-rail { display: none; }
+  /* «Требует решения» has its own tab on the phone. */
+  .fleet-rail .decision-section { display: none; }
+  .fleet-rail, .dashboard-stage { border-width: 0; border-radius: 0; }
+  .operations-toast { bottom: calc(var(--tabbar-h) + var(--safe-bottom) + 8px); }
+
+  /* The truck card: a sheet over the current tab — strip, half, full screen. */
+  .truck-card.truck-card-sheet { position: fixed; z-index: 44; top: auto; right: 0; bottom: calc(var(--tabbar-h) + var(--safe-bottom)); left: 0; width: auto; max-height: none; border-width: 1px 0 0; border-radius: 16px 16px 0 0; box-shadow: 0 -8px 24px rgb(var(--shadow-rgb) / 0.18); transition: height .18s ease; }
+  .truck-card-sheet-strip { height: 132px; }
+  .truck-card-sheet-half { height: 62dvh; }
+  .truck-card-sheet-full { height: calc(100dvh - var(--tabbar-h) - var(--safe-bottom) - var(--safe-top) - 8px); }
+  .truck-card-sheet-strip .truck-card-tabbar, .truck-card-sheet-strip .truck-card-body, .truck-card-sheet-strip .assignment-bar { display: none; }
+  .truck-sheet-handle { display: grid; width: 100%; min-height: 28px; flex: none; place-items: center; touch-action: none; cursor: grab; }
+  .truck-sheet-handle::before { content: ""; width: 44px; height: 5px; border-radius: 999px; background: rgb(var(--ln-cbd5e1)); }
+  .truck-sheet-handle:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; border-radius: 12px; }
+
+  /* «Ещё» */
+  .more-page { display: grid; gap: 14px; }
+  .more-who { display: flex; align-items: center; gap: 12px; padding: 4px 2px; }
+  .more-who strong { display: block; font-size: 1rem; font-weight: 600; }
+  .more-who span span, .more-who > span:last-child > span { display: block; color: rgb(var(--tx-64748b)); font-size: .8125rem; }
+  .more-assistant { display: flex; min-height: 64px; align-items: center; gap: 12px; border-radius: 14px; background: var(--acc); padding: 12px 16px; color: var(--acc-ink); text-align: left; }
+  .more-assistant strong { display: block; font-size: 1rem; font-weight: 600; }
+  .more-assistant span span { display: block; opacity: .85; font-size: .8125rem; }
+  .more-assistant > svg:last-child { margin-left: auto; flex: none; }
+  .more-assistant:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  .more-list { display: grid; overflow: hidden; border: 1px solid rgb(var(--ln-e3e8ef)); border-radius: 14px; background: rgb(var(--bg-ffffff)); }
+  .more-list > * + * { border-top: 1px solid rgb(var(--ln-eef1f5)); }
+  .more-item { display: flex; width: 100%; min-height: 52px; align-items: center; gap: 12px; padding: 0 16px; color: rgb(var(--tx-0f172a)); font-size: .9375rem; text-align: left; }
+  .more-item > svg:first-child { flex: none; color: rgb(var(--tx-475569)); }
+  .more-item:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+  .more-item-label { flex: 1; min-width: 0; }
+  .more-item-note { color: rgb(var(--tx-64748b)); font-size: .8125rem; }
+  .more-item-chevron { flex: none; color: rgb(var(--tx-94a3b8)); }
+  .more-item .theme-toggle-label, .more-item .alert-toggle-label { flex: 1; }
+  .more-logout { color: rgb(var(--tx-b91c1c)); }
+  .more-logout > svg { color: inherit !important; }
+}

@@ -9,6 +9,7 @@ import { formatTime } from '../lib/format'
 import { terminText } from '../lib/tours'
 import type { Stop } from '../types/domain'
 import { AppointmentReview } from './AppointmentReview'
+import { useIsPhone } from '../hooks/useIsPhone'
 
 type Tone = 'late' | 'termin' | 'arrival' | 'ok' | 'info'
 
@@ -156,12 +157,15 @@ export function OperationsNotifications() {
   const [permission, setPermission] = useState<AlertPermission>(alertPermission)
   const [banner, setBanner] = useState(() => !bannerDismissed())
   const onDashboard = location.pathname === '/'
+  // On a phone the «Решения» tab with its badge already says it; on «Решения» the card is on the page.
+  const phone = useIsPhone()
+  const quiet = onDashboard || phone || location.pathname.startsWith('/decisions')
 
   if (state.termin) return <div className="appointment-review-overlay" role="dialog" aria-modal="true" aria-label="Проверка термина">
     <AppointmentReview document={pendingToDocument(state.termin)} fingerprint={state.termin.fingerprint} match={state.termin.match} pendingId={state.termin.id} fileName="Ожидающий Termin"
       onApplied={() => void state.closeTermin(true)} onSaved={() => void state.closeTermin(false)} onSkip={() => void state.closeTermin(false)} />
   </div>
-  const current = onDashboard ? undefined : state.open.find(needsAttention)
+  const current = quiet ? undefined : state.open.find(needsAttention)
   const askPermission = permission === 'default' && banner
   if (!current && !askPermission) return null
   return <aside role="dialog" aria-labelledby={current ? `decision-${current.id}` : 'operations-permission-heading'} className="operations-toast">

@@ -16,6 +16,8 @@ const AlertsPage = lazy(() => import('./pages/AlertsPage').then((module) => ({ d
 const HistoryPage = lazy(() => import('./pages/HistoryPage').then((module) => ({ default: module.HistoryPage })))
 const AnalyticsPage = lazy(() => import('./pages/AnalyticsPage').then((module) => ({ default: module.AnalyticsPage })))
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then((module) => ({ default: module.SettingsPage })))
+const DecisionsPage = lazy(() => import('./pages/DecisionsPage').then((module) => ({ default: module.DecisionsPage })))
+const MorePage = lazy(() => import('./pages/MorePage').then((module) => ({ default: module.MorePage })))
 const DispatchersPage = lazy(() => import('./pages/DispatchersPage').then((module) => ({ default: module.DispatchersPage })))
 const CustomersPage = lazy(() => import('./pages/CustomersPage').then((module) => ({ default: module.CustomersPage })))
 const CustomerPage = lazy(() => import('./pages/CustomerPage').then((module) => ({ default: module.CustomerPage })))
@@ -47,6 +49,8 @@ export function App() {
         <Route path="customers" element={page(<CustomersPage />)} />
         <Route path="customers/:id" element={page(<CustomerPage />)} />
         <Route path="settings" element={page(<SettingsPage />)} />
+        <Route path="decisions" element={page(<DecisionsPage />)} />
+        <Route path="more" element={page(<MorePage />)} />
         <Route path="help" element={page(<HelpPage />)} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
