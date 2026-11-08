@@ -1,4 +1,4 @@
-import { Bell, ChartColumn, ClipboardList, FileText, Map as MapIcon, Menu, Route, Settings, Truck } from 'lucide-react'
+import { Bell, Building2, ChartColumn, ClipboardList, FileText, Map as MapIcon, Menu, Route, Settings, Truck } from 'lucide-react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 
 import { NotificationsProvider, useNotifications } from '../context/notifications'
@@ -15,6 +15,7 @@ const navItems = [
   { to: '/', label: 'Диспозиция', icon: MapIcon, also: [] as string[] },
   { to: '/orders/new', label: 'Auftrag', icon: FileText, also: [] },
   { to: '/vehicles', label: 'Машины', icon: Truck, also: [] },
+  { to: '/customers', label: 'Заказчики', icon: Building2, also: [] },
   { to: '/tours', label: 'Туры', icon: Route, also: [] },
   { to: '/status', label: 'Статус', icon: ClipboardList, also: [] },
   { to: '/analytics', label: 'Аналитика', icon: ChartColumn, also: ['/history', '/alerts'] },

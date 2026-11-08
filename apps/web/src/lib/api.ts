@@ -86,6 +86,7 @@ export interface DispatcherAccount {
   login: string
   displayName: string
   onboardingCompletedAt?: string | null
+  lines?: Array<{ lineId: string; isPrimary: boolean }>
   role: 'admin' | 'dispatcher'
   active: boolean
   lastLoginAt: string | null
@@ -93,6 +94,47 @@ export interface DispatcherAccount {
 }
 
 const json = (method: string, body: unknown): RequestInit => ({ method, body: JSON.stringify(body) })
+
+export type CustomerCategory = 'OEM_LOGISTICS' | 'WAREHOUSE' | 'SPOT' | 'OTHER'
+export interface CustomerProfile {
+  version: 1
+  import: { routeSource: 'TOUR_REMARKS' | 'TABLE' | 'EMAIL_TEXT'; warehouseWords: string[]; carrierNames: string[]; dateOnlyMeansPlannedStart: boolean; zuladungWords: string[]; aiNotes: string }
+  statusList: { enabled: boolean; dueLocalTime: string; excludedVehicles: string[]; weColumnLabel: string | null; showASchild: boolean; showAppSped: boolean }
+  defaults: { serviceMinMinutes: number; serviceMaxMinutes: number; arrivalRadiusMeters: number }
+}
+export interface CustomerLine {
+  id: string; customerId: string; code: string; name: string; active: boolean; sortIndex: number
+  departmentCompany: string | null; departmentAddress: string | null; departmentCity: string | null
+  vehicleCount: number; dispatchers: Array<{ id: string; name: string; primary: boolean }>
+}
+export interface Customer {
+  id: string; name: string; slug: string; category: CustomerCategory; color: string | null; active: boolean
+  aliases: string[]; profile: CustomerProfile; lines: CustomerLine[]; createdAt: string; updatedAt: string
+}
+export interface CustomerOverview {
+  vehicles: number; activeTours: number; tours30d: number; documents: number; documentsWithoutCorrections: number
+  mostCorrected: Array<{ field: string; count: number }>; learnedRules: number
+  recentDocuments: Array<{ id: string; filename: string; mimeType: string; status: string; tourId: string | null; createdAt: string }>
+}
+export interface CustomerMigrationItem { slug: string; name: string; exists: boolean; statusList: boolean; lines: Array<{ code: string; name: string; vehicles: string[] }> }
+type ProfilePatch = { import?: Partial<CustomerProfile['import']>; statusList?: Partial<CustomerProfile['statusList']>; defaults?: Partial<CustomerProfile['defaults']> }
+
+export const customersApi = {
+  list: () => request<{ customers: Customer[] }>('/customers').then((result) => result.customers),
+  get: (id: string) => request<Customer & { overview: CustomerOverview }>(`/customers/${encodeURIComponent(id)}`),
+  create: (input: { name: string; category?: CustomerCategory; aliases?: string[]; color?: string | null }) => request<{ id: string }>('/customers', json('POST', input)),
+  update: (id: string, input: { name?: string; category?: CustomerCategory; aliases?: string[]; color?: string | null; active?: boolean; profile?: ProfilePatch }) =>
+    request<{ id: string }>(`/customers/${encodeURIComponent(id)}`, json('PATCH', input)),
+  addLine: (customerId: string, input: { code: string; name: string; departmentCompany?: string | null; departmentAddress?: string | null; departmentCity?: string | null }) =>
+    request<{ id: string }>(`/customers/${encodeURIComponent(customerId)}/lines`, json('POST', input)),
+  updateLine: (id: string, input: { name?: string; active?: boolean; departmentCompany?: string | null; departmentAddress?: string | null; departmentCity?: string | null; sortIndex?: number }) =>
+    request<{ id: string }>(`/customer-lines/${encodeURIComponent(id)}`, json('PATCH', input)),
+  setVehicleLine: (vehicleId: string, lineId: string | null) => request<{ id: string }>(`/vehicles/${encodeURIComponent(vehicleId)}/customer-line`, json('PUT', { lineId })),
+  setDispatcherLines: (dispatcherId: string, lineIds: string[], primaryLineId: string | null) =>
+    request<{ lines: unknown[] }>(`/dispatchers/${encodeURIComponent(dispatcherId)}/lines`, json('PUT', { lineIds, primaryLineId })),
+  migrationPreview: () => request<{ customers: CustomerMigrationItem[] }>('/customers/migration-preview').then((result) => result.customers),
+  migrate: () => request<{ result: Array<{ slug: string; created: boolean; lines: number; vehicles: number }> }>('/customers/migrate-from-lines', json('POST', {})).then((result) => result.result)
+}
 
 export const accountsApi = {
   list: () => request<DispatcherAccount[]>('/dispatchers'),

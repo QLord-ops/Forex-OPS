@@ -6,12 +6,17 @@ import { Link } from 'react-router-dom'
 import { DataTable } from '../components/DataTable'
 import { WebfleetConnectionPanel } from '../components/WebfleetConnectionPanel'
 import { SchnelleckePreset, VehicleStatusCells } from '../components/VehicleStatusSettings'
+import { CustomerLineSelect } from '../components/CustomerLineCells'
 import { EmptyState, ErrorState, LoadingState } from '../components/States'
 import { usePolling } from '../hooks/usePolling'
-import { api } from '../lib/api'
+import { api, customersApi } from '../lib/api'
 
 export function VehiclesPage() {
   const { data, error, loading, refetch } = usePolling(api.vehicles, 30_000)
+  const customersQuery = usePolling(customersApi.list, 0)
+  const customers = customersQuery.data ?? []
+  // With customers set up, a truck gets one customer line; before that, the old line and block fields stay.
+  const byCustomer = customers.length > 0
   const [vehicleNumber, setVehicleNumber] = useState('')
   const [licensePlate, setLicensePlate] = useState('')
   const [maxSpeedKmh, setMaxSpeedKmh] = useState(85)
@@ -70,7 +75,7 @@ export function VehiclesPage() {
       </div>
 
       <WebfleetConnectionPanel vehicles={vehicles} />
-      <SchnelleckePreset onApplied={() => void refetch()} />
+      {byCustomer ? null : <SchnelleckePreset onApplied={() => void refetch()} />}
 
       <form className="work-surface p-4" onSubmit={handleCreateVehicle}>
         <div className="grid items-end gap-3 md:grid-cols-[180px_220px_160px_auto]">
@@ -103,7 +108,7 @@ export function VehiclesPage() {
       {createError ? <ErrorState error={createError} /> : null}
 
       {vehicles.length ? (
-        <DataTable columns={['Грузовик', 'Госномер', 'Макс. скорость', 'Линия', 'Группа', 'Телефон машины', 'A Schild', 'AppSped', '']}>
+        <DataTable columns={byCustomer ? ['Грузовик', 'Госномер', 'Макс. скорость', 'Заказчик · линия', 'Телефон машины', 'A Schild', 'AppSped', ''] : ['Грузовик', 'Госномер', 'Макс. скорость', 'Линия', 'Группа', 'Телефон машины', 'A Schild', 'AppSped', '']}>
           {vehicles.map((vehicle) => (
             <tr key={vehicle.id} className="hover:bg-slate-50">
               {editing?.id === vehicle.id ? <td className="px-3 py-3" colSpan={3}>
@@ -120,7 +125,8 @@ export function VehiclesPage() {
                 <td className="px-3 py-3 text-sm">{vehicle.licensePlate || '–'}</td>
                 <td className="px-3 py-3 text-sm tabular-nums">{vehicle.maxSpeedKmh} км/ч</td>
               </>}
-              <VehicleStatusCells vehicle={vehicle} onSaved={() => void refetch()} />
+              {byCustomer ? <CustomerLineSelect vehicle={vehicle} customers={customers} onSaved={() => void refetch()} /> : null}
+              <VehicleStatusCells vehicle={vehicle} onSaved={() => void refetch()} withLine={!byCustomer} />
               <td className="px-3 py-3 text-right">
                 <span className="inline-flex gap-1">
                   <button type="button" className="secondary-button min-h-9 px-2" onClick={() => setEditing({ id: vehicle.id, vehicleNumber: vehicle.vehicleNumber, licensePlate: vehicle.licensePlate ?? '', maxSpeedKmh: vehicle.maxSpeedKmh, busy: false, error: '' })} aria-label={`Изменить грузовик ${vehicle.vehicleNumber}`}>

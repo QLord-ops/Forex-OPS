@@ -20,6 +20,8 @@ import { currentStopOf, terminOf } from '../lib/tours'
 import { classNames, formatAppointment, formatDateTime, formatDurationMinutes, formatTime, shortAddress, statusLabel, stopTypeLabel } from '../lib/format'
 import type { Coordinate, CurrentPosition, DashboardVehicle, Stop } from '../types/domain'
 import { zuladungState } from '../lib/zuladung'
+import { customerColor } from '../lib/customers'
+import '../components/customers.css'
 
 const PIN_STORAGE_KEY = 'ops-dashboard-pinned-vehicles'
 const SORT_STORAGE_KEY = 'ops-dashboard-sort'
@@ -41,6 +43,7 @@ export function DashboardPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<FleetFilter>('ALL')
+  const [customerFilter, setCustomerFilter] = useState<string | null>(null)
   const [sort, setSort] = useState<FleetSort>(() => readSort())
   const [scope, setScope] = useState<FleetScope | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -120,7 +123,17 @@ export function DashboardPage() {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
+  const customerChips = useMemo(() => {
+    const seen = new Map<string, { id: string; name: string; slug: string; color: string | null; count: number }>()
+    for (const row of vehicles) if (row.customer) {
+      const entry = seen.get(row.customer.id) ?? { ...row.customer, count: 0 }
+      entry.count += 1
+      seen.set(row.customer.id, entry)
+    }
+    return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name))
+  }, [vehicles])
   const scoped = orderedVehicles.filter((row) => activeScope === 'FLEET' || (activeScope === 'MINE' ? row.mine : !row.assignedTo))
+    .filter((row) => !customerFilter || row.customer?.id === customerFilter)
   const needle = query.trim().toLocaleLowerCase('ru-RU')
   const searched = scoped.filter((row) => !needle || [row.vehicle.vehicleNumber, `lkw ${row.vehicle.vehicleNumber}`, row.vehicle.licensePlate, row.telemetry?.objectNo, row.tour?.orderNumber, shortAddress(row.from), shortAddress(row.to)]
     .some((value) => value?.toLocaleLowerCase('ru-RU').includes(needle)))
@@ -229,6 +242,12 @@ export function DashboardPage() {
               className={classNames('filter-chip', filter === item.value && 'filter-chip-active', item.value === 'DECIDE' && counts.DECIDE > 0 && 'filter-chip-alert')}
               onClick={() => setFilter(item.value)}>{item.label}<span className="filter-chip-count">{counts[item.value]}</span></button>)}
           </div>
+          {customerChips.length > 1 ? <div className="fleet-customers" role="group" aria-label="Заказчик">
+            <button type="button" aria-pressed={!customerFilter} className={classNames('filter-chip', !customerFilter && 'filter-chip-active')} onClick={() => setCustomerFilter(null)}>Все заказчики</button>
+            {customerChips.map((item) => <button key={item.id} type="button" aria-pressed={customerFilter === item.id} className={classNames('filter-chip', customerFilter === item.id && 'filter-chip-active')} onClick={() => setCustomerFilter(customerFilter === item.id ? null : item.id)}>
+              <span className="customer-swatch" style={{ background: customerColor(item), width: 8, height: 8 }} aria-hidden="true" />{item.name}<span className="filter-chip-count">{item.count}</span>
+            </button>)}
+          </div> : null}
         </div>
         <div className="fleet-scroll">
           {notifications.open.length ? <section className="decision-section" aria-label="Требует решения">
@@ -314,7 +333,7 @@ function VehicleRow({ row, selected, open, pinned, owner, busy, onOpen, onRoute,
       <button type="button" className="vehicle-row-main" aria-current={selected ? 'true' : undefined} aria-expanded={open} onClick={onOpen}>
         <span className="vehicle-row-icon" aria-hidden="true"><Truck className="h-4 w-4" /></span>
         <span className="block min-w-0 flex-1">
-          <span className="vehicle-row-title"><strong>{number}</strong>{plate ? <span className="vehicle-row-muted">{plate}</span> : null}</span>
+          <span className="vehicle-row-title"><strong>{number}</strong>{plate ? <span className="vehicle-row-muted">{plate}</span> : null}{row.customer ? <span className="vehicle-row-customer"><span className="customer-swatch" style={{ background: customerColor(row.customer) }} aria-hidden="true" />{row.customer.name}{row.line ? ` · ${row.line.name}` : ''}</span> : null}</span>
           <span className="vehicle-row-line"><span className={`status-dot status-dot-${status.tone}`} aria-hidden="true" /><span className={`vehicle-row-status status-text-${status.tone}`}>{status.label}</span>{place ? <span className="truncate">· {place}</span> : null}</span>
           <span className="vehicle-row-meta">
             {dwell ? <span>На точке {formatDurationMinutes(dwell)}</span> : null}

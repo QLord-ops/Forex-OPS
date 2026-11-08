@@ -17,6 +17,8 @@ const HistoryPage = lazy(() => import('./pages/HistoryPage').then((module) => ({
 const AnalyticsPage = lazy(() => import('./pages/AnalyticsPage').then((module) => ({ default: module.AnalyticsPage })))
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then((module) => ({ default: module.SettingsPage })))
 const DispatchersPage = lazy(() => import('./pages/DispatchersPage').then((module) => ({ default: module.DispatchersPage })))
+const CustomersPage = lazy(() => import('./pages/CustomersPage').then((module) => ({ default: module.CustomersPage })))
+const CustomerPage = lazy(() => import('./pages/CustomerPage').then((module) => ({ default: module.CustomerPage })))
 const HelpPage = lazy(() => import('./pages/HelpPage').then((module) => ({ default: module.HelpPage })))
 
 function PageLoading() {
@@ -42,6 +44,8 @@ export function App() {
         <Route path="history" element={page(<HistoryPage />)} />
         <Route path="dispatchers" element={page(<DispatchersPage />)} />
         <Route path="analytics" element={page(<AnalyticsPage />)} />
+        <Route path="customers" element={page(<CustomersPage />)} />
+        <Route path="customers/:id" element={page(<CustomerPage />)} />
         <Route path="settings" element={page(<SettingsPage />)} />
         <Route path="help" element={page(<HelpPage />)} />
         <Route path="*" element={<Navigate to="/" replace />} />
