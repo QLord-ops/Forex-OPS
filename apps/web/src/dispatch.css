@@ -517,16 +517,16 @@ button.decision-card-title:focus-visible { outline: 2px solid var(--focus); outl
 .field-stop-doubt { border-color: rgb(var(--ln-dc2626)) !important; }
 .field-gate { margin: 0; color: rgb(var(--tx-9f1239)); font-size: .75rem; }
 
-/* Top bar: eight sections fit on a laptop. The account shows only its initials below 1600 px, the wordmark goes below
-   1300 px, and below 1180 px the sections move into «Меню». Nothing may run under the bell. */
-@media (max-width: 1600px) {
-  .account-menu-name { display: none; }
-}
-@media (max-width: 1300px) {
-  .topbar-brand .brand-wordmark { display: none; }
-  .topbar-brand { padding-right: 12px; }
-  .topbar-link { padding: 0 10px; }
-}
+/* Top bar: nothing may run under the bell. Font widths differ per system, so the bar measures itself
+   (hooks/useTopbarFit.ts) and steps down: 1) only the account's initials, 2) no wordmark and tighter sections,
+   3) sections in «Меню». The 1180 px rule above stays as the first paint before the measurement. */
+.topbar-fit-1 .account-menu-name { display: none; }
+.topbar-fit-2 { gap: 12px; }
+.topbar-fit-2 .topbar-brand .brand-wordmark { display: none; }
+.topbar-fit-2 .topbar-brand { padding-right: 12px; }
+.topbar-fit-2 .topbar-link { padding: 0 10px; }
+.topbar-fit-3 .topbar-nav { display: none; }
+.topbar-fit-3 .topbar-menu { display: block; }
 
 /* The truck list stays put (owner, 08.11): nothing in it scrolls sideways. Filters wrap onto the next line, the
    «Мои / Весь парк / Свободные» switch drops below the title when the panel is narrow, the truck number is never cut. */

@@ -19,8 +19,14 @@ const row = (index: number) => {
   }
 }
 
-for (const width of [1280, 1440, 1512]) {
-  test(`Диспозиция на ширине ${width}: шапка не наезжает, список не ездит вбок, номер машины виден целиком`, async ({ page }) => {
+// The system font decides text width (Segoe on Windows, SF on a Mac, DejaVu in CI); Verdana is wider than all of them.
+for (const font of ['system', 'wide'] as const) for (const width of [1280, 1440, 1512]) {
+  test(`Диспозиция ${width} px, шрифт ${font}: шапка не наезжает, список не ездит вбок, номер машины виден целиком`, async ({ page }) => {
+    if (font === 'wide') await page.addInitScript(() => document.addEventListener('DOMContentLoaded', () => {
+      const style = document.createElement('style')
+      style.textContent = ':root { font-family: Verdana, "DejaVu Sans", sans-serif !important; }'
+      document.head.append(style)
+    }))
     await page.route('**/api/**', async (route) => {
       const path = new URL(route.request().url()).pathname.replace(/^\/api/, '')
       if (path === '/auth/session') return json(route, { authenticated: true, role: 'admin', csrfToken: 'e2e', dispatcherId: 'd1', displayName: 'Yeevhenii Stolovoi', onboardingCompletedAt: '2026-11-01T00:00:00Z' })
