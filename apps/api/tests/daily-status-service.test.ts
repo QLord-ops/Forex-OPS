@@ -67,7 +67,9 @@ describe('07:00 schedule', () => {
   it('two instances at the same moment make one list', async () => {
     const at = new Date('2026-11-05T06:00:00Z');
     const results = await Promise.all([service().runIfDue(at), service().runIfDue(at)]);
-    expect(results.sort()).toEqual(['BUSY', 'GENERATED']);
+    // The second instance either finds the claim (BUSY) or the finished list (DONE); it never makes a second one.
+    expect(results.filter((result) => result === 'GENERATED')).toHaveLength(1);
+    expect(results.every((result) => ['GENERATED', 'BUSY', 'DONE'].includes(result))).toBe(true);
     expect(await db.dailyStatusReport.count()).toBe(1);
   });
   it('waits for Webfleet up to 10 minutes after 07:00 or after a restart, then marks the list preliminary', async () => {

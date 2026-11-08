@@ -26,7 +26,9 @@ function badRequest(message: string, statusCode = 400) {
 export function registerDispatcherRoutes(app: FastifyInstance, prisma: PrismaClient) {
   const admin = { preHandler: requireDispatcherRoles('admin') };
 
-  app.get('/dispatchers', admin, async () => prisma.dispatcher.findMany({ select: publicFields, orderBy: [{ active: 'desc' }, { displayName: 'asc' }] }));
+  app.get('/dispatchers', admin, async () => prisma.dispatcher.findMany({
+    select: { ...publicFields, lines: { select: { lineId: true, isPrimary: true } } }, orderBy: [{ active: 'desc' }, { displayName: 'asc' }]
+  }));
 
   /** Colleagues a truck can be handed over to; names only. */
   app.get('/dispatchers/directory', async () => prisma.dispatcher.findMany({ where: { active: true }, select: { id: true, displayName: true }, orderBy: { displayName: 'asc' } }));
