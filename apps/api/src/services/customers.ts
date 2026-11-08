@@ -1,6 +1,7 @@
 import type { Prisma, PrismaClient } from '@prisma/client';
 import { writeAuditLog, type AuditActor } from './audit-log.js';
 import { mergeProfile, OEM_TOUR_REMARKS_TEMPLATE, parseProfile, SCHNELLECKE_PROFILE, type CustomerCategory, type CustomerProfile } from './customer-profile.js';
+import type { ImportCustomerContext } from './pdf-order-import.js';
 
 const DAY_MS = 24 * 3600_000;
 
@@ -51,6 +52,23 @@ export class CustomerService {
       include: { lines: { orderBy: [{ sortIndex: 'asc' }, { name: 'asc' }], include: lineInclude } }
     });
     return customers.map((customer) => this.present(customer));
+  }
+
+  /**
+   * What the Auftrag import needs: a short card of every active customer and, when the dispatcher picked one, its
+   * import profile and the Abteilung warehouses of its lines. An archived or unknown customer cannot be picked.
+   */
+  async importContext(selectedId: string | null): Promise<ImportCustomerContext> {
+    const customers = await this.db.customer.findMany({
+      where: { active: true }, orderBy: { name: 'asc' },
+      include: { lines: { where: { active: true }, orderBy: { sortIndex: 'asc' }, select: { departmentCompany: true, departmentCity: true } } }
+    });
+    const cards = customers.map((customer) => ({ id: customer.id, key: customer.slug, name: customer.name, aliases: aliasesOf(customer.aliasesJson), carrierNames: parseProfile(customer.profileJson).import.carrierNames }));
+    if (!selectedId) return { cards, selected: null };
+    const customer = customers.find((item) => item.id === selectedId);
+    if (!customer) throw new CustomerError('Заказчик не найден или в архиве.', 404);
+    const departments = [...new Set(customer.lines.map((line) => [line.departmentCompany, line.departmentCity].filter(Boolean).join(' ')).filter(Boolean))];
+    return { cards, selected: { id: customer.id, key: customer.slug, name: customer.name, profile: parseProfile(customer.profileJson).import, departments } };
   }
 
   async get(id: string, now = new Date()) {

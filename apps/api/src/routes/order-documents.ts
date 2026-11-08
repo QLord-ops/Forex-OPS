@@ -1,8 +1,12 @@
+import type { PrismaClient } from '@prisma/client';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import type { AuditActor } from '../services/audit-log.js';
+import { writeAuditLog, type AuditActor } from '../services/audit-log.js';
+import type { ImportCustomer } from '../services/customer-resolver.js';
+import type { CustomerService } from '../services/customers.js';
 import { requireDispatcherRoles } from '../services/dispatcher-auth.js';
 import type { OrderDocumentService } from '../services/order-documents.js';
+import type { ImportCustomerContext } from '../services/pdf-order-import.js';
 
 const idParams = z.object({ id: z.string().trim().min(1).max(64) });
 
@@ -61,5 +65,41 @@ export function registerOrderDocumentRoutes(app: FastifyInstance, documents: Ord
     const removed = await documents.discard(id, actorOf(request));
     if (!removed) return reply.status(409).send({ error: 'Удалить можно только Auftrag, который ещё не сохранён в туре.' });
     return { ok: true };
+  });
+}
+
+type StoredFile = { content: Buffer; filename: string; mimeType: string };
+type ReparsedPreview = { customer?: ImportCustomer | null; documentKind?: string; drafts: Array<unknown>; warnings: Array<{ code: string; message: string }> };
+
+export type OrderReparseDeps = {
+  documents: OrderDocumentService;
+  customers: Pick<CustomerService, 'importContext'>;
+  db: PrismaClient;
+  /** Reads the stored file again for this customer (AI for PDF and images, the stored parse for Excel). */
+  read: (file: StoredFile, previewJson: string, customer: ImportCustomerContext, request: FastifyRequest) => Promise<{ preview: ReparsedPreview } | { status: number; error: string }>;
+  /** Saves the new parse on the same document row (same file, same sha256) and returns what the client gets. */
+  store: (preview: ReparsedPreview, file: StoredFile, request: FastifyRequest) => Promise<unknown>;
+};
+
+/**
+ * Another customer picked in the check: the stored file is read again with that customer's profile, without a new
+ * upload. Only a document no tour was saved from; a saved one is history.
+ */
+export function registerOrderReparseRoute(app: FastifyInstance, deps: OrderReparseDeps) {
+  app.post('/documents/:id/reparse', { preHandler: requireDispatcherRoles('admin', 'dispatcher'), config: { rateLimit: { max: 5, timeWindow: '1 minute' } } }, async (request, reply) => {
+    const { id } = idParams.parse(request.params);
+    const { customerId } = z.object({ customerId: z.string().trim().min(1).max(64).nullable() }).parse(request.body ?? {});
+    const document = await deps.documents.get(id);
+    if (!document) return reply.status(404).send({ error: 'Auftrag не найден.' });
+    if (document.status !== 'PENDING') return reply.status(409).send({ error: 'Auftrag уже сохранён в туре — разобрать заново можно только до сохранения.' });
+    const file = await deps.documents.file(id);
+    if (!file) return reply.status(410).send({ error: 'Файл Auftrag больше не хранится — загрузите его заново.' });
+    const context = await deps.customers.importContext(customerId);
+    const result = await deps.read(file, document.previewJson, context, request);
+    if ('error' in result) return reply.status(result.status).send({ error: result.error });
+    const stored = await deps.store(result.preview, file, request);
+    await writeAuditLog(deps.db, actorOf(request), { action: 'ORDER_DOCUMENT_REPARSED', entityType: 'OrderDocument', entityId: id,
+      metadata: { from: document.customerId, customerId, customer: result.preview.customer?.key ?? null } });
+    return stored;
   });
 }

@@ -23,7 +23,7 @@ describe('CLAUDE.md rule 7: every mutating route writes the audit log', () => {
       const body = source.slice(match.index, starts[index + 1]?.index ?? source.length).split(/\n\s*app\.(get|register|addHook|setErrorHandler)\(/)[0];
       if (NOT_AUDITED.has(route)) return;
       // The daily list audits inside its service: generate() and editRow() write the entry; so does discard() of a document.
-      if (!/\baudit\(|writeAuditLog\(|auditActor\(request\)|\.generate\(|\.editRow\(|\.runNow\(|\.discard\(|learning\.(update|remove)\(|customers\.(create|update|addLine|updateLine|setVehicleLine|setDispatcherLines|migrateFromLines)\(/.test(body)) missing.push(route);
+      if (!/\baudit\(|writeAuditLog\(|auditActor\(request\)|\.generate\(|\.editRow\(|\.runNow\(|\.discard\(|learning\.(update|remove|promote)\(|customers\.(create|update|addLine|updateLine|setVehicleLine|setDispatcherLines|migrateFromLines)\(/.test(body)) missing.push(route);
     });
     expect(missing).toEqual([]);
   });

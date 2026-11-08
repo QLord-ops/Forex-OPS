@@ -56,13 +56,14 @@ import { writeAuditLog, type AuditActor } from './services/audit-log.js';
 import { matchAppointment } from './services/appointment-match.js';
 import { documentFingerprint, PendingAppointmentService } from './services/pending-appointments.js';
 import { OrderDocumentService } from './services/order-documents.js';
-import { registerOrderDocumentRoutes } from './routes/order-documents.js';
+import { registerOrderDocumentRoutes, registerOrderReparseRoute } from './routes/order-documents.js';
 import { CustomerService, isMine } from './services/customers.js';
+import { resolveImportCustomer, vehicleKey, type ImportCustomer } from './services/customer-resolver.js';
 import { registerCustomerRoutes } from './routes/customers.js';
 import { ImportLearningService } from './services/import-learning.js';
 import { registerImportRuleRoutes } from './routes/import-rules.js';
 import { registerAppointmentDocumentRoutes } from './routes/appointments.js';
-import type { DocumentImportPreview } from './services/pdf-order-import.js';
+import type { CustomerEvidence, DocumentImportPreview, ImportCustomerContext } from './services/pdf-order-import.js';
 
 function auditActor(request: FastifyRequest): AuditActor | undefined {
   return request.dispatcherSession
@@ -137,7 +138,7 @@ async function attachDocument(documentId: string, tourId: string, vehicleId: str
     const document = await orderDocuments.get(documentId);
     if (!document) return;
     await importLearning.recordConfirmation({
-      documentId, tourId, dispatcherId: request.dispatcherSession?.dispatcherId ?? null, preview: JSON.parse(document.previewJson) as unknown,
+      documentId, tourId, dispatcherId: request.dispatcherSession?.dispatcherId ?? null, customerId: document.customerId, preview: JSON.parse(document.previewJson) as unknown,
       orderNumber: confirmed.orderNumber, confirmedStops: confirmed.stops, tourRemarks: confirmed.tourRemarks ?? null, actor: auditActor(request)
     });
   } catch (error) {
@@ -153,10 +154,10 @@ async function withDocument<T extends TourAggregate>(tour: T): Promise<T> {
 }
 
 /** The Auftrag file stays with the tour it will create. A storage failure never costs the dispatcher the parse. */
-async function withStoredDocument<T extends { documentKind?: string; drafts: Array<unknown>; warnings: Array<{ code: string; message: string }> }>(preview: T, file: { buffer: Buffer; filename: string; mimeType: string }, request: FastifyRequest) {
+async function withStoredDocument<T extends { documentKind?: string; drafts: Array<unknown>; warnings: Array<{ code: string; message: string }>; customer?: ImportCustomer | null }>(preview: T, file: { buffer: Buffer; filename: string; mimeType: string }, request: FastifyRequest) {
   if (preview.documentKind === 'APPOINTMENT' || !preview.drafts?.length) return { ...preview, documentId: null, documentReused: false, attachedTourId: null };
   try {
-    const stored = await orderDocuments.store({ ...file, previewJson: preview, actor: auditActor(request) });
+    const stored = await orderDocuments.store({ ...file, previewJson: preview, customerId: preview.customer?.id ?? null, actor: auditActor(request) });
     const warnings = stored.attachedTourId
       ? [...preview.warnings, { code: 'DOCUMENT_ALREADY_ATTACHED', message: 'Этот файл уже сохранён с другим туром — проверьте, не дубль ли это.' }]
       : preview.warnings;
@@ -166,6 +167,33 @@ async function withStoredDocument<T extends { documentKind?: string; drafts: Arr
     return { ...preview, documentId: null, documentReused: false, attachedTourId: null };
   }
 }
+/** `?customerId=` of an import: a customer id, or nothing / "auto" for automatic detection. */
+async function importCustomerContext(request: FastifyRequest): Promise<ImportCustomerContext> {
+  const { customerId } = z.object({ customerId: z.string().trim().max(64).optional() }).parse(request.query ?? {});
+  const selected = customerId && customerId !== 'auto' ? customerId : null;
+  // Without a choice the import still runs when the customer list cannot be read; a chosen customer must exist.
+  return selected ? customerService.importContext(selected) : customerService.importContext(null).catch(() => ({ cards: [], selected: null }));
+}
+
+/** Customers of the trucks the Auftrag names (number or plate → the truck's line). */
+async function vehicleCustomerIds(drafts: Array<{ vehicleNumber?: string | null; vehiclePlate?: string | null }>): Promise<string[]> {
+  const wanted = new Set(drafts.flatMap((draft) => [vehicleKey(draft.vehicleNumber), vehicleKey(draft.vehiclePlate)]).filter(Boolean));
+  if (!wanted.size) return [];
+  const vehicles = await prisma.vehicle.findMany({ where: { customerLineId: { not: null } }, select: { vehicleNumber: true, licensePlate: true, customerLine: { select: { customerId: true } } } });
+  return [...new Set(vehicles.filter((vehicle) => wanted.has(vehicleKey(vehicle.vehicleNumber)) || (vehicle.licensePlate && wanted.has(vehicleKey(vehicle.licensePlate))))
+    .map((vehicle) => vehicle.customerLine?.customerId).filter((id): id is string => Boolean(id)))];
+}
+
+/** The preview learns whose Auftrag it is; a failed lookup never costs the dispatcher the parse. */
+async function withCustomer<T extends { documentKind?: string; drafts: Array<{ vehicleNumber?: string | null; vehiclePlate?: string | null }>; warnings: Array<{ code: string; message: string }>; customerEvidence?: CustomerEvidence }>(
+  preview: T, context: ImportCustomerContext
+): Promise<T & { customer: ImportCustomer | null }> {
+  if (preview.documentKind === 'APPOINTMENT' || !preview.drafts?.length) return { ...preview, customer: null };
+  const vehicles = await vehicleCustomerIds(preview.drafts).catch(() => []);
+  const { customer, warnings } = resolveImportCustomer({ cards: context.cards, selectedId: context.selected?.id ?? null, evidence: preview.customerEvidence, vehicleCustomerIds: vehicles });
+  return { ...preview, customer, warnings: [...preview.warnings.filter((warning) => !warning.code.startsWith('CUSTOMER_')), ...warnings] };
+}
+
 // Automatic arrival from fresh Webfleet GPS (zone + standstill); AUTO_ARRIVAL_ENABLED=false keeps it a suggestion.
 const autoArrival: AutoArrivalHandler | undefined = process.env.AUTO_ARRIVAL_ENABLED === 'false' ? undefined
   : (input) => operationsService.confirmArrival(input.stopId, input.arrivedAt, input.now, SYSTEM_WEBFLEET_ACTOR, { source: 'WEBFLEET_AUTO', meta: input.meta });
@@ -265,8 +293,8 @@ const patchTourSchema = z.union([
 
 export interface BuildAppOptions {
   auth?: DispatcherAuthOptions;
-  pdfImport?: (buffer: Buffer, filename: string) => Promise<PdfImportPreview>;
-  imageImport?: (buffer: Buffer, filename: string, mimeType: "image/png" | "image/jpeg" | "image/webp") => Promise<ImageImportPreview>;
+  pdfImport?: (buffer: Buffer, filename: string, customer?: ImportCustomerContext | null) => Promise<PdfImportPreview>;
+  imageImport?: (buffer: Buffer, filename: string, mimeType: "image/png" | "image/jpeg" | "image/webp", customer?: ImportCustomerContext | null) => Promise<ImageImportPreview>;
   databaseCheck?: () => Promise<unknown>;
 }
 
@@ -349,9 +377,11 @@ export async function buildApp(options: BuildAppOptions = {}) {
   await registerRouteScenarioRoutes(app, { service: scenarioService });
 
   let activeOrderImports = 0;
-  const learnedRules = () => importLearning.learned().catch(() => null);
-  const pdfImport = options.pdfImport ?? (async (buffer, filename) => importPdfPreview(buffer, filename, { learned: await learnedRules() }));
-  const imageImport = options.imageImport ?? (async (buffer, filename, mimeType) => importImagePreview(buffer, filename, mimeType, { learned: await learnedRules() }));
+  const learnedRules = (customerId: string | null) => importLearning.learned(customerId).catch(() => null);
+  const pdfImport = options.pdfImport ?? (async (buffer, filename, customer) =>
+    importPdfPreview(buffer, filename, { learned: await learnedRules(customer?.selected?.id ?? null), customer: customer ?? null }));
+  const imageImport = options.imageImport ?? (async (buffer, filename, mimeType, customer) =>
+    importImagePreview(buffer, filename, mimeType, { learned: await learnedRules(customer?.selected?.id ?? null), customer: customer ?? null }));
   const databaseCheck = options.databaseCheck ?? (() => prisma.$queryRaw`SELECT 1`);
   const subscribers = new Set<import('node:http').ServerResponse>();
   const subscriberSessions = new Map<string, number>();
@@ -709,6 +739,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
         request.log.warn({ errorType: error instanceof Error ? error.name : 'unknown' }, "Отклонена небезопасная или повреждённая книга Excel");
         return reply.status(422).send({ error: "Не удалось безопасно прочитать книгу Excel." });
       }
+      const customerContext = await importCustomerContext(request);
       let result;
       try {
         result = await importExcelPreview(buffer, filename, {
@@ -719,7 +750,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
         request.log.error({ errorType: error instanceof Error ? error.name : 'unknown' }, "Не удалось разобрать книгу Excel");
         return reply.status(422).send({ error: "Не удалось безопасно прочитать книгу Excel." });
       }
-      return withStoredDocument(await withAddressRules({
+      return withStoredDocument(await withCustomer(await withAddressRules({
         source: result.source,
         detectedLayout: result.detectedLayout,
         drafts: result.drafts.map((draft) => ({
@@ -738,9 +769,37 @@ export async function buildApp(options: BuildAppOptions = {}) {
           row: warning.sourceRow
         })),
         aiAvailable: result.aiAvailable
-      }), { buffer, filename, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }, request);
+      }), customerContext), { buffer, filename, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }, request);
     } finally {
       activeOrderImports -= 1;
+    }
+  });
+
+  registerOrderReparseRoute(app, {
+    documents: orderDocuments, customers: customerService, db: prisma,
+    store: (preview, file, request) => withStoredDocument(preview, { buffer: file.content, filename: file.filename, mimeType: file.mimeType }, request),
+    read: async (file, previewJson, customerContext, request) => {
+      if (activeOrderImports >= 2) return { status: 429, error: "Слишком много одновременных импортов заказов. Повторите попытку позже." };
+      activeOrderImports += 1;
+      try {
+        // Excel is read by its columns, not by a profile: only the customer of the stored parse changes.
+        if (file.mimeType !== "application/pdf" && !isSupportedImageMimeType(file.mimeType)) {
+          return { preview: await withCustomer(JSON.parse(previewJson) as Parameters<typeof withCustomer>[0], customerContext) };
+        }
+        if (!options.auth?.disabled) await assistantService.consumeUsage(assistantSessionKey(request));
+        try {
+          const read = file.mimeType === "application/pdf"
+            ? await pdfImport(file.content, file.filename, customerContext)
+            : await imageImport(file.content, file.filename, file.mimeType as "image/png" | "image/jpeg" | "image/webp", customerContext);
+          return { preview: await withCustomer(await withAppointmentMatch(read, file.content), customerContext) };
+        } catch (error) {
+          if (error instanceof AssistantError) throw error;
+          request.log.error({ errorType: error instanceof Error ? error.name : "unknown" }, "Не удалось заново разобрать Auftrag");
+          return { status: 502, error: "Не удалось прочитать Auftrag заново. Повторите попытку позже." };
+        }
+      } finally {
+        activeOrderImports -= 1;
+      }
     }
   });
 
@@ -772,9 +831,10 @@ export async function buildApp(options: BuildAppOptions = {}) {
         return reply.status(415).send({ error: "Файл не является корректным PDF-заказом." });
       }
 
+      const customerContext = await importCustomerContext(request);
       if (!options.auth?.disabled) await assistantService.consumeUsage(assistantSessionKey(request));
       try {
-        return await withStoredDocument(await withAppointmentMatch(await pdfImport(buffer, filename), buffer), { buffer, filename, mimeType: "application/pdf" }, request);
+        return await withStoredDocument(await withCustomer(await withAppointmentMatch(await pdfImport(buffer, filename, customerContext), buffer), customerContext), { buffer, filename, mimeType: "application/pdf" }, request);
       } catch (error) {
         if (error instanceof Error && error.message.includes("OPENAI_API_KEY")) {
           return reply.status(503).send({ error: "OpenAI ещё не настроен для импорта PDF." });
@@ -817,9 +877,10 @@ export async function buildApp(options: BuildAppOptions = {}) {
         return reply.status(415).send({ error: "Файл не является корректным изображением PNG, JPG/JPEG или WebP." });
       }
 
+      const customerContext = await importCustomerContext(request);
       if (!options.auth?.disabled) await assistantService.consumeUsage(assistantSessionKey(request));
       try {
-        return await withStoredDocument(await withAppointmentMatch(await imageImport(buffer, filename, file.mimetype), buffer), { buffer, filename, mimeType: file.mimetype }, request);
+        return await withStoredDocument(await withCustomer(await withAppointmentMatch(await imageImport(buffer, filename, file.mimetype, customerContext), buffer), customerContext), { buffer, filename, mimeType: file.mimetype }, request);
       } catch (error) {
         if (error instanceof Error && error.message.includes("OPENAI_API_KEY")) {
           return reply.status(503).send({ error: "OpenAI ещё не настроен для импорта скриншотов." });
@@ -966,7 +1027,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
 
   app.post("/imports/tours/confirm", { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request, reply) => {
     const { importAttemptId, importFingerprint, documentId, ...input } = confirmImportedTourSchema.parse(request.body);
-    const result = await tourService.createImportedTour(input, { importAttemptId, importFingerprint }, auditActor(request));
+    const customerId = documentId ? (await orderDocuments.get(documentId).catch(() => null))?.customerId ?? null : null;
+    const result = await tourService.createImportedTour({ ...input, customerId }, { importAttemptId, importFingerprint }, auditActor(request));
     if (result.created) {
       // With the stored preview the server learns from the real diff; without it the client's learnLabel still counts.
       if (documentId) await attachDocument(documentId, result.tour.id, input.vehicleId, input, request);
@@ -985,7 +1047,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
       tour: createTourSchema.omit({ vehicleId: true }).extend({ documentId: documentIdSchema })
     }).parse(request.body);
     const { documentId, ...tourInput } = input.tour;
-    const result = await tourService.createTourForNewVehicle({ vehicle: input.vehicle, tour: tourInput }, auditActor(request));
+    const customerId = documentId ? (await orderDocuments.get(documentId).catch(() => null))?.customerId ?? null : null;
+    const result = await tourService.createTourForNewVehicle({ vehicle: input.vehicle, tour: { ...tourInput, customerId } }, auditActor(request));
     if (documentId) await attachDocument(documentId, result.tour.id, result.vehicle.id, tourInput, request);
     else await learnAddressRules(tourInput.stops, auditActor(request));
     return reply.status(201).send({ vehicle: toIsoObject(result.vehicle), tour: enrichTour(await withDocument(result.tour)) });

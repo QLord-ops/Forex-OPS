@@ -16,18 +16,25 @@ function actorOf(request: FastifyRequest): AuditActor | undefined {
 export function registerImportRuleRoutes(app: FastifyInstance, learning: ImportLearningService) {
   const roles = requireDispatcherRoles('admin', 'dispatcher');
 
-  app.get('/import-rules', { preHandler: roles }, async () => {
+  app.get('/import-rules', { preHandler: roles }, async (request) => {
+    const { customerId } = z.object({ customerId: z.string().trim().min(1).max(64).optional() }).parse(request.query);
     const builtIn = [
       ...Object.entries(BUILT_IN_IMPORT_RULES.aliases).map(([pattern, value]) => ({ kind: 'ALIAS', pattern, value })),
       ...Object.entries(BUILT_IN_IMPORT_RULES.ignoreLabels).map(([pattern, value]) => ({ kind: 'IGNORE_LABEL', pattern, value }))
     ];
-    return { rules: await learning.list(), builtIn, corrections: { last7d: await learning.correctionsSince(new Date(Date.now() - 7 * 24 * 3600_000)) } };
+    return { rules: await learning.list(customerId), builtIn, corrections: { last7d: await learning.correctionsSince(new Date(Date.now() - 7 * 24 * 3600_000), customerId) } };
   });
 
   app.patch('/import-rules/:id', { preHandler: roles }, async (request) => {
     const { id } = idParams.parse(request.params);
     const patch = z.object({ active: z.boolean().optional(), value: z.string().trim().min(1).max(200).nullable().optional() }).parse(request.body);
     return learning.update(id, patch, actorOf(request));
+  });
+
+  // A rule for every customer changes how all Auftrag are read: an admin decides.
+  app.post('/import-rules/:id/promote', { preHandler: requireDispatcherRoles('admin') }, async (request) => {
+    const { id } = idParams.parse(request.params);
+    return learning.promote(id, actorOf(request));
   });
 
   app.delete('/import-rules/:id', { preHandler: roles }, async (request, reply) => {

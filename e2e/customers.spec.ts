@@ -117,3 +117,69 @@ test('статус: вкладка на заказчика, колонки по 
   await expect(page.getByRole('columnheader', { name: 'WE in Northeim' })).toHaveCount(0)
   await expect(page.getByRole('columnheader', { name: 'A Schild' })).toHaveCount(0)
 })
+
+test('Auftrag читается по профилю заказчика моей линии и по кнопке заново — по профилю заказчика из шапки', async ({ page }) => {
+  let uploadedFor: string | null = null
+  let reparse: unknown = null
+  const stops = [
+    { sequence: 1, type: 'LOAD', company: 'Walter Logistics', address: 'Tesla-Straße 1, 15537 Grünheide', city: 'Grünheide', appointmentLocal: null, confidence: 0.9 },
+    { sequence: 2, type: 'UNLOAD', company: 'BMW', address: 'BMW-Allee 1, 04349 Leipzig', city: 'Leipzig', appointmentLocal: null, confidence: 0.9 }
+  ]
+  const preview = (orderNumber: string, customer: unknown, warnings: unknown[] = []) => ({ source: 'OPENAI', detectedLayout: 'PDF', documentKind: 'ORDER', aiAvailable: true, documentId: 'doc-9', documentReused: false,
+    attachedTourId: null, warnings, customer, drafts: [{ orderNumber, vehicleNumber: null, vehiclePlate: null, trailerPlate: null, tourRemarks: null, warnings: [], stops }] })
+  const walterRef = { id: 'c-wt', key: 'WALTER_TESLA', name: 'Walter (Tesla)' }
+  await signedIn(page, 'dispatcher', async (route, path) => {
+    if (path === '/customers') { await json(route, { customers: [schnellecke, walter] }); return true }
+    if (path === '/vehicles') { await json(route, [{ id: 'v1', vehicleNumber: '321', licensePlate: null, maxSpeedKmh: 85 }]); return true }
+    if (path === '/imports/pdf/preview') {
+      uploadedFor = new URL(route.request().url()).searchParams.get('customerId')
+      await json(route, preview('W-1', { id: 'c-sl', key: 'SCHNELLECKE', name: 'Schnellecke', source: 'SELECTED', confidence: 1, profileApplied: true, detected: { ...walterRef, source: 'DOCUMENT', confidence: 0.6 } },
+        [{ code: 'CUSTOMER_MISMATCH', message: 'Похоже, это Auftrag заказчика Walter (Tesla) (по шапке документа), а разобран по профилю Schnellecke.' }])); return true
+    }
+    if (path === '/documents/doc-9/reparse') {
+      reparse = route.request().postDataJSON()
+      await json(route, preview('W-1R', { ...walterRef, source: 'SELECTED', confidence: 1, profileApplied: true, detected: { ...walterRef, source: 'DOCUMENT', confidence: 0.6 } })); return true
+    }
+    if (path === '/geocode') { await json(route, { address: 'x', latitude: 52.4, longitude: 13.8, city: 'Grünheide', provider: 'e2e' }); return true }
+    return false
+  })
+
+  await page.goto('/orders/new')
+  const picker = page.getByRole('combobox', { name: 'Заказчик Auftrag' })
+  await expect(picker).toHaveValue('c-sl')
+  await page.locator('main input[type="file"][multiple]').first().setInputFiles({ name: 'walter.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.7 walter') })
+  await expect.poll(() => uploadedFor).toBe('c-sl')
+  const note = page.getByRole('group', { name: 'Чей это Auftrag' })
+  await expect(note).toContainText('Schnellecke')
+  await expect(note).toContainText('выбран вами')
+  await expect(page.getByText(/Похоже, это Auftrag заказчика Walter/)).toBeVisible()
+
+  await note.getByRole('button', { name: 'Разобрать по профилю Walter (Tesla)' }).click()
+  await expect.poll(() => reparse).toEqual({ customerId: 'c-wt' })
+  await expect(page.getByLabel('Номер Auftrag')).toHaveValue('W-1R')
+  await expect(note).toContainText('Walter (Tesla)')
+  await expect(note.getByRole('button', { name: /Разобрать по профилю/ })).toHaveCount(0)
+})
+
+test('правило, выученное у двух заказчиков, админ делает общим', async ({ page }) => {
+  let promoted = false
+  const rule = { id: 'r1', kind: 'ALIAS', pattern: 'mb', value: 'Mercedes-Benz AG / Werk 065', active: true, hits: 2, applied: 0, builtIn: false, lastSeenAt: '2026-11-08T08:00:00Z', createdAt: '', updatedAt: '',
+    scope: 'c-sl', customer: { id: 'c-sl', name: 'Schnellecke' }, promotable: true }
+  page.on('dialog', (dialog) => void dialog.accept())
+  await signedIn(page, 'admin', async (route, path) => {
+    if (path === '/customers') { await json(route, { customers: [schnellecke, walter] }); return true }
+    if (path === '/import-rules') {
+      await json(route, { rules: promoted ? [{ ...rule, id: 'g1', scope: 'global', customer: null, promotable: false, hits: 4 }] : [rule], builtIn: [], corrections: { last7d: 3 } }); return true
+    }
+    if (path === '/import-rules/r1/promote') { promoted = true; await json(route, { ...rule, scope: 'global' }); return true }
+    if (path === '/address-rules') { await json(route, { rules: [], builtIn: [] }); return true }
+    return false
+  })
+  await page.goto('/settings')
+  const rules = page.getByRole('region', { name: 'Правила импорта' })
+  await expect(rules.getByRole('row', { name: /MB = Mercedes-Benz AG/ })).toContainText('Schnellecke')
+  await rules.getByRole('button', { name: 'Сделать общим' }).click()
+  await expect.poll(() => promoted).toBe(true)
+  await expect(rules.getByRole('row', { name: /MB = Mercedes-Benz AG/ })).toContainText('Общее')
+  await expect(rules.getByRole('button', { name: 'Сделать общим' })).toHaveCount(0)
+})

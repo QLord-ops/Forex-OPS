@@ -67,3 +67,12 @@
 .vehicle-row-customer { display: inline-flex; align-items: center; gap: 5px; color: rgb(var(--tx-475569)); font-size: .75rem; }
 .vehicle-row-customer .customer-swatch { width: 8px; height: 8px; border-radius: 2px; }
 .fleet-customers { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* Customer of an Auftrag upload: picker before reading, note with "read again" in the check. */
+.import-customer-select { display: grid; gap: 4px; margin-bottom: 8px; }
+.import-customer-note { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 12px; border: 1px solid rgb(var(--ln-e3e8ef)); border-radius: 10px; padding: 8px 12px; font-size: .875rem; color: rgb(var(--tx-0f172a)); }
+.import-customer-name { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.import-customer-name strong { font-weight: 600; }
+.import-customer-name > span:last-child { color: rgb(var(--tx-64748b)); }
+.import-customer-other { margin-left: auto; }
+.import-customer-other .field-input { min-height: 32px; padding-block: 4px; font-size: .8125rem; }
