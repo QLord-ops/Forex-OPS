@@ -11,11 +11,28 @@ import { snapshotVehicleClock } from './tours.js';
 import { distanceMeters } from './webfleet.js';
 import type { DriverHours, WebfleetDrivingTimes } from './webfleet-live.js';
 import { withZuladungNote } from './zuladung.js';
+import { parseProfile } from './customer-profile.js';
 
+/** The list before customers existed: Schnellecke, blocks NORD / SÜD / LuFe. Used until a Schnellecke customer is set up. */
 export const STATUS_LINE = 'SCHNELLECKE';
 export const STATUS_GROUP_ORDER = ['NORD', 'SUED', 'LUFE'] as const;
-/** The list is due at this Berlin time every day. */
-const DUE_LOCAL_TIME = '07:00';
+
+/** One customer's daily list: its key (the customer slug), blocks (lines), columns and due time. */
+export type StatusListConfig = {
+  key: string;
+  customerId: string | null;
+  name: string;
+  dueLocalTime: string;
+  groups: Array<{ code: string; name: string }>;
+  excludedVehicles: string[];
+  columns: { we: string | null; aSchild: boolean; appSped: boolean };
+};
+
+export const LEGACY_STATUS_LIST: StatusListConfig = {
+  key: STATUS_LINE, customerId: null, name: 'Schnellecke', dueLocalTime: '07:00',
+  groups: [{ code: 'NORD', name: 'NORD' }, { code: 'SUED', name: 'SÜD' }, { code: 'LUFE', name: 'LuFe' }],
+  excludedVehicles: [], columns: { we: 'WE in Northeim', aSchild: true, appSped: true }
+};
 /** Without a Termin and without tachograph data the driver is assumed to start at this time. */
 const DEFAULT_START_LOCAL_TIME = '06:00';
 /** After a restart the Webfleet figures refill within minutes: wait this long before a list with missing data. */
@@ -266,17 +283,56 @@ export class DailyStatusError extends Error {
   constructor(message: string, public readonly statusCode = 400) { super(message); }
 }
 
-/** Builds, stores and serves the 07:00 status list of the Schnellecke line. Webfleet is only read. */
+/** Builds, stores and serves the daily status list of each customer that has one (Schnellecke at 07:00). Webfleet is only read. */
 export class DailyStatusService {
   private running = false;
+  private listsCache: { at: number; lists: StatusListConfig[] } | null = null;
   constructor(private readonly db: PrismaClient, private readonly deps: DailyStatusDeps) {}
 
+  /**
+   * Every customer with a status list in its profile, blocks = its lines. Before customers exist, or while
+   * Schnellecke is not yet a customer, the original Schnellecke list keeps running.
+   */
+  async lists(): Promise<StatusListConfig[]> {
+    if (this.listsCache && Date.now() - this.listsCache.at < 60_000) return this.listsCache.lists;
+    const customers = await this.db.customer.findMany({ where: { active: true }, orderBy: { name: 'asc' },
+      include: { lines: { where: { active: true }, orderBy: [{ sortIndex: 'asc' }, { name: 'asc' }] } } }).catch(() => []);
+    const lists: StatusListConfig[] = customers.flatMap((customer) => {
+      const profile = parseProfile(customer.profileJson).statusList;
+      if (!profile.enabled) return [];
+      return [{ key: customer.slug, customerId: customer.id, name: customer.name, dueLocalTime: profile.dueLocalTime,
+        groups: customer.lines.map((line) => ({ code: line.code, name: line.name })), excludedVehicles: profile.excludedVehicles,
+        columns: { we: profile.weColumnLabel, aSchild: profile.showASchild, appSped: profile.showAppSped } }];
+    });
+    if (!customers.some((customer) => customer.slug === STATUS_LINE)) lists.unshift(LEGACY_STATUS_LIST);
+    this.listsCache = { at: Date.now(), lists };
+    return lists;
+  }
+
+  async list(key?: string | null): Promise<StatusListConfig> {
+    const lists = await this.lists();
+    const found = key ? lists.find((item) => item.key === key) : lists[0];
+    if (!found) throw new DailyStatusError('Такого списка статуса нет.', 404);
+    return found;
+  }
+
+  /** Runs every list that is due; the result of the most eventful one is returned. */
   async runIfDue(now = new Date()): Promise<RunResult> {
+    const order: RunResult[] = ['GENERATED', 'FAILED', 'BUSY', 'WAITING_WEBFLEET', 'DONE', 'NOT_DUE'];
+    let best: RunResult = 'NOT_DUE';
+    for (const list of await this.lists()) {
+      const result = await this.runListIfDue(list, now);
+      if (order.indexOf(result) < order.indexOf(best)) best = result;
+    }
+    return best;
+  }
+
+  private async runListIfDue(list: StatusListConfig, now: Date): Promise<RunResult> {
     if (this.running) return 'BUSY';
     const dayKey = berlinToday(now);
-    const due = berlinLocalToDate(`${dayKey}T${DUE_LOCAL_TIME}`)!;
+    const due = berlinLocalToDate(`${dayKey}T${list.dueLocalTime}`)!;
     if (now < due) return 'NOT_DUE';
-    const existing = await this.db.dailyStatusReport.findUnique({ where: { line_date: { line: STATUS_LINE, date: dayKey } } });
+    const existing = await this.db.dailyStatusReport.findUnique({ where: { line_date: { line: list.key, date: dayKey } } });
     if (existing?.status === 'READY') return 'DONE';
     if (existing?.status === 'GENERATING' && now.getTime() - existing.updatedAt.getTime() < STALE_GENERATION_MS) return 'BUSY';
     const graceEnd = Math.max(due.getTime(), this.deps.startedAt.getTime()) + WEBFLEET_GRACE_MS;
@@ -286,26 +342,27 @@ export class DailyStatusService {
       const claimed = await this.db.dailyStatusReport.updateMany({ where: { id: existing.id, status: existing.status, updatedAt: existing.updatedAt }, data: { status: 'GENERATING' } });
       if (!claimed.count) return 'BUSY';
     } else {
-      try { await this.db.dailyStatusReport.create({ data: { line: STATUS_LINE, date: dayKey, status: 'GENERATING', generatedByRole: 'system' } }); }
+      try { await this.db.dailyStatusReport.create({ data: { line: list.key, customerId: list.customerId, date: dayKey, status: 'GENERATING', generatedByRole: 'system' } }); }
       catch { return 'BUSY'; }
     }
     this.running = true;
     try {
-      await this.generate(dayKey, now, DAILY_STATUS_SYSTEM_ACTOR, { claimed: true });
+      await this.generate(dayKey, now, DAILY_STATUS_SYSTEM_ACTOR, { claimed: true, list: list.key });
       return 'GENERATED';
     } catch {
-      await this.db.dailyStatusReport.updateMany({ where: { line: STATUS_LINE, date: dayKey }, data: { status: 'FAILED' } }).catch(() => undefined);
+      await this.db.dailyStatusReport.updateMany({ where: { line: list.key, date: dayKey }, data: { status: 'FAILED' } }).catch(() => undefined);
       return 'FAILED';
     } finally { this.running = false; }
   }
 
-  async generate(dayKey: string, now: Date, actor: AuditActor, options: { resetEdits?: boolean; claimed?: boolean } = {}) {
+  async generate(dayKey: string, now: Date, actor: AuditActor, options: { resetEdits?: boolean; claimed?: boolean; list?: string | null } = {}) {
     if (dayKey !== berlinToday(now)) throw new DailyStatusError('Прошлые списки только для чтения.', 409);
+    const list = await this.list(options.list);
     const report = options.claimed
-      ? await this.db.dailyStatusReport.findUniqueOrThrow({ where: { line_date: { line: STATUS_LINE, date: dayKey } } })
-      : await this.db.dailyStatusReport.upsert({ where: { line_date: { line: STATUS_LINE, date: dayKey } },
-        create: { line: STATUS_LINE, date: dayKey, status: 'GENERATING', generatedByRole: actor.role }, update: { status: 'GENERATING' } });
-    const vehicles = await this.db.vehicle.findMany({ where: { line: STATUS_LINE }, include: {
+      ? await this.db.dailyStatusReport.findUniqueOrThrow({ where: { line_date: { line: list.key, date: dayKey } } })
+      : await this.db.dailyStatusReport.upsert({ where: { line_date: { line: list.key, date: dayKey } },
+        create: { line: list.key, customerId: list.customerId, date: dayKey, status: 'GENERATING', generatedByRole: actor.role }, update: { status: 'GENERATING' } });
+    const vehicles = await this.db.vehicle.findMany({ where: { line: list.key, ...(list.excludedVehicles.length ? { vehicleNumber: { notIn: list.excludedVehicles } } : {}) }, include: {
       issues: { where: { resolvedAt: null } },
       tours: { where: { status: { in: ['ACTIVE', 'QUEUED'] } }, orderBy: [{ queueIndex: 'asc' }, { createdAt: 'asc' }], include: { stops: { orderBy: { sequence: 'asc' } }, legs: true } }
     } });
@@ -313,9 +370,10 @@ export class DailyStatusService {
     const ready = this.deps.webfleetReady(now);
     const drafts: StatusRowDraft[] = [];
     for (const vehicle of vehicles) drafts.push(await this.rowFor(vehicle, dayKey, dayStart, now, ready));
+    const groupOrder = list.groups.map((group) => group.code);
     const order = (draft: StatusRowDraft) => {
-      const group = STATUS_GROUP_ORDER.indexOf(draft.statusGroup as typeof STATUS_GROUP_ORDER[number]);
-      return [group < 0 ? STATUS_GROUP_ORDER.length : group, Number.parseInt(draft.vehicleNumber, 10) || Number.MAX_SAFE_INTEGER, draft.vehicleNumber] as const;
+      const group = groupOrder.indexOf(draft.statusGroup ?? '');
+      return [group < 0 ? groupOrder.length : group, Number.parseInt(draft.vehicleNumber, 10) || Number.MAX_SAFE_INTEGER, draft.vehicleNumber] as const;
     };
     drafts.sort((a, b) => { const [ga, na, sa] = order(a), [gb, nb, sb] = order(b); return ga - gb || na - nb || sa.localeCompare(sb); });
     const keep = new Set(drafts.map((draft) => draft.vehicleId));
@@ -333,8 +391,8 @@ export class DailyStatusService {
         generatedAt: now, generatedByRole: actor.role, generatedByDispatcherId: actor.dispatcherId ?? null } });
     });
     await writeAuditLog(this.db, actor, { action: 'DAILY_STATUS_GENERATED', entityType: 'DailyStatusReport', entityId: report.id,
-      metadata: { line: STATUS_LINE, date: dayKey, rows: drafts.length, preliminary: !ready, resetEdits: Boolean(options.resetEdits), removed: removed.map((row) => row.vehicleNumber) } });
-    return this.get(dayKey, now);
+      metadata: { line: list.key, date: dayKey, rows: drafts.length, preliminary: !ready, resetEdits: Boolean(options.resetEdits), removed: removed.map((row) => row.vehicleNumber) } });
+    return this.get(dayKey, now, list.key);
   }
 
   private async rowFor(vehicle: Awaited<ReturnType<PrismaClient['vehicle']['findMany']>>[number] & { tours: Array<Parameters<typeof buildPlannerStops>[0]['tours'][number]>; issues: Array<{ kind: string; resolvedAt: Date | null; expectedResolvedAt: Date | null }> },
@@ -389,11 +447,14 @@ export class DailyStatusService {
     return schedule.find((item) => item.stopId === stops[0]?.stopId)?.predictedEta ?? null;
   }
 
-  async get(dayKey: string, now = new Date()) {
-    const report = await this.db.dailyStatusReport.findUnique({ where: { line_date: { line: STATUS_LINE, date: dayKey } }, include: { rows: { orderBy: { sortIndex: 'asc' } } } });
-    if (!report) return { date: dayKey, report: null, rows: [], editable: dayKey === berlinToday(now) };
+  async get(dayKey: string, now = new Date(), key?: string | null) {
+    const list = await this.list(key);
+    const lists = (await this.lists()).map((item) => ({ key: item.key, name: item.name }));
+    const config = { key: list.key, name: list.name, dueLocalTime: list.dueLocalTime, groups: list.groups, columns: list.columns };
+    const report = await this.db.dailyStatusReport.findUnique({ where: { line_date: { line: list.key, date: dayKey } }, include: { rows: { orderBy: { sortIndex: 'asc' } } } });
+    if (!report) return { date: dayKey, list: config, lists, report: null, rows: [], editable: dayKey === berlinToday(now) };
     const { rows, ...meta } = report;
-    return { date: dayKey, editable: dayKey === berlinToday(now) && report.status === 'READY', report: meta,
+    return { date: dayKey, list: config, lists, editable: dayKey === berlinToday(now) && report.status === 'READY', report: meta,
       rows: rows.map((row) => ({ ...row, flags: flagsOf(row.detailsJson), shown: presentRow(row, dayKey), edited: Boolean(row.editedAt) })) };
   }
 

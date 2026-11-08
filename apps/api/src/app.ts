@@ -57,6 +57,8 @@ import { matchAppointment } from './services/appointment-match.js';
 import { documentFingerprint, PendingAppointmentService } from './services/pending-appointments.js';
 import { OrderDocumentService } from './services/order-documents.js';
 import { registerOrderDocumentRoutes } from './routes/order-documents.js';
+import { CustomerService, isMine } from './services/customers.js';
+import { registerCustomerRoutes } from './routes/customers.js';
 import { ImportLearningService } from './services/import-learning.js';
 import { registerImportRuleRoutes } from './routes/import-rules.js';
 import { registerAppointmentDocumentRoutes } from './routes/appointments.js';
@@ -89,6 +91,7 @@ const operationsService = new OperationsService(prisma, tourService);
 const pendingAppointments = new PendingAppointmentService(prisma);
 const orderDocuments = new OrderDocumentService(prisma);
 const importLearning = new ImportLearningService(prisma, addressRules);
+const customerService = new CustomerService(prisma);
 const ORDER_DOCUMENT_SYSTEM_ACTOR: AuditActor = { role: 'system', sessionId: 'order-documents' };
 
 /** A Termin slip gets its truck and stop match and tells whether the same file was used before. */
@@ -342,6 +345,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   registerAddressBookRoutes(app, prisma, addressBook);
   registerOrderDocumentRoutes(app, orderDocuments);
   registerImportRuleRoutes(app, importLearning);
+  registerCustomerRoutes(app, customerService);
   await registerRouteScenarioRoutes(app, { service: scenarioService });
 
   let activeOrderImports = 0;
@@ -429,7 +433,12 @@ export async function buildApp(options: BuildAppOptions = {}) {
     // Pop-ups follow the dispatcher's own and free trucks; the alerts page still lists everything.
     const me = request.dispatcherSession?.dispatcherId;
     if (!me) return { notifications };
-    const others = new Set((await prisma.vehicle.findMany({ where: { assignedDispatcherId: { not: null, notIn: [me] } }, select: { id: true } })).map((vehicle) => vehicle.id));
+    const myLines = await customerService.linesOf(me);
+    const others = new Set((await prisma.vehicle.findMany({ where: { OR: [
+      { assignedDispatcherId: { not: null, notIn: [me] } },
+      // A free truck on a line that other dispatchers work on is theirs to watch, once I have lines of my own.
+      ...(myLines.length ? [{ assignedDispatcherId: null, customerLineId: { not: null, notIn: myLines }, customerLine: { dispatchers: { some: {} } } }] : [])
+    ] }, select: { id: true } })).map((vehicle) => vehicle.id));
     return { notifications: notifications.filter((notification) => !others.has(notification.vehicleId)) };
   });
   app.post('/notifications/:id/ack', async (request) => {
@@ -1221,9 +1230,11 @@ export async function buildApp(options: BuildAppOptions = {}) {
   app.get("/dashboard", async (request) => {
     const generatedAt = new Date();
     const me = request.dispatcherSession?.dispatcherId ?? null;
+    const myLines = new Set(await customerService.linesOf(me));
     const vehicles = await prisma.vehicle.findMany({
       include: {
         assignedDispatcher: { select: { id: true, displayName: true } },
+        customerLine: { select: { id: true, code: true, name: true, customer: { select: { id: true, name: true, slug: true, color: true } } } },
         issues: { where: { resolvedAt: null }, orderBy: { createdAt: 'desc' } },
         tours: {
           where: { status: { in: ["ACTIVE", "QUEUED"] } },
@@ -1314,7 +1325,10 @@ export async function buildApp(options: BuildAppOptions = {}) {
         }),
         operationVersion: vehicle.operationVersion,
         assignedTo: vehicle.assignedDispatcher ? { id: vehicle.assignedDispatcher.id, name: vehicle.assignedDispatcher.displayName } : null,
-        mine: Boolean(me && vehicle.assignedDispatcherId === me),
+        // «Мои»: taken by me, or on one of my lines and not taken by a colleague.
+        mine: isMine(me, vehicle, myLines),
+        customer: vehicle.customerLine ? { id: vehicle.customerLine.customer.id, name: vehicle.customerLine.customer.name, slug: vehicle.customerLine.customer.slug, color: vehicle.customerLine.customer.color } : null,
+        line: vehicle.customerLine ? { id: vehicle.customerLine.id, code: vehicle.customerLine.code, name: vehicle.customerLine.name } : null,
         tour: activeTour ? toDashboardTourSummary(activeTour) : null,
         statusText: position.status,
         etaSource: position.etaSource ?? "CALCULATED",

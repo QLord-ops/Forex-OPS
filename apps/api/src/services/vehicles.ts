@@ -12,7 +12,10 @@ export class VehicleService {
 
   list() {
     return this.db.vehicle.findMany({
-      include: { tours: { where: { status: { in: ["ACTIVE", "QUEUED"] } }, orderBy: { plannedStartAt: "asc" } } },
+      include: {
+        tours: { where: { status: { in: ["ACTIVE", "QUEUED"] } }, orderBy: { plannedStartAt: "asc" } },
+        customerLine: { select: { id: true, code: true, name: true, customer: { select: { id: true, name: true, slug: true, color: true } } } }
+      },
       orderBy: { vehicleNumber: "asc" }
     });
   }

@@ -15,7 +15,8 @@ const editSchema = z.object({
   weNortheim: text(100).optional(),
   overrides: z.object({ ort: text(100).optional(), start: text(100).optional(), ziel: text(100).optional(), ankunft: text(100).optional(), trailer: text(100).optional() }).strict().optional()
 }).strict();
-const generateSchema = z.object({ date: date.optional(), resetEdits: z.boolean().default(false) }).strict();
+const listKey = z.string().trim().min(1).max(64);
+const generateSchema = z.object({ date: date.optional(), resetEdits: z.boolean().default(false), list: listKey.optional() }).strict();
 
 function actorOf(request: FastifyRequest): AuditActor {
   const session = request.dispatcherSession;
@@ -27,21 +28,21 @@ function statusError(error: unknown): never {
   throw error;
 }
 
-/** The daily status list of the Schnellecke line: read, regenerate today's, edit Bemerkung / WE, download as Excel. */
+/** The daily status lists of the customers: read, regenerate today's, edit Bemerkung / WE, download as Excel. */
 export function registerDailyStatusRoutes(app: FastifyInstance, service: DailyStatusService) {
   app.get('/daily-status', async (request) => {
-    const query = z.object({ date: date.optional() }).parse(request.query);
+    const query = z.object({ date: date.optional(), list: listKey.optional() }).parse(request.query);
     const now = new Date();
     const day = query.date ?? berlinToday(now);
     // A list missed at 07:00 (server down, Webfleet empty) is caught up by the first look at today's page.
     if (day === berlinToday(now)) await service.runIfDue(now).catch(() => undefined);
-    return service.get(day, now);
+    return service.get(day, now, query.list).catch(statusError);
   });
 
   app.post('/daily-status/generate', { preHandler: requireDispatcherRoles('admin', 'dispatcher'), config: { rateLimit: { max: 3, timeWindow: '1 minute' } } }, async (request) => {
     const input = generateSchema.parse(request.body ?? {});
     const now = new Date();
-    return service.generate(input.date ?? berlinToday(now), now, actorOf(request), { resetEdits: input.resetEdits }).catch(statusError);
+    return service.generate(input.date ?? berlinToday(now), now, actorOf(request), { resetEdits: input.resetEdits, list: input.list }).catch(statusError);
   });
 
   app.patch('/daily-status/rows/:id', { preHandler: requireDispatcherRoles('admin', 'dispatcher') }, async (request) => {
@@ -52,10 +53,11 @@ export function registerDailyStatusRoutes(app: FastifyInstance, service: DailySt
 
   app.get('/daily-status/:date/export.xlsx', async (request, reply) => {
     const params = z.object({ date }).parse(request.params);
-    const list = await service.get(params.date);
+    const query = z.object({ list: listKey.optional() }).parse(request.query);
+    const list = await service.get(params.date, new Date(), query.list).catch(statusError);
     if (!list.report) throw Object.assign(new Error('Список за этот день не сформирован.'), { statusCode: 404 });
-    const buffer = await buildStatusWorkbook({ date: params.date, generatedAt: list.report.generatedAt, rows: list.rows });
-    const name = `Status ${params.date}.xlsx`;
+    const buffer = await buildStatusWorkbook({ date: params.date, generatedAt: list.report.generatedAt, rows: list.rows, groups: list.list.groups, columns: list.list.columns });
+    const name = `Status ${list.list.key === 'SCHNELLECKE' ? '' : `${list.list.name} `}${params.date}.xlsx`;
     return reply
       .header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
       .header('Content-Disposition', `attachment; filename="${name}"; filename*=UTF-8''${encodeURIComponent(name)}`)
