@@ -563,3 +563,17 @@ button.decision-card-title:focus-visible { outline: 2px solid var(--focus); outl
   .fleet-rail .fleet-chips, .fleet-rail .fleet-customers { flex-wrap: nowrap; margin-right: -16px; overflow-x: auto; padding-right: 16px; scrollbar-width: none; }
   .fleet-rail .fleet-chips::-webkit-scrollbar, .fleet-rail .fleet-customers::-webkit-scrollbar { display: none; }
 }
+
+/* One card per truck: the truck's earlier notifications fold under its card. */
+.decision-stack { margin-top: 8px; border-top: 1px solid rgb(var(--ln-eef1f5)); padding-top: 6px; }
+.decision-stack > summary { cursor: pointer; color: rgb(var(--tx-475569)); font-size: .75rem; font-weight: 500; }
+.decision-stack > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
+.decision-stack-waiting { color: rgb(var(--tx-b91c1c)); }
+.decision-stack-list { display: grid; gap: 6px; margin-top: 6px; }
+.decision-stack-close { margin-top: 6px; }
+.decision-card-nested { grid-template-columns: 14px minmax(0, 1fr); gap: 8px; border-radius: 8px; padding: 6px 8px; box-shadow: none; }
+.decision-card-nested .decision-card-icon { width: 14px; height: 14px; }
+.decision-card-nested .decision-card-title { font-size: .8125rem; font-weight: 500; }
+.decision-card-nested .decision-card-detail { font-size: .75rem; }
+.decision-card-nested .decision-card-actions { margin-top: 4px; gap: 4px; }
+.decision-card-nested .decision-button { height: 28px; padding: 0 8px; font-size: .75rem; }

@@ -1,5 +1,5 @@
 import type { PrismaClient } from '@prisma/client';
-import { prioritize } from './notification-priority.js';
+import { prioritize, stackByTruck } from './notification-priority.js';
 import type { TourService } from './tours.js';
 
 export type DwellSeverity = 'NONE' | 'WARNING' | 'CRITICAL';
@@ -76,7 +76,7 @@ export class NotificationService {
     });
   }
 
-  /** Open notifications, most important first: decisions, then risks, then information and what no longer applies. */
+  /** Open notifications, most important first: decisions, then risks, then information and what no longer applies; one lead per truck. */
   async list(now = new Date()) {
     const items = await this.db.notification.findMany({ where: { acknowledgedAt: null }, orderBy: { createdAt: 'asc' }, take: 300 });
     const legIds = new Set<string>();
@@ -91,7 +91,7 @@ export class NotificationService {
     for (const leg of legs) stopIds.add(leg.toStopId);
     const stops = stopIds.size ? await this.db.stop.findMany({ where: { id: { in: [...stopIds] } },
       select: { id: true, type: true, arrivedAt: true, completedAt: true, appointmentAt: true, appointmentWindowStartAt: true } }) : [];
-    return prioritize(items, { stops: new Map(stops.map((stop) => [stop.id, stop])), legTarget: new Map(legs.map((leg) => [leg.id, leg.toStopId])) }, now);
+    return stackByTruck(prioritize(items, { stops: new Map(stops.map((stop) => [stop.id, stop])), legTarget: new Map(legs.map((leg) => [leg.id, leg.toStopId])) }, now));
   }
 
   acknowledge(id: string, now = new Date()) {

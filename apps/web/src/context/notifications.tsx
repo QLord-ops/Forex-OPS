@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { useNavigate } from 'react-router-dom'
 
 import { usePolling } from '../hooks/usePolling'
-import { needsAttention, planAlerts, playAlertSound, readDeferred, readSeen, showSummaryAlert, showSystemAlert, titleWithCount, writeDeferred, writeSeen, type AlertNotification } from '../lib/alerts'
+import { closableWith, isLead, needsAttention, planAlerts, playAlertSound, readDeferred, readSeen, showSummaryAlert, showSystemAlert, stackOf as stackIn, titleWithCount, writeDeferred, writeSeen, type AlertNotification } from '../lib/alerts'
 import { readWorkHours, WORK_HOURS_EVENT, type WorkHours } from '../lib/work-hours'
 import { api } from '../lib/api'
 import { pendingToDocument } from '../lib/appointments'
@@ -22,8 +22,10 @@ export interface Departure { stopType: 'LOAD' | 'UNLOAD'; leftAt: string; time: 
 
 interface NotificationsState {
   items: AlertNotification[]
-  /** Open items the dispatcher has not set aside in this tab, most important first. */
+  /** One card per truck the dispatcher has not set aside in this tab, most important first. */
   open: AlertNotification[]
+  /** The other open notifications of a card's truck, newest first. */
+  stackOf: (item: AlertNotification) => AlertNotification[]
   workHours: WorkHours
   acknowledgeAll: (items: AlertNotification[]) => Promise<void>
   pending: PendingAppointment[]
@@ -71,12 +73,14 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener(WORK_HOURS_EVENT, onChange)
   }, [])
   const items = useMemo(() => notifications.data?.notifications ?? [], [notifications.data])
+  // One card, one count and one sound per truck: the truck's other notifications fold under its card.
+  const leads = useMemo(() => items.filter(isLead), [items])
   const loaded = notifications.data !== null
   useEffect(() => {
     if (!loaded) return
-    document.title = titleWithCount(items.filter(needsAttention).length)
+    document.title = titleWithCount(leads.filter(needsAttention).length)
     // Outside the working day only urgent items ring; the rest wait for one morning summary.
-    const plan = planAlerts(items, readSeen(), readDeferred(), new Date(), readWorkHours())
+    const plan = planAlerts(leads, readSeen(), readDeferred(), new Date(), readWorkHours())
     writeSeen(plan.seen)
     writeDeferred(plan.deferred)
     const away = document.visibilityState === 'hidden' || !document.hasFocus()
@@ -88,11 +92,12 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
       playAlertSound(item.type)
       if (away) showSystemAlert(item, (path) => navigate(path))
     }
-  }, [items, loaded, navigate])
+  }, [leads, loaded, navigate])
   useEffect(() => () => { document.title = titleWithCount(0) }, [])
 
   const pending = useMemo(() => (Array.isArray(pendingPoll.data?.items) ? pendingPoll.data.items : []), [pendingPoll.data])
-  const open = useMemo(() => items.filter((item) => !hidden.includes(item.id)), [hidden, items])
+  const open = useMemo(() => leads.filter((item) => !hidden.includes(item.id)), [hidden, leads])
+  const stackOf = useCallback((item: AlertNotification) => stackIn(items, item), [items])
 
   const run = useCallback(async (item: AlertNotification, work: () => Promise<void>) => {
     setBusyId(item.id)
@@ -127,10 +132,13 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
         await changed()
         return
       }
-      await operationsRequest(`/notifications/${item.id}/ack`, 'POST')
+      // «Понятно» on a truck's card closes its stack too, except decisions that still wait for their own answer.
+      const ids = closableWith(items, item)
+      if (ids.length > 1) await operationsRequest('/notifications/ack-many', 'POST', { ids: ids.slice(0, 300) })
+      else await operationsRequest(`/notifications/${item.id}/ack`, 'POST')
       await refetch()
     })
-  }, [changed, refetch, run])
+  }, [changed, items, refetch, run])
 
   const findPending = useCallback(async (item: AlertNotification) => {
     const pendingId = pendingIdOf(item)
@@ -176,21 +184,22 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
     if (!list.length) return
     setBusyId('all')
     try {
-      for (let index = 0; index < list.length; index += 300) {
-        await operationsRequest('/notifications/ack-many', 'POST', { ids: list.slice(index, index + 300).map((item) => item.id) })
+      const ids = [...new Set(list.flatMap((item) => closableWith(items, item)))]
+      for (let index = 0; index < ids.length; index += 300) {
+        await operationsRequest('/notifications/ack-many', 'POST', { ids: ids.slice(index, index + 300) })
       }
       await refetch()
     } catch (cause) {
       setErrors((current) => ({ ...current, all: cause instanceof Error ? cause.message : 'Не удалось отметить прочитанными' }))
     } finally { setBusyId(null) }
-  }, [refetch])
+  }, [items, refetch])
 
   const hide = useCallback((id: string) => setHidden((previous) => [...previous, id]), [])
   const pendingOf = useCallback((item: AlertNotification) => pending.find((entry) => entry.id === pendingIdOf(item)) ?? null, [pending])
 
   const value = useMemo<NotificationsState>(() => ({
-    items, open, workHours, acknowledgeAll, pending, busyId, errors, termin: termin?.item ?? null, hide, answerDeparture, resolve, reviewTermin, acceptTermin, closeTermin, pendingOf
-  }), [acceptTermin, acknowledgeAll, answerDeparture, busyId, closeTermin, errors, hide, items, open, pending, pendingOf, resolve, reviewTermin, termin, workHours])
+    items, open, stackOf, workHours, acknowledgeAll, pending, busyId, errors, termin: termin?.item ?? null, hide, answerDeparture, resolve, reviewTermin, acceptTermin, closeTermin, pendingOf
+  }), [acceptTermin, acknowledgeAll, answerDeparture, busyId, closeTermin, errors, hide, items, open, pending, pendingOf, resolve, reviewTermin, stackOf, termin, workHours])
   return <Context.Provider value={value}>{children}</Context.Provider>
 }
 

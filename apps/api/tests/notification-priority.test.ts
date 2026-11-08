@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PrismaClient } from '../src/generated/sqlite-client/index.js';
 import { buildApp } from '../src/app.js';
-import { prioritize, type PriorityFacts, type StopFacts } from '../src/services/notification-priority.js';
+import { prioritize, stackByTruck, type PriorityFacts, type StopFacts } from '../src/services/notification-priority.js';
 import { NotificationService } from '../src/services/notifications.js';
 import { MockRoutingProvider } from '../src/services/routing.js';
 import { TourService } from '../src/services/tours.js';
@@ -74,6 +74,30 @@ describe('notification priority after the night', () => {
     expect(list.map((item) => [item.id, item.priority, item.urgent])).toEqual([
       ['critical', 'ACTION', true], ['sooner', 'RISK', false], ['later', 'RISK', false], ['late', 'RISK', false], ['onTime', 'INFO', false]
     ]);
+  });
+});
+
+describe('one card per truck', () => {
+  const jams = (vehicleId: string, count: number) => Array.from({ length: count }, (_, index) => note(`${vehicleId}-jam-${index}`, 'TRAFFIC_DELAY', { vehicleId, stopId: `${vehicleId}-s${index}`, createdAt: night(0, index) }));
+
+  it('leads with the newest notification and folds the other notifications of the truck under it', () => {
+    const list = stackByTruck(prioritize([...jams('v1', 20), note('v2-rest', 'DAILY_REST_AT_STOP', { vehicleId: 'v2', stopId: 'x' })], facts([]), now));
+    const leads = list.filter((item) => item.leadId === item.id);
+    expect(leads.map((item) => [item.id, item.stackSize])).toEqual([['v1-jam-19', 20], ['v2-rest', 1]]);
+    expect(list.filter((item) => item.vehicleId === 'v1').every((item) => item.leadId === 'v1-jam-19')).toBe(true);
+  });
+
+  it('keeps an open decision on top, the one that needs an answer first, never a newer piece of information', () => {
+    const left = note('left', 'STOP_DEPARTED', { stopId: 's-left', createdAt: night(0) });
+    const deviation = note('deviation', 'ROUTE_DEVIATION', { payload: { legId: 'l1' }, createdAt: night(1) });
+    const list = stackByTruck(prioritize([left, deviation, ...jams('v1', 3).map((item) => ({ ...item, createdAt: night(4) }))], facts([stop('s-left', { arrivedAt: night(0) })]), now));
+    expect(new Set(list.map((item) => item.leadId))).toEqual(new Set(['left']));
+    // Once BELADEN is recorded the departure no longer needs an answer: the open deviation leads.
+    const settled = stackByTruck(prioritize([left, deviation, ...jams('v1', 3)], facts([stop('s-left', { arrivedAt: night(0), completedAt: night(0, 30) })]), now));
+    expect(settled[0].leadId).toBe('deviation');
+    // Only settled or informational items left: the newest one leads.
+    const quiet = stackByTruck(prioritize([{ ...left, createdAt: night(5) }, ...jams('v1', 3)], facts([stop('s-left', { arrivedAt: night(0), completedAt: night(0, 30) })]), now));
+    expect(quiet[0].leadId).toBe('left');
   });
 });
 

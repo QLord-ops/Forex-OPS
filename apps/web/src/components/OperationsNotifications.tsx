@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 
 import { departureOf, useNotifications } from '../context/notifications'
-import { alertPermission, bannerDismissed, dismissBanner, needsAttention, nightItems, requestAlertPermission, type AlertNotification, type AlertPermission } from '../lib/alerts'
+import { alertPermission, answerRequired, bannerDismissed, dismissBanner, needsAttention, nightItems, requestAlertPermission, type AlertNotification, type AlertPermission } from '../lib/alerts'
 import { pendingToDocument } from '../lib/appointments'
 import { formatTime } from '../lib/format'
 import { terminText } from '../lib/tours'
@@ -13,8 +13,12 @@ import { AppointmentReview } from './AppointmentReview'
 type Tone = 'late' | 'termin' | 'arrival' | 'ok' | 'info'
 
 /** One open question for the dispatcher, with its own buttons. Used in «Требует решения», the bell and the toast. */
-export function DecisionCard({ item, stop, onSelect, openLink = false }: { item: AlertNotification; stop?: Stop | null; onSelect?: (vehicleId: string) => void; openLink?: boolean }) {
+export function DecisionCard({ item, stop, onSelect, openLink = false, nested = false }: { item: AlertNotification; stop?: Stop | null; onSelect?: (vehicleId: string) => void; openLink?: boolean; nested?: boolean }) {
   const state = useNotifications()
+  // Earlier notifications of the same truck fold under its card; «Понятно» closes them too, decisions that wait for an answer stay.
+  const stack = nested ? [] : state.stackOf(item)
+  const waiting = stack.filter(answerRequired).length
+  const closes = 1 + stack.length - waiting
   const navigate = useNavigate()
   const busy = state.busyId === item.id
   const error = state.errors[item.id]
@@ -82,8 +86,10 @@ export function DecisionCard({ item, stop, onSelect, openLink = false }: { item:
     ]
   }
 
+  if (closes > 1) actions = actions.map((action) => action.label === 'Понятно' || action.label === 'Прочитано' ? { ...action, label: `${action.label} · все ${closes}` } : action)
+
   const headingId = `decision-${item.id}`
-  return <article className={`decision-card decision-card-${item.resolved ? 'info' : tone}`} aria-labelledby={headingId}>
+  return <article className={`decision-card decision-card-${item.resolved ? 'info' : tone}${nested ? ' decision-card-nested' : ''}`} aria-labelledby={headingId}>
     <Icon className="decision-card-icon" aria-hidden="true" />
     <div className="min-w-0">
       {onSelect ? <button type="button" id={headingId} className="decision-card-title" onClick={() => onSelect(item.vehicleId)}>{title}</button> : <h3 id={headingId} className="decision-card-title">{title}</h3>}
@@ -94,6 +100,11 @@ export function DecisionCard({ item, stop, onSelect, openLink = false }: { item:
         {actions.map((action) => <button key={action.label} type="button" className={action.primary ? 'decision-button decision-button-primary' : 'decision-button'} disabled={busy} onClick={action.run}>{action.label}</button>)}
         {openLink ? <Link className="decision-button" to={`/vehicles/${item.vehicleId}`} onClick={() => state.hide(item.id)}>Открыть грузовик</Link> : null}
       </div>
+      {stack.length ? <details className="decision-stack">
+        <summary>Ещё {stack.length} по этой машине{waiting ? <span className="decision-stack-waiting"> · ждут ответа: {waiting}</span> : null}</summary>
+        {stack.length - waiting > 1 ? <button type="button" className="decision-button decision-stack-close" disabled={state.busyId === 'all'} onClick={() => void state.acknowledgeAll(stack.filter((older) => !answerRequired(older)))}>Прочитать эти {stack.length - waiting}</button> : null}
+        <div className="decision-stack-list">{stack.map((older) => <DecisionCard key={older.id} item={older} nested />)}</div>
+      </details> : null}
     </div>
   </article>
 }
