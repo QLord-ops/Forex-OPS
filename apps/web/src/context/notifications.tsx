@@ -5,6 +5,7 @@ import { usePolling } from '../hooks/usePolling'
 import { closableWith, isLead, needsAttention, planAlerts, playAlertSound, readDeferred, readSeen, showSummaryAlert, showSystemAlert, stackOf as stackIn, titleWithCount, writeDeferred, writeSeen, type AlertNotification } from '../lib/alerts'
 import { readWorkHours, WORK_HOURS_EVENT, type WorkHours } from '../lib/work-hours'
 import { onServiceWorkerOpen } from '../lib/pwa'
+import { syncPushWorkHours } from '../lib/push'
 import { api } from '../lib/api'
 import { pendingToDocument } from '../lib/appointments'
 import type { PendingAppointment } from '../types/domain'
@@ -72,7 +73,7 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
 
   const [workHours, setWorkHours] = useState<WorkHours>(readWorkHours)
   useEffect(() => {
-    const onChange = () => setWorkHours(readWorkHours())
+    const onChange = () => { setWorkHours(readWorkHours()); void syncPushWorkHours() }
     window.addEventListener(WORK_HOURS_EVENT, onChange)
     return () => window.removeEventListener(WORK_HOURS_EVENT, onChange)
   }, [])

@@ -17,6 +17,8 @@ const deviation = { id: 'n1', vehicleId: 'v2', stopId: null, type: 'ROUTE_DEVIAT
   priority: 'ACTION', urgent: false, resolved: false, resolvedReason: null, leadId: 'n1', stackSize: 1 }
 
 async function phone(page: Page, onImage?: () => void) {
+  // Headless Chromium always reports notifications as blocked; a phone where the dispatcher allowed them is the usual case.
+  await page.addInitScript(() => Object.defineProperty(Notification, 'permission', { get: () => 'granted' }))
   await page.route('**/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname.replace(/^\/api/, '')
     if (path === '/auth/session') return json(route, { authenticated: true, role: 'dispatcher', csrfToken: 'e2e', dispatcherId: 'd1', displayName: 'Anna Beispiel', onboardingCompletedAt: '2026-11-01T00:00:00Z' })
@@ -92,6 +94,8 @@ test('телефон: «Решения» вместо колокольчика, 
   const sections = page.getByRole('navigation', { name: 'Остальные разделы' })
   for (const name of ['Статус 07:00', 'Туры', /Машины и Webfleet/, 'Заказчики', 'Аналитика', /Настройки/]) await expect(sections.getByRole('link', { name })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Выйти' })).toBeVisible()
+  // Without VAPID keys on the server the switch says so instead of failing silently.
+  await expect(page.getByRole('switch', { name: /Push на этот телефон/ })).toContainText('не настроен на сервере')
   await sections.getByRole('link', { name: 'Туры' }).click()
   await expect(tabs.getByRole('link', { name: 'Ещё' })).toHaveAttribute('aria-current', 'page')
   expect(await sideways(page)).toBe(0)

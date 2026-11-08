@@ -2,6 +2,7 @@ import { Bot, Building2, ChartColumn, ChevronRight, CircleHelp, ClipboardList, G
 import { Link } from 'react-router-dom'
 
 import { AlertToggle } from '../components/AlertToggle'
+import { PushToggle } from '../components/PushToggle'
 import { DispatcherLogout } from '../components/AuthGate'
 import { ThemeToggle } from '../components/ThemeToggle'
 import { currentDispatcher, currentDispatcherRole } from '../lib/auth'
@@ -41,6 +42,7 @@ export function MorePage() {
     <div className="more-list" role="group" aria-label="Этот телефон">
       <ThemeToggle className="more-item" />
       <AlertToggle className="more-item" />
+      <PushToggle className="more-item" />
     </div>
     <div className="more-list" role="group" aria-label="Помощь">
       <button type="button" className="more-item" onClick={() => window.dispatchEvent(new CustomEvent(ONBOARDING_EVENT, { detail: { start: 0 } }))}><GraduationCap className="h-5 w-5" aria-hidden="true" /><span className="more-item-label">Обучение</span><span className="more-item-note">пройти снова</span></button>

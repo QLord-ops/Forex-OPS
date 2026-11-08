@@ -8,6 +8,7 @@ import { AlertToggle } from '../components/AlertToggle'
 import { WorkHoursSettings } from '../components/WorkHoursSettings'
 import { currentDispatcher, currentDispatcherRole } from '../lib/auth'
 import { THEME_EVENT, currentTheme, setTheme, type Theme } from '../lib/theme'
+import { PushToggle } from '../components/PushToggle'
 
 /** Personal settings of this browser plus the admin entry to accounts. */
 export function SettingsPage() {
@@ -38,6 +39,7 @@ export function SettingsPage() {
         <h3 id="settings-sound" className="section-title">Уведомления</h3>
         <p className="page-subtitle">Звук и окно Windows о прибытии, выезде без BELADEN/ENTLADEN и Termin, пока вкладка OPS открыта.</p>
         <AlertToggle className="settings-toggle" />
+        <PushToggle className="settings-toggle" />
         <WorkHoursSettings />
       </section>
       <AddressRules />
