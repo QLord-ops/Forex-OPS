@@ -16,14 +16,14 @@ const row = (id: string, number: string) => ({
 const deviation = { id: 'n1', vehicleId: 'v2', stopId: null, type: 'ROUTE_DEVIATION', message: 'LKW 997: 2,4 km vom Kurs', createdAt: new Date().toISOString(), payloadJson: '{}',
   priority: 'ACTION', urgent: false, resolved: false, resolvedReason: null, leadId: 'n1', stackSize: 1 }
 
-async function phone(page: Page, onImage?: () => void) {
+async function phone(page: Page, onImage?: () => void, vehicles: unknown[] = [row('v1', '321'), row('v2', '997')]) {
   // Headless Chromium always reports notifications as blocked; a phone where the dispatcher allowed them is the usual case.
   await page.addInitScript(() => Object.defineProperty(Notification, 'permission', { get: () => 'granted' }))
   await page.route('**/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname.replace(/^\/api/, '')
     if (path === '/auth/session') return json(route, { authenticated: true, role: 'dispatcher', csrfToken: 'e2e', dispatcherId: 'd1', displayName: 'Anna Beispiel', onboardingCompletedAt: '2026-11-01T00:00:00Z' })
     if (path === '/notifications') return json(route, { notifications: [deviation] })
-    if (path === '/dashboard') return json(route, { me: 'd1', vehicles: [row('v1', '321'), row('v2', '997')] })
+    if (path === '/dashboard') return json(route, { me: 'd1', vehicles })
     if (path.endsWith('/current-position')) return json(route, { status: 'EN_ROUTE' })
     if (path.endsWith('/card')) return json(route, { vehicleNumber: '321', webfleet: null, events: { unresolved: 0, items: [] } })
     if (path === '/imports/image/preview') { onImage?.(); return json(route, { source: 'OPENAI', detectedLayout: 'IMAGE', drafts: [], warnings: [], aiAvailable: true }) }
@@ -32,6 +32,38 @@ async function phone(page: Page, onImage?: () => void) {
   await page.route('https://tile.openstreetmap.org/**', (route) => route.abort())
 }
 const sideways = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
+
+/** Pieces of text that are drawn over each other, and labels that broke onto a second line or were cut. */
+const textClashes = (page: Page, selector: string) => page.locator(selector).evaluate((root) => {
+  const textBoxes = (element: Element) => {
+    const boxes: Array<{ node: Node; text: string; rect: DOMRect }> = []
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT)
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const text = node.textContent?.trim()
+      const parent = node.parentElement
+      if (!text || !parent || parent.closest('.sr-only') || !parent.checkVisibility()) continue
+      const range = document.createRange()
+      range.selectNodeContents(node)
+      for (const rect of range.getClientRects()) if (rect.width > 0 && rect.height > 0) boxes.push({ node, text, rect })
+    }
+    return boxes
+  }
+  const boxes = textBoxes(root)
+  const clashes: string[] = []
+  // Pieces of one text (lines of a wrapped text, a line cut with «…») never count against each other.
+  boxes.forEach((a, index) => boxes.slice(index + 1).filter((b) => b.node !== a.node).forEach((b) => {
+    const x = Math.min(a.rect.right, b.rect.right) - Math.max(a.rect.left, b.rect.left)
+    const y = Math.min(a.rect.bottom, b.rect.bottom) - Math.max(a.rect.top, b.rect.top)
+    if (x > 1 && y > 1) clashes.push(`«${a.text}» × «${b.text}»`)
+  }))
+  for (const label of root.querySelectorAll('strong, .status-pill')) {
+    const [first, ...rest] = textBoxes(label).map((box) => box.rect)
+    // A second line starts below the first one; pieces of one line overlap it in height.
+    if (first && rest.some((rect) => rect.top >= first.bottom - 2)) clashes.push(`«${label.textContent}» перенесён на вторую строку`)
+    if (label.scrollWidth > label.clientWidth + 1) clashes.push(`«${label.textContent}» обрезан`)
+  }
+  return clashes
+})
 
 test('телефон: вкладки внизу, машины и карта по отдельности, выбранная машина не теряется', async ({ page }) => {
   await phone(page)
@@ -99,4 +131,33 @@ test('телефон: «Решения» вместо колокольчика, 
   await sections.getByRole('link', { name: 'Туры' }).click()
   await expect(tabs.getByRole('link', { name: 'Ещё' })).toHaveAttribute('aria-current', 'page')
   expect(await sideways(page)).toBe(0)
+})
+
+test('телефон: в панели машины внизу карты текст не налезает друг на друга', async ({ page }) => {
+  const at = (hours: number) => new Date(Date.now() + hours * 3_600_000).toISOString()
+  const base = row('v1', 'B-WY9724')
+  const [load, unload] = base.tour.stops
+  // As on the owner's phone: a long plate, the speed in the status and a Termin with its margin.
+  const vehicle = {
+    ...base,
+    tour: { ...base.tour, stops: [{ ...load, completedAt: at(-3) }, { ...unload, city: 'Glauchau', address: 'D 08371 Glauchau', appointmentAt: at(10) }] },
+    statusText: 'MOVING', eta: at(2), etaSource: 'GPS', remainingKm: 182,
+    telemetry: { source: 'WEBFLEET', speedKmh: 82, ageSeconds: 40, latitude: 51.4, longitude: 11.9 }
+  }
+  await phone(page, undefined, [vehicle, row('v2', '997')])
+  for (const width of [393, 360]) {
+    await page.setViewportSize({ width, height: 851 })
+    await page.goto('/?view=map&vehicleId=v1')
+    const strip = page.getByRole('button', { name: 'Развернуть панель LKW B-WY9724' })
+    await expect(strip).toContainText('LKW B-WY9724')
+    await expect(strip).toContainText(/Termin .* · запас/)
+    await expect(strip).toContainText('82 км/ч')
+    expect(await textClashes(page, '.vehicle-panel-collapsed'), `свёрнутая панель, ${width} px`).toEqual([])
+
+    await strip.click()
+    await expect(page.getByRole('button', { name: 'Свернуть панель машины' })).toBeVisible()
+    expect(await textClashes(page, '.vehicle-panel'), `развёрнутая панель, ${width} px`).toEqual([])
+    expect(await sideways(page)).toBe(0)
+    await page.getByRole('button', { name: 'Свернуть панель машины' }).click()
+  }
 })
