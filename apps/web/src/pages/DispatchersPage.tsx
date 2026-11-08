@@ -3,7 +3,8 @@ import { useState, type FormEvent } from 'react'
 
 import { EmptyState, ErrorState, LoadingState } from '../components/States'
 import { usePolling } from '../hooks/usePolling'
-import { accountsApi, type DispatcherAccount } from '../lib/api'
+import { accountsApi, customersApi, type DispatcherAccount } from '../lib/api'
+import { DispatcherLinesEditor } from '../components/CustomerLineCells'
 import { currentDispatcher, currentDispatcherRole } from '../lib/auth'
 import { formatDateTime } from '../lib/format'
 
@@ -13,6 +14,7 @@ const MIN_PASSWORD = 12
 export function DispatchersPage() {
   const isAdmin = currentDispatcherRole() === 'admin'
   const { data, error, loading, refetch } = usePolling(accountsApi.list, 0, isAdmin)
+  const customers = usePolling(customersApi.list, 0, isAdmin).data ?? []
   const [form, setForm] = useState({ login: '', displayName: '', role: 'dispatcher' as 'admin' | 'dispatcher', password: '' })
   const [busy, setBusy] = useState<string | null>(null)
   const [message, setMessage] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null)
@@ -97,7 +99,7 @@ export function DispatchersPage() {
         {loading && !data ? <LoadingState /> : error && !data ? <ErrorState error={error} onRetry={refetch} /> : !data?.length ? <EmptyState label="Аккаунтов пока нет. Создайте первый — после этого общий пароль диспетчера перестанет работать." /> : (
           <table className="w-full text-left text-sm">
             <thead className="border-b border-slate-200 text-xs text-slate-500">
-              <tr><th className="px-4 py-2 font-medium">Имя</th><th className="px-4 py-2 font-medium">Логин</th><th className="px-4 py-2 font-medium">Роль</th><th className="px-4 py-2 font-medium">Последний вход</th><th className="px-4 py-2 font-medium">Обучение</th><th className="px-4 py-2 font-medium">Статус</th><th className="px-4 py-2" /></tr>
+              <tr><th className="px-4 py-2 font-medium">Имя</th><th className="px-4 py-2 font-medium">Логин</th><th className="px-4 py-2 font-medium">Роль</th><th className="px-4 py-2 font-medium">Линии</th><th className="px-4 py-2 font-medium">Последний вход</th><th className="px-4 py-2 font-medium">Обучение</th><th className="px-4 py-2 font-medium">Статус</th><th className="px-4 py-2" /></tr>
             </thead>
             <tbody>
               {data.map((account) => {
@@ -113,6 +115,7 @@ export function DispatchersPage() {
                         <option value="admin">Администратор</option>
                       </select>
                     </td>
+                    <td className="px-4 py-3"><DispatcherLinesEditor account={account} customers={customers} onSaved={(text) => { setMessage({ tone: 'ok', text }); void refetch() }} /></td>
                     <td className="px-4 py-3 tabular-nums">{account.lastLoginAt ? formatDateTime(account.lastLoginAt) : 'ещё не входил'}</td>
                     <td className="px-4 py-3">{account.onboardingCompletedAt ? 'пройдено' : 'нет'}</td>
                     <td className="px-4 py-3">{account.active ? 'Активен' : 'Отключён'}</td>

@@ -5,7 +5,7 @@ import { GROUP_LABEL, LINE_LABEL, statusApi, type StatusPresetCandidate } from '
 import type { StatusGroup, Vehicle, VehicleLine } from '../types/domain'
 
 /** Line, block, service phone and A Schild / AppSped of one truck, saved on change: what the 07:00 status list uses. */
-export function VehicleStatusCells({ vehicle, onSaved }: { vehicle: Vehicle; onSaved: () => void }) {
+export function VehicleStatusCells({ vehicle, onSaved, withLine = true }: { vehicle: Vehicle; onSaved: () => void; withLine?: boolean }) {
   const [phone, setPhone] = useState(vehicle.servicePhone ?? '')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -15,7 +15,7 @@ export function VehicleStatusCells({ vehicle, onSaved }: { vehicle: Vehicle; onS
   }
   const number = vehicle.vehicleNumber
   return <>
-    <td className="px-3 py-2">
+    {withLine ? <><td className="px-3 py-2">
       <select className="field-input h-8 min-w-32" aria-label={`Линия LKW ${number}`} disabled={busy} value={vehicle.line ?? ''}
         onChange={(event) => void save({ line: (event.target.value || null) as VehicleLine | null })}>
         <option value="">—</option>
@@ -28,7 +28,7 @@ export function VehicleStatusCells({ vehicle, onSaved }: { vehicle: Vehicle; onS
         <option value="">—</option>
         {(Object.keys(GROUP_LABEL) as StatusGroup[]).map((group) => <option key={group} value={group}>{GROUP_LABEL[group]}</option>)}
       </select>
-    </td>
+    </td></> : null}
     <td className="px-3 py-2">
       <input className="field-input h-8 min-w-36" aria-label={`Служебный телефон LKW ${number}`} title="Служебный номер машины — не личный номер водителя" inputMode="tel" maxLength={30}
         value={phone} disabled={busy} onChange={(event) => setPhone(event.target.value)}

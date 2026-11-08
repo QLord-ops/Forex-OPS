@@ -23,9 +23,14 @@ export interface Vehicle {
   servicePhone?: string | null
   aSchild?: boolean
   appSped?: boolean
+  /** The customer line the truck runs on (Schnellecke Nord, Walter Tesla …). */
+  customerLineId?: string | null
+  customerLine?: (CustomerLineRef & { customer: CustomerRef }) | null
   createdAt?: string
   updatedAt?: string
 }
+export interface CustomerRef { id: string; name: string; slug: string; color: string | null }
+export interface CustomerLineRef { id: string; code: string; name: string }
 export type VehicleLine = 'SCHNELLECKE' | 'WALTER_TESLA' | 'OTHER'
 export type StatusGroup = 'NORD' | 'SUED' | 'LUFE'
 
@@ -111,6 +116,9 @@ export interface Tour {
 export interface DashboardVehicle {
   issues?: Array<{ id: string; kind: string; description: string; expectedResolvedAt: string | null; createdAt: string }>
   vehicle: Vehicle
+  /** Customer and line of the truck; null while it is on no line. */
+  customer?: CustomerRef | null
+  line?: CustomerLineRef | null
   tour?: Tour | null
   statusText: string
   /** GPS: km and ETA measured from the Webfleet position; CALCULATED: from the drive timer. */
