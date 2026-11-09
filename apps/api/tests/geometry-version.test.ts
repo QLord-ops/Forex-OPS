@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { PrismaClient } from "../src/generated/sqlite-client/index.js";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { MockRoutingProvider } from "../src/services/routing.js";
-import { TourService } from "../src/services/tours.js";
+import { makePersistedDrivePlan, TourService } from "../src/services/tours.js";
+import { createUnknownClockState } from "../src/services/vehicle-clock.js";
 import { asAppDatabase, migrateTestDatabase } from "./test-database.js";
 
 let directory: string;
@@ -88,6 +89,35 @@ it("measures distance and ETA from fresh GPS and never marks the truck arrived b
   // Stale GPS does not move anything.
   const stale = await service.getCurrentPosition(vehicle.id, new Date(), { latitude: 53.07, longitude: 8.8, fresh: false });
   expect(stale.etaSource).toBe("CALCULATED");
+});
+
+it("without the truck's starting hours a GPS ETA is the remaining drive, not a daily rest the timer invented (LKW B-CY2803)", async () => {
+  const service = new TourService(asAppDatabase(db), new MockRoutingProvider());
+  const vehicle = await db.vehicle.create({ data: { vehicleNumber: "B-CY2803" } });
+  await service.createTour({ vehicleId: vehicle.id, orderNumber: "20565840", stops: [
+    { sequence: 1, type: "LOAD", address: "Hannover", latitude: 52.37, longitude: 9.73 },
+    { sequence: 2, type: "UNLOAD", address: "Emden", latitude: 53.36, longitude: 7.2 }
+  ] });
+  const leg = await db.leg.findFirstOrThrow({ where: { tour: { vehicleId: vehicle.id } } });
+  const line = [{ latitude: 52.37, longitude: 9.73 }, { latitude: 53.07, longitude: 8.8 }, { latitude: 53.36, longitude: 7.2 }];
+  const now = new Date();
+  // The leg began 2 h ago with a clock that guessed the hours were nearly used up: its plan is 30 min of driving, then an
+  // 11 h daily rest. By the timer the driver is resting now; GPS shows the truck on the road.
+  const startedAt = new Date(now.getTime() - 2 * 3600_000);
+  const guessed = createUnknownClockState(new Date(startedAt.getTime() - 12 * 3600_000));
+  guessed.currentCycle.drivingSeconds = 8.5 * 3600;
+  guessed.currentCycle.dutySeconds = 12 * 3600;
+  guessed.updatedAt = startedAt.toISOString();
+  await db.leg.update({ where: { id: leg.id }, data: { status: "ACTIVE", startedAt, routeGeometry: JSON.stringify(line), distanceMeters: 230_000, simulatedDurationSeconds: 3 * 3600,
+    drivePlan: JSON.stringify(makePersistedDrivePlan(guessed, 3 * 3600, startedAt)) } });
+  await db.vehicle.update({ where: { id: vehicle.id }, data: { clockState: JSON.stringify(guessed) } });
+
+  const gps = await service.getCurrentPosition(vehicle.id, now, { latitude: 53.07, longitude: 8.8, fresh: true });
+  expect(gps.etaSource).toBe("GPS");
+  // About half of a 3 h leg is left: arrival within about 2 h, not after a 9–11 h rest.
+  const hours = (Date.parse(gps.eta!) - now.getTime()) / 3600_000;
+  expect(hours).toBeGreaterThan(1);
+  expect(hours).toBeLessThan(2.5);
 });
 
 it("sends the driven part without a straight line between stitched pieces and without the stretch the truck did not drive", async () => {
