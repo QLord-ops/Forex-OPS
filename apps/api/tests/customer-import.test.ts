@@ -79,9 +79,9 @@ describe('the prompt follows the customer profile', () => {
   }
 
   it('waits long enough for a long Auftrag behind the 120 s proxy and keeps the quotes per field short', async () => {
-    // 45 s was not enough once every field carried a confidence and a quote (09.11: every PDF aborted after 45 s).
-    expect(DEFAULT_TIMEOUT_MS).toBeGreaterThanOrEqual(90_000);
-    expect(DEFAULT_TIMEOUT_MS).toBeLessThan(120_000);
+    // 45 s, then 100 s were not enough once every field carried a confidence and a quote (09.11: PDFs aborted at 45 s and at 100 s).
+    // The reading is a background job now, so the model gets minutes.
+    expect(DEFAULT_TIMEOUT_MS).toBeGreaterThanOrEqual(180_000);
     const { instruction, schema } = await read(null);
     expect(instruction).toContain('at most 60 characters');
     expect(schema).toContain('"maxLength":80');

@@ -7,8 +7,8 @@ import type { AiField, OrderField, StopField, StopProvenance } from "./field-con
 
 export { mentionsZuladung } from "./zuladung.js";
 
-// Reading a several-page Auftrag with a confidence and a quote per field takes the model 30–60 s; the Vercel proxy in front waits 120 s.
-export const DEFAULT_TIMEOUT_MS = 100_000;
+// The reading runs as a background job, so the model may take minutes; this only stops a request that will never answer.
+export const DEFAULT_TIMEOUT_MS = 240_000;
 const REASONING_EFFORTS = ["minimal", "low", "medium", "high"] as const;
 
 /** OPENAI_IMPORT_REASONING_EFFORT on the server may change it; anything unknown stays "low". */
