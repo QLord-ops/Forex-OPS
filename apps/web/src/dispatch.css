@@ -322,6 +322,9 @@ button.decision-card-title:focus-visible { outline: 2px solid var(--focus); outl
 /* «ETA 10:41 · опоздание 2 ч 12 мин»: the parts move to a new line instead of running into the next column. */
 .vehicle-panel-note { display: flex; flex-wrap: wrap; column-gap: 6px; }
 .vehicle-panel-note > span { white-space: nowrap; }
+/* A long company name («Schnellecke Transportlogistik GmbH») ends in «…» inside its column instead of running under the ETA. */
+.vehicle-panel-next .vehicle-panel-note { min-width: 0; }
+.vehicle-panel-next .vehicle-panel-note > span { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .vehicle-panel-note > span + span::before { content: '·'; margin-right: 6px; color: rgb(var(--tx-94a3b8)); }
 .vehicle-panel-actions { display: flex; grid-column: -2; gap: 10px; justify-self: end; }
 .vehicle-panel-actions .primary-button, .vehicle-panel-actions .secondary-button { min-height: 46px; padding: 0 16px; font-size: .9375rem; white-space: nowrap; }
@@ -496,8 +499,9 @@ button.decision-card-title:focus-visible { outline: 2px solid var(--focus); outl
 .road-shield-hidden { visibility: hidden; }
 
 /* Daily rest at the stop: a calm, known state, not an alarm. */
-.rest-at-stop { display: inline-flex; align-items: center; border: 1px solid rgb(var(--ln-bae6fd)); border-radius: 6px; padding: 0 7px; background: rgb(var(--bg-f0f9ff)); color: rgb(var(--tx-075985)); font-size: .75rem; font-weight: 500; white-space: nowrap; }
-.vehicle-panel-id .rest-at-stop { font-size: .8125rem; }
+/* The tachograph line can be long («Пауза с 11:49 · вождения ещё 3 ч 47 мин · смена до 17:00»): it wraps instead of running under the GPS chip. */
+.rest-at-stop { display: inline-flex; max-width: 100%; align-items: center; border: 1px solid rgb(var(--ln-bae6fd)); border-radius: 6px; padding: 1px 7px; background: rgb(var(--bg-f0f9ff)); color: rgb(var(--tx-075985)); font-size: .75rem; font-weight: 500; line-height: 1.35; }
+.vehicle-panel-id .rest-at-stop { max-width: 17rem; font-size: .8125rem; }
 /* A break or waiting at the dock: neutral, the truck goes on today. */
 .rest-at-stop-pause { border-color: rgb(var(--ln-e2e8f0)); background: rgb(var(--bg-f8fafc)); color: rgb(var(--tx-334155)); }
 .vehicle-panel-zuladung { color: rgb(var(--tx-92400e)); font-weight: 500; }
@@ -545,7 +549,8 @@ button.decision-card-title:focus-visible { outline: 2px solid var(--focus); outl
 .vehicle-card { display: grid; grid-template-columns: minmax(0, 1fr) 148px; grid-template-rows: 26px auto; align-items: start; gap: 0; }
 .vehicle-card > .vehicle-row-main { grid-column: 1 / -1; grid-row: 1 / span 2; }
 .vehicle-card > .vehicle-card-side { z-index: 1; grid-column: 2; grid-row: 2; padding-left: 10px; }
-.vehicle-card > .vehicle-action-popover { grid-column: 1 / -1; grid-row: 3; }
+.vehicle-card > .vehicle-card-activity { grid-column: 1 / -1; grid-row: 3; min-width: 0; margin: 6px 0 0 52px; }
+.vehicle-card > .vehicle-action-popover { grid-column: 1 / -1; grid-row: 4; }
 .vehicle-row-main .vehicle-row-line, .vehicle-row-main .vehicle-row-meta, .vehicle-row-main .vehicle-row-owner { margin-right: 148px; }
 .vehicle-row-title { min-height: 24px; }
 .vehicle-row-title strong { flex: none; }
