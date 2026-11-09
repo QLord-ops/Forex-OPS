@@ -100,7 +100,33 @@ function importFile(path: string, file: File, customerId?: string | null) {
   const body = new FormData()
   body.append('file', file)
   const query = customerId ? `?customerId=${encodeURIComponent(customerId)}` : ''
-  return request<OrderImportPreview>(`${path}${query}`, { method: 'POST', body })
+  return importResult(`${path}${query}`, { method: 'POST', body })
+}
+
+const IMPORT_POLL_MS = 2000
+
+/**
+ * Reading an Auftrag can take minutes. The server answers 202 with a job once it has read for a while; the page then asks
+ * for the result every two seconds until it is there (or the reading failed with its own message).
+ */
+async function importResult(path: string, init: RequestInit): Promise<OrderImportPreview> {
+  const response = await fetch(`${API_BASE}${path}`, { ...init, credentials: 'same-origin', headers: { ...init.headers, ...authHeaders() } })
+  if (!response.ok) {
+    if (response.status === 401) notifySessionExpired()
+    throw new ApiError(await readErrorMessage(response), response.status)
+  }
+  const payload = await response.json() as OrderImportPreview | { status: 'running'; jobId: string }
+  if (response.status !== 202 || !('jobId' in payload)) return payload as OrderImportPreview
+  for (;;) {
+    await new Promise((resolve) => setTimeout(resolve, IMPORT_POLL_MS))
+    const poll = await fetch(`${API_BASE}/imports/jobs/${encodeURIComponent(payload.jobId)}`, { credentials: 'same-origin', headers: authHeaders() })
+    if (!poll.ok) {
+      if (poll.status === 401) notifySessionExpired()
+      throw new ApiError(await readErrorMessage(poll), poll.status)
+    }
+    const state = await poll.json() as { status: 'running' } | { status: 'done'; preview: OrderImportPreview }
+    if (state.status === 'done') return state.preview
+  }
 }
 
 export type CustomerCategory = 'OEM_LOGISTICS' | 'WAREHOUSE' | 'SPOT' | 'OTHER'
@@ -282,7 +308,7 @@ export const api = {
   importImage: (file: File, customerId?: string | null) => importFile('/imports/image/preview', file, customerId),
   /** The stored Auftrag read again with another customer's profile (null: automatic detection). */
   reparseDocument: (documentId: string, customerId: string | null) =>
-    request<OrderImportPreview>(`/documents/${encodeURIComponent(documentId)}/reparse`, { method: 'POST', body: JSON.stringify({ customerId }) }),
+    importResult(`/documents/${encodeURIComponent(documentId)}/reparse`, { method: 'POST', body: JSON.stringify({ customerId }), headers: { 'Content-Type': 'application/json' } }),
   geocode: (address: string) => request<GeocodeResult>(`/geocode?address=${encodeURIComponent(address)}`),
   resolveAddress: (payload: { address: string; city?: string | null; company?: string | null }) =>
     request<AddressResolution>('/geocode/resolve', { method: 'POST', body: JSON.stringify(payload) })

@@ -2,7 +2,7 @@ import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
 import multipart from "@fastify/multipart";
 import rateLimit from "@fastify/rate-limit";
-import Fastify, { type FastifyRequest } from "fastify";
+import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import { z } from "zod";
 import { CALCULATED_POSITION_DISCLAIMER, type CurrentPosition, type GpsFix, withoutPositionGeometry } from "./domain.js";
 import { prisma } from "./lib/prisma.js";
@@ -56,6 +56,7 @@ import { writeAuditLog, type AuditActor } from './services/audit-log.js';
 import { matchAppointment } from './services/appointment-match.js';
 import { documentFingerprint, PendingAppointmentService } from './services/pending-appointments.js';
 import { OrderDocumentService } from './services/order-documents.js';
+import { ImportJobError, ImportJobs, type ImportJobHandle } from './services/import-jobs.js';
 import { TelemetryRetention, TELEMETRY_SYSTEM_ACTOR } from './services/telemetry-retention.js';
 import { registerOrderDocumentRoutes, registerOrderReparseRoute } from './routes/order-documents.js';
 import { CustomerService, isMine } from './services/customers.js';
@@ -330,6 +331,8 @@ export interface BuildAppOptions {
   pdfImport?: (buffer: Buffer, filename: string, customer?: ImportCustomerContext | null) => Promise<PdfImportPreview>;
   imageImport?: (buffer: Buffer, filename: string, mimeType: "image/png" | "image/jpeg" | "image/webp", customer?: ImportCustomerContext | null) => Promise<ImageImportPreview>;
   databaseCheck?: () => Promise<unknown>;
+  /** How long an Auftrag upload waits for the AI before answering «ещё читаем» (tests make it short). */
+  importWaitMs?: number;
 }
 
 /** Number of proxies in front of the API; 0 means use the socket address. */
@@ -412,6 +415,17 @@ export async function buildApp(options: BuildAppOptions = {}) {
   await registerRouteScenarioRoutes(app, { service: scenarioService });
 
   let activeOrderImports = 0;
+  // Reading an Auftrag may take minutes: the upload answers 202 with a job after this wait and the page asks for the result.
+  // A serverless host cannot work on after the answer, so there the upload waits almost as long as its proxy allows.
+  const importJobs = new ImportJobs();
+  const importWaitMs = options.importWaitMs ?? (isServerless ? 110_000 : 20_000);
+  const importOwner = (request: FastifyRequest) => assistantSessionKey(request);
+  async function answerImportJob<T>(job: ImportJobHandle<T>, reply: FastifyReply) {
+    const state = await job.settled(importWaitMs);
+    if (state.status === "done") return state.result;
+    if (state.status === "failed") return reply.status(state.statusCode).send({ error: state.error });
+    return reply.status(202).send({ status: "running", jobId: job.id });
+  }
   const learnedRules = (customerId: string | null) => importLearning.learned(customerId).catch(() => null);
   const pdfImport = options.pdfImport ?? (async (buffer, filename, customer) =>
     importPdfPreview(buffer, filename, { learned: await learnedRules(customer?.selected?.id ?? null), customer: customer ?? null }));
@@ -832,7 +846,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   });
 
   registerOrderReparseRoute(app, {
-    documents: orderDocuments, customers: customerService, db: prisma,
+    documents: orderDocuments, customers: customerService, db: prisma, jobs: importJobs, owner: importOwner, waitMs: importWaitMs,
     store: (preview, file, request) => withStoredDocument(preview, { buffer: file.content, filename: file.filename, mimeType: file.mimeType }, request),
     read: async (file, previewJson, customerContext, request) => {
       if (activeOrderImports >= 2) return { status: 429, error: "Слишком много одновременных импортов заказов. Повторите попытку позже." };
@@ -868,6 +882,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     }
 
     activeOrderImports += 1;
+    let handedOff = false;
     try {
       const file = await request.file({ limits: { fileSize: 20 * 1024 * 1024 } });
       if (!file) return reply.status(400).send({ error: "PDF-заказ не приложен." });
@@ -889,20 +904,23 @@ export async function buildApp(options: BuildAppOptions = {}) {
 
       const customerContext = await importCustomerContext(request);
       if (!options.auth?.disabled) await assistantService.consumeUsage(assistantSessionKey(request));
-      try {
-        const started = Date.now();
-        const read = await pdfImport(buffer, filename, customerContext);
-        request.log.info({ aiMs: Date.now() - started, pdfBytes: buffer.length }, 'PDF-заказ распознан');
-        return await withStoredDocument(await withFieldConfidence(await withCustomer(await withAppointmentMatch(read, buffer), customerContext)), { buffer, filename, mimeType: "application/pdf" }, request);
-      } catch (error) {
-        if (error instanceof Error && error.message.includes("OPENAI_API_KEY")) {
-          return reply.status(503).send({ error: "OpenAI ещё не настроен для импорта PDF." });
+      handedOff = true;
+      const job = importJobs.start(importOwner(request), async () => {
+        try {
+          const started = Date.now();
+          const read = await pdfImport(buffer, filename, customerContext);
+          const aiMs = Date.now() - started;
+          request.log.info({ aiMs, pdfBytes: buffer.length, readMode: read.readMode ?? null }, 'PDF-заказ распознан');
+          return { ...await withStoredDocument(await withFieldConfidence(await withCustomer(await withAppointmentMatch(read, buffer), customerContext)), { buffer, filename, mimeType: "application/pdf" }, request), readMs: Date.now() - started };
+        } catch (error) {
+          if (error instanceof Error && error.message.includes("OPENAI_API_KEY")) throw new ImportJobError("OpenAI ещё не настроен для импорта PDF.", 503);
+          request.log.error({ err: error }, "Не удалось распознать PDF-заказ");
+          throw new ImportJobError("Не удалось прочитать PDF-заказ. Проверьте файл и повторите попытку.", 502);
         }
-        request.log.error({ err: error }, "Не удалось распознать PDF-заказ");
-        return reply.status(502).send({ error: "Не удалось прочитать PDF-заказ. Проверьте файл и повторите попытку." });
-      }
+      }, () => { activeOrderImports -= 1; });
+      return answerImportJob(job, reply);
     } finally {
-      activeOrderImports -= 1;
+      if (!handedOff) activeOrderImports -= 1;
     }
   });
 
@@ -915,6 +933,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     }
 
     activeOrderImports += 1;
+    let handedOff = false;
     try {
       const file = await request.file({ limits: { fileSize: 10 * 1024 * 1024 } });
       if (!file) return reply.status(400).send({ error: "Скриншот не приложен." });
@@ -938,18 +957,34 @@ export async function buildApp(options: BuildAppOptions = {}) {
 
       const customerContext = await importCustomerContext(request);
       if (!options.auth?.disabled) await assistantService.consumeUsage(assistantSessionKey(request));
-      try {
-        return await withStoredDocument(await withFieldConfidence(await withCustomer(await withAppointmentMatch(await imageImport(buffer, filename, file.mimetype, customerContext), buffer), customerContext)), { buffer, filename, mimeType: file.mimetype }, request);
-      } catch (error) {
-        if (error instanceof Error && error.message.includes("OPENAI_API_KEY")) {
-          return reply.status(503).send({ error: "OpenAI ещё не настроен для импорта скриншотов." });
+      handedOff = true;
+      const mimeType = file.mimetype;
+      const job = importJobs.start(importOwner(request), async () => {
+        try {
+          const started = Date.now();
+          const read = await imageImport(buffer, filename, mimeType, customerContext);
+          request.log.info({ aiMs: Date.now() - started, imageBytes: buffer.length }, 'Скриншот заказа распознан');
+          return { ...await withStoredDocument(await withFieldConfidence(await withCustomer(await withAppointmentMatch(read, buffer), customerContext)), { buffer, filename, mimeType }, request), readMs: Date.now() - started };
+        } catch (error) {
+          if (error instanceof Error && error.message.includes("OPENAI_API_KEY")) throw new ImportJobError("OpenAI ещё не настроен для импорта скриншотов.", 503);
+          request.log.error({ err: error }, "Не удалось распознать скриншот заказа");
+          throw new ImportJobError("Не удалось прочитать скриншот. Проверьте файл и повторите попытку.", 502);
         }
-        request.log.error({ err: error }, "Не удалось распознать скриншот заказа");
-        return reply.status(502).send({ error: "Не удалось прочитать скриншот. Проверьте файл и повторите попытку." });
-      }
+      }, () => { activeOrderImports -= 1; });
+      return answerImportJob(job, reply);
     } finally {
-      activeOrderImports -= 1;
+      if (!handedOff) activeOrderImports -= 1;
     }
+  });
+
+  /** The page asks here while an Auftrag is still being read; only the session that uploaded it gets the result. */
+  app.get("/imports/jobs/:id", async (request, reply) => {
+    const { id } = idParams.parse(request.params);
+    const state = importJobs.get(id, importOwner(request));
+    if (!state) return reply.status(404).send({ error: "Разбор не найден — возможно, он давно завершён. Загрузите файл заново." });
+    if (state.status === "failed") return reply.status(state.statusCode).send({ error: state.error });
+    if (state.status === "running") return reply.status(202).send({ status: "running", startedAt: new Date(state.startedAt).toISOString() });
+    return { status: "done", preview: state.result };
   });
 
   app.get("/vehicles", async () => {

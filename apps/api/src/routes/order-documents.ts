@@ -6,6 +6,7 @@ import type { ImportCustomer } from '../services/customer-resolver.js';
 import type { CustomerService } from '../services/customers.js';
 import { requireDispatcherRoles } from '../services/dispatcher-auth.js';
 import type { OrderDocumentService } from '../services/order-documents.js';
+import { ImportJobError, type ImportJobs } from '../services/import-jobs.js';
 import type { ImportCustomerContext } from '../services/pdf-order-import.js';
 
 const idParams = z.object({ id: z.string().trim().min(1).max(64) });
@@ -79,6 +80,10 @@ export type OrderReparseDeps = {
   read: (file: StoredFile, previewJson: string, customer: ImportCustomerContext, request: FastifyRequest) => Promise<{ preview: ReparsedPreview } | { status: number; error: string }>;
   /** Saves the new parse on the same document row (same file, same sha256) and returns what the client gets. */
   store: (preview: ReparsedPreview, file: StoredFile, request: FastifyRequest) => Promise<unknown>;
+  /** With jobs the reading runs on after `waitMs` and the page collects the result from /imports/jobs/:id. */
+  jobs?: ImportJobs;
+  owner?: (request: FastifyRequest) => string;
+  waitMs?: number;
 };
 
 /**
@@ -95,11 +100,24 @@ export function registerOrderReparseRoute(app: FastifyInstance, deps: OrderRepar
     const file = await deps.documents.file(id);
     if (!file) return reply.status(410).send({ error: 'Файл Auftrag больше не хранится — загрузите его заново.' });
     const context = await deps.customers.importContext(customerId);
-    const result = await deps.read(file, document.previewJson, context, request);
-    if ('error' in result) return reply.status(result.status).send({ error: result.error });
-    const stored = await deps.store(result.preview, file, request);
-    await writeAuditLog(deps.db, actorOf(request), { action: 'ORDER_DOCUMENT_REPARSED', entityType: 'OrderDocument', entityId: id,
-      metadata: { from: document.customerId, customerId, customer: result.preview.customer?.key ?? null } });
-    return stored;
+    const work = async () => {
+      const result = await deps.read(file, document.previewJson, context, request);
+      if ('error' in result) throw new ImportJobError(result.error, result.status);
+      const stored = await deps.store(result.preview, file, request);
+      await writeAuditLog(deps.db, actorOf(request), { action: 'ORDER_DOCUMENT_REPARSED', entityType: 'OrderDocument', entityId: id,
+        metadata: { from: document.customerId, customerId, customer: result.preview.customer?.key ?? null } });
+      return stored;
+    };
+    if (!deps.jobs) {
+      try { return await work(); } catch (error) {
+        if (error instanceof ImportJobError) return reply.status(error.statusCode).send({ error: error.message });
+        throw error;
+      }
+    }
+    const job = deps.jobs.start(deps.owner?.(request) ?? request.ip, work);
+    const state = await job.settled(deps.waitMs ?? 20_000);
+    if (state.status === 'done') return state.result;
+    if (state.status === 'failed') return reply.status(state.statusCode).send({ error: state.error });
+    return reply.status(202).send({ status: 'running', jobId: job.id });
   });
 }

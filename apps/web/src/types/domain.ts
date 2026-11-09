@@ -555,6 +555,8 @@ export interface ImportedOrderDraft {
 }
 
 export interface OrderImportPreview {
+  /** How long the server took to read the file, for the «распознан за N с» note. */
+  readMs?: number
   source: OrderImportSource
   detectedLayout: OrderImportLayout
   /** PDF and screenshots: an Auftrag or a Termin slip. */
