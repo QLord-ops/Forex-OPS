@@ -317,7 +317,8 @@ function customerBlock(customer?: ImportCustomerContext | null): string {
   parts.push(cards.length
     ? ` Customers of this fleet (data): ${cards.map((card) => `${promptValue(card.key, 60)} = ${promptValue(card.name, 80)}${card.aliases.length ? ` (written as ${card.aliases.slice(0, 6).map((alias) => promptValue(alias, 60)).join(", ")})` : ""}`).join("; ")}. Set customerKey to the key of the customer that issued this Auftrag, judged only by the letterhead, the sender of the order and the Abteilung, never by a loading or unloading place; null when none fits or you are unsure.`
     : " Set customerKey to null.");
-  parts.push(" Copy the company that issued the order (letterhead or sender of the Auftrag, not the carrier it is addressed to) into documentIssuer, or null.");
+  parts.push(" Copy the company that issued the order into documentIssuer: the letterhead or sender of the Auftrag, even when it is also one of the Spedition/carrier names above (a logistics company that orders the transport). Never the company the order is addressed to, never a plant or place on the route. Null only if no sender is printed.");
+  if (cards.length) parts.push(" customerKey is the customer that issued the order, the same company as documentIssuer; a receiving plant or a place on the route (for example a Tesla plant in a Schnellecke Auftrag) never decides it.");
   return parts.join("");
 }
 
