@@ -7,7 +7,8 @@ import type { AiField, OrderField, StopField, StopProvenance } from "./field-con
 
 export { mentionsZuladung } from "./zuladung.js";
 
-const DEFAULT_TIMEOUT_MS = 45_000;
+// Reading a several-page Auftrag with a confidence and a quote per field takes the model 30–60 s; the Vercel proxy in front waits 120 s.
+export const DEFAULT_TIMEOUT_MS = 100_000;
 const MAX_OPENAI_OUTPUT_CHARS = 100_000;
 const ROUTE_SYNTAX =
   "Interpret Tourbemerkung as German route syntax: every location before the first 'für' (or an arrow '-->', '->', '→', or 'nach') is a LOAD in written order, and every location after it is an UNLOAD in written order. A '+', ',' or 'und' separates additional stops of the same type on that side; '&' joins companies that share the city written after the last of them ('Seifert & BLG Bremen' = Seifert in Bremen and BLG in Bremen, two separate stops). One stop per company and city: several table rows or addresses of the same company in the same city are one stop. Example: 'Hydro Crimmitschau + Voestalpine Schmölln für VW Braunschweig' means exactly 1) LOAD Hydro Crimmitschau, 2) LOAD Voestalpine Schmölln, 3) UNLOAD VW Braunschweig. A trailing parenthetical place after a destination is supplementary information, not the city: 'für Rudolph Großmehring (Győr)' means company Rudolph in city Großmehring. ";
@@ -17,7 +18,7 @@ const ROUTE_DETAILS_RULE =
   "Every unloading location named in Tourbemerkung is its own UNLOAD stop with the receiver's printed postal address (Empfänger, Entladestelle, direct-delivery receiver); never put that address only into the instructions of a loading stop. " +
   "Abbreviations: 'MB' is Mercedes-Benz, so 'MB Düsseldorf' is the Mercedes-Benz AG plant (Werk) in Düsseldorf printed as Absender or Abladestelle; 'VW' is Volkswagen. Codes written next to a place ('MB Düsseldorf 477339 070A & 070D': the Sendungsnummer suffix 477339, the Abladestelle or Entladezone codes 070A and 070D) are registration references of that stop: put them into its referenceNumbers, never into company, address or city, and never make a stop out of a code alone. 'LG' or 'Leergut' (empties) and 'VG' or 'Vollgut' describe the cargo, never a place: mention them in the stop instructions. All warnings must be written in Russian.";
 const FIELD_CONFIDENCE_RULE =
-  "For every stop fill fieldConfidence and for every order fill orderFieldConfidence: for each field c is your certainty from 0 to 1 that the value is exactly what the document states (1: printed clearly and unambiguous; 0.7: printed but partly unreadable or matched from another row; 0.4: inferred; 0.1: guessed or absent), and evidence is the shortest verbatim quote of at most 120 characters that shows the value, or null when nothing printed shows it. A field without a value has c 0 and evidence null. When a warning concerns one stop, set its stopSequence to that stop's sequence and field to the field it is about; otherwise both are null.";
+  "For every stop fill fieldConfidence and for every order fill orderFieldConfidence: for each field c is your certainty from 0 to 1 that the value is exactly what the document states (1: printed clearly and unambiguous; 0.7: printed but partly unreadable or matched from another row; 0.4: inferred; 0.1: guessed or absent), and evidence is the shortest verbatim quote of at most 60 characters (a few words) that shows the value, or null when nothing printed shows it. A field without a value has c 0 and evidence null. When a warning concerns one stop, set its stopSequence to that stop's sequence and field to the field it is about; otherwise both are null.";
 export const supportedImageMimeTypes = ["image/png", "image/jpeg", "image/webp"] as const;
 // Termin slips (LKWcontrol Fahrtenschein, Deckblatt zur Warenanlieferung, mRoad) share the drop zone with Auftrag.
 const appointmentRule = (carriers: string[]) =>
@@ -27,7 +28,7 @@ const appointmentRule = (carriers: string[]) =>
   "Time: a single planned arrival (Geplante Ankunft, Anlieferdatum with time, Termin) is appointmentLocal. A slot with from and to (Von/Bis) or a delivery time together with a latest arrival (Späteste Ankunft) is the window windowStartLocal/windowEndLocal and appointmentLocal stays null. A date without time goes to appointmentDateLocal. 'Standgeld ab' is only standgeldFromLocal, never the appointment. The printing time of the document (e.g. a timestamp in the header) is never the appointment. " +
   "stopType: UNLOAD when the slip is for unloading or incoming goods (Entladung, Warenanlieferung), LOAD when only for loading; if both Entladung and Beladung (empties, Leergut) appear, stopType is UNLOAD and positions list them. references: every identifier with its printed label, e.g. Fahrt-ID, Borderonummer, Leergut-Auftrags-Nr, Leergut-Abholavisierungs-Nr, Relation, ZF-Code; never a phone number. positions: short lines like 'A36 Entladung 4 LE'. Never copy a driver phone number anywhere.";
 
-const aiFieldSchema = z.object({ c: z.number().min(0).max(1), evidence: z.string().trim().max(300).nullable().default(null) });
+const aiFieldSchema = z.object({ c: z.number().min(0).max(1), evidence: z.string().trim().max(120).nullable().default(null) });
 const aiStopFieldsSchema = z.object({
   type: aiFieldSchema, company: aiFieldSchema, address: aiFieldSchema, city: aiFieldSchema, time: aiFieldSchema, loadingMeters: aiFieldSchema, references: aiFieldSchema
 }).partial();
@@ -1134,7 +1135,7 @@ function responseJsonSchema(): Record<string, unknown> {
 }
 
 function aiFieldsJsonSchema(fields: string[]): Record<string, unknown> {
-  const field = { type: "object", additionalProperties: false, required: ["c", "evidence"], properties: { c: { type: "number", minimum: 0, maximum: 1 }, evidence: { type: ["string", "null"], maxLength: 300 } } };
+  const field = { type: "object", additionalProperties: false, required: ["c", "evidence"], properties: { c: { type: "number", minimum: 0, maximum: 1 }, evidence: { type: ["string", "null"], maxLength: 80 } } };
   return { type: "object", additionalProperties: false, required: fields, properties: Object.fromEntries(fields.map((name) => [name, field])) };
 }
 
