@@ -568,9 +568,48 @@ export interface ImportedOrderDraft {
   warnings: ImportWarning[]
 }
 
+/** Where the time of one reading went and what it cost; numbers and settings only. */
+export interface ReadStats {
+  model: string
+  effort: string
+  serviceTier: string | null
+  readMode: 'text' | 'file' | 'image'
+  extractMs: number
+  modelMs: number
+  postMs: number
+  inputTokens: number | null
+  cachedTokens: number | null
+  outputTokens: number | null
+  reasoningTokens: number | null
+  settingsRejected: boolean
+  contextMs?: number
+  totalMs?: number
+}
+
+/** Reading speed over the last stored documents (admin, Settings). */
+export interface ImportSpeedSummary {
+  documents: number
+  count: number
+  targetMs: number
+  medianMs: number | null
+  p90Ms: number | null
+  modelMedianMs: number | null
+  withinTarget: number
+  cachedShare: number | null
+  inputTokensMedian: number | null
+  outputTokensMedian: number | null
+  reasoningTokensMedian: number | null
+  modes: { text: number; file: number; image: number }
+  settingsRejected: number
+  lastReadAt: string | null
+  last: { model: string; effort: string; serviceTier: string | null } | null
+  configured: { effort: string; serviceTier: string | null }
+}
+
 export interface OrderImportPreview {
-  /** How long the server took to read the file, for the «распознан за N с» note. */
+  /** How long the server took to read the file; the note for the dispatcher uses the browser's own clock instead. */
   readMs?: number
+  readStats?: ReadStats
   source: OrderImportSource
   detectedLayout: OrderImportLayout
   /** PDF and screenshots: an Auftrag or a Termin slip. */

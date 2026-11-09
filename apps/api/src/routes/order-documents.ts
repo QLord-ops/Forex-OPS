@@ -6,6 +6,7 @@ import type { ImportCustomer } from '../services/customer-resolver.js';
 import type { CustomerService } from '../services/customers.js';
 import { requireDispatcherRoles } from '../services/dispatcher-auth.js';
 import type { OrderDocumentService } from '../services/order-documents.js';
+import { importSpeed } from '../services/import-stats.js';
 import { ImportJobError, type ImportJobs } from '../services/import-jobs.js';
 import type { ImportCustomerContext } from '../services/pdf-order-import.js';
 
@@ -25,6 +26,9 @@ export function safeFilename(filename: string) {
 /** The saved Auftrag of a tour: metadata for the card, the file itself for the dispatcher to open. */
 export function registerOrderDocumentRoutes(app: FastifyInstance, documents: OrderDocumentService) {
   const roles = requireDispatcherRoles('admin', 'dispatcher');
+
+  /** How fast the last Auftrag were read: timings and token counts only, nothing from the documents. */
+  app.get('/imports/stats', { preHandler: requireDispatcherRoles('admin') }, async () => importSpeed(documents));
 
   app.get('/documents/:id', { preHandler: roles }, async (request, reply) => {
     const { id } = idParams.parse(request.params);

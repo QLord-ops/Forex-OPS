@@ -71,7 +71,7 @@ import { registerCustomerRoutes } from './routes/customers.js';
 import { ImportLearningService } from './services/import-learning.js';
 import { registerImportRuleRoutes } from './routes/import-rules.js';
 import { registerAppointmentDocumentRoutes } from './routes/appointments.js';
-import type { CustomerEvidence, DocumentImportPreview, ImportCustomerContext } from './services/pdf-order-import.js';
+import type { CustomerEvidence, DocumentImportPreview, ImportCustomerContext, ReadStats } from './services/pdf-order-import.js';
 
 function auditActor(request: FastifyRequest): AuditActor | undefined {
   return request.dispatcherSession
@@ -175,6 +175,11 @@ async function attachDocument(documentId: string, tourId: string, vehicleId: str
 async function withDocument<T extends TourAggregate>(tour: T): Promise<T> {
   const document = await orderDocuments.forTour(tour.id).catch(() => null);
   return { ...tour, document: document ? { id: document.id, filename: document.filename, mimeType: document.mimeType } : null };
+}
+
+/** Adds what the route measured to the reading's own numbers, before the parse is stored with its document. */
+function withReadTimings<T extends { readStats?: ReadStats }>(preview: T, contextMs: number, startedAt: number): T {
+  return preview.readStats ? { ...preview, readStats: { ...preview.readStats, contextMs, totalMs: contextMs + Date.now() - startedAt } } : preview;
 }
 
 /** The Auftrag file stays with the tour it will create. A storage failure never costs the dispatcher the parse. */
@@ -883,10 +888,11 @@ export async function buildApp(options: BuildAppOptions = {}) {
         }
         if (!options.auth?.disabled) await assistantService.consumeUsage(assistantSessionKey(request));
         try {
+          const started = Date.now();
           const read = file.mimeType === "application/pdf"
             ? await pdfImport(file.content, file.filename, customerContext)
             : await imageImport(file.content, file.filename, file.mimeType as "image/png" | "image/jpeg" | "image/webp", customerContext);
-          return { preview: await withFieldConfidence(await withCustomer(await withAppointmentMatch(read, file.content), customerContext)) };
+          return { preview: withReadTimings(await withFieldConfidence(await withCustomer(await withAppointmentMatch(read, file.content), customerContext)), 0, started) };
         } catch (error) {
           if (error instanceof AssistantError) throw error;
           request.log.error({ errorType: error instanceof Error ? error.name : "unknown" }, "Не удалось заново разобрать Auftrag");
@@ -927,16 +933,19 @@ export async function buildApp(options: BuildAppOptions = {}) {
         return reply.status(415).send({ error: "Файл не является корректным PDF-заказом." });
       }
 
+      const contextStarted = Date.now();
       const customerContext = await importCustomerContext(request);
       if (!options.auth?.disabled) await assistantService.consumeUsage(assistantSessionKey(request));
+      const contextMs = Date.now() - contextStarted;
       handedOff = true;
       const job = importJobs.start(importOwner(request), async () => {
         try {
           const started = Date.now();
           const read = await pdfImport(buffer, filename, customerContext);
           const aiMs = Date.now() - started;
-          request.log.info({ aiMs, pdfBytes: buffer.length, readMode: read.readMode ?? null }, 'PDF-заказ распознан');
-          return { ...await withStoredDocument(await withFieldConfidence(await withCustomer(await withAppointmentMatch(read, buffer), customerContext)), { buffer, filename, mimeType: "application/pdf" }, request), readMs: Date.now() - started };
+          const checked = withReadTimings(await withFieldConfidence(await withCustomer(await withAppointmentMatch(read, buffer), customerContext)), contextMs, started);
+          request.log.info({ readMode: read.readMode ?? null, ...checked.readStats, aiMs, pdfBytes: buffer.length }, 'PDF-заказ распознан');
+          return { ...await withStoredDocument(checked, { buffer, filename, mimeType: "application/pdf" }, request), readMs: Date.now() - started };
         } catch (error) {
           if (error instanceof Error && error.message.includes("OPENAI_API_KEY")) throw new ImportJobError("OpenAI ещё не настроен для импорта PDF.", 503);
           request.log.error({ err: error }, "Не удалось распознать PDF-заказ");
@@ -980,16 +989,20 @@ export async function buildApp(options: BuildAppOptions = {}) {
         return reply.status(415).send({ error: "Файл не является корректным изображением PNG, JPG/JPEG или WebP." });
       }
 
+      const contextStarted = Date.now();
       const customerContext = await importCustomerContext(request);
       if (!options.auth?.disabled) await assistantService.consumeUsage(assistantSessionKey(request));
+      const contextMs = Date.now() - contextStarted;
       handedOff = true;
       const mimeType = file.mimetype;
       const job = importJobs.start(importOwner(request), async () => {
         try {
           const started = Date.now();
           const read = await imageImport(buffer, filename, mimeType, customerContext);
-          request.log.info({ aiMs: Date.now() - started, imageBytes: buffer.length }, 'Скриншот заказа распознан');
-          return { ...await withStoredDocument(await withFieldConfidence(await withCustomer(await withAppointmentMatch(read, buffer), customerContext)), { buffer, filename, mimeType }, request), readMs: Date.now() - started };
+          const aiMs = Date.now() - started;
+          const checked = withReadTimings(await withFieldConfidence(await withCustomer(await withAppointmentMatch(read, buffer), customerContext)), contextMs, started);
+          request.log.info({ ...checked.readStats, aiMs, imageBytes: buffer.length }, 'Скриншот заказа распознан');
+          return { ...await withStoredDocument(checked, { buffer, filename, mimeType }, request), readMs: Date.now() - started };
         } catch (error) {
           if (error instanceof Error && error.message.includes("OPENAI_API_KEY")) throw new ImportJobError("OpenAI ещё не настроен для импорта скриншотов.", 503);
           request.log.error({ err: error }, "Не удалось распознать скриншот заказа");

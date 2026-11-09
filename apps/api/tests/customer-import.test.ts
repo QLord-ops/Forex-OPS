@@ -12,7 +12,7 @@ import { CustomerError, CustomerService } from '../src/services/customers.js';
 import type { DispatcherRole } from '../src/services/dispatcher-auth.js';
 import { ImportLearningService } from '../src/services/import-learning.js';
 import { OrderDocumentService } from '../src/services/order-documents.js';
-import { DEFAULT_TIMEOUT_MS, importPdfPreview, importReasoningEffort, parseTourRemarksRoute, withBuiltInImportRules, type ImportCustomerContext } from '../src/services/pdf-order-import.js';
+import { DEFAULT_TIMEOUT_MS, importPdfPreview, importReasoningEffort, importServiceTier, parseTourRemarksRoute, withBuiltInImportRules, type ImportCustomerContext } from '../src/services/pdf-order-import.js';
 import { MockRoutingProvider } from '../src/services/routing.js';
 import { TourService } from '../src/services/tours.js';
 import { asAppDatabase, migrateTestDatabase } from './test-database.js';
@@ -66,17 +66,20 @@ describe('the prompt follows the customer profile', () => {
     city: null, appointmentLocal: null, appointmentWindowStartLocal: null, appointmentWindowEndLocal: null, appointmentDateLocal: null,
     loadingMeters: null, referenceNumbers: [], instructions: null, sourcePage: 1, sourceExcerpt: null, confidence: 0.9, ...extra
   });
-  async function read(customer: ImportCustomerContext | null, answer: Record<string, unknown> = {}, buffer: Buffer = Buffer.from('%PDF-1.7')) {
+  async function read(customer: ImportCustomerContext | null, answer: Record<string, unknown> = {}, buffer: Buffer = Buffer.from('%PDF-1.7'), openai: { envelope?: Record<string, unknown>; firstStatus?: number } = {}) {
     let body: { input: unknown; text: { format: { schema: { required: string[] } } } } | null = null;
+    const requests: unknown[] = [];
     const fetchMock = vi.fn(async (_input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
       body = JSON.parse(String(init?.body));
-      return new Response(JSON.stringify({ output_text: JSON.stringify({ drafts: [{
+      requests.push(body);
+      if (openai.firstStatus && requests.length === 1) return new Response(JSON.stringify({ error: { message: 'Unsupported value' } }), { status: openai.firstStatus });
+      return new Response(JSON.stringify({ ...openai.envelope, output_text: JSON.stringify({ drafts: [{
         orderNumber: 'A-1', vehicleNumber: null, vehiclePlate: null, trailerPlate: null, tourRemarks: null, tourRemarksSourcePage: null,
         departmentCompany: 'Walter Logistics Grünheide', departmentAddress: null, departmentCity: null, departmentSourcePage: null,
         stops: [stop(1, 'LOAD', { appointmentDateLocal: '2026-11-10' }), stop(2, 'UNLOAD')], warnings: [] }], warnings: [], ...answer }) }), { status: 200 });
     });
     const preview = await importPdfPreview(buffer, 'auftrag.pdf', { apiKey: 'test', fetchImpl: fetchMock as typeof fetch, now: new Date('2026-11-08T10:00:00Z'), customer });
-    return { preview, instruction: JSON.stringify(body!.input), required: body!.text.format.schema.required, schema: JSON.stringify(body!.text.format.schema), request: body as unknown };
+    return { preview, instruction: JSON.stringify(body!.input), required: body!.text.format.schema.required, schema: JSON.stringify(body!.text.format.schema), request: body as unknown, requests };
   }
 
   it('waits long enough for a long Auftrag behind the 120 s proxy and keeps the quotes per field short', async () => {
@@ -110,6 +113,56 @@ describe('the prompt follows the customer profile', () => {
     expect(request).toMatchObject({ reasoning: { effort: 'low' } });
     expect(importReasoningEffort({ OPENAI_IMPORT_REASONING_EFFORT: 'medium' })).toBe('medium');
     expect(importReasoningEffort({ OPENAI_IMPORT_REASONING_EFFORT: 'turbo' })).toBe('low');
+  });
+
+  it('takes «none» and «xhigh» from the server and asks for the fast tier only when the server is set to it', async () => {
+    expect(importReasoningEffort({ OPENAI_IMPORT_REASONING_EFFORT: 'none' })).toBe('none');
+    expect(importReasoningEffort({ OPENAI_IMPORT_REASONING_EFFORT: ' XHigh ' })).toBe('xhigh');
+    expect(importServiceTier({})).toBeNull();
+    expect(importServiceTier({ OPENAI_IMPORT_SERVICE_TIER: 'fast' })).toBe('priority');
+    expect(importServiceTier({ OPENAI_IMPORT_SERVICE_TIER: 'flex' })).toBe('flex');
+    expect(importServiceTier({ OPENAI_IMPORT_SERVICE_TIER: 'turbo' })).toBeNull();
+    expect((await read(null)).request).not.toHaveProperty('service_tier');
+    vi.stubEnv('OPENAI_IMPORT_REASONING_EFFORT', 'none');
+    vi.stubEnv('OPENAI_IMPORT_SERVICE_TIER', 'priority');
+    try {
+      expect((await read(null)).request).toMatchObject({ reasoning: { effort: 'none' }, service_tier: 'priority' });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('reports how long the reading took and what it cost, in numbers only', async () => {
+    const { preview } = await read(null, {}, auftragPdf(), { envelope: { service_tier: 'default', usage: {
+      input_tokens: 6210, input_tokens_details: { cached_tokens: 3072 }, output_tokens: 1480, output_tokens_details: { reasoning_tokens: 320 } } } });
+    expect(preview.readStats).toMatchObject({
+      model: 'gpt-5.4-mini', effort: 'low', serviceTier: 'default', readMode: 'text', settingsRejected: false,
+      inputTokens: 6210, cachedTokens: 3072, outputTokens: 1480, reasoningTokens: 320
+    });
+    for (const key of ['extractMs', 'modelMs', 'postMs'] as const) expect(preview.readStats?.[key]).toBeGreaterThanOrEqual(0);
+
+    // An answer without usage, or with something odd in it, still reads; the numbers are simply unknown.
+    const bare = await read(null, {}, Buffer.from('%PDF-1.7'), { envelope: { service_tier: 'DROP TABLE', usage: { input_tokens: 'many' } } });
+    expect(bare.preview.readStats).toMatchObject({ readMode: 'file', serviceTier: null, inputTokens: null, cachedTokens: null, outputTokens: null, reasoningTokens: null });
+  });
+
+  it('reads with the plain settings when OpenAI refuses the speed settings, and fails as before when nothing was set', async () => {
+    vi.stubEnv('OPENAI_IMPORT_REASONING_EFFORT', 'none');
+    vi.stubEnv('OPENAI_IMPORT_SERVICE_TIER', 'priority');
+    try {
+      const { preview, requests } = await read(null, {}, Buffer.from('%PDF-1.7'), { firstStatus: 400 });
+      expect(requests).toHaveLength(2);
+      expect(requests[1]).toMatchObject({ reasoning: { effort: 'low' } });
+      expect(requests[1]).not.toHaveProperty('service_tier');
+      expect(preview.readStats).toMatchObject({ effort: 'low', serviceTier: null, settingsRejected: true });
+      expect(preview.drafts).toHaveLength(1);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    const failure = await read(null, {}, Buffer.from('%PDF-1.7'), { firstStatus: 400 }).catch((error: Error) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain('HTTP 400');
+    expect((failure as Error).message).not.toContain('Unsupported value');
   });
 
   it('before any customer exists reads like before: Schnellecke warehouse words and carriers, no customer key', async () => {
