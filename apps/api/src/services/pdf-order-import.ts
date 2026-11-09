@@ -9,6 +9,13 @@ export { mentionsZuladung } from "./zuladung.js";
 
 // Reading a several-page Auftrag with a confidence and a quote per field takes the model 30–60 s; the Vercel proxy in front waits 120 s.
 export const DEFAULT_TIMEOUT_MS = 100_000;
+const REASONING_EFFORTS = ["minimal", "low", "medium", "high"] as const;
+
+/** OPENAI_IMPORT_REASONING_EFFORT on the server may change it; anything unknown stays "low". */
+export function importReasoningEffort(env: NodeJS.ProcessEnv = process.env): (typeof REASONING_EFFORTS)[number] {
+  const value = env.OPENAI_IMPORT_REASONING_EFFORT?.trim().toLowerCase();
+  return REASONING_EFFORTS.find((effort) => effort === value) ?? "low";
+}
 const MAX_OPENAI_OUTPUT_CHARS = 100_000;
 const ROUTE_SYNTAX =
   "Interpret Tourbemerkung as German route syntax: every location before the first 'für' (or an arrow '-->', '->', '→', or 'nach') is a LOAD in written order, and every location after it is an UNLOAD in written order. A '+', ',' or 'und' separates additional stops of the same type on that side; '&' joins companies that share the city written after the last of them ('Seifert & BLG Bremen' = Seifert in Bremen and BLG in Bremen, two separate stops). One stop per company and city: several table rows or addresses of the same company in the same city are one stop. Example: 'Hydro Crimmitschau + Voestalpine Schmölln für VW Braunschweig' means exactly 1) LOAD Hydro Crimmitschau, 2) LOAD Voestalpine Schmölln, 3) UNLOAD VW Braunschweig. A trailing parenthetical place after a destination is supplementary information, not the city: 'für Rudolph Großmehring (Győr)' means company Rudolph in city Großmehring. ";
@@ -426,6 +433,8 @@ async function importVisualOrderPreview(input: {
       signal: controller.signal,
       body: JSON.stringify({
         model: options.model ?? process.env.OPENAI_IMPORT_MODEL ?? "gpt-5.4-mini",
+        // Copying fields from a document needs little reasoning; the default depth took over 100 s for a real Auftrag (09.11).
+        reasoning: { effort: importReasoningEffort() },
         store: false,
         input: [
           {

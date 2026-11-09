@@ -890,7 +890,10 @@ export async function buildApp(options: BuildAppOptions = {}) {
       const customerContext = await importCustomerContext(request);
       if (!options.auth?.disabled) await assistantService.consumeUsage(assistantSessionKey(request));
       try {
-        return await withStoredDocument(await withFieldConfidence(await withCustomer(await withAppointmentMatch(await pdfImport(buffer, filename, customerContext), buffer), customerContext)), { buffer, filename, mimeType: "application/pdf" }, request);
+        const started = Date.now();
+        const read = await pdfImport(buffer, filename, customerContext);
+        request.log.info({ aiMs: Date.now() - started, pdfBytes: buffer.length }, 'PDF-заказ распознан');
+        return await withStoredDocument(await withFieldConfidence(await withCustomer(await withAppointmentMatch(read, buffer), customerContext)), { buffer, filename, mimeType: "application/pdf" }, request);
       } catch (error) {
         if (error instanceof Error && error.message.includes("OPENAI_API_KEY")) {
           return reply.status(503).send({ error: "OpenAI ещё не настроен для импорта PDF." });
