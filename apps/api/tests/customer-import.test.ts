@@ -12,7 +12,7 @@ import { CustomerError, CustomerService } from '../src/services/customers.js';
 import type { DispatcherRole } from '../src/services/dispatcher-auth.js';
 import { ImportLearningService } from '../src/services/import-learning.js';
 import { OrderDocumentService } from '../src/services/order-documents.js';
-import { DEFAULT_TIMEOUT_MS, importPdfPreview, parseTourRemarksRoute, withBuiltInImportRules, type ImportCustomerContext } from '../src/services/pdf-order-import.js';
+import { DEFAULT_TIMEOUT_MS, importPdfPreview, importReasoningEffort, parseTourRemarksRoute, withBuiltInImportRules, type ImportCustomerContext } from '../src/services/pdf-order-import.js';
 import { MockRoutingProvider } from '../src/services/routing.js';
 import { TourService } from '../src/services/tours.js';
 import { asAppDatabase, migrateTestDatabase } from './test-database.js';
@@ -75,7 +75,7 @@ describe('the prompt follows the customer profile', () => {
         stops: [stop(1, 'LOAD', { appointmentDateLocal: '2026-11-10' }), stop(2, 'UNLOAD')], warnings: [] }], warnings: [], ...answer }) }), { status: 200 });
     });
     const preview = await importPdfPreview(Buffer.from('%PDF-1.7'), 'auftrag.pdf', { apiKey: 'test', fetchImpl: fetchMock as typeof fetch, now: new Date('2026-11-08T10:00:00Z'), customer });
-    return { preview, instruction: JSON.stringify(body!.input), required: body!.text.format.schema.required, schema: JSON.stringify(body!.text.format.schema) };
+    return { preview, instruction: JSON.stringify(body!.input), required: body!.text.format.schema.required, schema: JSON.stringify(body!.text.format.schema), request: body as unknown };
   }
 
   it('waits long enough for a long Auftrag behind the 120 s proxy and keeps the quotes per field short', async () => {
@@ -85,6 +85,13 @@ describe('the prompt follows the customer profile', () => {
     const { instruction, schema } = await read(null);
     expect(instruction).toContain('at most 60 characters');
     expect(schema).toContain('"maxLength":80');
+  });
+
+  it('asks the model for little reasoning so a long Auftrag answers in time', async () => {
+    const { request } = await read(null);
+    expect(request).toMatchObject({ reasoning: { effort: 'low' } });
+    expect(importReasoningEffort({ OPENAI_IMPORT_REASONING_EFFORT: 'medium' })).toBe('medium');
+    expect(importReasoningEffort({ OPENAI_IMPORT_REASONING_EFFORT: 'turbo' })).toBe('low');
   });
 
   it('before any customer exists reads like before: Schnellecke warehouse words and carriers, no customer key', async () => {
