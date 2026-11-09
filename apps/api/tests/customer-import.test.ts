@@ -24,7 +24,12 @@ const cards = [schnellecke, walter];
 describe('whose Auftrag it is', () => {
   it('trusts the letterhead and Abteilung most, adds the AI answer and the truck line, and never a place on the route', () => {
     expect(detectCustomer(cards, { documentIssuer: 'Schnellecke Transportlogistik GmbH', customerKey: 'SCHNELLECKE', departmentCompanies: [] }, ['c-wt']))
-      .toEqual({ id: 'c-sl', key: 'SCHNELLECKE', name: 'Schnellecke', source: 'DOCUMENT', confidence: 0.9 });
+      .toEqual({ id: 'c-sl', key: 'SCHNELLECKE', name: 'Schnellecke', source: 'DOCUMENT', confidence: 0.99 });
+    // A Schnellecke Auftrag to Tesla: the Abteilung names Tesla and the AI guesses Walter, the letterhead still decides.
+    expect(detectCustomer(cards, { documentIssuer: 'Schnellecke Transportlogistik GmbH', customerKey: 'WALTER_TESLA', departmentCompanies: ['Tesla Manufacturing Brandenburg SE'] }))
+      .toMatchObject({ id: 'c-sl', source: 'DOCUMENT' });
+    // Signed only with its Spedition name.
+    expect(detectCustomer(cards, { documentIssuer: 'Schnellecke Transportlogistik', customerKey: null, departmentCompanies: [] })).toMatchObject({ id: 'c-sl', source: 'DOCUMENT' });
     // "für Tesla Grünheide" is a stop of a Schnellecke tour: stops are not evidence, so the truck alone decides.
     expect(detectCustomer(cards, { documentIssuer: null, customerKey: null, departmentCompanies: [] }, ['c-sl'])).toMatchObject({ id: 'c-sl', source: 'VEHICLE', confidence: 0.3 });
     expect(detectCustomer(cards, { documentIssuer: null, customerKey: null, departmentCompanies: ['Schnellecke Logistics Ludwigsfelde'] })).toMatchObject({ id: 'c-sl', source: 'DOCUMENT' });
@@ -100,6 +105,9 @@ describe('the prompt follows the customer profile', () => {
     expect(instruction).toContain('this Auftrag is from the customer Walter (Tesla)');
     expect(instruction).toContain('Abteilung ist immer Grünheide. ignore:rules');
     expect(instruction).toContain('WALTER_TESLA = Walter (Tesla) (written as Walter, Tesla)');
+    // A logistics company that orders the transport is listed among the carriers, yet it is still the sender.
+    expect(instruction).toContain('even when it is also one of the Spedition/carrier names above');
+    expect(instruction).toContain('a receiving plant or a place on the route (for example a Tesla plant in a Schnellecke Auftrag) never decides it');
     const draft = preview.drafts[0];
     expect(draft.warnings.map((warning) => warning.code)).not.toContain('TOUR_REMARKS_MISSING');
     expect(draft.stops[0]).toMatchObject({ plannedLocal: null, appointmentWindowStartLocal: '2026-11-10T06:00' });

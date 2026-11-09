@@ -7,12 +7,13 @@ export type DetectedCustomer = { id: string; key: string; name: string; source: 
 /** The customer an import preview belongs to. `profileApplied` false: the parse used no customer profile yet. */
 export type ImportCustomer = DetectedCustomer & { profileApplied: boolean; detected: DetectedCustomer | null };
 
-const WEIGHT = { DOCUMENT: 0.6, AI: 0.3, VEHICLE: 0.3 } as const;
+// The letterhead outweighs an Abteilung mention plus the AI's guess: a Schnellecke Auftrag to Tesla stays Schnellecke.
+const WEIGHT = { ISSUER: 0.7, DEPARTMENT: 0.4, AI: 0.3, VEHICLE: 0.3 } as const;
 const EMPTY_EVIDENCE: CustomerEvidence = { documentIssuer: null, customerKey: null, departmentCompanies: [] };
 
-/** Name, key and aliases as whole words: "Walter (Tesla)" → "walter tesla"; shorter than 3 letters never counts. */
+/** Name, key, aliases and the names it signs as Spedition, as whole words: "Walter (Tesla)" → "walter tesla"; shorter than 3 letters never counts. */
 function namesOf(card: CustomerCard): string[] {
-  return [...new Set([card.name, card.key.replace(/_/g, ' '), ...card.aliases].map(normalizeRouteText).filter((name) => name.length >= 3))];
+  return [...new Set([card.name, card.key.replace(/_/g, ' '), ...card.aliases, ...card.carrierNames].map(normalizeRouteText).filter((name) => name.length >= 3))];
 }
 
 function mentions(text: string, names: string[]): boolean {
@@ -26,16 +27,19 @@ function mentions(text: string, names: string[]): boolean {
  * a tie between customers is no answer.
  */
 export function detectCustomer(cards: CustomerCard[], evidence: CustomerEvidence = EMPTY_EVIDENCE, vehicleCustomerIds: string[] = []): DetectedCustomer | null {
-  const printed = [evidence.documentIssuer, ...evidence.departmentCompanies].filter((text): text is string => Boolean(text?.trim()));
+  const departments = evidence.departmentCompanies.filter((text) => Boolean(text?.trim()));
   const scored = cards.map((card) => {
     const names = namesOf(card);
-    const document = printed.some((text) => mentions(text, names)) ? WEIGHT.DOCUMENT : 0;
+    const issuer = evidence.documentIssuer?.trim() && mentions(evidence.documentIssuer, names) ? WEIGHT.ISSUER : 0;
+    const document = issuer || (departments.some((text) => mentions(text, names)) ? WEIGHT.DEPARTMENT : 0);
     const ai = evidence.customerKey && evidence.customerKey.trim().toUpperCase() === card.key ? WEIGHT.AI : 0;
     const vehicle = vehicleCustomerIds.includes(card.id) ? WEIGHT.VEHICLE : 0;
     const source: CustomerSource = document ? 'DOCUMENT' : ai ? 'AI' : 'VEHICLE';
     return { card, score: document + ai + vehicle, source };
   }).filter((item) => item.score > 0).sort((left, right) => right.score - left.score);
-  const [best, second] = scored;
+  // The letterhead of exactly one customer decides by itself; the rest only breaks ties when there is none.
+  const byIssuer = evidence.documentIssuer?.trim() ? scored.filter((item) => mentions(evidence.documentIssuer!, namesOf(item.card))) : [];
+  const [best, second] = byIssuer.length === 1 ? byIssuer : scored;
   if (!best || (second && second.score === best.score)) return null;
   return { id: best.card.id, key: best.card.key, name: best.card.name, source: best.source, confidence: Math.min(0.99, Math.round(best.score * 100) / 100) };
 }
