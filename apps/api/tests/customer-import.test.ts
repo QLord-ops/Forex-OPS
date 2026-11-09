@@ -12,7 +12,7 @@ import { CustomerError, CustomerService } from '../src/services/customers.js';
 import type { DispatcherRole } from '../src/services/dispatcher-auth.js';
 import { ImportLearningService } from '../src/services/import-learning.js';
 import { OrderDocumentService } from '../src/services/order-documents.js';
-import { importPdfPreview, parseTourRemarksRoute, withBuiltInImportRules, type ImportCustomerContext } from '../src/services/pdf-order-import.js';
+import { DEFAULT_TIMEOUT_MS, importPdfPreview, parseTourRemarksRoute, withBuiltInImportRules, type ImportCustomerContext } from '../src/services/pdf-order-import.js';
 import { MockRoutingProvider } from '../src/services/routing.js';
 import { TourService } from '../src/services/tours.js';
 import { asAppDatabase, migrateTestDatabase } from './test-database.js';
@@ -75,8 +75,17 @@ describe('the prompt follows the customer profile', () => {
         stops: [stop(1, 'LOAD', { appointmentDateLocal: '2026-11-10' }), stop(2, 'UNLOAD')], warnings: [] }], warnings: [], ...answer }) }), { status: 200 });
     });
     const preview = await importPdfPreview(Buffer.from('%PDF-1.7'), 'auftrag.pdf', { apiKey: 'test', fetchImpl: fetchMock as typeof fetch, now: new Date('2026-11-08T10:00:00Z'), customer });
-    return { preview, instruction: JSON.stringify(body!.input), required: body!.text.format.schema.required };
+    return { preview, instruction: JSON.stringify(body!.input), required: body!.text.format.schema.required, schema: JSON.stringify(body!.text.format.schema) };
   }
+
+  it('waits long enough for a long Auftrag behind the 120 s proxy and keeps the quotes per field short', async () => {
+    // 45 s was not enough once every field carried a confidence and a quote (09.11: every PDF aborted after 45 s).
+    expect(DEFAULT_TIMEOUT_MS).toBeGreaterThanOrEqual(90_000);
+    expect(DEFAULT_TIMEOUT_MS).toBeLessThan(120_000);
+    const { instruction, schema } = await read(null);
+    expect(instruction).toContain('at most 60 characters');
+    expect(schema).toContain('"maxLength":80');
+  });
 
   it('before any customer exists reads like before: Schnellecke warehouse words and carriers, no customer key', async () => {
     const { preview, instruction, required } = await read(null);
