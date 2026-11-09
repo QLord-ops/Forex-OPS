@@ -168,6 +168,23 @@ export function compareVehicles(a: DashboardVehicle, b: DashboardVehicle, pinned
 
 type HoursPart = { label: string; value: string; warn?: boolean }
 /**
+ * What is left to the stop, for the bottom panel: the driving time with the daily rest or break on the way when the ETA
+ * was planned on the driver's hours, otherwise only the time until the ETA. The source says whose hours were used.
+ */
+export function etaPlanLine(row: Pick<DashboardVehicle, 'eta' | 'etaSource' | 'etaPlan'>, now = Date.now()): { text: string; source: string } {
+  const position = row.etaSource === 'GPS' ? 'от GPS' : 'расчёт'
+  const plan = row.etaPlan
+  if (!row.eta) return { text: 'время неизвестно', source: position }
+  if (!plan) return { text: `≈ ${formatDurationMinutes(Math.max(0, Math.round((new Date(row.eta).getTime() - now) / 60_000)))} до точки`, source: position }
+  const at = (iso: string) => berlinDay(new Date(iso).getTime()) === berlinDay(now) ? formatTime(iso) : formatDateTime(iso)
+  const parts = [`≈ ${formatDurationMinutes(plan.driveSeconds / 60)} езды`]
+  if (plan.startsAt) parts.push(`выезд не раньше ${at(plan.startsAt)}`)
+  if (plan.rest) parts.push(`отдых ${formatDurationMinutes(plan.rest.seconds / 60)}${plan.rest.reduced ? ' (сокращён)' : ''} до ${at(plan.rest.endAt)}`)
+  else if (plan.breakSeconds > 0) parts.push(`перерыв ${formatDurationMinutes(plan.breakSeconds / 60)}`)
+  return { text: parts.join(' · '), source: `${position} · ${plan.hours === 'TACHOGRAPH' ? 'по тахографу' : 'часы предварительно'}` }
+}
+
+/**
  * The driver's day in one line for the bottom panel: from the Webfleet tachograph when it is there,
  * otherwise from the calculated vehicle clock, always saying which one.
  */

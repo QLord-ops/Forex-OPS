@@ -25,7 +25,7 @@ npm run webfleet:check -w @ops/api   # одна read-only проверка кл�
 
 - `apps/api/src/app.ts` — все маршруты; сервисы — `apps/api/src/services/*`.
 - `services/webfleet.ts` — Webfleet: синхронизация, сопоставление машин, ошибки, привязки.
-- `services/vehicle-clock.ts` — расчёт часов машины (ЕС 561/2006), `tours.ts` — туры, `operations.ts` — прибытие/стоянки.
+- `services/vehicle-clock.ts` — расчёт часов машины (ЕС 561/2006), `termin-planner.ts` — паузы в пути по тахографу Webfleet (общий движок ETA и Termin: отдых 11 ч, 9 ч при раннем Termin), `tours.ts` — туры, `operations.ts` — прибытие/стоянки.
 - `services/*-order-import.ts` — импорт Auftrag (PDF/XLSX/изображения), `xlsx-validation.ts` — защита загрузок.
 - `services/dispatcher-auth.ts` — сессии, роли `admin`/`dispatcher`, CSRF; `audit-log.ts` — журнал действий.
 - Документация: `docs/REMAINING_WORK.md` (что осталось), `docs/webfleet-integration.md`, `docs/DEPLOYMENT.md`, `DESIGN.md`.

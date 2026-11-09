@@ -15,7 +15,7 @@ import { usePolling } from '../hooks/usePolling'
 import { usePopover } from '../hooks/usePopover'
 import { useVehiclePosition } from '../hooks/useVehiclePosition'
 import { api, type RouteOptions } from '../lib/api'
-import { compareVehicles, driverHoursLine, getAttention, matchesFleetFilter, positionSource, activityNote, terminMargin, terminNeeded, vehiclePlace, vehicleStatus, type FleetFilter, type FleetSort } from '../lib/fleet-status'
+import { compareVehicles, driverHoursLine, etaPlanLine, getAttention, matchesFleetFilter, positionSource, activityNote, terminMargin, terminNeeded, vehiclePlace, vehicleStatus, type FleetFilter, type FleetSort } from '../lib/fleet-status'
 import { getRoutePreview, setRoutePreview, subscribeRoutePreview } from '../lib/route-preview'
 import { etaText, routeProgress, type StopState } from '../lib/route-progress'
 import { currentStopOf, terminOf } from '../lib/tours'
@@ -436,7 +436,7 @@ function VehiclePanel({ row, position, drawerOpen, onToggleDrawer, collapsed, on
   const terminStop = termin ? progress.stops.find(({ stop }) => !stop.completedAt)?.stop ?? null : null
   const margin = terminMargin(row)
   const speed = status.tone === 'ok' && row.telemetry?.source === 'WEBFLEET' && typeof row.telemetry.speedKmh === 'number' ? ` · ${Math.round(row.telemetry.speedKmh)} км/ч` : ''
-  const etaMinutes = row.eta ? Math.max(0, Math.round((new Date(row.eta).getTime() - Date.now()) / 60_000)) : null
+  const remaining = etaPlanLine(row)
   const nextStop = progress.currentIndex >= 0 ? progress.stops[progress.currentIndex]?.stop ?? null : row.to ?? null
   // Tachograph figures come from server memory (no Webfleet call); only while the panel is open.
   const card = usePolling(() => api.vehicleCard(row.vehicle.id), 60_000, !collapsed, `${row.vehicle.id}-${collapsed}`)
@@ -496,7 +496,7 @@ function VehiclePanel({ row, position, drawerOpen, onToggleDrawer, collapsed, on
       <div className="vehicle-panel-metric">
         <span className="vehicle-panel-label">Осталось</span>
         <strong>{typeof row.remainingKm === 'number' ? `≈ ${Math.round(row.remainingKm)} км` : '–'}</strong>
-        <span className="vehicle-panel-note"><span>{etaMinutes !== null ? `≈ ${formatDurationMinutes(etaMinutes)} до точки` : 'время неизвестно'}</span><span>{row.etaSource === 'GPS' ? 'от GPS' : 'расчёт'}</span></span>
+        <span className="vehicle-panel-note"><span>{remaining.text}</span><span>{remaining.source}</span></span>
       </div>
       <div className="vehicle-panel-actions">
         {row.etaSource === 'GPS' ? <button type="button" className="secondary-button" onClick={onRouteOptions} disabled={optionsBusy} title="Три маршрута от GPS-позиции до точки"><GitFork className="h-4 w-4" aria-hidden="true" />Варианты</button> : null}

@@ -33,11 +33,12 @@ import { RestAtStopService } from './services/rest-at-stop.js';
 import { AddressRuleService, applyRulesToStop, BUILT_IN_RULES } from './services/address-rules.js';
 import { VEHICLE_CLOCK_LIMITS } from './services/vehicle-clock.js';
 import { bindWebfleetObject, listWebfleetBindings, unbindWebfleetVehicle, WebfleetSyncService, WebfleetTelemetryService, distanceMeters, DEFAULT_ARRIVAL_RADIUS_METERS, type AutoArrivalHandler, type AutoStopEventHandler } from './services/webfleet.js';
-import { buildVehicleCard, readDriverHours, suggestWebfleetBindings, vehicleObjectUid, WebfleetDetailsSync, WebfleetLiveStore, WebfleetTrackService } from './services/webfleet-live.js';
+import { buildVehicleCard, readDriverBudget, readDriverHours, suggestWebfleetBindings, vehicleObjectUid, WebfleetDetailsSync, WebfleetLiveStore, WebfleetTrackService } from './services/webfleet-live.js';
 import { TerminService } from './services/termin-service.js';
 import { VehicleBriefService } from './services/vehicle-brief.js';
 import { calculateRiskColor, calculateSimulatedDuration } from './services/simulation.js';
 import { forecastDrive } from './services/vehicle-clock.js';
+import { forecastEta, WebfleetEngine } from './services/termin-planner.js';
 import { forecastClock, parseClockState } from './services/tours.js';
 import { registerDispatcherAuth, requireDispatcherRoles, type DispatcherAuthOptions } from './services/dispatcher-auth.js';
 import { RouteScenarioService, routeScenarioInputSchema } from './services/route-scenario.js';
@@ -238,10 +239,16 @@ const webfleetDetails = new WebfleetDetailsSync(webfleetLive);
 const addressBook = new AddressBookSync(prisma);
 const webfleetTracks = new WebfleetTrackService();
 const webfleetTelemetry = new WebfleetTelemetryService(prisma, autoArrival, autoStopEvent);
+// The driver's tachograph for the ETA (memory only); a Webfleet hiccup never breaks the position.
+const driverBudget = (id: string, now: Date) => readDriverBudget(prisma, webfleetLive, id, now).catch(() => null);
 const currentPosition = async (id: string, now = new Date()) => {
-  const telemetry = await webfleetTelemetry.latest(id, now);
-  return withWebfleetPosition(await tourService.getCurrentPosition(id, now, gpsFixOf(telemetry)), telemetry);
+  const [telemetry, driver] = await Promise.all([webfleetTelemetry.latest(id, now), driverBudget(id, now)]);
+  return withWebfleetPosition(await tourService.getCurrentPosition(id, now, gpsFixOf(telemetry), driver), telemetry);
 };
+async function enrichTourLive(tour: TourAggregate) {
+  const now = new Date();
+  return enrichTour(tour, now, await driverBudget(tour.vehicleId, now));
+}
 const appointmentService = new AppointmentService(prisma, etaService, currentPosition);
 const replanningService = new ReplanningService(prisma, routingService, currentPosition);
 const trafficService = new TrafficOperationsService(prisma, tourService, notificationService, new TrafficRoutingService(trafficProvider, trafficQuota), currentPosition);
@@ -1116,7 +1123,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   app.post("/tours", async (request, reply) => {
     const input = createTourSchema.parse(request.body);
     const tour = await tourService.createTour(input, auditActor(request));
-    return reply.status(201).send(enrichTour(tour));
+    return reply.status(201).send(await enrichTourLive(tour));
   });
 
   app.post("/imports/tours/confirm", { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request, reply) => {
@@ -1129,7 +1136,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
       else await learnAddressRules(input.stops, auditActor(request));
     }
     return reply.status(result.created ? 201 : 200).send({
-      tour: enrichTour(await withDocument(result.tour)),
+      tour: await enrichTourLive(await withDocument(result.tour)),
       created: result.created,
       reused: !result.created
     });
@@ -1145,7 +1152,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const result = await tourService.createTourForNewVehicle({ vehicle: input.vehicle, tour: { ...tourInput, customerId } }, auditActor(request));
     if (documentId) await attachDocument(documentId, result.tour.id, result.vehicle.id, tourInput, request);
     else await learnAddressRules(tourInput.stops, auditActor(request));
-    return reply.status(201).send({ vehicle: toIsoObject(result.vehicle), tour: enrichTour(await withDocument(result.tour)) });
+    return reply.status(201).send({ vehicle: toIsoObject(result.vehicle), tour: await enrichTourLive(await withDocument(result.tour)) });
   });
 
   app.post("/tours/preview", { config: { rateLimit: routingRateLimit } }, async (request) => {
@@ -1174,12 +1181,19 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const points = origin ? [origin, ...coordinates] : coordinates;
     const route = await routingService.calculateMultiStopRoute(points, { traffic: true, source: "manual", truck: vehicle ? { maxSpeedKmh: vehicle.maxSpeedKmh } : undefined });
     const durationSeconds = calculateSimulatedDuration(route.distanceMeters, route.durationSeconds, vehicle?.maxSpeedKmh ?? 85);
-    const forecast = origin && vehicle ? forecastDrive(forecastClock(parseClockState(vehicle.clockState, new Date()), new Date()), durationSeconds, new Date()) : null;
+    const now = new Date();
+    // On the driver's tachograph when Webfleet has it; otherwise the calculated clock, preliminary.
+    const driver = vehicle ? await driverBudget(vehicle.id, now) : null;
+    const forecast = origin && vehicle
+      ? driver ? forecastEta(new WebfleetEngine(driver.budget), durationSeconds, now, null, driver.startsAt)
+        : { ...forecastDrive(forecastClock(parseClockState(vehicle.clockState, now), now), durationSeconds, now), plan: null }
+      : null;
     return {
       distanceMeters: route.distanceMeters,
       durationSeconds,
-      estimatedArrivalAt: forecast?.endAt ?? null,
-      preliminary: !origin || !vehicle?.clockState,
+      estimatedArrivalAt: forecast ? new Date(forecast.endAt).toISOString() : null,
+      preliminary: !origin || (driver ? false : !vehicle?.clockState),
+      etaPlan: forecast?.plan ?? null,
       geometry: route.geometry.map((point) => [point.longitude, point.latitude])
     };
   });
@@ -1187,7 +1201,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   app.get("/tours/:id", async (request) => {
     const { id } = z.object({ id: z.string() }).parse(request.params);
     const tour = await prisma.tour.findUniqueOrThrow({ where: { id }, include: tourInclude });
-    return enrichTour(tour);
+    return enrichTourLive(tour);
   });
 
   app.patch("/tours/:id", async (request) => {
@@ -1197,7 +1211,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
       ? await tourService.cancelTour(id, body.version, new Date(), auditActor(request))
       : await tourService.updateFutureTour(id, body, auditActor(request));
     await refreshAlertsForVehicle(tour.vehicleId);
-    return enrichTour(tour);
+    return enrichTourLive(tour);
   });
 
   /**
@@ -1227,7 +1241,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const tour = await tourService.recordLoaded(id, body.timestamp ? new Date(body.timestamp) : new Date(), manualNote(body.note, arrival), auditActor(request), arrival);
     if (arrival.manual) await audit(request, 'STOP_EVENT_WITHOUT_GPS', 'Stop', id, { vehicleId: tour.vehicleId, tourId: tour.id, stopId: id, metadata: { event: 'LOADED' } });
     await refreshAlertsForVehicle(tour.vehicleId);
-    return enrichTour(tour);
+    return enrichTourLive(tour);
   });
 
   app.post("/stops/:id/unloaded", async (request) => {
@@ -1237,7 +1251,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const tour = await tourService.recordUnloaded(id, body.timestamp ? new Date(body.timestamp) : new Date(), manualNote(body.note, arrival), auditActor(request), arrival);
     if (arrival.manual) await audit(request, 'STOP_EVENT_WITHOUT_GPS', 'Stop', id, { vehicleId: tour.vehicleId, tourId: tour.id, stopId: id, metadata: { event: 'UNLOADED' } });
     await refreshAlertsForVehicle(tour.vehicleId);
-    return enrichTour(tour);
+    return enrichTourLive(tour);
   });
 
   app.get("/vehicles/:id/current-position", async (request) => {
@@ -1363,7 +1377,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
       generatedAt: new Date().toISOString(),
       truncated,
       limits: HISTORY_LIMITS,
-      tours: enrichToursWithScheduleGroupedByVehicle(tours),
+      tours: await enrichToursWithScheduleGroupedByVehicle(tours),
       events: events.map(toIsoObject),
       operationEvents,
       timeReports: tours.flatMap(tour => tour.stops.filter(stop => stop.arrivedAt).map(stop => ({
@@ -1409,14 +1423,15 @@ export async function buildApp(options: BuildAppOptions = {}) {
       const currentLeg = activeTour?.legs.find((leg) => leg.status === "ACTIVE" || leg.status === "ARRIVED");
       const fromStop = currentLeg ? activeTour?.stops.find((stop) => stop.id === currentLeg.fromStopId) : undefined;
       const toStop = currentLeg ? activeTour?.stops.find((stop) => stop.id === currentLeg.toStopId) : undefined;
-      const [latestTelemetry, lastOperation] = await Promise.all([
+      const [latestTelemetry, lastOperation, driver] = await Promise.all([
         webfleetTelemetry.latest(vehicle.id, generatedAt),
-        prisma.operationEvent.findFirst({ where: { vehicleId: vehicle.id }, orderBy: { createdAt: "desc" } })
+        prisma.operationEvent.findFirst({ where: { vehicleId: vehicle.id }, orderBy: { createdAt: "desc" } }),
+        driverBudget(vehicle.id, generatedAt)
       ]);
-      const calculatedPosition = await tourService.getCurrentPosition(vehicle.id, generatedAt, gpsFixOf(latestTelemetry));
+      const calculatedPosition = await tourService.getCurrentPosition(vehicle.id, generatedAt, gpsFixOf(latestTelemetry), driver);
       const position = withWebfleetPosition(calculatedPosition, latestTelemetry);
       const currentStop = activeTour?.stops.find((stop) => !stop.completedAt) ?? null;
-      const scheduledStop = currentStop ? etaService.calculateVehicleSchedule(vehicle.tours, generatedAt).find((stop) => stop.stopId === currentStop.id) : null;
+      const scheduledStop = currentStop ? etaService.calculateVehicleSchedule(vehicle.tours, generatedAt, driver).find((stop) => stop.stopId === currentStop.id) : null;
       // With fresh GPS the ETA is measured from the truck; the saved plan only fills in when there is no GPS.
       const gpsEta = position.etaSource === "GPS";
       // At the stop the truck is no longer late: the arrival settled it (TERMIN_MET says on time or how late).
@@ -1489,6 +1504,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
         tour: activeTour ? toDashboardTourSummary(activeTour) : null,
         statusText: position.status,
         etaSource: position.etaSource ?? "CALCULATED",
+        etaPlan: position.etaPlan ?? null,
         offRouteMeters: position.offRouteMeters ?? null,
         predictedArrival: position.predictedArrival ?? false,
         from: fromStop ? toIsoObject(fromStop) : null,
@@ -1699,15 +1715,17 @@ function toTimelineLeg(
   };
 }
 
-function enrichToursWithSchedule(tours: TourAggregate[]) {
-  const schedule = etaService.calculateVehicleSchedule(tours);
+async function enrichToursWithSchedule(tours: TourAggregate[]) {
+  const now = new Date();
+  const driver = tours[0] ? await driverBudget(tours[0].vehicleId, now) : null;
+  const schedule = etaService.calculateVehicleSchedule(tours, now, driver);
   const scheduleByTour = new Map<string, (typeof schedule)[number]>();
   for (const item of schedule) {
     scheduleByTour.set(item.tourId, item);
   }
 
   return tours.map((tour) => {
-    const enriched = enrichTour(tour);
+    const enriched = enrichTour(tour, now, driver);
     const item = scheduleByTour.get(tour.id);
     return {
       ...enriched,
@@ -1717,7 +1735,7 @@ function enrichToursWithSchedule(tours: TourAggregate[]) {
   });
 }
 
-function enrichToursWithScheduleGroupedByVehicle(tours: TourAggregate[]) {
+async function enrichToursWithScheduleGroupedByVehicle(tours: TourAggregate[]) {
   const byVehicle = new Map<string, TourAggregate[]>();
   for (const tour of tours) {
     const group = byVehicle.get(tour.vehicleId) ?? [];
@@ -1725,9 +1743,9 @@ function enrichToursWithScheduleGroupedByVehicle(tours: TourAggregate[]) {
     byVehicle.set(tour.vehicleId, group);
   }
 
-  const enrichedById = new Map<string, ReturnType<typeof enrichToursWithSchedule>[number]>();
+  const enrichedById = new Map<string, Awaited<ReturnType<typeof enrichToursWithSchedule>>[number]>();
   for (const group of byVehicle.values()) {
-    for (const tour of enrichToursWithSchedule(group)) {
+    for (const tour of await enrichToursWithSchedule(group)) {
       enrichedById.set(tour.id, tour);
     }
   }

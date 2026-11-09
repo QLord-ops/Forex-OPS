@@ -124,6 +124,8 @@ export interface DashboardVehicle {
   statusText: string
   /** GPS: km and ETA measured from the Webfleet position; CALCULATED: from the drive timer. */
   etaSource?: 'GPS' | 'CALCULATED'
+  /** Whose hours the ETA used (tachograph or the calculated clock), the driving time and the daily rest on the way. */
+  etaPlan?: DriveEtaPlan | null
   offRouteMeters?: number | null
   /** The timer says the truck should be at the stop, but GPS has not confirmed it. */
   predictedArrival?: boolean
@@ -382,8 +384,20 @@ export interface VehicleTimeline {
   items: TimelineItem[]
 }
 
+/** How an ETA was reached: the hours used, pure driving, breaks and the daily rest before the stop, if any. */
+export interface DriveEtaPlan {
+  hours: 'TACHOGRAPH' | 'CLOCK'
+  preliminary: boolean
+  driveSeconds: number
+  breakSeconds: number
+  rest: { startAt: string; endAt: string; seconds: number; reduced: boolean } | null
+  /** Driving starts no earlier than this: the next shift of a driver whose card is out. */
+  startsAt: string | null
+}
+
 export interface CurrentPosition {
   vehicleId: string
+  etaPlan?: DriveEtaPlan | null
   tourId?: string | null
   legId?: string | null
   geometryVersion?: string | null
