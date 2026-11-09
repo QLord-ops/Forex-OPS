@@ -41,14 +41,14 @@ export function StopCoordinatesCheck() {
     {error ? <p className="quick-order-error" role="alert">{error}</p> : null}
     {report ? <p className="page-subtitle" role="status">{report}</p> : null}
     {issues && !issues.length && !report ? <p className="page-subtitle" role="status">Все точки на своих местах.</p> : null}
-    {issues?.length ? <table className="rules-table">
-      <thead><tr><th>Машина · тур</th><th>Точка</th><th>Сейчас</th><th>Должно быть</th><th><span className="sr-only">Действия</span></th></tr></thead>
-      <tbody>{issues.map((issue) => <tr key={issue.stopId}>
-        <td><strong>LKW {issue.vehicleNumber}</strong><span>{issue.orderNumber}{issue.tourStatus === 'QUEUED' ? ' · в очереди' : ''}</span></td>
-        <td><strong>{stopTypeLabel(issue.type)} {issue.sequence}</strong><span>{[issue.company, issue.address, issue.city].filter(Boolean).join(', ')}</span></td>
-        <td>{issue.current.resolvedAddress ?? `${issue.current.latitude.toFixed(3)}, ${issue.current.longitude.toFixed(3)}`}</td>
-        <td><strong>{issue.proposed.resolvedAddress}</strong><span>{issue.distanceKm} км от текущей точки</span></td>
-        <td><button type="button" className="secondary-button" onClick={() => void fix([issue.stopId])} disabled={busy !== null}>Исправить</button></td>
+    {issues?.length ? <table className="rules-table stop-coords-table" role="table">
+      <thead><tr role="row"><th role="columnheader">Машина · тур</th><th role="columnheader">Точка</th><th role="columnheader">Сейчас</th><th role="columnheader">Должно быть</th><th role="columnheader"><span className="sr-only">Действия</span></th></tr></thead>
+      <tbody>{issues.map((issue) => <tr key={issue.stopId} role="row">
+        <td role="cell"><strong>LKW {issue.vehicleNumber}</strong><span>{issue.orderNumber}{issue.tourStatus === 'QUEUED' ? ' · в очереди' : ''}</span></td>
+        <td role="cell"><strong>{stopTypeLabel(issue.type)} {issue.sequence}</strong><span>{[issue.company, issue.address, issue.city].filter(Boolean).join(', ')}</span></td>
+        <td role="cell"><span className="stop-coords-label" aria-hidden="true">Сейчас</span>{issue.current.resolvedAddress ?? `${issue.current.latitude.toFixed(3)}, ${issue.current.longitude.toFixed(3)}`}</td>
+        <td role="cell"><span className="stop-coords-label" aria-hidden="true">Должно быть</span><strong>{issue.proposed.resolvedAddress}</strong><span>{issue.distanceKm} км от текущей точки</span></td>
+        <td role="cell"><button type="button" className="secondary-button" onClick={() => void fix([issue.stopId])} disabled={busy !== null}>Исправить</button></td>
       </tr>)}</tbody>
     </table> : null}
   </section>
