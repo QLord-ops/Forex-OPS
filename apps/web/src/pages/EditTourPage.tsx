@@ -10,6 +10,7 @@ import { usePolling } from '../hooks/usePolling'
 import { api } from '../lib/api'
 import type { CreateTourStopInput, GeocodeResult, StopType, Tour } from '../types/domain'
 import { berlinLocalToIso, isoToBerlinLocal } from '../lib/berlin-time'
+import { sharedTerminLeadIndex } from '../lib/tours'
 
 interface StopDraft {
   id: string
@@ -22,6 +23,16 @@ interface StopDraft {
   serviceMaxMinutes: number
   geocode?: GeocodeResult
   geocodeError?: string
+  terminSharedWithStopId?: string | null
+}
+
+/** Unloading and loading at one plant go under one Termin: the second stop says whose Termin it follows. */
+function SharedTerminHint({ stops, index }: { stops: StopDraft[]; index: number }) {
+  // A retyped or re-picked address is no longer known to be the same place.
+  const lead = sharedTerminLeadIndex(stops.map((stop) => ({ ...stop, moved: stop.geocode?.provider !== 'saved' })), index)
+  if (lead < 0) return null
+  const at = stops[lead].appointmentAt
+  return <p className="mb-2 text-sm text-slate-600">Общий Termin с точкой {lead + 1}{at ? ` · ${at.slice(8, 10)}.${at.slice(5, 7)} ${at.slice(11, 16)}` : ''} — одно место, свой срок нужен только при отдельном окне.</p>
 }
 
 export function EditTourPage() {
@@ -55,6 +66,7 @@ export function EditTourPage() {
             address: stop.address,
             city: stop.city ?? '',
             appointmentAt: isoToBerlinLocal(stop.appointmentAt),
+            terminSharedWithStopId: stop.terminSharedWithStopId ?? null,
             serviceMinMinutes: stop.serviceMinMinutes ?? 60,
             serviceMaxMinutes: stop.serviceMaxMinutes ?? 120,
             geocode: {
@@ -208,6 +220,7 @@ export function EditTourPage() {
               <div><span className="field-label">Координаты</span><button type="button" className="secondary-button w-full" onClick={() => void handleGeocode(stop.id)} disabled={!stop.address.trim() || geocodingStopId === stop.id}><MapPin className="h-4 w-4" /> Проверить</button></div>
               <div className="flex items-end"><button type="button" className="danger-button min-h-10 px-2" onClick={() => setStops((current) => current.filter((item) => item.id !== stop.id))} disabled={stops.length <= 2} aria-label="Удалить точку"><Trash2 className="h-4 w-4" /></button></div>
               <div className="xl:col-start-3 xl:col-end-10">
+                <SharedTerminHint stops={stops} index={index} />
                 {stop.geocode ? <div className="flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800"><CheckCircle2 className="h-4 w-4" />{stop.geocode.address} · {stop.geocode.latitude.toFixed(5)}, {stop.geocode.longitude.toFixed(5)}</div> : stop.geocodeError ? <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{stop.geocodeError}</div> : <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">Проверьте адрес повторно.</div>}
               </div>
             </div>

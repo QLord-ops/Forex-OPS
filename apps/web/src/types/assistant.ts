@@ -29,6 +29,7 @@ export interface BriefStop {
   stopId: string; tourId: string; sequence: number; type: string; label: string; company: string | null; city: string | null; address: string
   appointmentAt: string | null; appointmentAtLocal: string | null; windowStartAt: string | null; windowEndAt: string | null; plannedAt: string | null
   terminRequired: boolean; serviceMinMinutes: number; serviceMaxMinutes: number; arrivedAt: string | null; completedAt: string | null
+  terminSharedWithStopId?: string | null
   eta: { earliest: string | null; earliestLocal: string | null; latest: string | null; latestLocal: string | null; risk: string; preliminary: boolean } | null
 }
 export interface VehicleBrief {

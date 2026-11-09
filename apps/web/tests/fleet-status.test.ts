@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { compareVehicles, getAttention, matchesFleetFilter, needsDecision, positionSource, activityNote, restNote, terminMargin, vehiclePlace, vehicleStatus } from '../src/lib/fleet-status'
+import { compareVehicles, getAttention, matchesFleetFilter, needsDecision, positionSource, activityNote, restNote, terminMargin, terminNeeded, vehiclePlace, vehicleStatus } from '../src/lib/fleet-status'
 import type { DashboardVehicle, Stop } from '../src/types/domain'
 
 const NOW = new Date('2026-11-03T12:00:00Z').getTime()
@@ -85,5 +85,18 @@ describe('fleet status', () => {
     const sorted = [calm, today, late].sort((a, b) => compareVehicles(a, b, [], 'URGENCY', NOW))
     expect(sorted.map((item) => item.vehicle.vehicleNumber)).toEqual(['1410', '949', '125'])
     expect([today, calm, late].sort((a, b) => compareVehicles(a, b, [], 'NUMBER', NOW)).map((item) => item.vehicle.vehicleNumber)).toEqual(['125', '949', '1410'])
+  })
+
+  it('waits for a Termin once per place: the Leergut stop after unloading at the same plant needs none', () => {
+    const tour = (stops: Stop[]) => ({ id: 't1', stops }) as never
+    const unload = stop({ id: 'u', sequence: 1, terminRequired: true })
+    const leergut = stop({ id: 'l', sequence: 2, type: 'LOAD', terminRequired: false, terminSharedWithStopId: 'u' })
+    expect(terminNeeded(row({ tour: tour([unload, leergut]) }))).toBe(true)
+    expect(matchesFleetFilter(row({ tour: tour([unload, leergut]) }), 'NO_TERMIN', new Set(), NOW)).toBe(true)
+    const done = { ...unload, appointmentAt: '2026-11-03T07:00:00Z', completedAt: '2026-11-03T08:30:00Z' }
+    expect(terminNeeded(row({ tour: tour([done, leergut]) }))).toBe(false)
+    // An older record may still carry the flag: the pair decides, not the flag.
+    expect(terminNeeded(row({ tour: tour([done, { ...leergut, terminRequired: true }]) }))).toBe(false)
+    expect(terminNeeded(row({ tour: tour([done, { ...leergut, terminRequired: true, terminSharedWithStopId: null }]) }))).toBe(true)
   })
 })

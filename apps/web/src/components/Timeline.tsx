@@ -1,7 +1,8 @@
 import { CheckCircle2, Circle, Clock3, Dot } from 'lucide-react'
 
 import { formatDateTime, metersToKm, stopTypeLabel } from '../lib/format'
-import type { TimelineItem, Tour } from '../types/domain'
+import { sharedTerminOf, sortedStops } from '../lib/tours'
+import type { Stop, TimelineItem, Tour } from '../types/domain'
 import { TourStatusBadge } from './StatusBadge'
 
 const itemIcon = {
@@ -13,12 +14,13 @@ const itemIcon = {
 
 export function TourTimeline({ tours, items }: { tours?: Tour[]; items?: TimelineItem[] }) {
   if (items?.length) {
+    const stops = items.flatMap((item) => (item.stop ? [item.stop] : []))
     return (
       <div className="work-surface p-4">
         <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-500">Цепочка маршрутов</h2>
         <div className="space-y-3">
           {items.map((item) => (
-            <TimelineRow key={item.id} item={item} />
+            <TimelineRow key={item.id} item={item} stops={stops} />
           ))}
         </div>
       </div>
@@ -35,19 +37,7 @@ export function TourTimeline({ tours, items }: { tours?: Tour[]; items?: Timelin
               <div className="font-semibold">Заказ {tour.orderNumber}</div>
               <TourStatusBadge status={tour.status} />
             </div>
-            <div className="space-y-3">
-              {tour.stops?.slice().sort((a, b) => a.sequence - b.sequence).map((stop) => (
-                <div key={stop.id} className="grid grid-cols-[96px_1fr_auto] gap-3 text-sm">
-                  <span className="tabular-nums text-slate-500">{formatDateTime(stop.appointmentAt)}</span>
-                  <span>
-                    <span className="font-medium">{stopTypeLabel(stop.type)}</span> · {stop.address}
-                  </span>
-                  <span className={stop.completedAt ? 'text-emerald-700' : 'text-slate-500'}>
-                    {stop.completedAt ? 'ГОТОВО' : tour.status === 'QUEUED' ? 'В ОЧЕРЕДИ' : 'ДАЛЕЕ'}
-                  </span>
-                </div>
-              ))}
-            </div>
+            <TourStops tour={tour} />
           </div>
         ))}
       </div>
@@ -55,8 +45,33 @@ export function TourTimeline({ tours, items }: { tours?: Tour[]; items?: Timelin
   )
 }
 
-function TimelineRow({ item }: { item: TimelineItem }) {
+/** The second operation at a place shows the Termin of the first: both go under one Termin. */
+function TourStops({ tour }: { tour: Tour }) {
+  const stops = sortedStops(tour)
+  return (
+    <div className="space-y-3">
+      {stops.map((stop) => {
+        const shared = sharedTerminOf(stops, stop)
+        return (
+          <div key={stop.id} className="grid grid-cols-[96px_1fr_auto] gap-3 text-sm">
+            <span className="tabular-nums text-slate-500">{formatDateTime((shared?.lead ?? stop).appointmentAt)}</span>
+            <span>
+              <span className="font-medium">{stopTypeLabel(stop.type)}</span> · {stop.address}
+              {shared ? <span className="text-slate-600"> · общий Termin с точкой {shared.lead.sequence}</span> : null}
+            </span>
+            <span className={stop.completedAt ? 'text-emerald-700' : 'text-slate-500'}>
+              {stop.completedAt ? 'ГОТОВО' : tour.status === 'QUEUED' ? 'В ОЧЕРЕДИ' : 'ДАЛЕЕ'}
+            </span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function TimelineRow({ item, stops }: { item: TimelineItem; stops: Stop[] }) {
   const Icon = itemIcon[item.status]
+  const shared = item.stop ? sharedTerminOf(stops, item.stop) : null
   const distance = item.leg ? metersToKm(item.leg.distanceMeters) : null
 
   return (
@@ -65,7 +80,7 @@ function TimelineRow({ item }: { item: TimelineItem }) {
       <div>
         <div className="font-medium">{item.label}</div>
         <div className="mt-1 text-sm text-slate-500">
-          {item.stop ? `${stopTypeLabel(item.stop.type)} · ${formatDateTime(item.stop.appointmentAt)}` : item.meta}
+          {item.stop ? `${stopTypeLabel(item.stop.type)} · ${shared ? shared.label : formatDateTime(item.stop.appointmentAt)}` : item.meta}
         </div>
       </div>
       <div className="text-sm font-medium text-slate-600">{distance}</div>

@@ -39,10 +39,26 @@ export const BUILT_IN_RULES: AddressRuleRecord[] = [
   cityCode("bre", "Bremen"), cityCode("ld", "Ludwigsfelde")
 ];
 
-/** Companies whose Termin always comes as a separate slip. */
-export function requiresTermin(text: string | null | undefined, rules: AddressRuleRecord[] = BUILT_IN_RULES): boolean {
+const SITE_RADIUS_METERS = 300;
+function metersApart(a: { latitude: number; longitude: number }, b: { latitude: number; longitude: number }): number {
+  const meridian = 111_320;
+  return Math.hypot((a.latitude - b.latitude) * meridian, (a.longitude - b.longitude) * meridian * Math.cos((a.latitude * Math.PI) / 180));
+}
+
+/**
+ * Companies whose Termin always comes as a separate slip, and learned places the admin marked «Termin нужен»:
+ * such a place counts when the stop names it or stands on it.
+ */
+export function requiresTermin(text: string | null | undefined, rules: AddressRuleRecord[] = BUILT_IN_RULES,
+  point?: { latitude: number; longitude: number } | null): boolean {
   const words = ` ${normalizePattern(text)} `;
-  return rules.some((rule) => rule.requiresTermin && rule.kind === "COMPANY" && words.includes(` ${rule.pattern} `));
+  return rules.some((rule) => {
+    if (!rule.requiresTermin) return false;
+    if (rule.kind === "COMPANY") return words.includes(` ${rule.pattern} `);
+    if (rule.kind !== "SITE") return false;
+    if (point && rule.latitude !== null && rule.longitude !== null && metersApart(point, { latitude: rule.latitude, longitude: rule.longitude }) <= SITE_RADIUS_METERS) return true;
+    return rule.pattern.split(" ").every((token) => words.includes(` ${token} `));
+  });
 }
 
 /** A single-token city code ("WOB") spelled out; anything else stays as written. */
@@ -83,7 +99,18 @@ export function findSiteRule(companyName: string | null | undefined, city: strin
   return null;
 }
 
-/** Stored rules plus the built-in dictionary; a stored rule with the same pattern replaces the built-in one. */
+type StoredAddressRule = Omit<AddressRuleRecord, "kind" | "builtIn"> & { kind: string };
+
+/** A stored rule with the same pattern replaces the built-in one. */
+export function mergeAddressRules(stored: StoredAddressRule[]): AddressRuleRecord[] {
+  const own = new Set(stored.map((rule) => rule.pattern));
+  return [
+    ...stored.map((rule) => ({ ...rule, kind: rule.kind as AddressRuleKind, builtIn: false })),
+    ...BUILT_IN_RULES.filter((rule) => !own.has(rule.pattern))
+  ];
+}
+
+/** Stored rules plus the built-in dictionary. */
 export class AddressRuleService {
   private cache: { at: number; rules: AddressRuleRecord[] } | null = null;
   constructor(private readonly db: Pick<PrismaClient, "addressRule" | "$transaction">) {}
@@ -93,11 +120,7 @@ export class AddressRuleService {
     // An unreachable rules table must not stop an import: the built-in dictionary still applies.
     const stored = await this.db.addressRule.findMany({ orderBy: { pattern: "asc" } }).catch(() => null);
     if (!stored) return BUILT_IN_RULES;
-    const own = new Set(stored.map((rule) => rule.pattern));
-    const rules = [
-      ...stored.map((rule) => ({ ...rule, kind: rule.kind as AddressRuleKind, builtIn: false })),
-      ...BUILT_IN_RULES.filter((rule) => !own.has(rule.pattern))
-    ];
+    const rules = mergeAddressRules(stored);
     this.cache = { at: Date.now(), rules };
     return rules;
   }
@@ -113,9 +136,12 @@ export class AddressRuleService {
     const pattern = normalizePattern(input.sourceLabel);
     if (pattern.length < 2) return null;
     const data = { kind: "SITE", company: input.company, street: input.street, postalCode: input.postalCode, city: input.city,
-      latitude: input.latitude, longitude: input.longitude, requiresTermin: requiresTermin(`${input.company ?? ""} ${input.sourceLabel}`) };
+      latitude: input.latitude, longitude: input.longitude };
+    const needsTermin = requiresTermin(`${input.company ?? ""} ${input.sourceLabel}`);
     const rule = await this.db.$transaction(async (tx) => {
-      const saved = await tx.addressRule.upsert({ where: { pattern }, create: { pattern, ...data, createdByDispatcherId: actor?.dispatcherId ?? null }, update: { ...data, hits: { increment: 1 } } });
+      // Learning the place again keeps the «Termin нужен» mark the admin set by hand.
+      const saved = await tx.addressRule.upsert({ where: { pattern },
+        create: { pattern, ...data, requiresTermin: needsTermin, createdByDispatcherId: actor?.dispatcherId ?? null }, update: { ...data, hits: { increment: 1 } } });
       await writeAuditLog(tx, actor, { action: "ADDRESS_RULE_LEARNED", entityType: "AddressRule", entityId: saved.id, metadata: { pattern, city: input.city }, createdAt: now });
       return saved;
     });

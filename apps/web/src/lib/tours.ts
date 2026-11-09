@@ -42,6 +42,39 @@ export function terminText(slot: { appointmentAt?: string | null; windowStartAt?
   return ''
 }
 
+/**
+ * Unloading and loading at one plant go under one Termin, kept on the first of the two stops.
+ * For the later stop: the stop that keeps the Termin and a label that names it; null for a stop of its own.
+ */
+export function sharedTerminOf(stops: Stop[], stop: Stop): { lead: Stop; label: string } | null {
+  const lead = stop.terminSharedWithStopId ? stops.find((item) => item.id === stop.terminSharedWithStopId) : null
+  if (!lead) return null
+  const time = terminText({ appointmentAt: lead.appointmentAt, windowStartAt: lead.appointmentWindowStartAt, windowEndAt: lead.appointmentWindowEndAt })
+  return { lead, label: `общий Termin с точкой ${lead.sequence}${time ? ` · ${time}` : ''}` }
+}
+
+/**
+ * The same for an editor, where the stops are drafts in list order: the index of the draft whose Termin covers
+ * the one at `index`, or -1 once a time of its own is typed, the pair is pulled apart or one of the two addresses changed.
+ */
+export function sharedTerminLeadIndex(
+  stops: Array<{ id?: string; terminSharedWithStopId?: string | null; appointmentAt?: string | null; moved?: boolean }>,
+  index: number
+): number {
+  const stop = stops[index]
+  if (!stop?.terminSharedWithStopId || stop.appointmentAt || stop.moved) return -1
+  const lead = stops.findIndex((item) => item.id === stop.terminSharedWithStopId)
+  if (lead < 0 || lead >= index || stops[lead].moved) return -1
+  return stops.slice(lead + 1, index).every((item) => item.terminSharedWithStopId === stop.terminSharedWithStopId && !item.moved) ? lead : -1
+}
+
+/** «Termin общий для точек 2 и 3 (Salzgitter) — сохранён на точке 2.»; empty when the Termin covers one stop. */
+export function sharedTerminNote(place: { sequences: number[]; city: string | null } | null | undefined, saved: boolean): string {
+  if (!place || place.sequences.length < 2) return ''
+  const numbers = `${place.sequences.slice(0, -1).join(', ')} и ${place.sequences[place.sequences.length - 1]}`
+  return `Termin общий для точек ${numbers}${place.city ? ` (${place.city})` : ''} — ${saved ? 'сохранён' : 'сохранится'} на точке ${place.sequences[0]}.`
+}
+
 function clock(value: string, withDate: boolean) {
   const parts = Object.fromEntries(new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', hourCycle: 'h23', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
     .formatToParts(new Date(value)).map((part) => [part.type, part.value]))

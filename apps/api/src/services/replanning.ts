@@ -3,6 +3,7 @@ import type { Prisma, PrismaClient } from '@prisma/client';
 import type { Coordinate, CurrentPosition, RouteResult } from '../domain.js';
 import type { RoutingProvider } from './routing.js';
 import { calculateSimulatedDuration } from './simulation.js';
+import { shareTerminAtSamePlace } from './termin-groups.js';
 import { TourService, snapshotVehicleClock, rebaseActiveLeg } from './tours.js';
 import { forecastDrive, applyStopTime, type ClockState } from './vehicle-clock.js';
 import { writeAuditLog, type AuditActor } from './audit-log.js';
@@ -85,6 +86,13 @@ export class ReplanningService {
       if (!Number.isFinite(point.latitude) || Math.abs(point.latitude) > 90 || !Number.isFinite(point.longitude) || Math.abs(point.longitude) > 180) throw new ReplanConflict('Некорректные координаты.');
       stops.push({ ...stop, id: stop.id ?? randomUUID(), latitude: point.latitude, longitude: point.longitude, serviceMinMinutes: min, serviceMaxMinutes: max });
     }
+    // Unloading and loading at one plant share one Termin, kept on the first of the two stops. The stop the truck
+    // already stands on is not rewritten, so a Termin that would have to move onto it stays where it was typed.
+    const stored = new Map(pending.map(s => [s.id, s]));
+    const shared = shareTerminAtSamePlace(stops.map(s => ({ ...s,
+      appointmentWindowStartAt: stored.get(s.id)?.appointmentWindowStartAt?.toISOString() ?? null,
+      appointmentWindowEndAt: stored.get(s.id)?.appointmentWindowEndAt?.toISOString() ?? null })));
+    if (!arrived || (shared[0].appointmentAt ?? null) === (stops[0].appointmentAt ?? null)) shared.forEach((s, i) => { stops[i].appointmentAt = s.appointmentAt ?? null; });
     const legs: PlannedLeg[] = [];
     const append = async (id: string, from: Coordinate & { id: string }, to: ResolvedStop | (Coordinate & { id: string }), active: boolean) => {
       const route = await this.routing.calculateRoute(from, to);

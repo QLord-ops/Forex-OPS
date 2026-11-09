@@ -40,11 +40,16 @@ function TerminPlanCard({ plan, now, onShowMap }: { plan: TerminPlan; now: Date;
   </div>
 }
 
+function sharedTermin(list: BriefStop[], stop: BriefStop): string {
+  const lead = stop.terminSharedWithStopId ? list.find((item) => item.stopId === stop.terminSharedWithStopId) : null
+  return lead ? ` · общий Termin с точкой ${lead.sequence}` : ''
+}
+
 function VehicleBriefCard({ brief }: { brief: VehicleBrief }) {
   const stops = (list: BriefStop[]) => <ul className="brief-stops">
     {list.map((stop) => <li key={stop.stopId} className={stop.completedAt ? 'brief-stop-done' : ''}>
       {stop.label}{stop.completedAt ? ' · завершена' : stop.arrivedAt ? ' · на точке' : ''}
-      {stop.appointmentAtLocal ? ` · Termin ${stop.appointmentAtLocal}` : stop.terminRequired ? ' · Termin нужен' : ''}
+      {stop.appointmentAtLocal ? ` · Termin ${stop.appointmentAtLocal}` : sharedTermin(list, stop) || (stop.terminRequired ? ' · Termin нужен' : '')}
       {!stop.completedAt && stop.eta?.earliestLocal ? ` · ETA ${stop.eta.earliestLocal}–${stop.eta.latestLocal}${stop.eta.preliminary ? ' (предварительно)' : ''}` : ''}
     </li>)}
   </ul>
