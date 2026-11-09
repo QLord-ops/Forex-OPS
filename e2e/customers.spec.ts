@@ -205,6 +205,13 @@ test('админ находит точку, нарисованную не в т�
   await expect(row).toContainText('Lagerstraße, 20095 Hamburg')
   await expect(row).toContainText('14974 Ludwigsfelde, Deutschland')
   await expect(row).toContainText('251 км')
+  // Phone: one card per stop, nothing wider than the settings card, «Исправить» on one line.
+  await page.setViewportSize({ width: 393, height: 851 })
+  const cardBox = (await card.boundingBox())!
+  const rowBox = (await row.boundingBox())!
+  expect(rowBox.x + rowBox.width).toBeLessThanOrEqual(cardBox.x + cardBox.width)
+  expect((await row.getByRole('button', { name: 'Исправить' }).boundingBox())!.height).toBeLessThan(48)
+  await expect(row.getByText('Должно быть', { exact: true })).toBeVisible()
   await card.getByRole('button', { name: 'Исправить все · 1' }).click()
   await expect.poll(() => fixed).toEqual(['s3'])
   await expect(card.getByRole('status')).toContainText('Исправлено точек: 1')

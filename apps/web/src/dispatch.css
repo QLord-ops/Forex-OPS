@@ -473,6 +473,18 @@ button.decision-card-title:focus-visible { outline: 2px solid var(--focus); outl
 .rules-table td { border-bottom: 1px solid rgb(var(--ln-eef1f5)); padding: 8px; vertical-align: top; }
 .rules-table td strong { display: block; font-weight: 600; }
 .rules-table td span { display: block; color: rgb(var(--tx-64748b)); font-size: .75rem; }
+/* On a phone the stop check reads as one card per stop: four columns of German addresses do not fit 390 px. */
+.stop-coords-table td { overflow-wrap: anywhere; }
+.stop-coords-table td:last-child { white-space: nowrap; }
+.rules-table td .stop-coords-label { display: none; }
+@media (max-width: 767px) {
+  .stop-coords-table, .stop-coords-table tbody { display: block; }
+  .stop-coords-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .stop-coords-table tr { display: grid; gap: 8px; border-bottom: 1px solid rgb(var(--ln-eef1f5)); padding: 12px 0; }
+  .stop-coords-table td { border: 0; padding: 0; }
+  .rules-table td .stop-coords-label { display: block; }
+  .stop-coords-table td:last-child .secondary-button { width: 100%; min-height: 40px; justify-content: center; }
+}
 .rules-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; white-space: nowrap; }
 .rules-filter { display: grid; gap: 4px; max-width: 280px; margin-bottom: 12px; }
 .rules-toggle { display: inline-flex; align-items: center; gap: 6px; }
