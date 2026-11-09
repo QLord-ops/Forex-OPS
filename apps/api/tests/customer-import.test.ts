@@ -16,6 +16,7 @@ import { DEFAULT_TIMEOUT_MS, importPdfPreview, importReasoningEffort, parseTourR
 import { MockRoutingProvider } from '../src/services/routing.js';
 import { TourService } from '../src/services/tours.js';
 import { asAppDatabase, migrateTestDatabase } from './test-database.js';
+import { auftragPdf } from './pdf-fixture.js';
 
 const schnellecke: CustomerCard = { id: 'c-sl', key: 'SCHNELLECKE', name: 'Schnellecke', aliases: ['Schnellecke', 'Schnellecke Transportlogistik GmbH'], carrierNames: ['Schnellecke Transportlogistik'] };
 const walter: CustomerCard = { id: 'c-wt', key: 'WALTER_TESLA', name: 'Walter (Tesla)', aliases: ['Walter', 'Tesla'], carrierNames: [] };
@@ -65,7 +66,7 @@ describe('the prompt follows the customer profile', () => {
     city: null, appointmentLocal: null, appointmentWindowStartLocal: null, appointmentWindowEndLocal: null, appointmentDateLocal: null,
     loadingMeters: null, referenceNumbers: [], instructions: null, sourcePage: 1, sourceExcerpt: null, confidence: 0.9, ...extra
   });
-  async function read(customer: ImportCustomerContext | null, answer: Record<string, unknown> = {}) {
+  async function read(customer: ImportCustomerContext | null, answer: Record<string, unknown> = {}, buffer: Buffer = Buffer.from('%PDF-1.7')) {
     let body: { input: unknown; text: { format: { schema: { required: string[] } } } } | null = null;
     const fetchMock = vi.fn(async (_input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
       body = JSON.parse(String(init?.body));
@@ -74,7 +75,7 @@ describe('the prompt follows the customer profile', () => {
         departmentCompany: 'Walter Logistics Grünheide', departmentAddress: null, departmentCity: null, departmentSourcePage: null,
         stops: [stop(1, 'LOAD', { appointmentDateLocal: '2026-11-10' }), stop(2, 'UNLOAD')], warnings: [] }], warnings: [], ...answer }) }), { status: 200 });
     });
-    const preview = await importPdfPreview(Buffer.from('%PDF-1.7'), 'auftrag.pdf', { apiKey: 'test', fetchImpl: fetchMock as typeof fetch, now: new Date('2026-11-08T10:00:00Z'), customer });
+    const preview = await importPdfPreview(buffer, 'auftrag.pdf', { apiKey: 'test', fetchImpl: fetchMock as typeof fetch, now: new Date('2026-11-08T10:00:00Z'), customer });
     return { preview, instruction: JSON.stringify(body!.input), required: body!.text.format.schema.required, schema: JSON.stringify(body!.text.format.schema), request: body as unknown };
   }
 
@@ -82,9 +83,26 @@ describe('the prompt follows the customer profile', () => {
     // 45 s, then 100 s were not enough once every field carried a confidence and a quote (09.11: PDFs aborted at 45 s and at 100 s).
     // The reading is a background job now, so the model gets minutes.
     expect(DEFAULT_TIMEOUT_MS).toBeGreaterThanOrEqual(180_000);
-    const { instruction, schema } = await read(null);
-    expect(instruction).toContain('at most 60 characters');
-    expect(schema).toContain('"maxLength":80');
+    // No per-field confidence from the model any more: the answer is a copy of the document, scored on the server.
+    const { instruction, schema, request } = await read(null);
+    expect(instruction).not.toContain('fieldConfidence');
+    expect(schema).not.toContain('fieldConfidence');
+    expect(request).toMatchObject({ max_output_tokens: 8000 });
+  });
+
+  it('sends a generated PDF as its text, page by page, and a scan as the file', async () => {
+    const text = await read(null, {}, auftragPdf());
+    const content = (text.request as { input: Array<{ content: unknown }> }).input[1].content as Array<{ type: string; text?: string }>;
+    expect(content[0].type).toBe('input_text');
+    expect(content[0].text).toContain('[Seite 1]\nSchnellecke Transportlogistik GmbH');
+    expect(content[0].text).toContain('[Seite 2]');
+    expect(text.instruction).toContain('read every page of the text above');
+    expect(text.preview.readMode).toBe('text');
+
+    const scan = await read(null);
+    const scanContent = (scan.request as { input: Array<{ content: unknown }> }).input[1].content as Array<{ type: string }>;
+    expect(scanContent[0].type).toBe('input_file');
+    expect(scan.preview.readMode).toBe('file');
   });
 
   it('asks the model for little reasoning so a long Auftrag answers in time', async () => {

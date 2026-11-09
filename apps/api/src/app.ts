@@ -909,8 +909,9 @@ export async function buildApp(options: BuildAppOptions = {}) {
         try {
           const started = Date.now();
           const read = await pdfImport(buffer, filename, customerContext);
-          request.log.info({ aiMs: Date.now() - started, pdfBytes: buffer.length }, 'PDF-заказ распознан');
-          return await withStoredDocument(await withFieldConfidence(await withCustomer(await withAppointmentMatch(read, buffer), customerContext)), { buffer, filename, mimeType: "application/pdf" }, request);
+          const aiMs = Date.now() - started;
+          request.log.info({ aiMs, pdfBytes: buffer.length, readMode: read.readMode ?? null }, 'PDF-заказ распознан');
+          return { ...await withStoredDocument(await withFieldConfidence(await withCustomer(await withAppointmentMatch(read, buffer), customerContext)), { buffer, filename, mimeType: "application/pdf" }, request), readMs: Date.now() - started };
         } catch (error) {
           if (error instanceof Error && error.message.includes("OPENAI_API_KEY")) throw new ImportJobError("OpenAI ещё не настроен для импорта PDF.", 503);
           request.log.error({ err: error }, "Не удалось распознать PDF-заказ");
@@ -963,7 +964,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
           const started = Date.now();
           const read = await imageImport(buffer, filename, mimeType, customerContext);
           request.log.info({ aiMs: Date.now() - started, imageBytes: buffer.length }, 'Скриншот заказа распознан');
-          return await withStoredDocument(await withFieldConfidence(await withCustomer(await withAppointmentMatch(read, buffer), customerContext)), { buffer, filename, mimeType }, request);
+          return { ...await withStoredDocument(await withFieldConfidence(await withCustomer(await withAppointmentMatch(read, buffer), customerContext)), { buffer, filename, mimeType }, request), readMs: Date.now() - started };
         } catch (error) {
           if (error instanceof Error && error.message.includes("OPENAI_API_KEY")) throw new ImportJobError("OpenAI ещё не настроен для импорта скриншотов.", 503);
           request.log.error({ err: error }, "Не удалось распознать скриншот заказа");

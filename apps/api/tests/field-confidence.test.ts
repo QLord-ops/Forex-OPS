@@ -114,7 +114,7 @@ describe('calibration', () => {
 });
 
 describe('the PDF reader', () => {
-  it('asks the model for a score per field, keeps it for scoring and ties warnings and placeholders to their stop', async () => {
+  it('asks the model for the document only (no score per field: the server scores) and ties warnings and placeholders to their stop', async () => {
     let schema = '';
     const fetchMock = vi.fn(async (_input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
       const body = JSON.parse(String(init?.body));
@@ -122,22 +122,21 @@ describe('the PDF reader', () => {
       return new Response(JSON.stringify({ output_text: JSON.stringify({ warnings: [], drafts: [{
         orderNumber: '1', vehicleNumber: null, vehiclePlate: null, trailerPlate: null, tourRemarks: 'Hydro Crimmitschau für Seifert Bremen', tourRemarksSourcePage: 1,
         departmentCompany: null, departmentAddress: null, departmentCity: null, departmentSourcePage: null,
-        orderFieldConfidence: { orderNumber: ai(0.9, 'Auftrag 1'), vehicle: ai(0, null), trailer: ai(0, null) },
         warnings: [{ code: 'LM_UNCLEAR', message: 'LM неразборчиво', sourcePage: 1, stopSequence: 1, field: 'loadingMeters' }],
         stops: [{ sequence: 1, type: 'LOAD', company: 'Hydro', address: 'Robert-Koch-Str. 4, 08451 Crimmitschau', city: 'Crimmitschau', appointmentLocal: null, appointmentWindowStartLocal: null,
-          appointmentWindowEndLocal: null, appointmentDateLocal: null, loadingMeters: 13.6, referenceNumbers: [], instructions: null, sourcePage: 1, sourceExcerpt: 'Hydro Crimmitschau', confidence: 0.9,
-          fieldConfidence: { type: ai(0.9), company: ai(0.9, 'Hydro'), address: ai(0.9, 'Robert-Koch-Str. 4'), city: ai(0.9), time: ai(0), loadingMeters: ai(0.5, 'LM 13,6'), references: ai(0) } }]
+          appointmentWindowEndLocal: null, appointmentDateLocal: null, loadingMeters: 13.6, referenceNumbers: [], instructions: null, sourcePage: 1, sourceExcerpt: 'Hydro Crimmitschau', confidence: 0.9 }]
       }] }) }), { status: 200 });
     });
     const preview = await importPdfPreview(Buffer.from('%PDF-1.7'), 'a.pdf', { apiKey: 'test', fetchImpl: fetchMock as typeof fetch, now: new Date('2026-11-08T10:00:00Z') });
-    expect(schema).toContain('"fieldConfidence"');
-    expect(schema).toContain('"orderFieldConfidence"');
+    // The answer tripled and took over 100 s with a score and a quote per field (09.11); the server scores from the data instead.
+    expect(schema).not.toContain('"fieldConfidence"');
+    expect(schema).not.toContain('"orderFieldConfidence"');
     expect(schema).toContain('"stopSequence"');
     const [load, unload] = preview.drafts[0].stops;
-    expect(load).toMatchObject({ provenance: 'TOUR_REMARKS', aiConfidence: { address: { c: 0.9, evidence: 'Robert-Koch-Str. 4' } } });
+    expect(load).toMatchObject({ provenance: 'TOUR_REMARKS', confidence: 0.9 });
     expect(load).not.toHaveProperty('fieldConfidence');
+    expect(load).not.toHaveProperty('aiConfidence');
     expect(unload).toMatchObject({ provenance: 'PLACEHOLDER', company: 'Seifert', address: 'Bremen' });
-    expect(preview.drafts[0].orderAiConfidence).toMatchObject({ orderNumber: { c: 0.9 } });
     expect(preview.drafts[0].warnings).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'LM_UNCLEAR', stopIndex: 0, field: 'loadingMeters' }),
       expect.objectContaining({ code: 'TOUR_REMARKS_STOP_NOT_FOUND', stopIndex: 1, field: 'address' })
