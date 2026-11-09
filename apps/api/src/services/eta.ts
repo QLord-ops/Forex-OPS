@@ -3,6 +3,7 @@ import { compareQueuedItems, normalizeServiceWindow, type RiskColor } from "../d
 import { calculateLateMinutes, calculateRiskColor } from "./simulation.js";
 import { applyStopTime, forecastDrive, type ClockState } from "./vehicle-clock.js";
 import { breakdownTiming, parseClockState, readPersistedDrivePlan, snapshotVehicleClock, waitClockUntil, type VehicleIssueTiming } from "./tours.js";
+import { forecastEta, WebfleetEngine, type DriveEngine, type DriverEtaInput } from "./termin-planner.js";
 
 type TourStatus = "DRAFT" | "QUEUED" | "ACTIVE" | "COMPLETED" | "CANCELLED";
 type TourWithStopsAndLegs = Prisma.TourGetPayload<{ include: { stops: true; legs: true } }> & {
@@ -19,9 +20,74 @@ export type ScheduleStop = {
 };
 
 export class EtaService {
-  calculateVehicleSchedule(tours: TourWithStopsAndLegs[], now = new Date()): ScheduleStop[] {
+  /** The next stops of one truck in order; with the driver's tachograph the drives are planned on the real hours. */
+  calculateVehicleSchedule(tours: TourWithStopsAndLegs[], now = new Date(), driver: DriverEtaInput | null = null): ScheduleStop[] {
     const relevant = tours.filter((tour) => ["ACTIVE", "QUEUED"].includes(tour.status))
       .sort((a, b) => Number(a.status === "QUEUED") - Number(b.status === "QUEUED") || compareQueuedItems(a, b));
+    const vehicle = relevant[0]?.vehicle;
+    if (driver && !breakdownTiming(vehicle ?? {}, now).blocked) return this.scheduleByTachograph(relevant, now, driver);
+    return this.scheduleByClock(relevant, now);
+  }
+
+  private scheduleByTachograph(relevant: TourWithStopsAndLegs[], now: Date, driver: DriverEtaInput): ScheduleStop[] {
+    const vehicle = relevant[0]?.vehicle;
+    const from = driver.startsAt && driver.startsAt > now ? driver.startsAt : now;
+    let early: Date | null = from;
+    let late: Date | null = from;
+    let earlyEngine: DriveEngine = new WebfleetEngine(driver.budget);
+    let lateEngine: DriveEngine = earlyEngine.clone();
+    const result: ScheduleStop[] = [];
+    for (const tour of relevant) {
+      for (const stop of [...tour.stops].sort((a, b) => a.sequence - b.sequence)) {
+        if (stop.completedAt) continue;
+        const leg = tour.legs.find((item) => item.toStopId === stop.id && item.status !== "COMPLETED");
+        const deadlineAt = stop.appointmentAt ?? stop.appointmentWindowEndAt;
+        const drive = (seconds: number) => {
+          if (early === null || late === null) return;
+          const a = forecastEta(earlyEngine, seconds, early, deadlineAt);
+          const b = forecastEta(lateEngine, seconds, late, deadlineAt);
+          early = a.endAt; late = b.endAt; earlyEngine = a.engine; lateEngine = b.engine;
+        };
+        if (stop.arrivedAt) {
+          early = late = stop.arrivedAt;
+        } else if (leg?.startedAt && ["ACTIVE", "ARRIVED"].includes(leg.status)) {
+          const snapshot = snapshotVehicleClock(vehicle ?? {}, leg, now);
+          drive(Math.max(0, leg.simulatedDurationSeconds - snapshot.driveElapsedSeconds));
+        } else if (leg) {
+          drive(leg.simulatedDurationSeconds);
+        } else if (tour.approachDurationSeconds != null && result.length === 0 && stop.sequence === 1) {
+          drive(tour.approachDurationSeconds);
+        } else {
+          early = null;
+          late = null;
+        }
+        const window = normalizeServiceWindow(stop.serviceMinMinutes, stop.serviceMaxMinutes);
+        const serviceStart = stop.appointmentAt ?? stop.appointmentWindowStartAt;
+        const earlyService: Date | null = early ? maxDate(early, serviceStart ?? early) : null;
+        const lateService: Date | null = late ? maxDate(late, serviceStart ?? late) : null;
+        const earliestDeparture: Date | null = earlyService ? maxDate(now, addMinutes(earlyService, window.minMinutes)) : null;
+        const latestDeparture: Date | null = lateService ? maxDate(now, addMinutes(lateService, window.maxMinutes)) : null;
+        result.push({
+          tourId: tour.id, stopId: stop.id, sequence: stop.sequence, type: stop.type,
+          address: stop.address, city: stop.city ?? null, appointmentAt: stop.appointmentAt,
+          appointmentWindowStartAt: stop.appointmentWindowStartAt,
+          appointmentWindowEndAt: stop.appointmentWindowEndAt, deadlineAt,
+          earliestArrival: early, latestArrival: late, earliestDeparture, latestDeparture,
+          predictedEta: early, predictedDelayMinutes: calculateLateMinutes(late, deadlineAt),
+          definiteDelayMinutes: calculateLateMinutes(early, deadlineAt),
+          riskColor: calculateRiskColor(late, deadlineAt), tourStatus: tour.status as TourStatus,
+          preliminary: !early || Boolean(vehicle?.manualStoppedAt)
+        });
+        // A long stay at the stop counts as a break or a daily rest on the tachograph.
+        if (early && earliestDeparture) earlyEngine.idle((earliestDeparture.getTime() - early.getTime()) / 1000, early);
+        if (late && latestDeparture) lateEngine.idle((latestDeparture.getTime() - late.getTime()) / 1000, late);
+        early = earliestDeparture; late = latestDeparture;
+      }
+    }
+    return result;
+  }
+
+  private scheduleByClock(relevant: TourWithStopsAndLegs[], now: Date): ScheduleStop[] {
     let early: Date | null = now;
     let late: Date | null = now;
     let earlyClock = parseClockState(relevant[0]?.vehicle?.clockState, now);

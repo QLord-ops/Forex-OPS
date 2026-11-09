@@ -126,6 +126,8 @@ export type CurrentPosition = {
   eta: string | null;
   /** GPS: distance and ETA measured from the Webfleet position on the route; CALCULATED: from the drive timer. */
   etaSource?: "GPS" | "CALCULATED";
+  /** Hours, breaks and the daily rest behind `eta`; null when there is no ETA. */
+  etaPlan?: DriveEtaPlan | null;
   /** Distance of the GPS point from the planned line, when GPS is fresh. */
   offRouteMeters?: number | null;
   /** The timer says the truck should be there, but nothing has confirmed it. */
@@ -134,6 +136,20 @@ export type CurrentPosition = {
 
 /** Fresh Webfleet GPS handed to the position calculation. */
 export type GpsFix = { latitude: number; longitude: number; fresh: boolean };
+
+/**
+ * How an ETA was reached: whose hours were used (the Webfleet tachograph or the calculated vehicle clock), the pure
+ * driving time, the breaks, and the daily rest on the way, if the day ends before the stop.
+ */
+export type DriveEtaPlan = {
+  hours: "TACHOGRAPH" | "CLOCK";
+  preliminary: boolean;
+  driveSeconds: number;
+  breakSeconds: number;
+  rest: { startAt: string; endAt: string; seconds: number; reduced: boolean } | null;
+  /** Driving starts no earlier than this: the next shift of a driver whose card is out. */
+  startsAt: string | null;
+};
 
 export const CALCULATED_POSITION_DISCLAIMER =
   "Berechnete Position – keine GPS-Daten" as const;

@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@prisma/client';
+import { driverBudgetAfterRest, driverBudgetFromWebfleet, type DriverEtaInput } from './termin-planner.js';
 import {
   normalizePlate, readWebfleetConfig, webfleetRequest, WebfleetError,
   type WebfleetConfig, type WebfleetDriverOnObject, type WebfleetErrorCategory, type WebfleetPosition, type WebfleetReadAction
@@ -628,4 +629,23 @@ function iso(value: Record<string, unknown>, key: string) {
   if (!raw) return null;
   const date = new Date(raw);
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+/**
+ * The driver's hours for an ETA. With a card in the truck these are the tachograph budgets as of now; with the card out,
+ * the last driver's figures say when the next shift may begin, and the drive is planned from there with a fresh day.
+ * Null without Webfleet, without figures, or when they are older than an hour: the ETA then uses the calculated clock.
+ */
+export async function readDriverBudget(db: PrismaClient, store: WebfleetLiveStore, vehicleId: string, now: Date): Promise<DriverEtaInput | null> {
+  const hours = await readDriverHours(db, store, vehicleId, now, { recent: true });
+  if (!hours.times) return null;
+  if (hours.status === 'SIGNED_ON') {
+    const budget = driverBudgetFromWebfleet(hours.times, { workState: hours.workState, since: hours.activitySince }, now);
+    return budget ? { budget, startsAt: null } : null;
+  }
+  if (hours.status === 'RECENT' && hours.times.earliestNextShiftAt) {
+    const startsAt = new Date(hours.times.earliestNextShiftAt);
+    if (Number.isFinite(startsAt.getTime()) && startsAt > now) return { budget: driverBudgetAfterRest(hours.times, startsAt), startsAt };
+  }
+  return null;
 }

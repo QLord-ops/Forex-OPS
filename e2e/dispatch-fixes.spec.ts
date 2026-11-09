@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
+import { textClashes } from './text-clashes'
 
 async function json(route: Route, body: unknown, status = 200) {
   await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
@@ -396,4 +397,23 @@ test('нижняя панель: этап под «бровью», следую�
   await page.getByRole('dialog').getByRole('button', { name: /Закрыть/ }).first().click()
   await expect(page.locator('.vehicle-panel')).not.toHaveClass(/vehicle-panel-collapsed/)
   await expect(page.getByRole('button', { name: 'Свернуть панель машины' })).toHaveAttribute('aria-expanded', 'true')
+})
+
+test('нижняя панель показывает, из чего сложилась ETA: езда, суточный отдых по тахографу, без наложений', async ({ page }) => {
+  const restEnd = new Date(Date.now() + 15 * 3600_000)
+  await dashboard(page, async (route, path) => {
+    if (path !== '/dashboard') return false
+    await json(route, { vehicles: [{ vehicle: truck('v1', '2853'), statusText: 'MOVING', etaSource: 'GPS', operationVersion: 4, remainingKm: 423, eta: new Date(restEnd.getTime() + 2 * 3600_000).toISOString(),
+      etaPlan: { hours: 'TACHOGRAPH', preliminary: false, driveSeconds: 6 * 3600 + 12 * 60, breakSeconds: 0, rest: { startAt: new Date(Date.now() + 4 * 3600_000).toISOString(), endAt: restEnd.toISOString(), seconds: 11 * 3600, reduced: false }, startsAt: null },
+      tour: { id: 'tour-1', vehicleId: 'v1', orderNumber: 'SHP2610-A59V928', status: 'ACTIVE', stops },
+      telemetry: { source: 'WEBFLEET', stale: false, ageSeconds: 60, speedKmh: 76, standstill: false, address: 'A2, Bad Nenndorf' },
+      mapPosition: { coordinate: [8.8, 53.07], source: 'WEBFLEET', stale: false, courseDeg: 90, standstill: false } }] })
+    return true
+  })
+  await page.goto('/?vehicleId=v1')
+  const panel = page.locator('.vehicle-panel')
+  await expect(panel.locator('.vehicle-panel-bar')).toBeVisible()
+  await expect(panel.getByText(/≈ 6 ч 12 мин езды · отдых 11 ч до /)).toBeVisible()
+  await expect(panel.getByText('от GPS · по тахографу')).toBeVisible()
+  expect(await textClashes(page, '.vehicle-panel'), 'нижняя панель').toEqual([])
 })

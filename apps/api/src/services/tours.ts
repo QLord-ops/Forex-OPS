@@ -22,6 +22,7 @@ import { OFF_ROUTE_METERS, projectOnLine, splitAtProjection } from "./route-proj
 import { cleanTravelled } from "./travelled-path.js";
 import { requiresTermin } from "./address-rules.js";
 import { applyStopTime, createUnknownClockState, evaluateClockPlan, forecastDrive, type ClockState, type VehicleClockPlan } from "./vehicle-clock.js";
+import { forecastEta, WebfleetEngine, type DriverEtaInput } from "./termin-planner.js";
 import {
   calculateDistanceTravelled,
   calculateEta,
@@ -376,7 +377,7 @@ export class TourService {
     return { ok: true };
   }
 
-  async getCurrentPosition(vehicleId: string, now = new Date(), gps?: GpsFix | null): Promise<CurrentPosition> {
+  async getCurrentPosition(vehicleId: string, now = new Date(), gps?: GpsFix | null, driver?: DriverEtaInput | null): Promise<CurrentPosition> {
     const [vehicle, activeTour, activeLeg] = await Promise.all([
       this.db.vehicle.findUniqueOrThrow({ where: { id: vehicleId }, include: { issues: { where: { resolvedAt: null } } } }),
       this.db.tour.findFirst({
@@ -404,9 +405,14 @@ export class TourService {
     const geometry = parseGeometry(activeLeg.routeGeometry);
     const position = calculatePositionOnRoute(geometry, progress);
     const breakdown = breakdownTiming(vehicle, now);
+    // With the driver's tachograph the remaining drive is planned on the real hours: shift end, breaks and the daily rest.
+    const deadline = activeLeg.toStop.appointmentAt ?? activeLeg.toStop.appointmentWindowEndAt ?? null;
+    const tachograph = (remainingSeconds: number) => driver && !breakdown.blocked && remainingSeconds > 0
+      ? forecastEta(new WebfleetEngine(driver.budget), remainingSeconds, now, deadline, driver.startsAt) : null;
+    const timerForecast = activeLeg.toStop.arrivedAt ? null : tachograph(Math.max(0, activeLeg.simulatedDurationSeconds - clock.driveElapsedSeconds));
     const eta = breakdown.blocked ? breakdown.resumeAt
       ? new Date(forecastDrive(waitClockUntil(clock.clockState, breakdown.resumeAt), Math.max(0, activeLeg.simulatedDurationSeconds - clock.driveElapsedSeconds), breakdown.resumeAt).endAt)
-      : null : clock.eta;
+      : null : timerForecast?.endAt ?? clock.eta;
     const arrived = progress >= 1 && activeLeg.status !== "COMPLETED";
     // Fresh Webfleet GPS beats the timer: distance, ETA and the drawn split come from where the truck really is,
     // and only a GPS arrival (arrivedAt) can put it at the stop.
@@ -417,11 +423,14 @@ export class TourService {
       ? Math.round((lineMeters - projection.alongMeters) * (legMeters / lineMeters) + (projection.offMeters > OFF_ROUTE_METERS ? projection.offMeters : 0))
       : null;
     const gpsProgress = gpsRemainingMeters !== null && legMeters > 0 ? Math.max(0, Math.min(1, 1 - gpsRemainingMeters / legMeters)) : null;
-    const gpsEta = gpsRemainingMeters !== null && !breakdown.blocked
-      ? new Date(forecastDrive(forecastClock(clock.clockState, now), legMeters > 0 ? activeLeg.simulatedDurationSeconds * gpsRemainingMeters / legMeters : 0, now).endAt)
+    const gpsRemainingSeconds = gpsRemainingMeters !== null ? (legMeters > 0 ? activeLeg.simulatedDurationSeconds * gpsRemainingMeters / legMeters : 0) : null;
+    const gpsForecast = gpsRemainingSeconds !== null ? tachograph(gpsRemainingSeconds) : null;
+    const gpsEta = gpsRemainingSeconds !== null && !breakdown.blocked
+      ? gpsForecast?.endAt ?? new Date(forecastDrive(forecastClock(clock.clockState, now), gpsRemainingSeconds, now).endAt)
       : null;
     const split = projection ? splitAtProjection(geometry, projection) : splitGeometryAtProgress(geometry, progress);
     const shownEta = projection ? gpsEta : eta;
+    const etaPlan = shownEta ? (projection ? gpsForecast : timerForecast)?.plan ?? null : null;
     const delayMinutes = activeLeg.toStop.appointmentAt ? calculateLateMinutes(shownEta, activeLeg.toStop.appointmentAt) : 0;
     const shownProgress = gpsProgress ?? progress;
     let travelledPrefix: Coordinate[] = [];
@@ -479,6 +488,7 @@ export class TourService {
       remainingDistanceMeters: gpsRemainingMeters ?? calculateRemainingDistance(activeLeg.distanceMeters, progress),
       eta: shownEta?.toISOString() ?? null,
       etaSource: projection ? "GPS" : "CALCULATED",
+      etaPlan,
       offRouteMeters: projection ? Math.round(projection.offMeters) : null,
       predictedArrival: arrived && !activeLeg.toStop.arrivedAt
     };
@@ -1002,12 +1012,13 @@ export const tourInclude = {
   document: { select: { id: true, filename: true, mimeType: true } }
 } satisfies Prisma.TourInclude;
 
-export function enrichTour(tour: TourAggregate, now = new Date()) {
+export function enrichTour(tour: TourAggregate, now = new Date(), driver: DriverEtaInput | null = null) {
   const activeLeg = tour.legs.find((leg) => leg.status === "ACTIVE" || leg.status === "ARRIVED");
   const nextStop = activeLeg
     ? tour.stops.find((stop) => stop.id === activeLeg.toStopId)
     : tour.stops.find((stop) => !stop.completedAt);
-  const eta = activeLeg ? positionEta(tour.vehicle, activeLeg, now) : null;
+  const deadlineOf = (leg: { toStopId: string }) => { const stop = tour.stops.find((item) => item.id === leg.toStopId); return stop?.appointmentAt ?? stop?.appointmentWindowEndAt ?? null; };
+  const eta = activeLeg ? positionEta(tour.vehicle, activeLeg, now, driver, deadlineOf(activeLeg)) : null;
 
   const currentDelayMinutes = nextStop ? calculateLateMinutes(eta, nextStop.appointmentAt) : 0;
   return {
@@ -1019,7 +1030,7 @@ export function enrichTour(tour: TourAggregate, now = new Date()) {
       return {
         ...toIsoObject(leg),
         progress,
-        eta: positionEta(tour.vehicle, leg, now)?.toISOString() ?? null
+        eta: positionEta(tour.vehicle, leg, now, driver, deadlineOf(leg))?.toISOString() ?? null
       };
     }),
     events: tour.events.map(toIsoObject),
@@ -1173,9 +1184,13 @@ export function waitClockUntil(clock: ClockState, at: Date): ClockState {
   return applyStopTime(clock, Math.max(0, (at.getTime() - new Date(clock.updatedAt).getTime()) / 1000), clock.updatedAt).state;
 }
 
-function positionEta(vehicle: { clockState?: string | null; manualStoppedAt?: Date | null; issues?: VehicleIssueTiming[] }, leg: Parameters<typeof snapshotVehicleClock>[1], now: Date): Date | null {
+function positionEta(vehicle: { clockState?: string | null; manualStoppedAt?: Date | null; issues?: VehicleIssueTiming[] }, leg: Parameters<typeof snapshotVehicleClock>[1], now: Date, driver: DriverEtaInput | null = null, deadline: Date | null = null): Date | null {
   const snapshot = snapshotVehicleClock(vehicle, leg, now);
   const breakdown = breakdownTiming(vehicle, now);
+  if (!breakdown.blocked && driver && leg?.startedAt && !leg.finishedAt) {
+    const remaining = Math.max(0, leg.simulatedDurationSeconds - snapshot.driveElapsedSeconds);
+    if (remaining > 0) return forecastEta(new WebfleetEngine(driver.budget), remaining, now, deadline, driver.startsAt).endAt;
+  }
   if (!breakdown.blocked) return snapshot.eta;
   if (!leg || !breakdown.resumeAt) return null;
   return new Date(forecastDrive(waitClockUntil(snapshot.clockState, breakdown.resumeAt), Math.max(0, leg.simulatedDurationSeconds - snapshot.driveElapsedSeconds), breakdown.resumeAt).endAt);

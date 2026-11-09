@@ -1,3 +1,4 @@
+import type { DriveEtaPlan } from '../domain.js';
 import { applyStopTime, createUnknownClockState, forecastDrive, type ClockState } from './vehicle-clock.js';
 import type { WebfleetDriverActivity, WebfleetDrivingTimes } from './webfleet-live.js';
 
@@ -132,23 +133,31 @@ export function driverBudgetFromWebfleet(times: WebfleetDrivingTimes, activity: 
   };
 }
 
-type Piece = { type: TerminSegmentType; startAt: Date; endAt: Date; durationSeconds: number; note?: string };
+export type Piece = { type: TerminSegmentType; startAt: Date; endAt: Date; durationSeconds: number; note?: string };
 type IdleResult = { countedAs: 'NONE' | 'BREAK' | 'DAILY_REST'; note?: string };
-interface DriveEngine {
-  drive(seconds: number, from: Date): { endAt: Date; pieces: Piece[] };
+export interface DriveEngine {
+  /** Drives for `seconds` from `from`; `restSeconds` is the daily rest to insert on the way (the engine's own when omitted). */
+  drive(seconds: number, from: Date, restSeconds?: number): { endAt: Date; pieces: Piece[] };
   idle(seconds: number, from: Date): IdleResult;
   clone(): DriveEngine;
+  /** Whose hours these are: the Webfleet tachograph or the calculated vehicle clock. */
+  readonly source: DriveEtaPlan['hours'];
+  readonly preliminary: boolean;
+  /** Whether a 9 h rest may still be taken (unknown counts as yes; the calculated clock never shortens by itself). */
+  canReduceRest(): boolean;
   readonly notes: Set<string>;
   readonly warnings: Set<string>;
 }
 
 /** Simulates driving on the tachograph budgets: breaks, daily rests and the shift window are inserted where the law requires them. */
-class WebfleetEngine implements DriveEngine {
+export class WebfleetEngine implements DriveEngine {
+  readonly source = 'TACHOGRAPH' as const;
+  readonly preliminary = false;
   readonly notes = new Set<string>();
   readonly warnings = new Set<string>();
   private contLeft: number; private breakLen: number; private dayLeft: number; private shiftEndMs: number | null;
   private weekLeft: number | null; private reducedLeft: number | null; private pendingBreak: number; private rests = 0;
-  constructor(private readonly budget: DriverBudget, private readonly restSeconds: number) {
+  constructor(private readonly budget: DriverBudget, private readonly restSeconds: number = DAILY_REST_SECONDS) {
     this.contLeft = budget.continuousDriveLeftSeconds; this.breakLen = budget.breakSeconds; this.dayLeft = budget.dailyDriveLeftSeconds;
     this.shiftEndMs = budget.shiftEndAt ? Date.parse(budget.shiftEndAt) : null;
     this.weekLeft = budget.weeklyDriveLeftSeconds; this.reducedLeft = budget.reducedRestsLeft; this.pendingBreak = budget.breakRemainingSeconds;
@@ -159,7 +168,8 @@ class WebfleetEngine implements DriveEngine {
     this.notes.forEach(note => copy.notes.add(note)); this.warnings.forEach(w => copy.warnings.add(w));
     return copy;
   }
-  drive(seconds: number, from: Date) {
+  canReduceRest() { return this.reducedLeft === null || this.reducedLeft > 0; }
+  drive(seconds: number, from: Date, restSeconds = this.restSeconds) {
     const pieces: Piece[] = [];
     let cursor = from.getTime();
     let remaining = seconds;
@@ -168,7 +178,8 @@ class WebfleetEngine implements DriveEngine {
       cursor += duration * 1000;
     };
     const rest = () => {
-      push('DAILY_REST', this.restSeconds);
+      push('DAILY_REST', restSeconds);
+      if (restSeconds < DAILY_REST_SECONDS && this.reducedLeft !== null) this.reducedLeft = Math.max(0, this.reducedLeft - 1);
       this.newDay(cursor);
     };
     if (this.pendingBreak > 0) { push('BREAK', this.pendingBreak); this.pendingBreak = 0; this.contLeft = CONTINUOUS_DRIVE_SECONDS; this.breakLen = BREAK_SECONDS; }
@@ -211,10 +222,13 @@ class WebfleetEngine implements DriveEngine {
 }
 
 /** The vehicle's calculated clock (no tachograph data): the same algorithm the ETA uses, marked preliminary. */
-class ClockEngine implements DriveEngine {
+export class ClockEngine implements DriveEngine {
+  readonly source = 'CLOCK' as const;
   readonly notes = new Set<string>();
   readonly warnings = new Set<string>();
   constructor(private state: ClockState) {}
+  get preliminary() { return this.state.kind !== 'KNOWN'; }
+  canReduceRest() { return false; }
   clone(): DriveEngine { return new ClockEngine(structuredClone(this.state)); }
   private sync(at: Date) {
     const updated = Date.parse(this.state.updatedAt);
@@ -234,6 +248,50 @@ class ClockEngine implements DriveEngine {
     this.state = result.state;
     return { countedAs: result.segment?.type === 'DAILY_REST' ? 'DAILY_REST' : result.segment?.type === 'BREAK' ? 'BREAK' : 'NONE' };
   }
+}
+
+/** The driver's hours for the ETA: the tachograph budget and, with the card out, when the next shift may begin. */
+export type DriverEtaInput = { budget: DriverBudget; startsAt: Date | null };
+
+/**
+ * The next day of a driver whose card is out of the truck: the shift begins at `startsAt` (Webfleet's earliest next shift)
+ * with a full 9 h of driving and a 13 h window; only the weekly figures and the rests left carry over.
+ */
+export function driverBudgetAfterRest(times: WebfleetDrivingTimes, startsAt: Date): DriverBudget {
+  const left = (max: number | null, used: number | null) => max === null || used === null ? null : Math.max(0, max - used);
+  return {
+    referenceTime: times.referenceTime ?? startsAt.toISOString(), workState: null, activitySince: null,
+    continuousDriveLeftSeconds: CONTINUOUS_DRIVE_SECONDS, breakSeconds: BREAK_SECONDS,
+    dailyDriveLeftSeconds: DAILY_DRIVE_SECONDS, drivenTodaySeconds: 0, maxDailyDriveSeconds: DAILY_DRIVE_SECONDS,
+    shiftEndAt: new Date(startsAt.getTime() + DUTY_WINDOW_SECONDS * 1000).toISOString(), restLatestAt: null, restSeconds: DAILY_REST_SECONDS,
+    weeklyDriveLeftSeconds: times.remainDrivingWeekMs === null ? null : times.remainDrivingWeekMs / 1000,
+    extendedShiftsLeft: left(times.maxExtendedShifts, times.extendedShiftsUsed), reducedRestsLeft: left(times.maxReducedRests, times.reducedRestsUsed),
+    earliestNextShiftAt: startsAt.toISOString(), breakRemainingSeconds: 0
+  };
+}
+
+/**
+ * The ETA of one drive on the driver's hours. The daily rest on the way is 11 h; when the stop has a Termin that an
+ * 11 h rest would miss and a reduced rest is still allowed, the rest is 9 h and the plan says so. The engine that made
+ * the chosen forecast is returned, so a chain of stops continues from it.
+ */
+export function forecastEta(engine: DriveEngine, driveSeconds: number, from: Date, deadlineAt: Date | null, startsAt: Date | null = null): { endAt: Date; plan: DriveEtaPlan; engine: DriveEngine } {
+  const start = startsAt && startsAt > from ? startsAt : from;
+  const run = (restSeconds: number) => { const copy = engine.clone(); return { engine: copy, ...copy.drive(driveSeconds, start, restSeconds) }; };
+  let chosen = run(DAILY_REST_SECONDS);
+  let reduced = false;
+  const rests = chosen.pieces.some(piece => piece.type === 'DAILY_REST');
+  if (rests && deadlineAt && chosen.endAt > deadlineAt && engine.canReduceRest()) { chosen = run(REDUCED_REST_SECONDS); reduced = true; }
+  const rest = chosen.pieces.find(piece => piece.type === 'DAILY_REST') ?? null;
+  return {
+    endAt: chosen.endAt, engine: chosen.engine,
+    plan: {
+      hours: engine.source, preliminary: engine.preliminary, driveSeconds: Math.round(driveSeconds),
+      breakSeconds: Math.round(chosen.pieces.filter(piece => piece.type === 'BREAK').reduce((sum, piece) => sum + piece.durationSeconds, 0)),
+      rest: rest ? { startAt: rest.startAt.toISOString(), endAt: rest.endAt.toISOString(), seconds: Math.round(rest.durationSeconds), reduced: reduced || rest.durationSeconds < DAILY_REST_SECONDS } : null,
+      startsAt: start > from ? start.toISOString() : null
+    }
+  };
 }
 
 export type PlanTerminInput = {
