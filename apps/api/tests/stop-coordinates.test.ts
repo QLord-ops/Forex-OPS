@@ -6,7 +6,8 @@ import { PrismaClient } from '../src/generated/sqlite-client/index.js';
 import { resolveAddressWithFallback } from '../src/services/address-resolution.js';
 import { BUILT_IN_RULES, findSiteRule, type AddressRuleRecord } from '../src/services/address-rules.js';
 import { ReplanningService } from '../src/services/replanning.js';
-import { MockRoutingProvider, RoutingError, type GeocodeResult } from '../src/services/routing.js';
+import type { GeocodeResult } from '../src/domain.js';
+import { MockRoutingProvider, RoutingError } from '../src/services/routing.js';
 import { StopCoordinatesService } from '../src/services/stop-coordinates.js';
 import { asAppDatabase, migrateTestDatabase } from './test-database.js';
 
