@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import { AddressRules } from '../components/AddressRules'
+import { StopCoordinatesCheck } from '../components/StopCoordinatesCheck'
 import { ImportRules } from '../components/ImportRules'
 import { AlertToggle } from '../components/AlertToggle'
 import { WorkHoursSettings } from '../components/WorkHoursSettings'
@@ -43,6 +44,7 @@ export function SettingsPage() {
         <WorkHoursSettings />
       </section>
       <AddressRules />
+      {admin ? <StopCoordinatesCheck /> : null}
       <ImportRules />
       {admin ? <Link to="/dispatchers" className="settings-card settings-link">
         <Users className="h-5 w-5" aria-hidden="true" />

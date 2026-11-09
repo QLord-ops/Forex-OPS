@@ -26,6 +26,7 @@ import { VehicleService } from "./services/vehicles.js";
 import { calculateDwellState, NotificationService } from "./services/notifications.js";
 import { OperationsService, SYSTEM_WEBFLEET_ACTOR } from "./services/operations.js";
 import { ReplanningService } from "./services/replanning.js";
+import { StopCoordinatesService } from "./services/stop-coordinates.js";
 import { PrismaTrafficQuotaStore, TomTomRoutingProvider, TrafficRoutingService } from './services/traffic-routing.js';
 import { TrafficOperationsService } from './services/traffic-operations.js';
 import { RouteDeviationService } from './services/route-deviation.js';
@@ -251,6 +252,7 @@ async function enrichTourLive(tour: TourAggregate) {
 }
 const appointmentService = new AppointmentService(prisma, etaService, currentPosition);
 const replanningService = new ReplanningService(prisma, routingService, currentPosition);
+const stopCoordinates = new StopCoordinatesService(prisma, routingService, () => addressRules.all(), replanningService);
 const trafficService = new TrafficOperationsService(prisma, tourService, notificationService, new TrafficRoutingService(trafficProvider, trafficQuota), currentPosition);
 const routeDeviation = new RouteDeviationService(prisma, currentPosition, (input) => notificationService.publish(input));
 const restAtStop: RestAtStopService = new RestAtStopService(prisma, webfleetLive, (input) => notificationService.publish(input));
@@ -722,6 +724,22 @@ export async function buildApp(options: BuildAppOptions = {}) {
   app.delete('/address-rules/:id', { preHandler: requireDispatcherRoles('admin', 'dispatcher') }, async (request, reply) => {
     await addressRules.remove(idParams.parse(request.params).id, auditActor(request));
     return reply.status(204).send();
+  });
+  // Stops drawn in the wrong town: the check resolves every future stop again (one geocoder call per second), so it runs
+  // as a job the page polls; the fix moves the chosen stops and redraws the legs of their trucks.
+  app.get('/maintenance/stop-coordinates', { preHandler: requireDispatcherRoles('admin') }, async (request, reply) => {
+    const job = importJobs.start(importOwner(request), () => stopCoordinates.check(new Date()));
+    return answerImportJob(job, reply);
+  });
+  app.post('/maintenance/stop-coordinates/fix', { preHandler: requireDispatcherRoles('admin') }, async (request, reply) => {
+    const input = z.object({ stopIds: z.array(z.string().min(1)).min(1).max(200) }).parse(request.body);
+    const actor = auditActor(request);
+    const job = importJobs.start(importOwner(request), async () => {
+      const result = await stopCoordinates.fix(input.stopIds, actor, new Date());
+      await audit(request, 'STOP_COORDINATES_FIX_RUN', 'Stop', 'all', { metadata: { fixed: result.fixed.length, skipped: result.skipped.length } });
+      return result;
+    });
+    return answerImportJob(job, reply);
   });
   app.post('/stops/:id/arrival/revert', { preHandler: requireDispatcherRoles('admin', 'dispatcher') }, async request => {
     const input = z.object({ reason: z.string().trim().max(300).optional() }).parse(request.body ?? {});

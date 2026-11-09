@@ -64,7 +64,10 @@ export function expandCompany(name: string | null | undefined, rules: AddressRul
   return name ?? null;
 }
 
-/** The learned place for a company in a city ("seifert bremen"), most specific first. */
+/**
+ * The learned place for a company in a city ("seifert bremen"), most specific first. A rule learned under the bare
+ * company name applies in another town only when it names no town itself: a carrier has a site in every city.
+ */
 export function findSiteRule(companyName: string | null | undefined, city: string | null | undefined, rules: AddressRuleRecord[]): AddressRuleRecord | null {
   const companyPattern = normalizePattern(companyName);
   if (!companyPattern) return null;
@@ -72,7 +75,10 @@ export function findSiteRule(companyName: string | null | undefined, city: strin
   const candidates = [cityPattern ? `${companyPattern} ${cityPattern}` : null, companyPattern].filter((value): value is string => Boolean(value));
   for (const pattern of candidates) {
     const rule = rules.find((item) => item.kind === "SITE" && item.pattern === pattern && (item.street || item.latitude !== null));
-    if (rule) return rule;
+    if (!rule) continue;
+    const ruleCity = normalizePattern(rule.city);
+    if (pattern === companyPattern && cityPattern && ruleCity && ruleCity !== cityPattern && !ruleCity.endsWith(` ${cityPattern}`)) continue;
+    return rule;
   }
   return null;
 }

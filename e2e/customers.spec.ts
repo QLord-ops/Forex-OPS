@@ -183,3 +183,30 @@ test('правило, выученное у двух заказчиков, ад�
   await expect(rules.getByRole('row', { name: /MB = Mercedes-Benz AG/ })).toContainText('Общее')
   await expect(rules.getByRole('button', { name: 'Сделать общим' })).toHaveCount(0)
 })
+
+test('админ находит точку, нарисованную не в том городе, и исправляет её из Настроек', async ({ page }) => {
+  let fixed: string[] = []
+  const issue = { stopId: 's3', tourId: 't1', tourStatus: 'ACTIVE', orderNumber: '71123726', vehicleId: 'v1', vehicleNumber: '7446', sequence: 3, type: 'UNLOAD',
+    company: 'Schnellecke Transportlogistik GmbH', address: 'Lager', city: 'D 14974 Ludwigsfelde',
+    current: { latitude: 53.55, longitude: 10, resolvedAddress: 'Lagerstraße, 20095 Hamburg, Deutschland' },
+    proposed: { latitude: 52.3, longitude: 13.25, resolvedAddress: '14974 Ludwigsfelde, Deutschland', precision: 'POSTCODE_CITY', provider: 'nominatim' }, distanceKm: 251, attempts: [] }
+  await signedIn(page, 'admin', async (route, path) => {
+    if (path === '/customers') { await json(route, { customers: [] }); return true }
+    if (path === '/import-rules') { await json(route, { rules: [], builtIn: [], corrections: { last7d: 0 } }); return true }
+    if (path === '/address-rules') { await json(route, { rules: [], builtIn: [] }); return true }
+    if (path === '/maintenance/stop-coordinates') { await json(route, fixed.length ? [] : [issue]); return true }
+    if (path === '/maintenance/stop-coordinates/fix') { fixed = (route.request().postDataJSON() as { stopIds: string[] }).stopIds; await json(route, { fixed: [issue], skipped: [] }); return true }
+    return false
+  })
+  await page.goto('/settings')
+  const card = page.getByRole('region', { name: 'Координаты точек' })
+  await card.getByRole('button', { name: 'Проверить точки' }).click()
+  const row = card.getByRole('row', { name: /LKW 7446/ })
+  await expect(row).toContainText('Lagerstraße, 20095 Hamburg')
+  await expect(row).toContainText('14974 Ludwigsfelde, Deutschland')
+  await expect(row).toContainText('251 км')
+  await card.getByRole('button', { name: 'Исправить все · 1' }).click()
+  await expect.poll(() => fixed).toEqual(['s3'])
+  await expect(card.getByRole('status')).toContainText('Исправлено точек: 1')
+  await expect(card.getByRole('row', { name: /LKW 7446/ })).toHaveCount(0)
+})
