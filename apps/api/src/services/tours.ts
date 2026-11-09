@@ -418,7 +418,7 @@ export class TourService {
       : null;
     const gpsProgress = gpsRemainingMeters !== null && legMeters > 0 ? Math.max(0, Math.min(1, 1 - gpsRemainingMeters / legMeters)) : null;
     const gpsEta = gpsRemainingMeters !== null && !breakdown.blocked
-      ? new Date(forecastDrive(clock.clockState, legMeters > 0 ? activeLeg.simulatedDurationSeconds * gpsRemainingMeters / legMeters : 0, now).endAt)
+      ? new Date(forecastDrive(forecastClock(clock.clockState, now), legMeters > 0 ? activeLeg.simulatedDurationSeconds * gpsRemainingMeters / legMeters : 0, now).endAt)
       : null;
     const split = projection ? splitAtProjection(geometry, projection) : splitGeometryAtProgress(geometry, progress);
     const shownEta = projection ? gpsEta : eta;
@@ -1189,6 +1189,15 @@ export function parseClockState(raw: string | null | undefined, now: Date): Cloc
     if (parsed && ["KNOWN", "UNKNOWN"].includes(parsed.kind) && parsed.currentCycle && parsed.weeklyExtendedDrive && Array.isArray(parsed.warnings)) return parsed;
   } catch { /* Legacy or corrupt state must not become a rested machine. */ }
   return createUnknownClockState(now);
+}
+
+/**
+ * Without the truck's starting hours the clock is only the timer's guess: it assumes the truck drove since the leg began,
+ * even through a night it really stood. With the real position from GPS that guess would add a daily rest the driver
+ * already took, so the preliminary forecast starts from now instead.
+ */
+export function forecastClock(clock: ClockState, now: Date): ClockState {
+  return clock.kind === "UNKNOWN" ? createUnknownClockState(now) : clock;
 }
 
 export function readPersistedDrivePlan(raw: string | null | undefined): PersistedDrivePlan | null {

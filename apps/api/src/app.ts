@@ -38,7 +38,7 @@ import { TerminService } from './services/termin-service.js';
 import { VehicleBriefService } from './services/vehicle-brief.js';
 import { calculateRiskColor, calculateSimulatedDuration } from './services/simulation.js';
 import { forecastDrive } from './services/vehicle-clock.js';
-import { parseClockState } from './services/tours.js';
+import { forecastClock, parseClockState } from './services/tours.js';
 import { registerDispatcherAuth, requireDispatcherRoles, type DispatcherAuthOptions } from './services/dispatcher-auth.js';
 import { RouteScenarioService, routeScenarioInputSchema } from './services/route-scenario.js';
 import { registerRouteScenarioRoutes } from './routes/route-scenario.js';
@@ -1136,7 +1136,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const points = origin ? [origin, ...coordinates] : coordinates;
     const route = await routingService.calculateMultiStopRoute(points, { traffic: true, source: "manual", truck: vehicle ? { maxSpeedKmh: vehicle.maxSpeedKmh } : undefined });
     const durationSeconds = calculateSimulatedDuration(route.distanceMeters, route.durationSeconds, vehicle?.maxSpeedKmh ?? 85);
-    const forecast = origin && vehicle ? forecastDrive(parseClockState(vehicle.clockState, new Date()), durationSeconds, new Date()) : null;
+    const forecast = origin && vehicle ? forecastDrive(forecastClock(parseClockState(vehicle.clockState, new Date()), new Date()), durationSeconds, new Date()) : null;
     return {
       distanceMeters: route.distanceMeters,
       durationSeconds,
