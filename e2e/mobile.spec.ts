@@ -1,5 +1,7 @@
 import { devices, expect, test, type Page, type Route } from '@playwright/test'
 
+import { textClashes } from './text-clashes'
+
 // The phone: Chromium in the Pixel 5 profile (touch, 393 px wide).
 test.use({ ...devices['Pixel 5'] })
 
@@ -33,37 +35,6 @@ async function phone(page: Page, onImage?: () => void, vehicles: unknown[] = [ro
 }
 const sideways = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
 
-/** Pieces of text that are drawn over each other, and labels that broke onto a second line or were cut. */
-const textClashes = (page: Page, selector: string) => page.locator(selector).evaluate((root) => {
-  const textBoxes = (element: Element) => {
-    const boxes: Array<{ node: Node; text: string; rect: DOMRect }> = []
-    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT)
-    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-      const text = node.textContent?.trim()
-      const parent = node.parentElement
-      if (!text || !parent || parent.closest('.sr-only') || !parent.checkVisibility()) continue
-      const range = document.createRange()
-      range.selectNodeContents(node)
-      for (const rect of range.getClientRects()) if (rect.width > 0 && rect.height > 0) boxes.push({ node, text, rect })
-    }
-    return boxes
-  }
-  const boxes = textBoxes(root)
-  const clashes: string[] = []
-  // Pieces of one text (lines of a wrapped text, a line cut with «…») never count against each other.
-  boxes.forEach((a, index) => boxes.slice(index + 1).filter((b) => b.node !== a.node).forEach((b) => {
-    const x = Math.min(a.rect.right, b.rect.right) - Math.max(a.rect.left, b.rect.left)
-    const y = Math.min(a.rect.bottom, b.rect.bottom) - Math.max(a.rect.top, b.rect.top)
-    if (x > 1 && y > 1) clashes.push(`«${a.text}» × «${b.text}»`)
-  }))
-  for (const label of root.querySelectorAll('strong, .status-pill')) {
-    const [first, ...rest] = textBoxes(label).map((box) => box.rect)
-    // A second line starts below the first one; pieces of one line overlap it in height.
-    if (first && rest.some((rect) => rect.top >= first.bottom - 2)) clashes.push(`«${label.textContent}» перенесён на вторую строку`)
-    if (label.scrollWidth > label.clientWidth + 1) clashes.push(`«${label.textContent}» обрезан`)
-  }
-  return clashes
-})
 
 test('телефон: вкладки внизу, машины и карта по отдельности, выбранная машина не теряется', async ({ page }) => {
   await phone(page)

@@ -347,7 +347,6 @@ function VehicleRow({ row, selected, open, pinned, owner, busy, onOpen, onRoute,
           <span className="vehicle-row-line"><span className={`status-dot status-dot-${status.tone}`} aria-hidden="true" /><span className={`vehicle-row-status status-text-${status.tone}`}>{status.label}</span>{place ? <span className="truncate">· {place}</span> : null}</span>
           <span className="vehicle-row-meta">
             {dwell ? <span>На точке {formatDurationMinutes(dwell)}</span> : null}
-            {activityNote(row) ? <span className={classNames('rest-at-stop', !row.restAtStop && 'rest-at-stop-pause')}>{activityNote(row)}</span> : null}
             {termin ? <span className="vehicle-row-termin">{termin.label}</span> : terminNeeded(row) ? <span className="termin-needed">Termin нужен</span> : null}
             {!termin && plannedAt ? <span>план {formatDateTime(plannedAt)}</span> : null}
             {row.eta && status.tone !== 'stop' ? <span>ETA {formatTime(row.eta)}{margin !== null ? <> · <span className={margin < 0 ? 'timing-late' : 'timing-ok'} title={margin < 0 ? `опоздание ${formatDurationMinutes(-margin)}` : `запас ${formatDurationMinutes(margin)}`}>+{formatDurationMinutes(Math.abs(margin))}</span></> : null}</span> : null}
@@ -367,6 +366,8 @@ function VehicleRow({ row, selected, open, pinned, owner, busy, onOpen, onRoute,
           <span className={`source-tag source-tag-${source.kind}`} title={source.long}>{source.short}</span>
         </div>
       </div>
+      {/* Its own line across the card: next to the GPS chip the tachograph line had no room (09.11). */}
+      {activityNote(row) ? <p className="vehicle-card-activity"><span className={classNames('rest-at-stop', !row.restAtStop && 'rest-at-stop-pause')}>{activityNote(row)}</span></p> : null}
       {popover}
     </article>
   )

@@ -1,11 +1,13 @@
 import { expect, test, type Route } from '@playwright/test'
 
+import { textClashes } from './text-clashes'
+
 async function json(route: Route, body: unknown, status = 200) {
   await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
 }
 const schnellecke = { id: 'c-sl', name: 'Schnellecke', slug: 'SCHNELLECKE', color: '#1d4ed8' }
 const walter = { id: 'c-wt', name: 'Walter (Tesla)', slug: 'WALTER_TESLA', color: '#b91c1c' }
-const stop = (id: string, type: 'LOAD' | 'UNLOAD', city: string) => ({ id, tourId: `t-${id}`, sequence: type === 'LOAD' ? 1 : 2, type, company: `Werk ${city}`, address: `Werkstraße 1, ${city}`, city,
+const stop = (id: string, type: 'LOAD' | 'UNLOAD', city: string, company = `Werk ${city}`) => ({ id, tourId: `t-${id}`, sequence: type === 'LOAD' ? 1 : 2, type, company, address: `Werkstraße 1, ${city}`, city,
   latitude: 52.4, longitude: 9.7, serviceMinMinutes: 60, serviceMaxMinutes: 120, arrivedAt: '2026-11-06T16:50:00Z', completedAt: null, appointmentWindowStartAt: '2026-11-06T06:00:00Z', appointmentWindowEndAt: '2026-11-06T13:00:00Z' })
 // Real plate-like truck numbers, two customers and the longest action labels, as on the owner's screen (08.11).
 const row = (index: number) => {
@@ -13,9 +15,12 @@ const row = (index: number) => {
   const action = [{ type: 'MARK_LOADED', label: 'BELADEN' }, { type: 'MARK_UNLOADED', label: 'ENTLADEN' }, { type: 'RESUME', label: 'Продолжить' }][index % 3]
   return {
     vehicle: { id: `v${index}`, vehicleNumber: number, licensePlate: number, maxSpeedKmh: 85 },
-    tour: { id: `t${index}`, vehicleId: `v${index}`, orderNumber: `7112${index}`, status: 'ACTIVE', stops: [stop(`a${index}`, 'LOAD', 'Soltau'), stop(`b${index}`, 'UNLOAD', 'Wolfsburg')], legs: [] },
+    tour: { id: `t${index}`, vehicleId: `v${index}`, orderNumber: `7112${index}`, status: 'ACTIVE', stops: [stop(`a${index}`, 'LOAD', 'Zwickau', 'Schnellecke Transportlogistik GmbH'), stop(`b${index}`, 'UNLOAD', 'Wolfsburg')], legs: [] },
     statusText: 'AT_STOP', operationVersion: 1, assignedTo: null, mine: true, dwellMinutes: 2665,
-    customer: index % 4 === 3 ? walter : schnellecke, line: { id: 'l', code: 'NORD', name: 'Nord' }, currentAction: action
+    customer: index % 4 === 3 ? walter : schnellecke, line: { id: 'l', code: 'NORD', name: 'Nord' }, currentAction: action,
+    // The longest tachograph line, as on the owner's screen (09.11): «Пауза с 11:49 · вождения ещё 3 ч 47 мин · смена до 17:00».
+    stopActivity: { kind: 'BREAK', stopId: `a${index}`, stopType: 'LOAD', place: 'Zwickau', since: new Date(Date.now() - 20 * 60_000).toISOString(), until: null,
+      drivingLeftMs: (3 * 60 + 47) * 60_000, shiftEndAt: new Date(Date.now() + 5 * 3600_000).toISOString() }
   }
 }
 
@@ -37,7 +42,7 @@ for (const font of ['system', 'wide'] as const) for (const width of [1280, 1440,
     })
     await page.route('https://tile.openstreetmap.org/**', (route) => route.abort())
     await page.setViewportSize({ width, height: 900 })
-    await page.goto('/')
+    await page.goto('/?vehicleId=v0')
     await page.locator('.vehicle-card').first().waitFor()
 
     const layout = await page.evaluate(() => {
@@ -63,5 +68,16 @@ for (const font of ['system', 'wide'] as const) for (const width of [1280, 1440,
     expect(layout.sideways).toBe(0)
     expect(layout.chipsOutside).toBe(0)
     expect(layout.numbersHidden).toBe(0)
+
+    // No text drawn over other text: the tachograph line of a card under its GPS chip, a long company under the ETA.
+    const cards = await page.locator('.fleet-list .vehicle-card').all()
+    for (const [index, card] of cards.slice(0, 4).entries()) {
+      expect(await textClashes(page, `.fleet-list .vehicle-card >> nth=${index}`), `карточка ${index + 1}`).toEqual([])
+      const box = await card.boundingBox()
+      const rest = await card.locator('.rest-at-stop').boundingBox()
+      if (box && rest) expect(rest.x + rest.width, `строка паузы карточки ${index + 1} внутри карточки`).toBeLessThanOrEqual(box.x + box.width + 0.5)
+    }
+    const panel = page.locator('.vehicle-panel')
+    if (await panel.locator('.vehicle-panel-bar').count()) expect(await textClashes(page, '.vehicle-panel'), 'нижняя панель').toEqual([])
   })
 }
