@@ -7,6 +7,12 @@ import { expandCity, findSiteRule, type AddressRuleRecord } from "./address-rule
 export const geocodePrecisions = ["EXACT", "STREET", "POSTCODE_CITY", "CITY"] as const;
 export type GeocodePrecision = (typeof geocodePrecisions)[number];
 
+/**
+ * A place farther than this from the stop's own town is wrong, whatever a learned rule or the geocoder says:
+ * "Lager, Ludwigsfelde" once came back as a Lagerstraße in Hamburg and sent the route 250 km north.
+ */
+export const MAX_DISTANCE_FROM_CITY_KM = 40;
+
 export type AddressResolution = GeocodeResult & {
   sourceAddress: string;
   resolvedAddress: string;
@@ -29,16 +35,39 @@ export async function resolveAddressWithFallback(
   const sourceAddress = input.address.trim();
   if (!sourceAddress) throw new RoutingError("Адрес не может быть пустым.", 400);
   const city = expandCity(input.city ?? null, rules.length ? rules : undefined);
+  const attempts: string[] = [];
+
+  // The stop's own town (postcode and city when printed) anchors every answer: a result elsewhere is dropped.
+  const anchor = cityAnchor(sourceAddress, city);
+  let anchorPoint: GeocodeResult | null | undefined;
+  const anchored = async () => {
+    if (anchorPoint === undefined) {
+      try { anchorPoint = anchor ? (await routing.geocode(anchor.query)) ?? null : null; } catch { anchorPoint = null; }
+    }
+    return anchorPoint;
+  };
+  /** Kilometres from the town when the result lies too far from it; null when it is plausible or cannot be checked. */
+  const farFromCity = async (point: { latitude: number; longitude: number }, resultCity?: string | null): Promise<number | null> => {
+    if (!anchor) return null;
+    if (resultCity && sameCity(resultCity, anchor.city)) return null;
+    const town = await anchored();
+    if (!town) return null;
+    const km = distanceKm(town, point);
+    return km > MAX_DISTANCE_FROM_CITY_KM ? km : null;
+  };
 
   const site = findSiteRule(input.company, city, rules);
   if (site && site.latitude !== null && site.longitude !== null) {
     const label = [site.company, site.street, [site.postalCode, site.city].filter(Boolean).join(" ")].filter(Boolean).join(", ");
-    return { latitude: site.latitude, longitude: site.longitude, city: site.city, label, provider: "address-rule",
-      sourceAddress, resolvedAddress: label, precision: "EXACT", attempts: [`правило: ${site.pattern}`] };
+    const km = await farFromCity({ latitude: site.latitude, longitude: site.longitude });
+    if (km === null) {
+      return { latitude: site.latitude, longitude: site.longitude, city: site.city, label, provider: "address-rule",
+        sourceAddress, resolvedAddress: label, precision: "EXACT", attempts: [`правило: ${site.pattern}`] };
+    }
+    attempts.push(`правило «${site.pattern}» отброшено: ${Math.round(km)} км от ${anchor!.query}`);
   }
 
   const candidates = buildAddressCandidates(sourceAddress, city, input.company);
-  const attempts: string[] = [];
   let lastNotFound: unknown;
   let approximateResult: AddressResolution | undefined;
 
@@ -46,6 +75,12 @@ export async function resolveAddressWithFallback(
     attempts.push(candidate.query);
     try {
       const result = await routing.geocode(candidate.query);
+      const km = await farFromCity(result, result.city);
+      if (km !== null) {
+        attempts.push(`${result.label}: ${Math.round(km)} км от ${anchor!.query}, отброшено`);
+        lastNotFound = { statusCode: 404 };
+        continue;
+      }
       const resolved = {
         ...result,
         sourceAddress,
@@ -72,6 +107,8 @@ export async function resolveAddressWithFallback(
       attempts.push(candidate.address);
       try {
         const result = await routing.geocode(candidate.address);
+        const km = await farFromCity(result, result.city);
+        if (km !== null) { attempts.push(`${result.label}: ${Math.round(km)} км от ${anchor!.query}, отброшено`); continue; }
         return {
           ...result,
           provider: result.provider ? `openai-web+${result.provider}` : "openai-web",
@@ -93,13 +130,35 @@ export async function resolveAddressWithFallback(
   throw new RoutingError(`Адрес не найден. Проверены: ${attempts.join(" → ")}.`, 404);
 }
 
+/** The town a stop belongs to, as a geocoder query: "14974 Ludwigsfelde" when the postcode is printed, else the city. */
+export function cityAnchor(address: string, city?: string | null): { query: string; city: string } | null {
+  const normalizedAddress = normalizeGermanAddress(address);
+  const postalCode = normalizedAddress.match(/\b\d{5}\b/)?.[0] ?? (city ?? "").match(/\b\d{5}\b/)?.[0];
+  const effectiveCity = normalizeCity(city) || extractCityFromAddress(normalizedAddress, postalCode);
+  if (!effectiveCity || /\d/.test(effectiveCity)) return null;
+  return { query: postalCode ? `${postalCode} ${effectiveCity}` : effectiveCity, city: effectiveCity };
+}
+
+function sameCity(left: string, right: string): boolean {
+  const a = normalizeForCompare(left), b = normalizeForCompare(right);
+  return Boolean(a && b) && (a === b || a.startsWith(`${b} `) || b.startsWith(`${a} `) || a.includes(` ${b}`) || b.includes(` ${a}`));
+}
+
+export function distanceKm(a: { latitude: number; longitude: number }, b: { latitude: number; longitude: number }): number {
+  const rad = Math.PI / 180;
+  const dLat = (b.latitude - a.latitude) * rad, dLon = (b.longitude - a.longitude) * rad;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.latitude * rad) * Math.cos(b.latitude * rad) * Math.sin(dLon / 2) ** 2;
+  return 2 * 6371 * Math.asin(Math.sqrt(h));
+}
+
 export function buildAddressCandidates(address: string, city?: string | null, company?: string | null): Array<{ query: string; precision: GeocodePrecision }> {
   const normalizedAddress = normalizeGermanAddress(address);
   const normalizedCity = normalizeCity(city);
   const exact = appendCity(normalizedAddress, normalizedCity);
   const street = removeHouseNumber(normalizedAddress);
-  const postalCode = normalizedAddress.match(/\b\d{5}\b/)?.[0];
-  const cityFromAddress = extractCityFromAddress(normalizedAddress, postalCode);
+  const addressPostalCode = normalizedAddress.match(/\b\d{5}\b/)?.[0];
+  const postalCode = addressPostalCode ?? (city ?? "").match(/\b\d{5}\b/)?.[0];
+  const cityFromAddress = extractCityFromAddress(normalizedAddress, addressPostalCode);
   const effectiveCity = normalizedCity || cityFromAddress;
   // Only a city was printed ("Bremen" for "Seifert & BLG Bremen"): the company in that city first, the bare city last,
   // and never a city centre presented as an exact address.

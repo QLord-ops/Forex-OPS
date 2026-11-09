@@ -110,13 +110,18 @@ const IMPORT_POLL_MS = 2000
  * for the result every two seconds until it is there (or the reading failed with its own message).
  */
 async function importResult(path: string, init: RequestInit): Promise<OrderImportPreview> {
+  return jobResult<OrderImportPreview>(path, init)
+}
+
+/** Any long server job answered the same way: the result at once, or 202 with a job to poll until it is done. */
+async function jobResult<T>(path: string, init: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, { ...init, credentials: 'same-origin', headers: { ...init.headers, ...authHeaders() } })
   if (!response.ok) {
     if (response.status === 401) notifySessionExpired()
     throw new ApiError(await readErrorMessage(response), response.status)
   }
-  const payload = await response.json() as OrderImportPreview | { status: 'running'; jobId: string }
-  if (response.status !== 202 || !('jobId' in payload)) return payload as OrderImportPreview
+  const payload = await response.json() as T | { status: 'running'; jobId: string }
+  if (response.status !== 202 || !(typeof payload === 'object' && payload !== null && 'jobId' in payload)) return payload as T
   for (;;) {
     await new Promise((resolve) => setTimeout(resolve, IMPORT_POLL_MS))
     const poll = await fetch(`${API_BASE}/imports/jobs/${encodeURIComponent(payload.jobId)}`, { credentials: 'same-origin', headers: authHeaders() })
@@ -124,7 +129,7 @@ async function importResult(path: string, init: RequestInit): Promise<OrderImpor
       if (poll.status === 401) notifySessionExpired()
       throw new ApiError(await readErrorMessage(poll), poll.status)
     }
-    const state = await poll.json() as { status: 'running' } | { status: 'done'; preview: OrderImportPreview }
+    const state = await poll.json() as { status: 'running' } | { status: 'done'; preview: T }
     if (state.status === 'done') return state.preview
   }
 }
@@ -311,5 +316,16 @@ export const api = {
     importResult(`/documents/${encodeURIComponent(documentId)}/reparse`, { method: 'POST', body: JSON.stringify({ customerId }), headers: { 'Content-Type': 'application/json' } }),
   geocode: (address: string) => request<GeocodeResult>(`/geocode?address=${encodeURIComponent(address)}`),
   resolveAddress: (payload: { address: string; city?: string | null; company?: string | null }) =>
-    request<AddressResolution>('/geocode/resolve', { method: 'POST', body: JSON.stringify(payload) })
+    request<AddressResolution>('/geocode/resolve', { method: 'POST', body: JSON.stringify(payload) }),
+  checkStopCoordinates: () => jobResult<StopCoordinateIssue[]>('/maintenance/stop-coordinates', { method: 'GET' }),
+  fixStopCoordinates: (stopIds: string[]) =>
+    jobResult<{ fixed: StopCoordinateIssue[]; skipped: Array<{ vehicleNumber: string; stopIds: string[]; reason: string }> }>('/maintenance/stop-coordinates/fix', { method: 'POST', body: JSON.stringify({ stopIds }), headers: { 'Content-Type': 'application/json' } })
+}
+
+export interface StopCoordinateIssue {
+  stopId: string; tourId: string; tourStatus: string; orderNumber: string; vehicleId: string; vehicleNumber: string
+  sequence: number; type: string; company: string | null; address: string; city: string | null
+  current: { latitude: number; longitude: number; resolvedAddress: string | null }
+  proposed: { latitude: number; longitude: number; resolvedAddress: string; precision: string; provider?: string }
+  distanceKm: number; attempts: string[]
 }

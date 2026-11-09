@@ -46,10 +46,11 @@ describe("address rules", () => {
     expect(next).toMatchObject({ company: "Seifert Logistics", address: "Musterweg 5, 28197 Bremen", city: "Bremen", ruleApplied: true, terminRequired: true });
     expect(await db.auditLog.count({ where: { action: "ADDRESS_RULE_LEARNED" } })).toBe(1);
 
-    const routing = { geocode: vi.fn(), route: vi.fn() };
+    // The geocoder is asked only where Bremen is, to make sure the learned point lies there; never about the address.
+    const routing = { geocode: vi.fn(async () => ({ latitude: 53.08, longitude: 8.8, label: "Bremen", provider: "test" })), route: vi.fn() };
     const resolved = await resolveAddressWithFallback(routing as never, { address: "Bremen", city: "Bremen", company: "Seifert" }, undefined, rules);
     expect(resolved).toMatchObject({ latitude: 53.1, longitude: 8.75, provider: "address-rule", precision: "EXACT" });
-    expect(routing.geocode).not.toHaveBeenCalled();
+    expect(routing.geocode.mock.calls).toEqual([["Bremen"]]);
 
     // Learning the same label again updates the rule instead of adding a second one.
     await service.learn({ sourceLabel: "seifert  bremen", company: "Seifert Logistics", street: "Musterweg 7", postalCode: "28197", city: "Bremen", latitude: 53.1, longitude: 8.75 }, actor);
