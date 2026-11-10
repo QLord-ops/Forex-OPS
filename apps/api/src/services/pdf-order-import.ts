@@ -58,6 +58,9 @@ const ROUTE_SOURCE_RULE =
 const ROUTE_DETAILS_RULE =
   "Every unloading location named in Tourbemerkung is its own UNLOAD stop with the receiver's printed postal address (Empfänger, Entladestelle, direct-delivery receiver); never put that address only into the instructions of a loading stop. " +
   "Abbreviations: 'MB' is Mercedes-Benz, so 'MB Düsseldorf' is the Mercedes-Benz AG plant (Werk) in Düsseldorf printed as Absender or Abladestelle; 'VW' is Volkswagen. Codes written next to a place ('MB Düsseldorf 477339 070A & 070D': the Sendungsnummer suffix 477339, the Abladestelle or Entladezone codes 070A and 070D) are registration references of that stop: put them into its referenceNumbers, never into company, address or city, and never make a stop out of a code alone. 'LG' or 'Leergut' (empties) and 'VG' or 'Vollgut' describe the cargo, never a place: mention them in the stop instructions. All warnings must be written in Russian.";
+// A Zwickau Auftrag prints no street under Abteilung; the model once borrowed the carrier's own (Mühlenweg 78, Bovenden).
+const DEPARTMENT_ADDRESS_RULE =
+  "departmentAddress is only the street, postcode and city printed inside the Abteilung block itself; when that block prints no street, departmentAddress is null and departmentCity still names its town. The transport company that receives the order (Frachtführer, Auftragnehmer, Spediteur, Unternehmer, the addressee of the Auftrag) is never the Abteilung: copy its street, postcode and city into carrierAddress and never into departmentAddress or a stop.";
 const WARNING_TARGET_RULE =
   "When a warning concerns one stop, set its stopSequence to that stop's sequence and field to the field it is about; otherwise both are null.";
 export const supportedImageMimeTypes = ["image/png", "image/jpeg", "image/webp"] as const;
@@ -131,6 +134,7 @@ const draftSchema = z.object({
   departmentAddress: z.string().trim().max(500).nullable().default(null),
   departmentCity: z.string().trim().max(300).nullable().default(null),
   departmentSourcePage: z.number().int().positive().nullable().default(null),
+  carrierAddress: z.string().trim().max(500).nullable().default(null),
   tourRemarks: z.string().trim().max(1500).nullable().default(null),
   tourRemarksSourcePage: z.number().int().positive().nullable().default(null),
   stops: z.array(stopSchema).min(1).max(12),
@@ -412,8 +416,8 @@ function systemMessage(layout: "PDF" | "IMAGE", customer?: ImportCustomerContext
   const step = routeSourceStep(profile);
   const departments = customer?.selected?.departments ?? [];
   const rules = layout === "PDF"
-    ? `${appointmentRule(profile.carrierNames)} For an ORDER: read every page of the PDF. ${step.first} ${tourRemarksRouteRule(profile, departments)} Record its exact relevant text in tourRemarks and page in tourRemarksSourcePage. Independently copy the complete Abteilung block into departmentCompany, departmentAddress, departmentCity and departmentSourcePage, because vorladen may refer to it. SECOND find those same locations and named destinations in tables or address blocks elsewhere in the PDF and copy the complete printed postal address, including street, house number, postcode and city when visible. Match by place/company/reference; never replace a printed street with city-only geocoding and never infer an unprinted street. ${step.missing} For each stop extract references from its row, nearby text, right-hand unloading notes, or Tourbemerkung only when attribution is supported; otherwise retain ambiguous text in tourRemarks and warn. Extract loadingMeters specifically from the LM column (German Lademeter), NOT adjacent RM or LMJ columns; use an explicitly labeled LDM value only when no LM column value is available and warn if values conflict. Read LKW and Trailer/Kennzeichen above Abteilung: vehicleNumber is the printed internal LKW identifier if present, vehiclePlate the truck registration, trailerPlate the trailer registration. Never treat Fahrer/SZM MEGA as a driver's identity. ${aiDateRules()} Include a brief sourceExcerpt and sourcePage for each stop. Return city separately when visible or unambiguous. ${WARNING_TARGET_RULE} Missing fields must be null; add Russian warnings for uncertain or conflicting data. Never invent facts.`
-    : `${appointmentRule(profile.carrierNames)} For an ORDER: read this screenshot. It may be an Auftrag, a photographed order, or an Excel/table screenshot. ${step.first.replace("FIRST locate and read Tourbemerkung", "If Tourbemerkung is visible, use it FIRST")} ${tourRemarksRouteRule(profile, departments)} Independently copy a visible Abteilung block into departmentCompany, departmentAddress and departmentCity; departmentSourcePage is null for an image. Then match every named stop to its full printed street address in the table; otherwise use the visible stop table. ${aiDateRules()} Read truck and trailer plates when visible. Never invent an unprinted street. Put a short supporting text in sourceExcerpt; set sourcePage and tourRemarksSourcePage to null. ${WARNING_TARGET_RULE} Missing optional metadata is null and unclear fields receive Russian warnings.`;
+    ? `${appointmentRule(profile.carrierNames)} For an ORDER: read every page of the PDF. ${step.first} ${tourRemarksRouteRule(profile, departments)} Record its exact relevant text in tourRemarks and page in tourRemarksSourcePage. Independently copy the complete Abteilung block into departmentCompany, departmentAddress, departmentCity and departmentSourcePage, because vorladen may refer to it. ${DEPARTMENT_ADDRESS_RULE} SECOND find those same locations and named destinations in tables or address blocks elsewhere in the PDF and copy the complete printed postal address, including street, house number, postcode and city when visible. Match by place/company/reference; never replace a printed street with city-only geocoding and never infer an unprinted street. ${step.missing} For each stop extract references from its row, nearby text, right-hand unloading notes, or Tourbemerkung only when attribution is supported; otherwise retain ambiguous text in tourRemarks and warn. Extract loadingMeters specifically from the LM column (German Lademeter), NOT adjacent RM or LMJ columns; use an explicitly labeled LDM value only when no LM column value is available and warn if values conflict. Read LKW and Trailer/Kennzeichen above Abteilung: vehicleNumber is the printed internal LKW identifier if present, vehiclePlate the truck registration, trailerPlate the trailer registration. Never treat Fahrer/SZM MEGA as a driver's identity. ${aiDateRules()} Include a brief sourceExcerpt and sourcePage for each stop. Return city separately when visible or unambiguous. ${WARNING_TARGET_RULE} Missing fields must be null; add Russian warnings for uncertain or conflicting data. Never invent facts.`
+    : `${appointmentRule(profile.carrierNames)} For an ORDER: read this screenshot. It may be an Auftrag, a photographed order, or an Excel/table screenshot. ${step.first.replace("FIRST locate and read Tourbemerkung", "If Tourbemerkung is visible, use it FIRST")} ${tourRemarksRouteRule(profile, departments)} Independently copy a visible Abteilung block into departmentCompany, departmentAddress and departmentCity; departmentSourcePage is null for an image. ${DEPARTMENT_ADDRESS_RULE} Then match every named stop to its full printed street address in the table; otherwise use the visible stop table. ${aiDateRules()} Read truck and trailer plates when visible. Never invent an unprinted street. Put a short supporting text in sourceExcerpt; set sourcePage and tourRemarksSourcePage to null. ${WARNING_TARGET_RULE} Missing optional metadata is null and unclear fields receive Russian warnings.`;
   return `${layout === "PDF" ? PDF_SYSTEM : IMAGE_SYSTEM}\n\n${rules} ${BREVITY_RULE} ${CONTEXT_RULE}`;
 }
 
@@ -643,7 +647,8 @@ export function finishModelAnswer(answer: unknown, context: {
             company: draft.departmentCompany,
             address: draft.departmentAddress,
             city: draft.departmentCity,
-            sourcePage: draft.departmentSourcePage
+            sourcePage: draft.departmentSourcePage,
+            carrierAddress: draft.carrierAddress
           }, learned)
         : { stops: orderedStops.map((stop) => ({ ...withLearnedStopType(stop, learned), provenance: "TABLE" as const })), warnings: [] as PdfImportWarning[] };
       const dateNotes: PdfImportWarning[] = [];
@@ -790,6 +795,8 @@ type DepartmentDetails = {
   address: string | null;
   city: string | null;
   sourcePage: number | null;
+  /** The transport company's own address: never the warehouse. */
+  carrierAddress?: string | null;
 };
 
 // Loading side and unloading side: "A für B", "A --> B", "A -> B", "A → B", "A nach B".
@@ -955,10 +962,27 @@ function reconcileStopsWithTourRemarks(
     if (routeStop.addressSource === "DEPARTMENT") {
       const candidateIndex = candidates.findIndex((candidate, index) =>
         !used.has(index) && isDepartmentCandidate(candidate, routeStop.type, learned));
-      const candidate = candidateIndex >= 0 ? candidates[candidateIndex] : null;
+      const found = candidateIndex >= 0 ? candidates[candidateIndex]! : null;
       if (candidateIndex >= 0) used.add(candidateIndex);
-      if (department.address || candidate?.address) {
-        return { ...withTourRemarkDetails(departmentLoadStop(routeStop, sequence + 1, department, candidate), routeStop), provenance: "DEPARTMENT" as const };
+      const town = cleanCity(department.city);
+      const foreign = (address: string | null | undefined) => Boolean(address) && isForeignToDepartment(address!, town, department.carrierAddress);
+      const doubted = foreign(department.address) || foreign(found?.address);
+      const own = { ...department, address: foreign(department.address) ? null : department.address };
+      // A row for the warehouse word carries the address only when it is one ("Lager" as an address is not).
+      const candidate = found && (foreign(found.address) || !/\d/.test(found.address ?? "")) ? { ...found, address: "" } : found;
+      if (own.address || candidate?.address) {
+        return { ...withTourRemarkDetails(departmentLoadStop(routeStop, sequence + 1, own, candidate), routeStop), provenance: "DEPARTMENT" as const };
+      }
+      if (town && own.company) {
+        // No street of its own: the warehouse is looked up as the company in its town, and the dispatcher is told.
+        warnings.push({
+          code: "DEPARTMENT_ADDRESS_NOT_FOUND", stopIndex: sequence, field: "address",
+          message: doubted
+            ? `У Abteilung ${town} в Auftrag нет своей улицы — напечатан адрес перевозчика, он не использован. Склад ищется как «${own.company}» в ${town}; проверьте ${routeStop.type === "LOAD" ? "загрузку" : "выгрузку"}.`
+            : `У Abteilung ${town} в Auftrag нет улицы. Склад ищется как «${own.company}» в ${town}; проверьте ${routeStop.type === "LOAD" ? "загрузку" : "выгрузку"}.`,
+          ...(department.sourcePage ?? tourRemarksSourcePage ? { page: department.sourcePage ?? tourRemarksSourcePage ?? undefined } : {})
+        });
+        return { ...withTourRemarkDetails(departmentLoadStop(routeStop, sequence + 1, { ...own, address: town }, candidate), routeStop), confidence: 0.5, provenance: "DEPARTMENT" as const };
       }
       warnings.push({
         code: "DEPARTMENT_ADDRESS_NOT_FOUND", stopIndex: sequence, field: "address",
@@ -1293,6 +1317,31 @@ function departmentLoadStop(
   };
 }
 
+/**
+ * An address that cannot be the Abteilung warehouse: the carrier's own street, or one printed with another town
+ * ("Mühlenweg 78, 37120 Bovenden" for the Abteilung in Zwickau).
+ */
+export function isForeignToDepartment(address: string, departmentCity: string | null, carrierAddress?: string | null): boolean {
+  return [carrierAddress, ...OWN_ADDRESSES].some((carrier) => sharesStreet(address, carrier)) || printedInAnotherTown(address, departmentCity);
+}
+
+// The fleet's own yard is printed on every Auftrag as the carrier; CARRIER_ADDRESSES (";"-separated) replaces the default.
+const OWN_ADDRESSES = (process.env.CARRIER_ADDRESSES || "Mühlenweg 78, 37120 Bovenden").split(";").map((item) => item.trim()).filter(Boolean);
+
+function sharesStreet(address: string, carrierAddress?: string | null): boolean {
+  const streetOf = (value: string) => normalizeRouteText(value.replace(/\bD\s*[-–]?\s*(?=\d{5}\b)/giu, "").split(/,|\b\d{5}\b/u)[0]!).replace(/(strasse|str)\b/gu, "str");
+  const own = streetOf(address);
+  if (!carrierAddress?.trim() || !own || !/\d/.test(own)) return false;
+  return ` ${normalizeRouteText(carrierAddress).replace(/(strasse|str)\b/gu, "str")} `.includes(` ${own} `);
+}
+
+function printedInAnotherTown(address: string, departmentCity: string | null): boolean {
+  const printedCity = /\b\d{5}\b/.test(address) ? inferCityFromAddress(address.replace(/\bD\s*[-–]?\s*(?=\d{5}\b)/giu, "")) : null;
+  if (!printedCity || !departmentCity) return false;
+  const a = normalizeRouteText(printedCity), b = normalizeRouteText(departmentCity.replace(/\bD\s*[-–]?\s*\d{5}\b|\b\d{5}\b/gu, ""));
+  return Boolean(a && b) && !(a === b || a.includes(b) || b.includes(a));
+}
+
 /** "Rudolf-Diesel-Straße 2 D 14974 Ludwigsfelde, 14974 D 14974 Ludwigsfelde" → the model repeated the city; keep it once. */
 export function compactAddress(address: string): string {
   const parts = address.split(/\s*,\s*/).map((part) => part.trim()).filter(Boolean);
@@ -1387,7 +1436,7 @@ function responseJsonSchema(): Record<string, unknown> {
         items: {
           type: "object",
           additionalProperties: false,
-          required: ["orderNumber", "vehicleNumber", "vehiclePlate", "trailerPlate", "departmentCompany", "departmentAddress", "departmentCity", "departmentSourcePage", "tourRemarks", "tourRemarksSourcePage", "stops", "warnings"],
+          required: ["orderNumber", "vehicleNumber", "vehiclePlate", "trailerPlate", "departmentCompany", "departmentAddress", "departmentCity", "departmentSourcePage", "carrierAddress", "tourRemarks", "tourRemarksSourcePage", "stops", "warnings"],
           properties: {
             orderNumber: { type: ["string", "null"], maxLength: 200 },
             vehicleNumber: { type: ["string", "null"], maxLength: 200 },
@@ -1397,6 +1446,7 @@ function responseJsonSchema(): Record<string, unknown> {
             departmentAddress: { type: ["string", "null"], maxLength: 500 },
             departmentCity: { type: ["string", "null"], maxLength: 300 },
             departmentSourcePage: { type: ["integer", "null"], minimum: 1 },
+            carrierAddress: { type: ["string", "null"], maxLength: 500 },
             tourRemarks: { type: ["string", "null"], maxLength: 1500 },
             tourRemarksSourcePage: { type: ["integer", "null"], minimum: 1 },
             stops: {
