@@ -688,3 +688,10 @@ main a:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .abbreviation-input { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.5rem; margin-top: 0.55rem; }
 .abbreviation-input label { min-width: 10rem; }
 .abbreviation-done { margin-top: 0.75rem; border: 1px solid rgb(var(--ln-a7f3d0, 167 243 208)); border-radius: 0.55rem; background: rgb(var(--bg-ecfdf5, 236 253 245)); padding: 0.65rem; color: rgb(var(--tx-065f46, 6 95 70)); font-size: 0.76rem; font-weight: 750; }
+
+.own-address-list { display: grid; gap: 0.4rem; max-height: 22rem; overflow-y: auto; margin-top: 0.6rem; }
+.own-address-list li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem; border: 1px solid rgb(var(--ln-e2e8f0)); border-radius: 0.55rem; padding: 0.5rem 0.65rem; }
+.own-address-list li > div { display: grid; flex: 1 1 12rem; font-size: 0.8rem; overflow-wrap: anywhere; }
+.own-address-list li span { color: rgb(var(--tx-475569)); }
+.own-address-hidden { opacity: 0.6; }
+.own-address-backfill { display: grid; gap: 0.5rem; justify-items: start; margin-top: 0.75rem; font-size: 0.8rem; }

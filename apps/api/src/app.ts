@@ -75,6 +75,7 @@ import { registerAppointmentDocumentRoutes } from './routes/appointments.js';
 import type { CustomerEvidence, DocumentImportPreview, ImportCustomerContext, ReadStats } from './services/pdf-order-import.js';
 import { storedAnswerOf } from './services/order-documents.js';
 import { KnownPlaces, resolveWithoutGeocoder } from './services/known-places.js';
+import { OwnAddressBook } from './services/own-addresses.js';
 import { readingFromStore } from './services/import-reuse.js';
 
 function auditActor(request: FastifyRequest): AuditActor | undefined {
@@ -104,6 +105,7 @@ const operationsService = new OperationsService(prisma, tourService);
 const pendingAppointments = new PendingAppointmentService(prisma);
 const orderDocuments = new OrderDocumentService(prisma);
 const knownPlaces = new KnownPlaces(prisma);
+const ownAddresses = new OwnAddressBook(prisma, () => knownPlaces.reset());
 const telemetryRetention = new TelemetryRetention(prisma);
 const importLearning = new ImportLearningService(prisma, addressRules);
 const customerService = new CustomerService(prisma);
@@ -175,6 +177,13 @@ async function attachDocument(documentId: string, tourId: string, vehicleId: str
     // A file with several Auftrag stays with its first tour; the preview already warned about a re-upload.
     request.log.warn({ err: error }, 'Auftrag не прикреплён к туру');
   }
+}
+
+/** Exact addresses of a saved tour go to the fleet's own address book. A failure never costs the dispatcher the tour. */
+async function rememberAddresses(tourId: string, request: FastifyRequest) {
+  await ownAddresses.rememberTour(tourId, auditActor(request)).catch((error: unknown) => {
+    request.log.warn({ errorType: error instanceof Error ? error.name : 'unknown' }, 'Адреса тура не запомнены');
+  });
 }
 
 /** Freshly created tours come back without their document relation; the card needs the link at once. */
@@ -436,7 +445,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   registerVehicleAssignmentRoutes(app, prisma);
   registerVehicleStatusSettingsRoutes(app, prisma);
   registerDailyStatusRoutes(app, dailyStatus);
-  registerAddressBookRoutes(app, prisma, addressBook);
+  registerAddressBookRoutes(app, prisma, addressBook, ownAddresses);
   registerOrderDocumentRoutes(app, orderDocuments);
   registerImportRuleRoutes(app, importLearning);
   registerCustomerRoutes(app, customerService);
@@ -1194,6 +1203,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   app.post("/tours", async (request, reply) => {
     const input = createTourSchema.parse(request.body);
     const tour = await tourService.createTour(input, auditActor(request));
+    await rememberAddresses(tour.id, request);
     return reply.status(201).send(await enrichTourLive(tour));
   });
 
@@ -1205,6 +1215,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
       // With the stored preview the server learns from the real diff; without it the client's learnLabel still counts.
       if (documentId) await attachDocument(documentId, result.tour.id, input.vehicleId, input, request);
       else await learnAddressRules(input.stops, auditActor(request));
+      await rememberAddresses(result.tour.id, request);
     }
     return reply.status(result.created ? 201 : 200).send({
       tour: await enrichTourLive(await withDocument(result.tour)),
@@ -1223,6 +1234,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const result = await tourService.createTourForNewVehicle({ vehicle: input.vehicle, tour: { ...tourInput, customerId } }, auditActor(request));
     if (documentId) await attachDocument(documentId, result.tour.id, result.vehicle.id, tourInput, request);
     else await learnAddressRules(tourInput.stops, auditActor(request));
+    await rememberAddresses(result.tour.id, request);
     return reply.status(201).send({ vehicle: toIsoObject(result.vehicle), tour: await enrichTourLive(await withDocument(result.tour)) });
   });
 
@@ -1281,6 +1293,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const tour = "status" in body
       ? await tourService.cancelTour(id, body.version, new Date(), auditActor(request))
       : await tourService.updateFutureTour(id, body, auditActor(request));
+    if (!("status" in body)) await rememberAddresses(tour.id, request);
     await refreshAlertsForVehicle(tour.vehicleId);
     return enrichTourLive(tour);
   });

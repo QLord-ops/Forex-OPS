@@ -162,7 +162,7 @@ function safeState(raw: string | null): AddressBookState | null {
 }
 
 export type AddressSuggestion = {
-  id: string; source: 'WEBFLEET' | 'RULE'; label: string; line2: string; company: string | null; street: string | null; postalCode: string | null; city: string | null;
+  id: string; source: 'WEBFLEET' | 'OPS' | 'RULE'; label: string; line2: string; company: string | null; street: string | null; postalCode: string | null; city: string | null;
   latitude: number; longitude: number; radiusMeters: number | null;
 };
 
@@ -181,7 +181,7 @@ export async function searchAddresses(db: Pick<PrismaClient, 'knownAddress' | 'a
   const rank = (name: string) => normalizePattern(name).startsWith(first) ? 0 : normalizePattern(name).split(' ').some((part) => part.startsWith(words[0])) ? 1 : 2;
   const fromWebfleet: AddressSuggestion[] = known
     .sort((a, b) => rank(a.name) - rank(b.name) || b.useCount - a.useCount || a.name.localeCompare(b.name, 'de'))
-    .map((row) => ({ id: row.id, source: 'WEBFLEET', label: [row.name, row.name2].filter(Boolean).join(' · '), line2: [row.street, [row.postalCode, row.city].filter(Boolean).join(' ')].filter(Boolean).join(', '),
+    .map((row) => ({ id: row.id, source: row.source === 'WEBFLEET' ? 'WEBFLEET' as const : 'OPS' as const, label: [row.name, row.name2].filter(Boolean).join(' · '), line2: [row.street, [row.postalCode, row.city].filter(Boolean).join(' ')].filter(Boolean).join(', '),
       company: row.name, street: row.street, postalCode: row.postalCode, city: row.city, latitude: row.latitude, longitude: row.longitude, radiusMeters: row.radiusMeters }));
   const fromRules: AddressSuggestion[] = rules
     .filter((rule) => rule.latitude !== null && rule.longitude !== null)

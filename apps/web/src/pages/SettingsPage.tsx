@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import { AddressRules } from '../components/AddressRules'
+import { OwnAddresses } from '../components/OwnAddresses'
 import { StopCoordinatesCheck } from '../components/StopCoordinatesCheck'
 import { ImportRules } from '../components/ImportRules'
 import { ImportSpeed } from '../components/ImportSpeed'
@@ -45,6 +46,7 @@ export function SettingsPage() {
         <WorkHoursSettings />
       </section>
       <AddressRules />
+      <OwnAddresses />
       {admin ? <StopCoordinatesCheck /> : null}
       <ImportRules />
       {admin ? <ImportSpeed /> : null}

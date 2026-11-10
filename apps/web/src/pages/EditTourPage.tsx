@@ -1,7 +1,7 @@
 import { CheckCircle2, MapPin, Plus, Save, Trash2 } from 'lucide-react'
 import type { FormEvent } from 'react'
 import { AddressInput } from '../components/AddressInput'
-import { suggestionAddress } from '../lib/address-book'
+import { suggestionAddress, suggestionProvider } from '../lib/address-book'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 
@@ -212,7 +212,7 @@ export function EditTourPage() {
               <label><span className="field-label">Тип</span><select className="field-input" value={stop.type} onChange={(event) => updateStop(stop.id, { type: event.target.value as StopType })}><option value="LOAD">Загрузка</option><option value="UNLOAD">Выгрузка</option></select></label>
               <label><span className="field-label">Компания</span><input className="field-input" value={stop.company} onChange={(event) => updateStop(stop.id, { company: event.target.value })} /></label>
               <label><span className="field-label">Адрес</span><AddressInput value={stop.address} onChange={(value) => updateStop(stop.id, { address: value })} required placeholder="Фирма, улица или город"
-                onPick={(item) => setStops((current) => current.map((entry) => entry.id === stop.id ? { ...entry, company: entry.company.trim() || item.company || '', address: suggestionAddress(item), city: item.city ?? entry.city, geocode: { address: suggestionAddress(item), latitude: item.latitude, longitude: item.longitude, city: item.city, provider: item.source === 'WEBFLEET' ? 'webfleet-address' : 'address-rule' }, geocodeError: undefined } : entry))} /></label>
+                onPick={(item) => setStops((current) => current.map((entry) => entry.id === stop.id ? { ...entry, company: entry.company.trim() || item.company || '', address: suggestionAddress(item), city: item.city ?? entry.city, geocode: { address: suggestionAddress(item), latitude: item.latitude, longitude: item.longitude, city: item.city, provider: suggestionProvider(item) }, geocodeError: undefined } : entry))} /></label>
               <label><span className="field-label">Город</span><input className="field-input" value={stop.city} onChange={(event) => updateStop(stop.id, { city: event.target.value })} placeholder="Город неизвестен" /></label>
               <label><span className="field-label">Срок</span><input className="field-input" type="datetime-local" value={stop.appointmentAt} onChange={(event) => updateStop(stop.id, { appointmentAt: event.target.value })} /></label>
               <label><span className="field-label">Стоянка мин.</span><input className="field-input" type="number" min={0} step={5} value={stop.serviceMinMinutes} onChange={(event) => updateStop(stop.id, { serviceMinMinutes: Number(event.target.value) })} /></label>
