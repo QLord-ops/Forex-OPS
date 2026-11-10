@@ -149,6 +149,27 @@ export class AddressRuleService {
     return rule;
   }
 
+  /**
+   * The dispatcher said what a city code of a Tourbemerkung means ("SZ" → Salzgitter). It applies at once and to
+   * every customer: a registration code means the same town whoever writes it. Null when the code is taken by a
+   * learned place or is no code.
+   */
+  async learnCityCode(code: string, city: string, actor?: AuditActor, now = new Date()) {
+    const pattern = normalizePattern(code);
+    const town = city.trim();
+    if (!/^\p{L}{1,4}$/u.test(pattern) || town.length < 2) return null;
+    const rule = await this.db.$transaction(async (tx) => {
+      const existing = await tx.addressRule.findUnique({ where: { pattern } });
+      if (existing && existing.kind !== "CITY_CODE") return null;
+      const saved = await tx.addressRule.upsert({ where: { pattern },
+        create: { pattern, kind: "CITY_CODE", city: town, createdByDispatcherId: actor?.dispatcherId ?? null }, update: { city: town, hits: { increment: 1 } } });
+      await writeAuditLog(tx, actor, { action: "ADDRESS_RULE_CREATED", entityType: "AddressRule", entityId: saved.id, metadata: { pattern, kind: "CITY_CODE", city: town, replaced: existing?.city ?? null }, createdAt: now });
+      return saved;
+    });
+    this.cache = null;
+    return rule;
+  }
+
   async update(id: string, patch: Partial<Pick<AddressRuleRecord, "company" | "street" | "postalCode" | "city" | "requiresTermin">>, actor?: AuditActor) {
     const rule = await this.db.$transaction(async (tx) => {
       const saved = await tx.addressRule.update({ where: { id }, data: patch });
