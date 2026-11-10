@@ -22,7 +22,7 @@ import { geocodePrecisions, resolveAddressWithFallback } from "./services/addres
 import { OpenPlzChecker, TomTomPlaceSearch } from "./services/address-check.js";
 import { BudgetedAddressResearcher } from "./services/address-research.js";
 import { validateXlsxArchive } from "./services/xlsx-validation.js";
-import { enrichTour, snapshotVehicleClock, type TourAggregate, toDashboardTourSummary, toIsoObject, tourInclude, TourService } from "./services/tours.js";
+import { enrichTour, snapshotVehicleClock, type TourAggregate, toDashboardTourSummary, toIsoObject, tourInclude, findToursForList, withoutDrawnRoute, TourService } from "./services/tours.js";
 import { VehicleService } from "./services/vehicles.js";
 import { calculateDwellState, NotificationService } from "./services/notifications.js";
 import { OperationsService, SYSTEM_WEBFLEET_ACTOR } from "./services/operations.js";
@@ -1191,15 +1191,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
 
   app.get("/tours", async (request) => {
     const query = z.object({ vehicleId: z.string().optional(), status: z.string().optional() }).parse(request.query);
-    const tours = await prisma.tour.findMany({
-      where: {
-        vehicleId: query.vehicleId,
-        status: query.status ? { equals: query.status as never } : undefined
-      },
-      include: tourInclude,
-      orderBy: [{ plannedStartAt: "asc" }, { createdAt: "asc" }]
-    });
-    return enrichToursWithScheduleGroupedByVehicle(tours);
+    return (await enrichToursWithScheduleGroupedByVehicle(await findToursForList(prisma, query))).map(withoutDrawnRoute);
   });
 
   app.post("/tours", async (request, reply) => {

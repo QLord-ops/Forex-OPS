@@ -40,7 +40,7 @@ export function ToursPage() {
       <div className="page-header">
         <div className="min-w-0">
           <h2 className="page-title">Маршруты</h2>
-          <p className="page-subtitle">Активные, ожидающие и завершённые заказы</p>
+          <p className="page-subtitle">Активные и ожидающие заказы; завершённые — за последние 30 дней</p>
         </div>
         <button className="secondary-button" onClick={refetch}>
           <RefreshCw className="h-4 w-4" aria-hidden="true" />

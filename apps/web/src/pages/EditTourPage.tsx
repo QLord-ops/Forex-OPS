@@ -171,7 +171,7 @@ export function EditTourPage() {
   if (!tour) return <ErrorState error={new Error('Маршрут не найден.')} />
 
   return (
-    <form className="space-y-5" onSubmit={handleSubmit}>
+    <form className="space-y-5 pb-56" onSubmit={handleSubmit}>
       <div className="min-w-0">
         <h2 className="page-title">Изменить маршрут</h2>
         <p className="page-subtitle">Можно изменять только будущие маршруты в очереди без подтверждённых событий.</p>
