@@ -74,6 +74,7 @@ import { registerImportRuleRoutes } from './routes/import-rules.js';
 import { registerAppointmentDocumentRoutes } from './routes/appointments.js';
 import type { CustomerEvidence, DocumentImportPreview, ImportCustomerContext, ReadStats } from './services/pdf-order-import.js';
 import { storedAnswerOf } from './services/order-documents.js';
+import { KnownPlaces, resolveWithoutGeocoder } from './services/known-places.js';
 import { readingFromStore } from './services/import-reuse.js';
 
 function auditActor(request: FastifyRequest): AuditActor | undefined {
@@ -102,6 +103,7 @@ const addressRules = new AddressRuleService(prisma);
 const operationsService = new OperationsService(prisma, tourService);
 const pendingAppointments = new PendingAppointmentService(prisma);
 const orderDocuments = new OrderDocumentService(prisma);
+const knownPlaces = new KnownPlaces(prisma);
 const telemetryRetention = new TelemetryRetention(prisma);
 const importLearning = new ImportLearningService(prisma, addressRules);
 const customerService = new CustomerService(prisma);
@@ -138,9 +140,10 @@ async function learnAddressRules(stops: Array<{ learnLabel?: string | null; comp
 /** Recognised stops pass the address rules: city codes, company names, learned places and the Termin a customer still owes. */
 async function withAddressRules<T extends { drafts: Array<{ stops: Array<{ company: string | null; address: string | null; city?: string | null; appointmentLocal: string | null; appointmentWindowStartLocal?: string | null }>; warnings: Array<{ code: string; message: string }> }> }>(preview: T): Promise<T> {
   if (!preview.drafts?.length) return preview;
-  const rules = await addressRules.all();
+  const [rules, places] = await Promise.all([addressRules.all(), knownPlaces.all().catch(() => [])]);
   return { ...preview, drafts: preview.drafts.map((draft) => {
-    const stops = draft.stops.map((stop) => applyRulesToStop(stop, rules));
+    // A place the fleet already knows comes with its coordinates, so the page has nothing to look up for it.
+    const stops = draft.stops.map((stop) => applyRulesToStop(stop, rules)).map((stop) => ({ ...stop, resolution: resolveWithoutGeocoder(stop, rules, places) }));
     const missing = stops.flatMap((stop, index) => !stop.ruleApplied && (stop.address ?? "").trim() === (stop.city ?? "").trim() && stop.company ? [{ code: "ADDRESS_FROM_RULE_MISSING", stopIndex: index, field: "address" as const,
       message: `Адрес ${stop.company}, ${stop.city ?? ""} не указан в Auftrag — введите его, он запомнится для следующих Auftrag.` }] : []);
     return { ...draft, stops, warnings: [...draft.warnings, ...missing] };
@@ -1153,13 +1156,13 @@ export async function buildApp(options: BuildAppOptions = {}) {
     return { address: result.label, ...result };
   });
 
-  app.post("/geocode/resolve", { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request) => {
+  app.post("/geocode/resolve", { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (request) => {
     const input = z.object({
       address: z.string().trim().min(1).max(2000),
       city: z.string().trim().max(300).nullable().optional(),
       company: z.string().trim().max(300).nullable().optional()
     }).parse(request.body);
-    const result = await resolveAddressWithFallback(routingService, input, addressResearcher, await addressRules.all());
+    const result = await resolveAddressWithFallback(routingService, input, addressResearcher, await addressRules.all(), await knownPlaces.all().catch(() => []));
     return { address: result.resolvedAddress, ...result };
   });
 

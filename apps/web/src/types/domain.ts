@@ -548,6 +548,8 @@ export interface ImportedStopDraft {
   terminRequired?: boolean
   /** The imported company and city ("Seifert Bremen"): a corrected place is remembered for it. */
   sourceLabel?: string
+  /** Coordinates the server already knows for this address (address book or a learned place): nothing to look up. */
+  resolution?: AddressResolution | null
   appointmentWindowStartLocal?: string | null
   appointmentWindowEndLocal?: string | null
   loadingMeters?: number | null

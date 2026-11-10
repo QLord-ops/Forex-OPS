@@ -142,3 +142,48 @@ test('тот же файл второй раз: сохранённый отве�
   await expect(again).toHaveCount(0)
   expect(reparsed).toEqual([{ customerId: null }])
 })
+
+test('известное место приходит с координатами: ищется только незнакомый адрес, «Подтвердить» не ждёт', async ({ page }) => {
+  const vehicle = { id: 'veh-1', vehicleNumber: '125', licensePlate: 'B-125', maxSpeedKmh: 85 }
+  const known = { address: 'Volkswagen AG Werk Salzgitter, Industriestraße Nord 1, 38239 Salzgitter', latitude: 52.19, longitude: 10.4, city: 'Salzgitter', provider: 'webfleet-address',
+    sourceAddress: 'Industriestraße Nord 1, 38239 Salzgitter', resolvedAddress: 'Volkswagen AG Werk Salzgitter, Industriestraße Nord 1, 38239 Salzgitter', precision: 'EXACT', attempts: [] }
+  const asked: Array<{ address: string }> = []
+  await signedIn(page, 'dispatcher', async (route, path) => {
+    if (path === '/vehicles' && route.request().method() === 'GET') { await json(route, [vehicle]); return true }
+    if (path === '/imports/pdf/preview') {
+      await json(route, { source: 'OPENAI', detectedLayout: 'PDF', documentKind: 'ORDER', warnings: [], aiAvailable: true, documentId: 'doc-2',
+        drafts: [{ orderNumber: '20566263', vehicleNumber: '125', vehiclePlate: null, trailerPlate: null, tourRemarks: null, warnings: [], stops: [
+          { sequence: 1, type: 'LOAD', company: 'Neuer Lieferant', address: 'Unbekannte Straße 9, 08058 Zwickau', city: 'Zwickau', appointmentLocal: null, confidence: 1 },
+          { sequence: 2, type: 'UNLOAD', company: 'VW', address: 'Industriestraße Nord 1, 38239 Salzgitter', city: 'Salzgitter', appointmentLocal: null, confidence: 1, resolution: known }
+        ] }] })
+      return true
+    }
+    if (path === '/geocode/resolve') {
+      asked.push(route.request().postDataJSON() as { address: string })
+      await new Promise((resolve) => setTimeout(resolve, 1500))
+      await json(route, { address: 'Unbekannte Straße 9, 08058 Zwickau', latitude: 50.7, longitude: 12.5, city: 'Zwickau', provider: 'e2e', sourceAddress: 'Unbekannte Straße 9, 08058 Zwickau', resolvedAddress: 'Unbekannte Straße 9, 08058 Zwickau', precision: 'EXACT', attempts: [] })
+      return true
+    }
+    if (path.startsWith('/vehicles/veh-1')) { await json(route, path.endsWith('/tours') ? [] : vehicle); return true }
+    return false
+  })
+  await page.goto('/vehicles')
+  await page.getByRole('button', { name: /меню$/ }).click()
+  await page.getByRole('button', { name: 'ИИ-диспетчер' }).click()
+  await page.getByRole('button', { name: 'Прикрепить Auftrag' }).click()
+  await page.locator('.dispatcher-import-host input[type="file"]').setInputFiles({ name: 'auftrag.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.7 e2e') })
+  await expect(page.getByLabel('Номер Auftrag')).toHaveValue('20566263')
+  const review = page.getByRole('region', { name: 'Проверка Auftrag' })
+  // The known place needs no lookup; the unknown one is being looked up and the check is usable meanwhile.
+  await expect(review.getByText('Точный адрес подтверждён: Volkswagen AG Werk Salzgitter, Industriestraße Nord 1, 38239 Salzgitter')).toBeVisible()
+  await expect(review.getByRole('status').filter({ hasText: 'Ищу адрес на карте' })).toHaveCount(1)
+  await expect(review.getByRole('button', { name: 'Подтвердить' })).toBeEnabled()
+
+  await page.setViewportSize({ width: 393, height: 851 })
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true)
+  if (process.env.A3_SHOTS) await review.getByRole('status').filter({ hasText: 'Ищу адрес на карте' }).scrollIntoViewIfNeeded().then(() => page.screenshot({ path: 'test-results/a3-looking-393.png' }))
+
+  await expect(review.getByText('Точный адрес подтверждён: Unbekannte Straße 9, 08058 Zwickau')).toBeVisible()
+  await expect(review.getByRole('status').filter({ hasText: 'Ищу адрес на карте' })).toHaveCount(0)
+  expect(asked.map((item) => item.address)).toEqual(['Unbekannte Straße 9, 08058 Zwickau'])
+})
