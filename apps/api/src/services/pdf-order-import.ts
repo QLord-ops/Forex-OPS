@@ -52,7 +52,7 @@ export interface ReadStats {
 }
 const MAX_OPENAI_OUTPUT_CHARS = 100_000;
 const ROUTE_SYNTAX =
-  "Interpret Tourbemerkung as German route syntax: every location before the first 'für' (or an arrow '-->', '->', '→', or 'nach') is a LOAD in written order, and every location after it is an UNLOAD in written order. A '+', ',' or 'und' separates additional stops of the same type on that side; '&' joins companies that share the city written after the last of them ('Seifert & BLG Bremen' = Seifert in Bremen and BLG in Bremen, two separate stops). One stop per company and city: several table rows or addresses of the same company in the same city are one stop. Example: 'Hydro Crimmitschau + Voestalpine Schmölln für VW Braunschweig' means exactly 1) LOAD Hydro Crimmitschau, 2) LOAD Voestalpine Schmölln, 3) UNLOAD VW Braunschweig. A trailing parenthetical place after a destination is supplementary information, not the city: 'für Rudolph Großmehring (Győr)' means company Rudolph in city Großmehring. ";
+  "Interpret Tourbemerkung as German route syntax: every location before the first 'für' (or an arrow '-->', '->', '→', or 'nach') is a LOAD in written order, and every location after it is an UNLOAD in written order. A '+', ',' or 'und' separates additional stops of the same type on that side; '&' joins companies that share the city written after the last of them ('Seifert & BLG Bremen' = Seifert in Bremen and BLG in Bremen, two separate stops). One stop per company, city and operation: several table rows or addresses of the same company in the same city with the same operation are one stop. When the truck unloads at a place and also loads there (for example the empties, Leergut, collected at the plant it delivers to), output two stops with that address, first the UNLOAD and then the LOAD, each with the Termin printed for it. Example: 'Hydro Crimmitschau + Voestalpine Schmölln für VW Braunschweig' means exactly 1) LOAD Hydro Crimmitschau, 2) LOAD Voestalpine Schmölln, 3) UNLOAD VW Braunschweig. A trailing parenthetical place after a destination is supplementary information, not the city: 'für Rudolph Großmehring (Győr)' means company Rudolph in city Großmehring. ";
 const ROUTE_SOURCE_RULE =
   "Never add a city merely because it appears in a table, direct-delivery note or address block. If the same loading or unloading location appears in several rows or pages, return exactly one stop for it and combine its supported references and notes. Tourbemerkung determines stop type and order; table rows, Abteilung and address blocks only provide the matching full postal address and stop details. ";
 const ROUTE_DETAILS_RULE =
@@ -198,6 +198,8 @@ export interface PdfImportedStopDraft {
   aiConfidence?: Partial<Record<StopField, AiField>> | null;
   provenance?: StopProvenance;
   aliasApplied?: boolean;
+  /** Unloading and loading at one plant: this stop is served at the place, and under the Termin, of the stop before it. */
+  samePlaceAsPrevious?: boolean;
 }
 
 export interface PdfImportedOrderDraft {
@@ -663,6 +665,7 @@ export function finishModelAnswer(answer: unknown, context: {
           city: cleanCity(stop.city) ?? inferCityFromAddress(stop.address)
         };
       });
+      const placeNotes = shareTerminOfPlace(stops);
       // A warning the model tied to its own stop sequence points at the final stop made from that row.
       const finalIndexOf = (sequence: number | null) => {
         const raw = sequence ? draft.stops.find((item) => item.sequence === sequence) : undefined;
@@ -682,6 +685,7 @@ export function finishModelAnswer(answer: unknown, context: {
           ...(layout === "PDF" && !draft.tourRemarks && profile.routeSource === "TOUR_REMARKS" ? [{ code: "TOUR_REMARKS_MISSING", message: "Tourbemerkung не найдено; порядок точек определён по таблице." }] : []),
           ...reconciled.warnings,
           ...dateNotes,
+          ...placeNotes,
           ...stops.flatMap((stop, index) => isCityOnlyAddress(stop.address, stop.city)
             ? [{ code: "ADDRESS_INCOMPLETE", stopIndex: index, field: "address" as const, message: `Для точки ${stop.sequence} найден только город; улицу нужно проверить вручную.`, ...(stop.sourcePage ? { page: stop.sourcePage } : {}) }]
             : [])
@@ -776,8 +780,11 @@ type TourRemarkStop = {
   addressSource: "TOUR_REMARKS" | "DEPARTMENT";
   references: string[];
   cargo: string | null;
+  /** "Lager --> VW SZ --> Lager": the truck loads again at this unloading place. */
+  thenLoad?: boolean;
 };
 type TourRemarkPart = { label: string; references: string[]; cargo: string | null };
+type ReconciledStop = ParsedStop & { provenance?: StopProvenance; aliasApplied?: boolean; samePlaceAsPrevious?: boolean };
 type DepartmentDetails = {
   company: string | null;
   address: string | null;
@@ -787,6 +794,7 @@ type DepartmentDetails = {
 
 // Loading side and unloading side: "A für B", "A --> B", "A -> B", "A → B", "A nach B".
 const ROUTE_SIDES = /\s+für\s+|\s*-+>\s*|\s*→\s*|\s+nach\s+/i;
+const ROUTE_ARROWS = /\s*-+>\s*|\s*→\s*/;
 
 /** True when the text is only the Zuladung note, optionally with a place ("Zuladung Kassel" → place "Kassel"). */
 function zuladungPart(part: string): { place: string | null } | null {
@@ -837,15 +845,18 @@ export function parseTourRemarksRoute(tourRemarks: string | null, learned: Learn
   const match = ROUTE_SIDES.exec(tourRemarks);
   if (!match) return null;
   const loads = splitTourRemarkParts(tourRemarks.slice(0, match.index), learned);
-  const unloads = splitTourRemarkParts(tourRemarks.slice(match.index + match[0].length), learned);
+  // "Lager --> VW SZ --> Lager": the truck unloads at the middle place, loads there again and brings that to the last one.
+  const legs = tourRemarks.slice(match.index + match[0].length).split(ROUTE_ARROWS).map((leg) => splitTourRemarkParts(leg, learned));
+  const unloads = legs.flatMap((leg, index) => leg.map((part) => ({ ...part, thenLoad: index < legs.length - 1 && leg.length === 1 })));
   if (!loads.length || !unloads.length) return null;
-  const toStop = (type: "LOAD" | "UNLOAD") => (part: TourRemarkPart): TourRemarkStop => ({
+  const toStop = (type: "LOAD" | "UNLOAD") => (part: TourRemarkPart & { thenLoad?: boolean }): TourRemarkStop => ({
     type,
     label: part.label,
     cityHint: isDepartmentLabel(part.label, learned) ? "" : lastRouteToken(part.label),
     addressSource: isDepartmentLabel(part.label, learned) ? "DEPARTMENT" as const : "TOUR_REMARKS" as const,
     references: part.references,
-    cargo: part.cargo
+    cargo: part.cargo,
+    ...(part.thenLoad && !isDepartmentLabel(part.label, learned) ? { thenLoad: true } : {})
   });
   const route = [...loads.map(toStop("LOAD")), ...unloads.map(toStop("UNLOAD"))];
   const merged = new Map<string, TourRemarkStop>();
@@ -928,10 +939,12 @@ function reconcileStopsWithTourRemarks(
   tourRemarksSourcePage: number | null,
   department: DepartmentDetails,
   learned: LearnedImportRules = BUILT_IN_IMPORT_RULES
-): { stops: ParsedStop[]; warnings: PdfImportWarning[] } {
+): { stops: ReconciledStop[]; warnings: PdfImportWarning[] } {
   const used = new Set<number>();
   const warnings: PdfImportWarning[] = [];
-  const stops = route.map((writtenStop, sequence) => {
+  // The second stop of a place (the Leergut loading at the plant of the unloading), by the index of its route stop.
+  const pairs = new Map<number, { stop: ReconciledStop; first: boolean }>();
+  const routeStops = route.map((writtenStop, sequence): ReconciledStop => {
     // "VW SZ": the addresses of this Auftrag say what SZ is before the rows are ranked.
     const decoded = decodeRouteCity(writtenStop, candidates, used, learned);
     const routeStop = decoded?.routeStop ?? writtenStop;
@@ -992,11 +1005,45 @@ function reconcileStopsWithTourRemarks(
     const duplicates = ranked.filter((match) =>
       match.index !== selected.index && sameTourRemarkCity(routeStop, match.candidate) && (!companyTokens.length || mentionsCompany(match.candidate, companyTokens, learned)));
     duplicates.forEach((match) => used.add(match.index));
+    const rows = [selected, ...duplicates].map((match) => match.candidate);
+    const own = rows.filter((row) => row.type === routeStop.type);
+    const other = rows.filter((row) => row.type !== routeStop.type);
+    // The truck unloads at the plant and loads its empties there: two stops of one place, never one. A learned stop
+    // type is not applied to them — it would turn the pair into two stops of the same type.
+    if (routeStop.type === "UNLOAD" && own.length && other.length) {
+      const leergut = routeStop.cargo === "Leergut";
+      const unload = withTourRemarkDetails(mergeDuplicateStopDetails(own[0]!, own.slice(1)), leergut ? { ...routeStop, cargo: null } : routeStop);
+      const load = withTourRemarkDetails(mergeDuplicateStopDetails(other[0]!, other.slice(1)), { ...routeStop, references: [], cargo: leergut ? routeStop.cargo : null });
+      pairs.set(sequence, { stop: { ...load, provenance: "TOUR_REMARKS" as const }, first: startsEarlier(load, unload) });
+      return { ...unload, provenance: "TOUR_REMARKS" as const };
+    }
     return { ...withLearnedStopType(withTourRemarkDetails(
       mergeDuplicateStopDetails({ ...selected.candidate, type: routeStop.type }, duplicates.map((match) => match.candidate)),
       routeStop
     ), learned), provenance: "TOUR_REMARKS" as const };
   });
+  route.forEach((routeStop, index) => {
+    if (!routeStop.thenLoad) return;
+    const unload = routeStops[index]!;
+    // No row of the Auftrag prints the loading: it is put at the same address for the dispatcher to check.
+    if (!pairs.has(index)) {
+      pairs.set(index, { first: false, stop: { ...unload, type: "LOAD", appointmentLocal: null, appointmentWindowStartLocal: null, appointmentWindowEndLocal: null,
+        appointmentDateLocal: null, loadingMeters: null, referenceNumbers: [], instructions: null, confidence: Math.min(unload.confidence, 0.5) } });
+    }
+    warnings.push({ code: "ROUTE_CHAIN", stopIndex: index,
+      message: `Tourbemerkung — цепочка: в ${cleanCity(unload.city) ?? inferCityFromAddress(unload.address) ?? `«${routeStop.label}»`} поставлены выгрузка и загрузка. Проверьте порядок точек.`,
+      ...(tourRemarksSourcePage ? { page: tourRemarksSourcePage } : {}) });
+  });
+  const stops: ReconciledStop[] = [];
+  const finalIndex: number[] = [];
+  routeStops.forEach((stop, index) => {
+    const pair = pairs.get(index);
+    if (pair?.first) stops.push(pair.stop);
+    finalIndex[index] = stops.length;
+    stops.push(pair?.first ? { ...stop, samePlaceAsPrevious: true } : stop);
+    if (pair && !pair.first) stops.push({ ...pair.stop, samePlaceAsPrevious: true });
+  });
+  for (const warning of warnings) if (typeof warning.stopIndex === "number") warning.stopIndex = finalIndex[warning.stopIndex] ?? warning.stopIndex;
   // Rows the Tourbemerkung does not name are not dropped silently: the dispatcher sees them.
   const unnamed = candidates.filter((candidate, index) => !used.has(index) && candidate.type === "UNLOAD")
     .map((candidate) => [candidate.company, cleanCity(candidate.city) ?? inferCityFromAddress(candidate.address)].filter(Boolean).join(", "))
@@ -1005,6 +1052,49 @@ function reconcileStopsWithTourRemarks(
     warnings.push({ code: "TABLE_STOPS_NOT_IN_TOUR_REMARKS", message: `В таблице есть адреса, которых нет в Tourbemerkung: ${unnamed.slice(0, 4).join("; ")}. Проверьте, к какой точке они относятся.` });
   }
   return { stops, warnings };
+}
+
+/** Both stops of a place print a time and this one is the earlier: it is served first. */
+function startsEarlier(stop: ParsedStop, than: ParsedStop): boolean {
+  const time = (item: ParsedStop) => item.appointmentLocal ?? item.appointmentWindowStartLocal;
+  const [first, second] = [time(stop), time(than)];
+  return Boolean(first && second && first < second);
+}
+
+type PlacedStop = {
+  type: "LOAD" | "UNLOAD"; company: string | null; city?: string | null; samePlaceAsPrevious?: boolean;
+  appointmentLocal?: string | null; appointmentWindowStartLocal?: string | null; appointmentWindowEndLocal?: string | null;
+};
+
+/**
+ * One Termin per place, as in a saved tour (termin-groups.ts): the Termin printed for the second stop of a plant
+ * moves to its first stop, a repeated equal one is dropped, two different ones stay for the dispatcher to check.
+ */
+export function shareTerminOfPlace(stops: PlacedStop[]): PdfImportWarning[] {
+  const notes: PdfImportWarning[] = [];
+  const hasTermin = (stop: PlacedStop) => Boolean(stop.appointmentLocal || stop.appointmentWindowStartLocal);
+  const key = (stop: PlacedStop) => [stop.appointmentLocal, stop.appointmentWindowStartLocal, stop.appointmentWindowEndLocal].map((value) => value ?? "").join("|");
+  const text = (stop: PlacedStop) => stop.appointmentLocal ? stop.appointmentLocal.slice(11)
+    : [stop.appointmentWindowStartLocal?.slice(11), stop.appointmentWindowEndLocal?.slice(11)].filter(Boolean).join("–");
+  stops.forEach((stop, index) => {
+    const lead = stops[index - 1];
+    if (!stop.samePlaceAsPrevious || !lead) return;
+    const operations = lead.type === "UNLOAD" ? "Выгрузка и загрузка" : "Загрузка и выгрузка";
+    const place = stop.city ?? lead.city ?? stop.company ?? "одном месте";
+    if (hasTermin(stop) && hasTermin(lead) && key(stop) !== key(lead)) {
+      notes.push({ code: "SHARED_TERMIN_CONFLICT", stopIndex: index, field: "time",
+        message: `В ${place} у ${lead.type === "UNLOAD" ? "выгрузки и загрузки" : "загрузки и выгрузки"} разные Termin (${text(lead)} и ${text(stop)}) — проверьте, два это окна или одно.` });
+      return;
+    }
+    if (hasTermin(stop) && !hasTermin(lead)) {
+      Object.assign(lead, { appointmentLocal: stop.appointmentLocal ?? null, appointmentWindowStartLocal: stop.appointmentWindowStartLocal ?? null, appointmentWindowEndLocal: stop.appointmentWindowEndLocal ?? null });
+    }
+    Object.assign(stop, { appointmentLocal: null, appointmentWindowStartLocal: null, appointmentWindowEndLocal: null });
+    notes.push({ code: "SHARED_TERMIN", message: hasTermin(lead)
+      ? `${operations} в ${place} — одно место: общий Termin ${text(lead)} стоит на точке ${index}.`
+      : `${operations} в ${place} — одно место: Termin у них общий, он ставится на точку ${index}.` });
+  });
+  return notes;
 }
 
 /** A code after a company name ("VW SZ") that is no alias, cargo label or warehouse word: a town somebody has to name. */
