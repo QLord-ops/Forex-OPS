@@ -440,6 +440,7 @@ export interface AddressResolution extends GeocodeResult {
   precision: 'EXACT' | 'STREET' | 'POSTCODE_CITY' | 'CITY'
   attempts: string[]
   researchUsed?: boolean
+  check?: { status: 'OK' | 'UNKNOWN_POSTCODE' | 'POSTCODE_NOT_IN_CITY' | 'STREET_NOT_IN_POSTCODE'; message?: string; cities?: string[] } | null
   researchCandidates?: Array<{
     address: string
     rationale: string

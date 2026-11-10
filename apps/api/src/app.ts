@@ -19,6 +19,7 @@ import {
 } from "./services/pdf-order-import.js";
 import { OsrmRoutingProvider, RoutingError, RoutingService } from "./services/routing.js";
 import { geocodePrecisions, resolveAddressWithFallback } from "./services/address-resolution.js";
+import { OpenPlzChecker, TomTomPlaceSearch } from "./services/address-check.js";
 import { BudgetedAddressResearcher } from "./services/address-research.js";
 import { validateXlsxArchive } from "./services/xlsx-validation.js";
 import { enrichTour, snapshotVehicleClock, type TourAggregate, toDashboardTourSummary, toIsoObject, tourInclude, TourService } from "./services/tours.js";
@@ -94,6 +95,7 @@ const trafficQuota = new PrismaTrafficQuotaStore(prisma);
 const trafficProvider = new TomTomRoutingProvider(trafficQuota, new OsrmRoutingProvider());
 const routingService = new RoutingService(trafficProvider);
 const addressResearcher = new BudgetedAddressResearcher(prisma);
+const addressSources = { checker: new OpenPlzChecker(), places: new TomTomPlaceSearch() };
 const tourService = new TourService(prisma, routingService);
 const etaService = new EtaService();
 const alertService = new AlertService(prisma);
@@ -1183,7 +1185,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
       city: z.string().trim().max(300).nullable().optional(),
       company: z.string().trim().max(300).nullable().optional()
     }).parse(request.body);
-    const result = await resolveAddressWithFallback(routingService, input, addressResearcher, await addressRules.all(), await knownPlaces.all().catch(() => []));
+    const result = await resolveAddressWithFallback(routingService, input, addressResearcher, await addressRules.all(), await knownPlaces.all().catch(() => []), addressSources);
     return { address: result.resolvedAddress, ...result };
   });
 
