@@ -15,7 +15,13 @@ const service = {
   file: async (id: string) => (id === 'doc1' ? { filename: 'Transport auftrag "Nr. 1" / Düsseldorf.pdf', mimeType: 'application/pdf', size: pdf.length, content: pdf } : null),
   forTour: async (tourId: string) => (tourId === 't1' ? meta : null),
   listForVehicle: async (vehicleId: string) => (vehicleId === 'v1' ? [meta] : []),
-  discard: async (id: string) => { discarded.push(id); return id === 'doc1'; }
+  discard: async (id: string) => { discarded.push(id); return id === 'doc1'; },
+  recentPreviews: async () => [7000, 9000, 31000].map((totalMs, index) => ({
+    createdAt: new Date(Date.UTC(2026, 10, 9, 8, index)),
+    previewJson: JSON.stringify({ drafts: [{ orderNumber: 'A-1' }], readStats: {
+      model: 'gpt-5.4-mini', effort: 'low', serviceTier: 'default', readMode: 'text', extractMs: 200, modelMs: totalMs - 500, postMs: 300,
+      inputTokens: 6000, cachedTokens: 3000, outputTokens: 1500, reasoningTokens: 0, settingsRejected: false, contextMs: 0, totalMs } })
+  }))
 } as unknown as OrderDocumentService;
 
 async function build(role: DispatcherRole | null) {
@@ -57,6 +63,15 @@ it('requires a session for every read and admin for discarding', async () => {
   expect((await admin.inject({ method: 'DELETE', url: '/documents/doc1' })).statusCode).toBe(200);
   expect((await admin.inject({ method: 'DELETE', url: '/documents/attached' })).statusCode).toBe(409);
   expect(discarded).toEqual(['doc1', 'attached']);
+});
+
+it('shows the reading speed to the admin only, as numbers without anything from the documents', async () => {
+  expect((await (await build(null)).inject({ method: 'GET', url: '/imports/stats' })).statusCode).toBe(401);
+  expect((await (await build('dispatcher')).inject({ method: 'GET', url: '/imports/stats' })).statusCode).toBe(403);
+  const response = await (await build('admin')).inject({ method: 'GET', url: '/imports/stats' });
+  expect(response.statusCode).toBe(200);
+  expect(response.json()).toMatchObject({ documents: 3, count: 3, targetMs: 10000, medianMs: 9000, p90Ms: 31000, withinTarget: 2, cachedShare: 0.5, modes: { text: 3, file: 0, image: 0 } });
+  expect(response.body).not.toContain('A-1');
 });
 
 it('never lets a file name break out of the header', () => {

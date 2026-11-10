@@ -85,6 +85,22 @@ describe('POST /imports/pdf/preview with a slow AI', () => {
     expect((await app.inject({ method: 'GET', url: '/imports/jobs/unknown' })).statusCode).toBe(404);
   });
 
+  it('adds the server’s own timings to the numbers of the reading', async () => {
+    const readStats = { model: 'gpt-5.4-mini', effort: 'low', serviceTier: null, readMode: 'text' as const, extractMs: 20, modelMs: 40, postMs: 5,
+      inputTokens: 6000, cachedTokens: 0, outputTokens: 1500, reasoningTokens: 0, settingsRejected: false };
+    const pdfImport = vi.fn(async () => { await sleep(40); return { ...preview, readStats }; });
+    const app = await buildApp({ pdfImport, auth: { disabled: true } });
+    apps.push(app);
+    const response = await app.inject({ method: 'POST', url: '/imports/pdf/preview', ...pdf });
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { readMs: number; readStats: typeof readStats & { contextMs: number; totalMs: number } };
+    expect(body.readStats).toMatchObject(readStats);
+    expect(body.readStats.contextMs).toBeGreaterThanOrEqual(0);
+    expect(body.readStats.totalMs).toBeGreaterThanOrEqual(35);
+    expect(body.readStats.totalMs).toBeLessThan(30_000);
+    expect(body.readMs).toBeGreaterThanOrEqual(35);
+  });
+
   it('a failed reading reaches the page with the API’s own message', async () => {
     const pdfImport = vi.fn(async () => { await sleep(100); throw new Error('AbortError'); });
     const app = await buildApp({ pdfImport, auth: { disabled: true }, importWaitMs: 10 });

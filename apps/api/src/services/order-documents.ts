@@ -84,6 +84,11 @@ export class OrderDocumentService {
     return this.db.orderDocument.findUnique({ where: { id }, select: { ...DOCUMENT_SELECT, previewJson: true, confirmedJson: true } });
   }
 
+  /** The newest stored parses, for the reading speed card. */
+  async recentPreviews(take: number) {
+    return this.db.orderDocument.findMany({ orderBy: { createdAt: 'desc' }, take, select: { previewJson: true, createdAt: true } });
+  }
+
   /** The only read that carries the bytes. Null once the retention sweep emptied them. */
   async file(id: string) {
     const row = await this.db.orderDocument.findUnique({ where: { id }, select: { filename: true, mimeType: true, size: true, content: true } });

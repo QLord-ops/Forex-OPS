@@ -10,6 +10,7 @@ import type {
   CurrentPosition,
   DashboardResponse,
   OrderImportPreview,
+  ImportSpeedSummary,
   GeocodeResult,
   HistoryResponse,
   Tour,
@@ -317,6 +318,7 @@ export const api = {
   geocode: (address: string) => request<GeocodeResult>(`/geocode?address=${encodeURIComponent(address)}`),
   resolveAddress: (payload: { address: string; city?: string | null; company?: string | null }) =>
     request<AddressResolution>('/geocode/resolve', { method: 'POST', body: JSON.stringify(payload) }),
+  importSpeed: () => request<ImportSpeedSummary>('/imports/stats'),
   checkStopCoordinates: () => jobResult<StopCoordinateIssue[]>('/maintenance/stop-coordinates', { method: 'GET' }),
   fixStopCoordinates: (stopIds: string[]) =>
     jobResult<{ fixed: StopCoordinateIssue[]; skipped: Array<{ vehicleNumber: string; stopIds: string[]; reason: string }> }>('/maintenance/stop-coordinates/fix', { method: 'POST', body: JSON.stringify({ stopIds }), headers: { 'Content-Type': 'application/json' } })
