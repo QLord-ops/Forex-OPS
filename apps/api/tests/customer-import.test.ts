@@ -99,7 +99,7 @@ describe('the prompt follows the customer profile', () => {
     expect(content[0].type).toBe('input_text');
     expect(content[0].text).toContain('[Seite 1]\nSchnellecke Transportlogistik GmbH');
     expect(content[0].text).toContain('[Seite 2]');
-    expect(text.instruction).toContain('read every page of the text above');
+    expect(text.instruction).toContain('read every page of the PDF');
     expect(text.preview.readMode).toBe('text');
 
     const scan = await read(null);
@@ -146,7 +146,7 @@ describe('the prompt follows the customer profile', () => {
     expect(bare.preview.readStats).toMatchObject({ readMode: 'file', serviceTier: null, inputTokens: null, cachedTokens: null, outputTokens: null, reasoningTokens: null });
   });
 
-  it('reads with the plain settings when OpenAI refuses the speed settings, and fails as before when nothing was set', async () => {
+  it('reads with the plain settings when OpenAI refuses the speed or cache settings', async () => {
     vi.stubEnv('OPENAI_IMPORT_REASONING_EFFORT', 'none');
     vi.stubEnv('OPENAI_IMPORT_SERVICE_TIER', 'priority');
     try {
@@ -154,15 +154,18 @@ describe('the prompt follows the customer profile', () => {
       expect(requests).toHaveLength(2);
       expect(requests[1]).toMatchObject({ reasoning: { effort: 'low' } });
       expect(requests[1]).not.toHaveProperty('service_tier');
+      expect(requests[0]).toHaveProperty('prompt_cache_key');
+      expect(requests[1]).not.toHaveProperty('prompt_cache_key');
       expect(preview.readStats).toMatchObject({ effort: 'low', serviceTier: null, settingsRejected: true });
       expect(preview.drafts).toHaveLength(1);
     } finally {
       vi.unstubAllEnvs();
     }
-    const failure = await read(null, {}, Buffer.from('%PDF-1.7'), { firstStatus: 400 }).catch((error: Error) => error);
-    expect(failure).toBeInstanceOf(Error);
-    expect((failure as Error).message).toContain('HTTP 400');
-    expect((failure as Error).message).not.toContain('Unsupported value');
+    // Nothing set: the cache key is the only extra, and a model that refuses it is asked again without it.
+    const plain = await read(null, {}, Buffer.from('%PDF-1.7'), { firstStatus: 400 });
+    expect(plain.requests).toHaveLength(2);
+    expect(plain.requests[1]).not.toHaveProperty('prompt_cache_key');
+    expect(plain.preview.readStats).toMatchObject({ settingsRejected: true });
   });
 
   it('before any customer exists reads like before: Schnellecke warehouse words and carriers, no customer key', async () => {
