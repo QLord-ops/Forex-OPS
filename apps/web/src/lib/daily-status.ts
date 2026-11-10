@@ -9,17 +9,29 @@ export interface DailyStatusRow {
   bemerkungAuto: string | null; bemerkung: string | null; weNortheim: string | null; servicePhone: string | null; aSchild: boolean; appSped: boolean
   ortSource: string | null; trailerSource: string | null; version: number; edited: boolean; flags: StatusFlag[]
   shown: { ort: string; start: string; ziel: string; ankunft: string; bemerkung: string; trailer: string }
+  /** Whose Excel the line goes into: the dispatcher who took the truck, or the dispatcher of its line; null = nobody's. */
+  owner?: DailyStatusOwner | null
 }
+export interface DailyStatusOwner { id: string; name: string; source: 'TAKEN' | 'LINE'; active: boolean }
 export interface DailyStatusReport {
   id: string; line: string; date: string; status: 'GENERATING' | 'READY' | 'FAILED'; preliminary: boolean
   generatedAt: string | null; generatedByRole: 'system' | 'admin' | 'dispatcher'
 }
-export interface DailyStatusListConfig { key: string; name: string; dueLocalTime: string; groups: Array<{ code: string; name: string }>; columns: { we: string | null; aSchild: boolean; appSped: boolean } }
+export interface DailyStatusListConfig {
+  key: string; name: string; dueLocalTime: string; groups: Array<{ code: string; name: string }>; columns: { we: string | null; aSchild: boolean; appSped: boolean }
+  /** Made by itself every morning; false = by the button only. Absent from older servers, where every list was automatic. */
+  auto?: boolean
+}
 export interface DailyStatusList {
   date: string; editable: boolean; report: DailyStatusReport | null; rows: DailyStatusRow[]
   /** The customer's list; absent from servers before customers, which only had Schnellecke. */
-  list?: DailyStatusListConfig; lists?: Array<{ key: string; name: string }>
+  list?: DailyStatusListConfig; lists?: Array<{ key: string; name: string; auto?: boolean }>
+  /** Dispatchers who have trucks in the list; absent from servers before the per-dispatcher status. */
+  owners?: Array<{ id: string; name: string; active: boolean; count: number }>
+  viewer?: { dispatcherId: string | null; role: 'admin' | 'dispatcher' }
 }
+export type StatusScope = 'MINE' | 'ALL'
+export interface OwnerSection { key: string; owner: Omit<DailyStatusOwner, 'source'> | null; rows: DailyStatusRow[] }
 export const LEGACY_LIST: DailyStatusListConfig = {
   key: 'SCHNELLECKE', name: 'Schnellecke', dueLocalTime: '07:00',
   groups: [{ code: 'NORD', name: 'NORD' }, { code: 'SUED', name: 'SÜD' }, { code: 'LUFE', name: 'LuFe' }],
@@ -54,8 +66,9 @@ export const statusApi = {
 }
 
 /** Downloads the list as the dispatcher's Excel ("Status 2026-11-05.xlsx"). */
-export async function downloadStatusExcel(date: string, list?: DailyStatusListConfig) {
-  const query = list && list.key !== LEGACY_LIST.key ? `?list=${encodeURIComponent(list.key)}` : ''
+export async function downloadStatusExcel(date: string, list?: DailyStatusListConfig, owner?: string) {
+  const params = new URLSearchParams({ ...(list && list.key !== LEGACY_LIST.key ? { list: list.key } : {}), ...(owner ? { owner } : {}) }).toString()
+  const query = params ? `?${params}` : ''
   const response = await fetch(`${API}/daily-status/${encodeURIComponent(date)}/export.xlsx${query}`, { credentials: 'same-origin', headers: authHeaders() })
   if (!response.ok) {
     if (response.status === 401) notifySessionExpired()
@@ -75,6 +88,24 @@ export const GROUP_LABEL: Record<StatusGroup, string> = { NORD: 'NORD', SUED: 'S
 export const LINE_LABEL: Record<VehicleLine, string> = { SCHNELLECKE: 'Schnellecke', WALTER_TESLA: 'Walter Tesla', OTHER: 'Другая' }
 
 /** Blocks in the order of the Excel: the customer's lines (NORD, SÜD, LuFe), then the trucks still without a line. */
+/** The trucks whose status this dispatcher sends. */
+export function ownedBy(rows: DailyStatusRow[], me: string | null): DailyStatusRow[] {
+  return me ? rows.filter((row) => row.owner?.id === me) : []
+}
+
+/** One section per dispatcher: me first, colleagues by name, the trucks of nobody last. */
+export function groupByOwner(rows: DailyStatusRow[], me: string | null): OwnerSection[] {
+  const sections = new Map<string, OwnerSection>()
+  for (const row of rows) {
+    const key = row.owner?.id ?? ''
+    const section = sections.get(key) ?? { key, owner: row.owner ? { id: row.owner.id, name: row.owner.name, active: row.owner.active } : null, rows: [] }
+    section.rows.push(row)
+    sections.set(key, section)
+  }
+  const rank = (section: OwnerSection) => !section.owner ? 2 : section.owner.id === me ? 0 : 1
+  return [...sections.values()].sort((a, b) => rank(a) - rank(b) || (a.owner?.name ?? '').localeCompare(b.owner?.name ?? '', 'de'))
+}
+
 export function groupRows(rows: DailyStatusRow[], groups: DailyStatusListConfig['groups'] = LEGACY_LIST.groups) {
   const codes = groups.map((group) => group.code)
   return [

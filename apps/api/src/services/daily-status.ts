@@ -12,6 +12,7 @@ import { distanceMeters } from './webfleet.js';
 import type { DriverHours, WebfleetDrivingTimes } from './webfleet-live.js';
 import { withZuladungNote } from './zuladung.js';
 import { parseProfile } from './customer-profile.js';
+import { statusOwnerOf, type StatusOwner } from './customers.js';
 
 /** The list before customers existed: Schnellecke, blocks NORD / SÜD / LuFe. Used until a Schnellecke customer is set up. */
 export const STATUS_LINE = 'SCHNELLECKE';
@@ -26,12 +27,14 @@ export type StatusListConfig = {
   groups: Array<{ code: string; name: string }>;
   excludedVehicles: string[];
   columns: { we: string | null; aSchild: boolean; appSped: boolean };
+  /** Made by itself at the due time; without it the list is made by the button on the status page. */
+  auto: boolean;
 };
 
 export const LEGACY_STATUS_LIST: StatusListConfig = {
   key: STATUS_LINE, customerId: null, name: 'Schnellecke', dueLocalTime: '07:00',
   groups: [{ code: 'NORD', name: 'NORD' }, { code: 'SUED', name: 'SÜD' }, { code: 'LUFE', name: 'LuFe' }],
-  excludedVehicles: [], columns: { we: 'WE in Northeim', aSchild: true, appSped: true }
+  excludedVehicles: [], columns: { we: 'WE in Northeim', aSchild: true, appSped: true }, auto: true
 };
 /** Without a Termin and without tachograph data the driver is assumed to start at this time. */
 const DEFAULT_START_LOCAL_TIME = '06:00';
@@ -290,8 +293,9 @@ export class DailyStatusService {
   constructor(private readonly db: PrismaClient, private readonly deps: DailyStatusDeps) {}
 
   /**
-   * Every customer with a status list in its profile, blocks = its lines. Before customers exist, or while
-   * Schnellecke is not yet a customer, the original Schnellecke list keeps running.
+   * Every customer with lines can have a status list, blocks = its lines; the profile decides whether it is made by
+   * itself at its time. Before customers exist, or while Schnellecke is not yet a customer, the original Schnellecke
+   * list keeps running.
    */
   async lists(): Promise<StatusListConfig[]> {
     if (this.listsCache && Date.now() - this.listsCache.at < 60_000) return this.listsCache.lists;
@@ -299,11 +303,13 @@ export class DailyStatusService {
       include: { lines: { where: { active: true }, orderBy: [{ sortIndex: 'asc' }, { name: 'asc' }] } } }).catch(() => []);
     const lists: StatusListConfig[] = customers.flatMap((customer) => {
       const profile = parseProfile(customer.profileJson).statusList;
-      if (!profile.enabled) return [];
+      if (!profile.enabled && !customer.lines.length) return [];
       return [{ key: customer.slug, customerId: customer.id, name: customer.name, dueLocalTime: profile.dueLocalTime,
         groups: customer.lines.map((line) => ({ code: line.code, name: line.name })), excludedVehicles: profile.excludedVehicles,
-        columns: { we: profile.weColumnLabel, aSchild: profile.showASchild, appSped: profile.showAppSped } }];
+        columns: { we: profile.weColumnLabel, aSchild: profile.showASchild, appSped: profile.showAppSped }, auto: profile.enabled }];
     });
+    // The lists made every morning come first, so the page opens on the one the dispatchers send daily.
+    lists.sort((a, b) => Number(b.auto) - Number(a.auto));
     if (!customers.some((customer) => customer.slug === STATUS_LINE)) lists.unshift(LEGACY_STATUS_LIST);
     this.listsCache = { at: Date.now(), lists };
     return lists;
@@ -321,6 +327,7 @@ export class DailyStatusService {
     const order: RunResult[] = ['GENERATED', 'FAILED', 'BUSY', 'WAITING_WEBFLEET', 'DONE', 'NOT_DUE'];
     let best: RunResult = 'NOT_DUE';
     for (const list of await this.lists()) {
+      if (!list.auto) continue;
       const result = await this.runListIfDue(list, now);
       if (order.indexOf(result) < order.indexOf(best)) best = result;
     }
@@ -364,6 +371,7 @@ export class DailyStatusService {
         create: { line: list.key, customerId: list.customerId, date: dayKey, status: 'GENERATING', generatedByRole: actor.role }, update: { status: 'GENERATING' } });
     const vehicles = await this.db.vehicle.findMany({ where: { line: list.key, ...(list.excludedVehicles.length ? { vehicleNumber: { notIn: list.excludedVehicles } } : {}) }, include: {
       issues: { where: { resolvedAt: null } },
+      customerLine: { select: { dispatchers: LINE_DISPATCHERS } },
       tours: { where: { status: { in: ['ACTIVE', 'QUEUED'] } }, orderBy: [{ queueIndex: 'asc' }, { createdAt: 'asc' }], include: { stops: { orderBy: { sequence: 'asc' } }, legs: true } }
     } });
     const dayStart = dayStartOf(dayKey);
@@ -376,12 +384,14 @@ export class DailyStatusService {
       return [group < 0 ? groupOrder.length : group, Number.parseInt(draft.vehicleNumber, 10) || Number.MAX_SAFE_INTEGER, draft.vehicleNumber] as const;
     };
     drafts.sort((a, b) => { const [ga, na, sa] = order(a), [gb, nb, sb] = order(b); return ga - gb || na - nb || sa.localeCompare(sb); });
+    const owners = new Map(vehicles.map((vehicle) => [vehicle.id, statusOwnerOf(vehicle, vehicle.customerLine?.dispatchers ?? [])]));
     const keep = new Set(drafts.map((draft) => draft.vehicleId));
     const removed = await this.db.dailyStatusRow.findMany({ where: { reportId: report.id, vehicleId: { notIn: [...keep] } }, select: { id: true, vehicleNumber: true } });
     await this.db.$transaction(async (tx) => {
       for (const [index, draft] of drafts.entries()) {
         const { flags, ...fields } = draft;
-        const data = { ...fields, sortIndex: index, detailsJson: JSON.stringify({ flags }) };
+        // The owner is kept with the row: a past list shows whose truck it was that morning.
+        const data = { ...fields, sortIndex: index, detailsJson: JSON.stringify({ flags, owner: owners.get(draft.vehicleId) ?? null }) };
         await tx.dailyStatusRow.upsert({ where: { reportId_vehicleId: { reportId: report.id, vehicleId: draft.vehicleId } },
           create: { ...data, reportId: report.id },
           update: { ...data, ...(options.resetEdits ? { bemerkung: null, weNortheim: null, overridesJson: null, editedAt: null, editedByDispatcherId: null } : {}), version: { increment: 1 } } });
@@ -449,19 +459,53 @@ export class DailyStatusService {
 
   async get(dayKey: string, now = new Date(), key?: string | null) {
     const list = await this.list(key);
-    const lists = (await this.lists()).map((item) => ({ key: item.key, name: item.name }));
-    const config = { key: list.key, name: list.name, dueLocalTime: list.dueLocalTime, groups: list.groups, columns: list.columns };
+    const lists = (await this.lists()).map((item) => ({ key: item.key, name: item.name, auto: item.auto }));
+    const config = { key: list.key, name: list.name, dueLocalTime: list.dueLocalTime, groups: list.groups, columns: list.columns, auto: list.auto };
     const report = await this.db.dailyStatusReport.findUnique({ where: { line_date: { line: list.key, date: dayKey } }, include: { rows: { orderBy: { sortIndex: 'asc' } } } });
-    if (!report) return { date: dayKey, list: config, lists, report: null, rows: [], editable: dayKey === berlinToday(now) };
+    if (!report) return { date: dayKey, list: config, lists, report: null, rows: [], owners: [], editable: dayKey === berlinToday(now) };
     const { rows, ...meta } = report;
-    return { date: dayKey, list: config, lists, editable: dayKey === berlinToday(now) && report.status === 'READY', report: meta,
-      rows: rows.map((row) => ({ ...row, flags: flagsOf(row.detailsJson), shown: presentRow(row, dayKey), edited: Boolean(row.editedAt) })) };
+    const owned = await this.ownersOf(rows, dayKey === berlinToday(now));
+    const names = await this.dispatcherNames([...owned.values()]);
+    const withOwner = rows.map((row) => {
+      const owner = owned.get(row.id) ?? null;
+      const person = owner ? names.get(owner.id) : undefined;
+      return { ...row, flags: flagsOf(row.detailsJson), shown: presentRow(row, dayKey), edited: Boolean(row.editedAt),
+        owner: owner ? { ...owner, name: person?.name ?? 'Диспетчер удалён', active: person?.active ?? false } : null };
+    });
+    const counts = new Map<string, number>();
+    for (const row of withOwner) if (row.owner) counts.set(row.owner.id, (counts.get(row.owner.id) ?? 0) + 1);
+    const owners = [...counts].map(([id, count]) => ({ id, name: names.get(id)?.name ?? 'Диспетчер удалён', active: names.get(id)?.active ?? false, count }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'de'));
+    return { date: dayKey, list: config, lists, editable: dayKey === berlinToday(now) && report.status === 'READY', report: meta, rows: withOwner, owners };
+  }
+
+  /** Today's owner is read live, so a truck taken or handed over moves at once; a past day keeps the owner of its morning. */
+  private async ownersOf(rows: Array<{ id: string; vehicleId: string | null; detailsJson: string | null }>, live: boolean): Promise<Map<string, StatusOwner | null>> {
+    const result = new Map(rows.map((row) => [row.id, ownerOf(row.detailsJson)]));
+    if (!live) return result;
+    const ids = rows.flatMap((row) => row.vehicleId ? [row.vehicleId] : []);
+    const vehicles = await this.db.vehicle.findMany({ where: { id: { in: ids } }, select: { id: true, assignedDispatcherId: true, customerLine: { select: { dispatchers: LINE_DISPATCHERS } } } });
+    const current = new Map(vehicles.map((vehicle) => [vehicle.id, statusOwnerOf(vehicle, vehicle.customerLine?.dispatchers ?? [])]));
+    for (const row of rows) if (row.vehicleId && current.has(row.vehicleId)) result.set(row.id, current.get(row.vehicleId) ?? null);
+    return result;
+  }
+
+  private async dispatcherNames(owners: Array<StatusOwner | null>) {
+    const ids = [...new Set(owners.flatMap((owner) => owner ? [owner.id] : []))];
+    const people = ids.length ? await this.db.dispatcher.findMany({ where: { id: { in: ids } }, select: { id: true, displayName: true, active: true } }) : [];
+    return new Map(people.map((person) => [person.id, { name: person.displayName, active: person.active }]));
   }
 
   async editRow(id: string, input: { version: number; bemerkung?: string | null; weNortheim?: string | null; overrides?: StatusOverrides }, actor: AuditActor, now = new Date()) {
     const row = await this.db.dailyStatusRow.findUnique({ where: { id }, include: { report: true } });
     if (!row) throw new DailyStatusError('Строка не найдена.', 404);
     if (row.report.date !== berlinToday(now)) throw new DailyStatusError('Прошлые списки только для чтения.', 409);
+    const owner = (await this.ownersOf([row], true)).get(row.id) ?? null;
+    // Each dispatcher sends the customer their own trucks: a colleague's line is theirs (or an admin's) to change.
+    if (actor.role === 'dispatcher' && actor.dispatcherId && owner && owner.id !== actor.dispatcherId) {
+      const name = (await this.dispatcherNames([owner])).get(owner.id)?.name ?? 'другой диспетчер';
+      throw new DailyStatusError(`LKW ${row.vehicleNumber} ведёт ${name}: Bemerkung правит этот диспетчер или администратор.`, 403);
+    }
     let overrides: StatusOverrides = {};
     try { overrides = row.overridesJson ? JSON.parse(row.overridesJson) as StatusOverrides : {}; } catch { overrides = {}; }
     if (input.overrides) for (const [key, value] of Object.entries(input.overrides)) {
@@ -476,12 +520,22 @@ export class DailyStatusService {
     const changed = await this.db.dailyStatusRow.updateMany({ where: { id, version: input.version }, data });
     if (!changed.count) throw new DailyStatusError('Строку только что изменил другой диспетчер. Список обновлён — проверьте и повторите.', 409);
     await writeAuditLog(this.db, actor, { action: 'DAILY_STATUS_ROW_EDITED', entityType: 'DailyStatusRow', entityId: id, vehicleId: row.vehicleId,
-      metadata: { date: row.report.date, vehicleNumber: row.vehicleNumber, fields: Object.keys(input).filter((key) => key !== 'version') } });
+      metadata: { date: row.report.date, vehicleNumber: row.vehicleNumber, ownerId: owner?.id ?? null, fields: Object.keys(input).filter((key) => key !== 'version') } });
     const updated = await this.db.dailyStatusRow.findUniqueOrThrow({ where: { id } });
-    return { ...updated, flags: flagsOf(updated.detailsJson), shown: presentRow(updated, row.report.date), edited: true };
+    const person = owner ? (await this.dispatcherNames([owner])).get(owner.id) : undefined;
+    return { ...updated, flags: flagsOf(updated.detailsJson), shown: presentRow(updated, row.report.date), edited: true,
+      owner: owner ? { ...owner, name: person?.name ?? 'Диспетчер удалён', active: person?.active ?? false } : null };
   }
 }
 
+const LINE_DISPATCHERS = { where: { dispatcher: { active: true } }, select: { dispatcherId: true, isPrimary: true } } as const;
+
 function flagsOf(details: string | null): StatusFlag[] {
   try { return details ? (JSON.parse(details) as { flags?: StatusFlag[] }).flags ?? [] : []; } catch { return []; }
+}
+function ownerOf(details: string | null): StatusOwner | null {
+  try {
+    const owner = details ? (JSON.parse(details) as { owner?: StatusOwner | null }).owner : null;
+    return owner && typeof owner.id === 'string' && (owner.source === 'TAKEN' || owner.source === 'LINE') ? { id: owner.id, source: owner.source } : null;
+  } catch { return null; }
 }

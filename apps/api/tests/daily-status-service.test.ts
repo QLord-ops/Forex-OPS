@@ -170,12 +170,14 @@ describe('routes', () => {
     expect((await app.inject({ method: 'GET', url: '/daily-status?date=2026-11-05' })).statusCode).toBe(401);
     const anna = await signIn('anna');
     expect((await app.inject({ method: 'GET', url: '/daily-status?date=05.11.2026', headers: anna })).statusCode).toBe(400);
-    expect((await app.inject({ method: 'GET', url: '/daily-status/2026-11-01/export.xlsx', headers: anna })).statusCode).toBe(404);
+    expect((await app.inject({ method: 'GET', url: '/daily-status/2026-11-01/export.xlsx?owner=mine', headers: anna })).statusCode).toBe(404);
     await service().generate('2026-11-05', new Date('2026-11-05T06:00:00Z'), { role: 'system', sessionId: 'daily-status' });
     const row = (await service().get('2026-11-05', new Date('2026-11-05T06:00:00Z'))).rows[0]!;
     expect((await app.inject({ method: 'PATCH', url: `/daily-status/rows/${row.id}`, headers: anna, payload: { version: row.version, driverName: 'x' } })).statusCode).toBe(400);
     expect((await app.inject({ method: 'PATCH', url: `/daily-status/rows/${row.id}`, headers: anna, payload: { version: row.version, bemerkung: 'x'.repeat(501) } })).statusCode).toBe(400);
-    const file = await app.inject({ method: 'GET', url: '/daily-status/2026-11-05/export.xlsx', headers: anna });
+    // The whole list is the admin's; a dispatcher downloads only their own trucks.
+    expect((await app.inject({ method: 'GET', url: '/daily-status/2026-11-05/export.xlsx', headers: anna })).statusCode).toBe(403);
+    const file = await app.inject({ method: 'GET', url: '/daily-status/2026-11-05/export.xlsx', headers: await signIn('chef') });
     expect(file.statusCode).toBe(200);
     expect(file.headers['content-type']).toContain('spreadsheetml');
     expect(file.headers['content-disposition']).toContain('filename="Status 2026-11-05.xlsx"');

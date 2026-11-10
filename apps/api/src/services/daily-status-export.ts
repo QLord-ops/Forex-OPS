@@ -36,6 +36,8 @@ function columnsOf(config: StatusListConfig['columns']): Column[] {
 export async function buildStatusWorkbook(input: {
   date: string; generatedAt: Date | null; rows: ExportRow[];
   groups?: StatusListConfig['groups']; columns?: StatusListConfig['columns'];
+  /** One dispatcher's Excel: only the blocks of lines that have their trucks. */
+  skipEmptyGroups?: boolean;
 }): Promise<Buffer> {
   const groupsConfig = input.groups ?? LEGACY_STATUS_LIST.groups;
   const columns = columnsOf(input.columns ?? LEGACY_STATUS_LIST.columns);
@@ -54,7 +56,7 @@ export async function buildStatusWorkbook(input: {
   const groups = [...groupsConfig.map((group) => ({ key: group.code as string | null, title: group.name })), { key: null, title: 'Ohne Gruppe' }];
   for (const group of groups) {
     const rows = input.rows.filter((row) => (row.statusGroup ?? null) === group.key || (group.key === null && !codes.includes(row.statusGroup ?? '')));
-    if (!rows.length && group.key === null) continue;
+    if (!rows.length && (group.key === null || input.skipEmptyGroups)) continue;
     const header = sheet.addRow(columns.map((column) => column.header));
     header.font = { bold: true, size: 12 };
     header.alignment = { horizontal: 'center', vertical: 'middle' };
