@@ -1041,6 +1041,40 @@ export const tourInclude = {
   document: { select: { id: true, filename: true, mimeType: true } }
 } satisfies Prisma.TourInclude;
 
+/**
+ * The list of tours: everything but the drawn route. A leg's geometry and provider answer are hundreds of kilobytes;
+ * read for every tour at once they held the whole server for a minute (10.11.2026).
+ */
+export const tourListInclude = {
+  ...tourInclude,
+  legs: {
+    orderBy: { createdAt: "asc" },
+    select: { id: true, tourId: true, fromStopId: true, toStopId: true, distanceMeters: true, routingDurationSeconds: true,
+      simulatedDurationSeconds: true, drivePlan: true, startedAt: true, finishedAt: true, status: true, createdAt: true, updatedAt: true }
+  }
+} satisfies Prisma.TourInclude;
+
+/** Finished tours stay in the list this long; older ones are in the truck's history. */
+export const TOUR_LIST_FINISHED_DAYS = 30;
+
+/** Tours for the list: running and queued ones, and those finished lately. ETA needs a leg's drive plan, never its drawn route. */
+export async function findToursForList(db: Pick<PrismaClient, "tour">, filter: { vehicleId?: string; status?: string } = {}, now = new Date()): Promise<TourAggregate[]> {
+  const tours = await db.tour.findMany({
+    where: {
+      vehicleId: filter.vehicleId,
+      status: filter.status ? { equals: filter.status as never } : undefined,
+      OR: [{ status: { in: ["ACTIVE", "QUEUED"] } }, { updatedAt: { gte: new Date(now.getTime() - TOUR_LIST_FINISHED_DAYS * 86_400_000) } }]
+    },
+    include: tourListInclude,
+    orderBy: [{ plannedStartAt: "asc" }, { createdAt: "asc" }]
+  });
+  return tours.map((tour) => ({ ...tour, legs: tour.legs.map((leg) => ({ ...leg, routeGeometry: "", routeDetails: null })) })) as TourAggregate[];
+}
+
+export function withoutDrawnRoute<T extends { legs: Array<{ routeGeometry?: unknown; routeDetails?: unknown }> }>(tour: T) {
+  return { ...tour, legs: tour.legs.map(({ routeGeometry: _geometry, routeDetails: _details, ...leg }) => leg) };
+}
+
 export function enrichTour(tour: TourAggregate, now = new Date(), driver: DriverEtaInput | null = null) {
   const activeLeg = tour.legs.find((leg) => leg.status === "ACTIVE" || leg.status === "ARRIVED");
   const nextStop = activeLeg
