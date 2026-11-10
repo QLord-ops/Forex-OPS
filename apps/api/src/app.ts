@@ -455,7 +455,12 @@ export async function buildApp(options: BuildAppOptions = {}) {
     if (state.status === "failed") return reply.status(state.statusCode).send({ error: state.error });
     return reply.status(202).send({ status: "running", jobId: job.id });
   }
-  const learnedRules = (customerId: string | null) => importLearning.learned(customerId).catch(() => null);
+  // What the dispatchers taught: import rules of the customer plus the city codes, which belong to everybody.
+  const learnedRules = async (customerId: string | null) => {
+    const [learned, rules] = await Promise.all([importLearning.learned(customerId).catch(() => null), addressRules.all().catch(() => [])]);
+    const cityCodes = Object.fromEntries(rules.filter((rule) => rule.kind === "CITY_CODE" && rule.city).map((rule) => [rule.pattern, rule.city!]));
+    return { aliases: {}, ignoreLabels: {}, stopTypes: {}, ...learned, cityCodes };
+  };
   const pdfImport = options.pdfImport ?? (async (buffer, filename, customer) =>
     importPdfPreview(buffer, filename, { learned: await learnedRules(customer?.selected?.id ?? null), customer: customer ?? null }));
   const imageImport = options.imageImport ?? (async (buffer, filename, mimeType, customer) =>
@@ -732,6 +737,13 @@ export async function buildApp(options: BuildAppOptions = {}) {
     rules: (await addressRules.list()).map((rule) => toIsoObject(rule)),
     builtIn: BUILT_IN_RULES.map(({ pattern, kind, company, city, requiresTermin }) => ({ pattern, kind, company, city, requiresTermin }))
   }));
+  // «Что значит SZ?» answered in the check of an Auftrag: remembered at once, for every customer.
+  app.post('/address-rules/city-codes', { preHandler: requireDispatcherRoles('admin', 'dispatcher'), config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (request, reply) => {
+    const input = z.object({ code: z.string().trim().regex(/^\p{L}{1,4}$/u), city: z.string().trim().min(2).max(100).regex(/^[\p{L}][\p{L} .()'/-]*$/u) }).strict().parse(request.body);
+    const rule = await addressRules.learnCityCode(input.code, input.city, auditActor(request));
+    if (!rule) return reply.status(409).send({ error: 'Это сокращение уже занято выученным местом — измените его в «Правилах адресов».' });
+    return reply.status(201).send(toIsoObject(rule));
+  });
   app.patch('/address-rules/:id', { preHandler: requireDispatcherRoles('admin', 'dispatcher') }, async request => {
     const id = idParams.parse(request.params).id;
     const patch = z.object({

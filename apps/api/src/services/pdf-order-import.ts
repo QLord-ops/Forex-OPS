@@ -8,6 +8,8 @@ import type { AiField, OrderField, StopField, StopProvenance } from "./field-con
 
 export { mentionsZuladung } from "./zuladung.js";
 import { extractPdfText, hasTextLayer, pagesAsText } from "./pdf-text.js";
+import { BUILT_IN_RULES } from "./address-rules.js";
+import { decodeCityCode, looksLikeCityCode } from "./route-decoding.js";
 
 // The reading runs as a background job, so the model may take minutes; this only stops a request that will never answer.
 export const DEFAULT_TIMEOUT_MS = 240_000;
@@ -172,6 +174,9 @@ export interface PdfImportWarning {
   /** The stop (0-based, in the order of the preview) and field the warning is about, so it shows next to that field. */
   stopIndex?: number;
   field?: StopField;
+  /** UNKNOWN_ABBREVIATION: the code nobody could explain and the towns of this Auftrag it might mean. */
+  abbreviation?: string;
+  options?: string[];
 }
 
 export interface PdfImportedStopDraft {
@@ -259,6 +264,8 @@ export type LearnedImportRules = {
   ignoreLabels: Record<string, string | null>;
   /** "company city" → the type the dispatcher always gives that place. */
   stopTypes: Record<string, "LOAD" | "UNLOAD">;
+  /** City code → town ("sz" → "Salzgitter"): the built-in registration codes plus what the dispatchers taught. */
+  cityCodes?: Record<string, string>;
   /** Words that mean the Abteilung warehouse, never a town (from the customer profile; default Lager, vorladen, divers). */
   warehouseWords?: string[];
   /** Text for the model: active rules and confirmed examples, already sanitised. */
@@ -269,7 +276,8 @@ export type LearnedImportRules = {
 export const BUILT_IN_IMPORT_RULES: LearnedImportRules = {
   aliases: { mb: "Mercedes-Benz AG", vw: "Volkswagen AG" },
   ignoreLabels: { lg: "Leergut", leergut: "Leergut", vg: "Vollgut", vollgut: "Vollgut" },
-  stopTypes: {}
+  stopTypes: {},
+  cityCodes: Object.fromEntries(BUILT_IN_RULES.filter((rule) => rule.kind === "CITY_CODE" && rule.city).map((rule) => [rule.pattern, rule.city!]))
 };
 
 export function withBuiltInImportRules(learned?: Partial<LearnedImportRules> | null): LearnedImportRules {
@@ -278,7 +286,8 @@ export function withBuiltInImportRules(learned?: Partial<LearnedImportRules> | n
     ...learned,
     aliases: { ...BUILT_IN_IMPORT_RULES.aliases, ...learned?.aliases },
     ignoreLabels: { ...BUILT_IN_IMPORT_RULES.ignoreLabels, ...learned?.ignoreLabels },
-    stopTypes: { ...BUILT_IN_IMPORT_RULES.stopTypes, ...learned?.stopTypes }
+    stopTypes: { ...BUILT_IN_IMPORT_RULES.stopTypes, ...learned?.stopTypes },
+    cityCodes: { ...BUILT_IN_IMPORT_RULES.cityCodes, ...learned?.cityCodes }
   };
 }
 
@@ -922,7 +931,14 @@ function reconcileStopsWithTourRemarks(
 ): { stops: ParsedStop[]; warnings: PdfImportWarning[] } {
   const used = new Set<number>();
   const warnings: PdfImportWarning[] = [];
-  const stops = route.map((routeStop, sequence) => {
+  const stops = route.map((writtenStop, sequence) => {
+    // "VW SZ": the addresses of this Auftrag say what SZ is before the rows are ranked.
+    const decoded = decodeRouteCity(writtenStop, candidates, used, learned);
+    const routeStop = decoded?.routeStop ?? writtenStop;
+    if (decoded?.source === "ADDRESS") {
+      warnings.push({ code: "ABBREVIATION_FROM_ADDRESS", stopIndex: sequence, field: "city",
+        message: `«${writtenStop.cityHint}» — это ${routeStop.cityHint}: так написан адрес в Auftrag.` });
+    }
     if (routeStop.addressSource === "DEPARTMENT") {
       const candidateIndex = candidates.findIndex((candidate, index) =>
         !used.has(index) && isDepartmentCandidate(candidate, routeStop.type, learned));
@@ -955,11 +971,20 @@ function reconcileStopsWithTourRemarks(
         });
         return { ...withLearnedStopType(withTourRemarkDetails(fromNotes, routeStop), learned), provenance: "OTHER_STOP_NOTE" as const };
       }
-      warnings.push({
-        code: "TOUR_REMARKS_STOP_NOT_FOUND", stopIndex: sequence, field: "address",
-        message: `Для точки «${routeStop.label}» из Tourbemerkung не найден надёжный адрес; проверьте его вручную.`,
-        ...(tourRemarksSourcePage ? { page: tourRemarksSourcePage } : {})
-      });
+      if (!decoded && isUnexplainedCode(writtenStop, learned)) {
+        const towns = [...new Set(candidates.map((candidate) => cleanCity(candidate.city) ?? inferCityFromAddress(candidate.address)).filter((city): city is string => Boolean(city)))];
+        warnings.push({
+          code: "UNKNOWN_ABBREVIATION", stopIndex: sequence, field: "city", abbreviation: writtenStop.cityHint, options: towns.slice(0, 6),
+          message: `Сокращение «${writtenStop.cityHint}» в Tourbemerkung («${writtenStop.label}») не расшифровано. Напишите, что оно значит, — оно запомнится для следующих Auftrag.`,
+          ...(tourRemarksSourcePage ? { page: tourRemarksSourcePage } : {})
+        });
+      } else {
+        warnings.push({
+          code: "TOUR_REMARKS_STOP_NOT_FOUND", stopIndex: sequence, field: "address",
+          message: `Для точки «${routeStop.label}» из Tourbemerkung не найден надёжный адрес; проверьте его вручную.`,
+          ...(tourRemarksSourcePage ? { page: tourRemarksSourcePage } : {})
+        });
+      }
       const placeholder = placeholderStop(routeStop, sequence + 1, tourRemarksSourcePage, learned);
       return { ...withLearnedStopType(withTourRemarkDetails(placeholder, routeStop), learned), provenance: "PLACEHOLDER" as const, aliasApplied: placeholder.company !== shortLabel(routeStop) };
     }
@@ -980,6 +1005,32 @@ function reconcileStopsWithTourRemarks(
     warnings.push({ code: "TABLE_STOPS_NOT_IN_TOUR_REMARKS", message: `В таблице есть адреса, которых нет в Tourbemerkung: ${unnamed.slice(0, 4).join("; ")}. Проверьте, к какой точке они относятся.` });
   }
   return { stops, warnings };
+}
+
+/** A code after a company name ("VW SZ") that is no alias, cargo label or warehouse word: a town somebody has to name. */
+function isUnexplainedCode(routeStop: TourRemarkStop, learned: LearnedImportRules): boolean {
+  const code = routeStop.cityHint;
+  if (routeStop.addressSource !== "TOUR_REMARKS" || !looksLikeCityCode(code) || code.length < 2) return false;
+  if (routeStop.label.trim().split(/\s+/).length < 2) return false;
+  const key = normalizeRouteText(code);
+  return !(key in learned.aliases) && !(key in learned.ignoreLabels) && !(learned.warehouseWords ?? []).some((word) => normalizeRouteText(word) === key);
+}
+
+/**
+ * The stop with its city code spelled out, when the address rows of the same company (or, for a bare code, of the
+ * whole Auftrag) or the dictionary say what it means. Null: nothing to decode or nobody knows.
+ */
+function decodeRouteCity(routeStop: TourRemarkStop, candidates: ParsedStop[], used: Set<number>, learned: LearnedImportRules): { routeStop: TourRemarkStop; source: "ADDRESS" | "RULE" } | null {
+  const code = routeStop.cityHint;
+  if (routeStop.addressSource !== "TOUR_REMARKS" || !looksLikeCityCode(code) || routeStop.label.trim().split(/\s+/).length < 2) return null;
+  const key = normalizeRouteText(code);
+  if (key in learned.aliases || key in learned.ignoreLabels) return null;
+  const companyTokens = tourRemarkCompanyTokens(routeStop);
+  const rows = candidates.filter((candidate, index) => !used.has(index) && (!companyTokens.length || mentionsCompany(candidate, companyTokens, learned)));
+  const decoding = decodeCityCode(code, rows.map((row) => cleanCity(row.city) ?? inferCityFromAddress(row.address)), learned.cityCodes);
+  if (!decoding) return null;
+  const label = `${routeStop.label.slice(0, routeStop.label.lastIndexOf(code))}${decoding.city}`.trim();
+  return { routeStop: { ...routeStop, label, cityHint: decoding.city }, source: decoding.source };
 }
 
 const COMPANY_STOPWORDS = new Set(["gmbh", "ag", "kg", "co", "se", "lager", "werk", "und", "the"]);
