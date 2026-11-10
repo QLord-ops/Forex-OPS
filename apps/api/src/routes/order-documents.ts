@@ -35,7 +35,10 @@ export function registerOrderDocumentRoutes(app: FastifyInstance, documents: Ord
     const document = await documents.get(id);
     if (!document) return reply.status(404).send({ error: 'Auftrag не найден.' });
     const parse = (text: string | null) => { try { return text ? JSON.parse(text) as unknown : null; } catch { return null; } };
-    return { ...document, previewJson: undefined, confirmedJson: undefined, preview: parse(document.previewJson), confirmed: parse(document.confirmedJson) };
+    const preview = parse(document.previewJson);
+    // The model's raw answer is the server's working copy; the page gets the checked preview only.
+    const shown = preview && typeof preview === 'object' ? { ...preview, modelAnswer: undefined } : preview;
+    return { ...document, previewJson: undefined, confirmedJson: undefined, preview: shown, confirmed: parse(document.confirmedJson) };
   });
 
   app.get('/documents/:id/file', { preHandler: roles, config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (request, reply) => {
@@ -84,6 +87,8 @@ export type OrderReparseDeps = {
   read: (file: StoredFile, previewJson: string, customer: ImportCustomerContext, request: FastifyRequest) => Promise<{ preview: ReparsedPreview } | { status: number; error: string }>;
   /** Saves the new parse on the same document row (same file, same sha256) and returns what the client gets. */
   store: (preview: ReparsedPreview, file: StoredFile, request: FastifyRequest) => Promise<unknown>;
+  /** Works the stored model answer out again by today's rules, without asking the model. */
+  recompute?: (file: StoredFile, previewJson: string, customer: ImportCustomerContext, request: FastifyRequest) => Promise<{ preview: ReparsedPreview } | { status: number; error: string }>;
   /** With jobs the reading runs on after `waitMs` and the page collects the result from /imports/jobs/:id. */
   jobs?: ImportJobs;
   owner?: (request: FastifyRequest) => string;
@@ -123,5 +128,25 @@ export function registerOrderReparseRoute(app: FastifyInstance, deps: OrderRepar
     if (state.status === 'done') return state.result;
     if (state.status === 'failed') return reply.status(state.statusCode).send({ error: state.error });
     return reply.status(202).send({ status: 'running', jobId: job.id });
+  });
+
+  /**
+   * A rule was learned or changed while the check is open: the answer the model already gave is worked out again
+   * by the rules of now. No model call, so it takes a moment and costs nothing.
+   */
+  app.post('/documents/:id/refresh', { preHandler: requireDispatcherRoles('admin', 'dispatcher'), config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (request, reply) => {
+    const { id } = idParams.parse(request.params);
+    const { customerId } = z.object({ customerId: z.string().trim().min(1).max(64).nullable() }).parse(request.body ?? {});
+    const document = await deps.documents.get(id);
+    if (!document) return reply.status(404).send({ error: 'Auftrag не найден.' });
+    if (document.status !== 'PENDING') return reply.status(409).send({ error: 'Auftrag уже сохранён в туре — пересчитать можно только до сохранения.' });
+    const file = await deps.documents.file(id);
+    if (!file || !deps.recompute) return reply.status(410).send({ error: 'Файл Auftrag больше не хранится — загрузите его заново.' });
+    const result = await deps.recompute(file, document.previewJson, await deps.customers.importContext(customerId), request);
+    if ('error' in result) return reply.status(result.status).send({ error: result.error });
+    const stored = await deps.store(result.preview, file, request);
+    await writeAuditLog(deps.db, actorOf(request), { action: 'ORDER_DOCUMENT_REFRESHED', entityType: 'OrderDocument', entityId: id,
+      metadata: { customerId, customer: result.preview.customer?.key ?? null } });
+    return stored;
   });
 }

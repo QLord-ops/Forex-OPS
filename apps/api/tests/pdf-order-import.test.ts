@@ -104,9 +104,11 @@ describe("PDF Auftrag import", () => {
         file_data: expect.stringMatching(/^data:application\/pdf;base64,/),
         detail: "high"
       }),
-      expect.objectContaining({ type: "input_text", text: expect.stringContaining("loadingMeters") })
+      expect.objectContaining({ type: "input_text", text: expect.stringContaining("Context of this reading") })
     ]));
-    const instruction = (userMessage?.content as Array<{ type: string; text?: string }>).find((item) => item.type === "input_text")?.text;
+    // The rules stand before the document, so OpenAI can cache them from one Auftrag to the next.
+    const instruction = String(body.input.find((item) => item.role === "system")?.content);
+    expect(instruction).toContain("loadingMeters");
     expect(instruction).toContain("FIRST locate and read Tourbemerkung");
     expect(instruction).toContain("SECOND find those same locations");
     expect(instruction).toContain("every location before the first 'für' (or an arrow");
@@ -519,7 +521,7 @@ describe("PDF Auftrag import", () => {
         image_url: expect.stringMatching(/^data:image\/png;base64,/),
         detail: "high"
       }),
-      expect.objectContaining({ type: "input_text", text: expect.stringContaining("city") })
+      expect.objectContaining({ type: "input_text", text: expect.stringContaining("Context of this reading") })
     ]));
   });
 });

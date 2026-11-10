@@ -164,10 +164,17 @@ function isValidDay(value: string): boolean {
   return Boolean(match && toDay(Number(match[1]), Number(match[2]), Number(match[3])));
 }
 
-/** Date rules for the AI reader; "today" lets it complete a date printed without a year. */
-export function aiDateRules(now = new Date()): string {
+const DATE_LABELS = 'very loading and unloading stop usually has a date; find it next to the stop or under labels such as Ladedatum, Ladetermin, Beladung, Abholdatum, Abholung, Liefertermin, Lieferdatum, Anlieferung, Entladedatum, Entladetermin, Zustelltermin, Fixtermin, Termin, Datum.';
+
+/** "today" lets the AI reader complete a date printed without a year. */
+export function aiToday(now = new Date()): string {
+  return `today is ${berlinToday(now)} (Europe/Berlin)`;
+}
+
+/** Date rules for the AI reader. Without `now` they name no day, so they can sit in the cached start of a request. */
+export function aiDateRules(now?: Date): string {
   return [
-    `Stop dates: today is ${berlinToday(now)} (Europe/Berlin). Every loading and unloading stop usually has a date; find it next to the stop or under labels such as Ladedatum, Ladetermin, Beladung, Abholdatum, Abholung, Liefertermin, Lieferdatum, Anlieferung, Entladedatum, Entladetermin, Zustelltermin, Fixtermin, Termin, Datum.`,
+    now ? `Stop dates: ${aiToday(now)}. E${DATE_LABELS}` : `Stop dates: e${DATE_LABELS}`,
     'Write Berlin wall-clock values. Fill at most ONE of: appointmentLocal; the pair appointmentWindowStartLocal/appointmentWindowEndLocal; appointmentDateLocal.',
     'appointmentLocal (YYYY-MM-DDTHH:mm) only for one printed time such as "FIX 13:30" or "um 9 Uhr".',
     'A printed time range ("08:00-14:00", "von 8 bis 12 Uhr") goes to the window pair. "bis 12 Uhr" means window 06:00 to 12:00 of that day; "ab 14 Uhr" means 14:00 to 18:00.',
