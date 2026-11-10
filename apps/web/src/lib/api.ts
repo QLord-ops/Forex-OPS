@@ -316,6 +316,11 @@ export const api = {
   /** The stored Auftrag read again with another customer's profile (null: automatic detection). */
   reparseDocument: (documentId: string, customerId: string | null) =>
     importResult(`/documents/${encodeURIComponent(documentId)}/reparse`, { method: 'POST', body: JSON.stringify({ customerId }), headers: { 'Content-Type': 'application/json' } }),
+  /** The stored answer of the AI worked out again by today's rules; no new reading. */
+  refreshDocument: (documentId: string, customerId: string | null) =>
+    importResult(`/documents/${encodeURIComponent(documentId)}/refresh`, { method: 'POST', body: JSON.stringify({ customerId }), headers: { 'Content-Type': 'application/json' } }),
+  /** "SZ" → Salzgitter, remembered for every later Auftrag. */
+  learnCityCode: (code: string, city: string) => request<{ id: string }>('/address-rules/city-codes', { method: 'POST', body: JSON.stringify({ code, city }) }),
   geocode: (address: string) => request<GeocodeResult>(`/geocode?address=${encodeURIComponent(address)}`),
   resolveAddress: (payload: { address: string; city?: string | null; company?: string | null }) =>
     request<AddressResolution>('/geocode/resolve', { method: 'POST', body: JSON.stringify(payload) }),

@@ -531,6 +531,9 @@ export interface ImportWarning {
   field?: string
   /** The stop (0-based, in the preview's order) the warning is about. */
   stopIndex?: number
+  /** UNKNOWN_ABBREVIATION: the city code to ask about and the towns of this Auftrag it might mean. */
+  abbreviation?: string
+  options?: string[]
 }
 
 export interface ImportedStopDraft {

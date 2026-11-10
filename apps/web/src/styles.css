@@ -680,3 +680,11 @@ main a:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
 /* ---- OPS FOREX brand ---- */
 .brand-mark { flex: none; }
+
+.abbreviation-question { margin-top: 0.75rem; border: 1px solid rgb(var(--ln-fde68a)); border-radius: 0.55rem; background: rgb(var(--bg-fffbeb)); padding: 0.75rem; color: rgb(var(--tx-92400e)); }
+.abbreviation-title { display: flex; align-items: center; gap: 0.4rem; font-size: 0.86rem; font-weight: 800; }
+.abbreviation-hint { margin-top: 0.2rem; font-size: 0.76rem; font-weight: 600; }
+.abbreviation-options { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.55rem; }
+.abbreviation-input { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.5rem; margin-top: 0.55rem; }
+.abbreviation-input label { min-width: 10rem; }
+.abbreviation-done { margin-top: 0.75rem; border: 1px solid rgb(var(--ln-a7f3d0, 167 243 208)); border-radius: 0.55rem; background: rgb(var(--bg-ecfdf5, 236 253 245)); padding: 0.65rem; color: rgb(var(--tx-065f46, 6 95 70)); font-size: 0.76rem; font-weight: 750; }
