@@ -73,6 +73,8 @@ import { ImportLearningService } from './services/import-learning.js';
 import { registerImportRuleRoutes } from './routes/import-rules.js';
 import { registerAppointmentDocumentRoutes } from './routes/appointments.js';
 import type { CustomerEvidence, DocumentImportPreview, ImportCustomerContext, ReadStats } from './services/pdf-order-import.js';
+import { storedAnswerOf } from './services/order-documents.js';
+import { readingFromStore } from './services/import-reuse.js';
 
 function auditActor(request: FastifyRequest): AuditActor | undefined {
   return request.dispatcherSession
@@ -178,22 +180,31 @@ async function withDocument<T extends TourAggregate>(tour: T): Promise<T> {
   return { ...tour, document: document ? { id: document.id, filename: document.filename, mimeType: document.mimeType } : null };
 }
 
+/** Every reading takes the same way: Termin slip match or address rules → customer → field confidence → timings. */
+async function finishRead<T extends DocumentImportPreview & { answerReused?: boolean }>(read: T, buffer: Buffer, customerContext: ImportCustomerContext, contextMs: number, startedAt: number) {
+  const checked = await withFieldConfidence(await withCustomer(await withAppointmentMatch(read, buffer), customerContext));
+  return read.answerReused ? checked : withReadTimings(checked, contextMs, startedAt);
+}
+
 /** Adds what the route measured to the reading's own numbers, before the parse is stored with its document. */
 function withReadTimings<T extends { readStats?: ReadStats }>(preview: T, contextMs: number, startedAt: number): T {
   return preview.readStats ? { ...preview, readStats: { ...preview.readStats, contextMs, totalMs: contextMs + Date.now() - startedAt } } : preview;
 }
 
 /** The Auftrag file stays with the tour it will create. A storage failure never costs the dispatcher the parse. */
-async function withStoredDocument<T extends { documentKind?: string; drafts: Array<unknown>; warnings: Array<{ code: string; message: string }>; customer?: ImportCustomer | null }>(preview: T, file: { buffer: Buffer; filename: string; mimeType: string }, request: FastifyRequest) {
+async function withStoredDocument<T extends { documentKind?: string; drafts: Array<unknown>; warnings: Array<{ code: string; message: string }>; customer?: ImportCustomer | null; modelAnswer?: unknown; answerReused?: boolean; readStats?: unknown }>(full: T, file: { buffer: Buffer; filename: string; mimeType: string }, request: FastifyRequest) {
+  // The model's raw answer stays in the database for the next reading of this file; the page never gets it.
+  // A reading taken from the store shows no timings: they belong to the first reading and stay with the stored row.
+  const preview = { ...full, modelAnswer: undefined, ...(full.answerReused ? { readStats: undefined } : {}) };
   if (preview.documentKind === 'APPOINTMENT' || !preview.drafts?.length) return { ...preview, documentId: null, documentReused: false, attachedTourId: null };
   try {
-    const stored = await orderDocuments.store({ ...file, previewJson: preview, customerId: preview.customer?.id ?? null, actor: auditActor(request) });
+    const stored = await orderDocuments.store({ ...file, previewJson: { ...full, answerReused: undefined }, customerId: preview.customer?.id ?? null, actor: auditActor(request) });
     const warnings = stored.attachedTourId
       ? [...preview.warnings, { code: 'DOCUMENT_ALREADY_ATTACHED', message: 'Этот файл уже сохранён с другим туром — проверьте, не дубль ли это.' }]
       : preview.warnings;
     return { ...preview, warnings, documentId: stored.id, documentReused: stored.reused, attachedTourId: stored.attachedTourId };
   } catch (error) {
-    request.log.warn({ err: error }, 'Auftrag не сохранён в базе; разбор отдан без документа');
+    request.log.warn({ errorType: error instanceof Error ? error.name : 'unknown' }, 'Auftrag не сохранён в базе; разбор отдан без документа');
     return { ...preview, documentId: null, documentReused: false, attachedTourId: null };
   }
 }
@@ -895,7 +906,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
           const read = file.mimeType === "application/pdf"
             ? await pdfImport(file.content, file.filename, customerContext)
             : await imageImport(file.content, file.filename, file.mimeType as "image/png" | "image/jpeg" | "image/webp", customerContext);
-          return { preview: withReadTimings(await withFieldConfidence(await withCustomer(await withAppointmentMatch(read, file.content), customerContext)), 0, started) };
+          return { preview: await finishRead(read, file.content, customerContext, 0, started) };
         } catch (error) {
           if (error instanceof AssistantError) throw error;
           request.log.error({ errorType: error instanceof Error ? error.name : "unknown" }, "Не удалось заново разобрать Auftrag");
@@ -904,6 +915,13 @@ export async function buildApp(options: BuildAppOptions = {}) {
       } finally {
         activeOrderImports -= 1;
       }
+    },
+    recompute: async (file, previewJson, customerContext) => {
+      const layout = file.mimeType === "application/pdf" ? "PDF" as const : "IMAGE" as const;
+      const again = await readingFromStore(storedAnswerOf({ id: "", status: "PENDING", previewJson }), layout, customerContext, () => learnedRules(customerContext.selected?.id ?? null));
+      if (!again) return { status: 409, error: "Для этого Auftrag нет сохранённого ответа ИИ по этому заказчику — нажмите «Прочитать заново ИИ»." };
+      // An answer to a question asked on purpose is not «the file was read before».
+      return { preview: await finishRead({ ...again, warnings: again.warnings.filter((warning) => warning.code !== "DOCUMENT_REUSED") }, file.content, customerContext, 0, Date.now()) };
     }
   });
 
@@ -937,17 +955,20 @@ export async function buildApp(options: BuildAppOptions = {}) {
       }
 
       const contextStarted = Date.now();
-      const customerContext = await importCustomerContext(request);
-      if (!options.auth?.disabled) await assistantService.consumeUsage(assistantSessionKey(request));
+      // Whose Auftrag it is and whether this very file was read before are asked side by side.
+      const [customerContext, before] = await Promise.all([importCustomerContext(request), orderDocuments.modelAnswerOf(buffer).catch(() => null)]);
+      const reused = await readingFromStore(before, "PDF", customerContext, () => learnedRules(customerContext.selected?.id ?? null));
+      // A reading taken from the store asks no model, so it does not count against the AI quota.
+      if (!reused && !options.auth?.disabled) await assistantService.consumeUsage(assistantSessionKey(request));
       const contextMs = Date.now() - contextStarted;
       handedOff = true;
       const job = importJobs.start(importOwner(request), async () => {
         try {
           const started = Date.now();
-          const read = await pdfImport(buffer, filename, customerContext);
+          const read = reused ?? await pdfImport(buffer, filename, customerContext);
           const aiMs = Date.now() - started;
-          const checked = withReadTimings(await withFieldConfidence(await withCustomer(await withAppointmentMatch(read, buffer), customerContext)), contextMs, started);
-          request.log.info({ readMode: read.readMode ?? null, ...checked.readStats, aiMs, pdfBytes: buffer.length }, 'PDF-заказ распознан');
+          const checked = await finishRead(read, buffer, customerContext, contextMs, started);
+          request.log.info({ readMode: read.readMode ?? null, ...checked.readStats, aiMs, pdfBytes: buffer.length, answerReused: Boolean(reused) }, 'PDF-заказ распознан');
           return { ...await withStoredDocument(checked, { buffer, filename, mimeType: "application/pdf" }, request), readMs: Date.now() - started };
         } catch (error) {
           if (error instanceof Error && error.message.includes("OPENAI_API_KEY")) throw new ImportJobError("OpenAI ещё не настроен для импорта PDF.", 503);
@@ -993,18 +1014,19 @@ export async function buildApp(options: BuildAppOptions = {}) {
       }
 
       const contextStarted = Date.now();
-      const customerContext = await importCustomerContext(request);
-      if (!options.auth?.disabled) await assistantService.consumeUsage(assistantSessionKey(request));
+      const [customerContext, before] = await Promise.all([importCustomerContext(request), orderDocuments.modelAnswerOf(buffer).catch(() => null)]);
+      const reused = await readingFromStore(before, "IMAGE", customerContext, () => learnedRules(customerContext.selected?.id ?? null));
+      if (!reused && !options.auth?.disabled) await assistantService.consumeUsage(assistantSessionKey(request));
       const contextMs = Date.now() - contextStarted;
       handedOff = true;
       const mimeType = file.mimetype;
       const job = importJobs.start(importOwner(request), async () => {
         try {
           const started = Date.now();
-          const read = await imageImport(buffer, filename, mimeType, customerContext);
+          const read = reused ?? await imageImport(buffer, filename, mimeType, customerContext);
           const aiMs = Date.now() - started;
-          const checked = withReadTimings(await withFieldConfidence(await withCustomer(await withAppointmentMatch(read, buffer), customerContext)), contextMs, started);
-          request.log.info({ ...checked.readStats, aiMs, imageBytes: buffer.length }, 'Скриншот заказа распознан');
+          const checked = await finishRead(read, buffer, customerContext, contextMs, started);
+          request.log.info({ ...checked.readStats, aiMs, imageBytes: buffer.length, answerReused: Boolean(reused) }, 'Скриншот заказа распознан');
           return { ...await withStoredDocument(checked, { buffer, filename, mimeType }, request), readMs: Date.now() - started };
         } catch (error) {
           if (error instanceof Error && error.message.includes("OPENAI_API_KEY")) throw new ImportJobError("OpenAI ещё не настроен для импорта скриншотов.", 503);

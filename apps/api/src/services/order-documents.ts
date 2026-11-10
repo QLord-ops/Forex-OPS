@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { Prisma, PrismaClient } from '@prisma/client';
 import { writeAuditLog, type AuditActor } from './audit-log.js';
+import { storedModelAnswerOf } from './pdf-order-import.js';
 
 const DAY_MS = 24 * 3600_000;
 
@@ -60,6 +61,12 @@ export class OrderDocumentService {
       select: { id: true }
     });
     return { id: created.id, sha256, reused: false, attachedTourId: null as string | null };
+  }
+
+  /** What the model answered for exactly this file before, with the timings of that reading. */
+  async modelAnswerOf(buffer: Buffer) {
+    const row = await this.db.orderDocument.findUnique({ where: { sha256: sha256Of(buffer) }, select: { id: true, status: true, previewJson: true } });
+    return row ? storedAnswerOf(row) : null;
   }
 
   /** Links a pending document to the tour made from it. A second call is a no-op; another tour is refused. */
@@ -126,5 +133,16 @@ export class OrderDocumentService {
     const removed = await this.db.orderDocument.deleteMany({ where: { id, status: 'PENDING' } });
     if (removed.count) await writeAuditLog(this.db, actor, { action: 'ORDER_DOCUMENT_DELETED', entityType: 'OrderDocument', entityId: id });
     return removed.count > 0;
+  }
+}
+
+/** The model answer kept inside a stored preview; null for Excel, old rows and anything unreadable. */
+export function storedAnswerOf(row: { id: string; status: string; previewJson: string }) {
+  try {
+    const preview = JSON.parse(row.previewJson) as { modelAnswer?: unknown; readStats?: unknown } | null;
+    const answer = storedModelAnswerOf(preview?.modelAnswer);
+    return answer ? { id: row.id, status: row.status, answer, readStats: preview?.readStats } : null;
+  } catch {
+    return null;
   }
 }
