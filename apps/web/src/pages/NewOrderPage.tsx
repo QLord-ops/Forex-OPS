@@ -9,7 +9,7 @@ import { EmptyState, ErrorState, LoadingState } from '../components/States'
 import { usePolling } from '../hooks/usePolling'
 import { api } from '../lib/api'
 import { statusLabel } from '../lib/format'
-import type { CreateTourStopInput, GeocodeResult, ImportedOrderDraft, OrderImportPreview, StopType } from '../types/domain'
+import type { AddressResolution, CreateTourStopInput, GeocodeResult, ImportedOrderDraft, OrderImportPreview, StopType } from '../types/domain'
 import { importFingerprint } from '../lib/import-fingerprint'
 import { berlinLocalToIso } from '../lib/berlin-time'
 import { AppointmentReview } from '../components/AppointmentReview'
@@ -96,12 +96,19 @@ function findNextImportSelection(items: ImportQueueItem[], current?: ImportSelec
   return null
 }
 
+/** How exact the coordinates are, when known: a known place or a picked suggestion is the door itself. */
+function precisionOf(geocode: GeocodeResult): AddressResolution['precision'] | undefined {
+  if ('precision' in geocode) return (geocode as AddressResolution).precision
+  return geocode.provider === 'webfleet-address' || geocode.provider === 'address-rule' || geocode.provider === 'ops-address' ? 'EXACT' : undefined
+}
+
 function buildStopsFromImport(draft: ImportedOrderDraft): StopDraft[] {
   const result = draft.stops.slice().sort((a, b) => a.sequence - b.sequence).map((stop, draftStopIndex): StopDraft => ({
     id: crypto.randomUUID(), draftStopIndex, type: stop.type, company: stop.company ?? '', address: stop.address ?? '', city: stop.city ?? '',
     appointmentAt: stop.appointmentLocal ?? '', appointmentWindowStartAt: stop.appointmentWindowStartLocal ?? '', appointmentWindowEndAt: stop.appointmentWindowEndLocal ?? '', loadingMeters: stop.loadingMeters?.toString() ?? '',
     referenceNumbers: stop.referenceNumbers?.join(', ') ?? '', instructions: stop.instructions ?? '', serviceMinMinutes: 60, serviceMaxMinutes: 120,
     sourceExcerpt: stop.sourceExcerpt, sourcePage: stop.sourcePage, plannedAt: stop.plannedLocal ?? null, terminRequired: stop.terminRequired,
+    geocode: stop.resolution && stop.resolution.sourceAddress === (stop.address ?? '').trim() ? stop.resolution : undefined,
     fieldConfidence: stop.fieldConfidence, original: stopValues({ type: stop.type, company: stop.company ?? '', address: stop.address ?? '', city: stop.city ?? '', appointmentAt: stop.appointmentLocal ?? '',
       appointmentWindowStartAt: stop.appointmentWindowStartLocal ?? '', loadingMeters: stop.loadingMeters?.toString() ?? '', referenceNumbers: stop.referenceNumbers?.join(', ') ?? '' })
   }))
@@ -213,7 +220,7 @@ export function NewOrderPage() {
     setTrailerPlate(draft.trailerPlate ?? '')
     setTourRemarks(draft.tourRemarks ?? '')
     setStops(importedStops); setManualMode(false); setEditing(false); setActiveStopId(null); setError(null); setSuccessMessage(null)
-    importedStops.forEach((stop) => { if (stop.address.trim()) void geocodeStop(stop) })
+    importedStops.forEach((stop) => { if (stop.address.trim() && !stop.geocode) void geocodeStop(stop) })
   }
 
   function selectImportedDraft(selection: ImportSelection) {
@@ -309,7 +316,8 @@ export function NewOrderPage() {
     let firstFailedStopId: string | null = null
     for (const stop of stops) {
       try {
-        const geocode = await api.geocode(buildGeocodeQuery(stop.address, stop.city))
+        // Coordinates already found for this very address (a picked suggestion, a known place) are kept: editing the address clears them.
+        const geocode = stop.geocode ?? await api.geocode(buildGeocodeQuery(stop.address, stop.city))
         resolvedStops.push({ ...stop, geocode, city: stop.city.trim() || geocode.city || '', geocodeError: undefined })
       } catch (err) {
         resolvedStops.push({ ...stop, geocode: undefined, geocodeError: err instanceof Error ? err.message : 'Адрес не найден.' })
@@ -325,7 +333,7 @@ export function NewOrderPage() {
     }
     const tourInput = {
       orderNumber: orderNumber.trim(), trailerPlate: trailerPlate.trim() || null, tourRemarks: tourRemarks.trim() || null,
-      stops: resolvedStops.map((stop, index): CreateTourStopInput => ({ sequence: index + 1, type: stop.type, company: stop.company.trim() || undefined, address: stop.address.trim(), city: stop.city.trim() || undefined, latitude: stop.geocode!.latitude, longitude: stop.geocode!.longitude, appointmentAt: stop.appointmentAt ? berlinLocalToIso(stop.appointmentAt) : null, appointmentWindowStartAt: stop.appointmentWindowStartAt ? berlinLocalToIso(stop.appointmentWindowStartAt) : null, appointmentWindowEndAt: stop.appointmentWindowEndAt ? berlinLocalToIso(stop.appointmentWindowEndAt) : null, plannedAt: stop.plannedAt && !stop.appointmentAt ? berlinLocalToIso(stop.plannedAt) : null, loadingMeters: stop.loadingMeters ? Number(stop.loadingMeters.replace(',', '.')) : null, referenceNumbers: stop.referenceNumbers.split(/[,;\n]+/).map((value) => value.trim()).filter(Boolean), instructions: stop.instructions.trim() || null, serviceMinMinutes: stop.serviceMinMinutes, serviceMaxMinutes: stop.serviceMaxMinutes, draftStopIndex: stop.draftStopIndex ?? null }))
+      stops: resolvedStops.map((stop, index): CreateTourStopInput => ({ sequence: index + 1, type: stop.type, company: stop.company.trim() || undefined, address: stop.address.trim(), city: stop.city.trim() || undefined, latitude: stop.geocode!.latitude, longitude: stop.geocode!.longitude, geocodeProvider: stop.geocode!.provider || null, ...(precisionOf(stop.geocode!) ? { geocodePrecision: precisionOf(stop.geocode!) } : {}), appointmentAt: stop.appointmentAt ? berlinLocalToIso(stop.appointmentAt) : null, appointmentWindowStartAt: stop.appointmentWindowStartAt ? berlinLocalToIso(stop.appointmentWindowStartAt) : null, appointmentWindowEndAt: stop.appointmentWindowEndAt ? berlinLocalToIso(stop.appointmentWindowEndAt) : null, plannedAt: stop.plannedAt && !stop.appointmentAt ? berlinLocalToIso(stop.plannedAt) : null, loadingMeters: stop.loadingMeters ? Number(stop.loadingMeters.replace(',', '.')) : null, referenceNumbers: stop.referenceNumbers.split(/[,;\n]+/).map((value) => value.trim()).filter(Boolean), instructions: stop.instructions.trim() || null, serviceMinMinutes: stop.serviceMinMinutes, serviceMaxMinutes: stop.serviceMaxMinutes, draftStopIndex: stop.draftStopIndex ?? null }))
     }
     try {
       const importedFile = appliedImportSelection ? importItems.find((item) => item.id === appliedImportSelection.itemId) : undefined

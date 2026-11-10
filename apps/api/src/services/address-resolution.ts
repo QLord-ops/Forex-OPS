@@ -3,6 +3,7 @@ import type { AddressResearchCandidate, AddressResearcher } from "./address-rese
 import type { RoutingProvider } from "./routing.js";
 import { RoutingError } from "./routing.js";
 import { expandCity, findSiteRule, type AddressRuleRecord } from "./address-rules.js";
+import { findKnownPlace, knownPlaceResolution, type KnownPlace } from "./known-places.js";
 
 export const geocodePrecisions = ["EXACT", "STREET", "POSTCODE_CITY", "CITY"] as const;
 export type GeocodePrecision = (typeof geocodePrecisions)[number];
@@ -30,7 +31,8 @@ export async function resolveAddressWithFallback(
   routing: RoutingProvider,
   input: { address: string; city?: string | null; company?: string | null },
   researcher?: AddressResearcher,
-  rules: AddressRuleRecord[] = []
+  rules: AddressRuleRecord[] = [],
+  places: KnownPlace[] = []
 ): Promise<AddressResolution> {
   const sourceAddress = input.address.trim();
   if (!sourceAddress) throw new RoutingError("Адрес не может быть пустым.", 400);
@@ -66,6 +68,10 @@ export async function resolveAddressWithFallback(
     }
     attempts.push(`правило «${site.pattern}» отброшено: ${Math.round(km)} км от ${anchor!.query}`);
   }
+
+  // The same door (street, house number, postcode) is in the address book: its coordinates need no geocoder.
+  const place = findKnownPlace({ ...input, city }, places);
+  if (place) return knownPlaceResolution(place, sourceAddress);
 
   const candidates = buildAddressCandidates(sourceAddress, city, input.company);
   let lastNotFound: unknown;
