@@ -189,7 +189,7 @@ export class AddressRuleService {
   }
 }
 
-type DraftStopLike = { company: string | null; address: string | null; city?: string | null; appointmentLocal: string | null; appointmentWindowStartLocal?: string | null };
+type DraftStopLike = { company: string | null; address: string | null; city?: string | null; appointmentLocal: string | null; appointmentWindowStartLocal?: string | null; samePlaceAsPrevious?: boolean };
 
 /**
  * Applies the rules to one recognised stop: city codes spelled out, short company names expanded,
@@ -210,7 +210,7 @@ export function applyRulesToStop<T extends DraftStopLike>(stop: T, rules: Addres
     address,
     city: site?.city ?? city,
     sourceLabel,
-    terminRequired: !hasTermin && requiresTermin(`${companyName ?? ""} ${stop.company ?? ""} ${stop.address ?? ""}`, rules),
+    terminRequired: !hasTermin && !stop.samePlaceAsPrevious && requiresTermin(`${companyName ?? ""} ${stop.company ?? ""} ${stop.address ?? ""}`, rules),
     ruleApplied: Boolean(site)
   };
 }

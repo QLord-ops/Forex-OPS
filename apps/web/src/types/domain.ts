@@ -549,6 +549,8 @@ export interface ImportedStopDraft {
   plannedLocal?: string | null
   /** The customer always sends a Termin and it has not arrived yet. */
   terminRequired?: boolean
+  /** Unloading and loading at one plant: served at the place, and under the Termin, of the stop before it. */
+  samePlaceAsPrevious?: boolean
   /** The imported company and city ("Seifert Bremen"): a corrected place is remembered for it. */
   sourceLabel?: string
   /** Coordinates the server already knows for this address (address book or a learned place): nothing to look up. */
