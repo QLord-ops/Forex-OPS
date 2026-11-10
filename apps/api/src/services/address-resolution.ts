@@ -4,6 +4,7 @@ import type { RoutingProvider } from "./routing.js";
 import { RoutingError } from "./routing.js";
 import { expandCity, findSiteRule, type AddressRuleRecord } from "./address-rules.js";
 import { findKnownPlace, knownPlaceResolution, type KnownPlace } from "./known-places.js";
+import { addressParts, type AddressCheck, type AddressChecker, type PlaceSearch } from "./address-check.js";
 
 export const geocodePrecisions = ["EXACT", "STREET", "POSTCODE_CITY", "CITY"] as const;
 export type GeocodePrecision = (typeof geocodePrecisions)[number];
@@ -21,7 +22,10 @@ export type AddressResolution = GeocodeResult & {
   attempts: string[];
   researchUsed?: boolean;
   researchCandidates?: AddressResearchCandidate[];
+  check?: AddressCheck | null;
 };
+
+export type AddressSources = { checker?: AddressChecker; places?: PlaceSearch };
 
 /**
  * Order of evidence (owner's decision 2026-11-04): a learned rule for the company in that city, then the city
@@ -32,7 +36,25 @@ export async function resolveAddressWithFallback(
   input: { address: string; city?: string | null; company?: string | null },
   researcher?: AddressResearcher,
   rules: AddressRuleRecord[] = [],
-  places: KnownPlace[] = []
+  places: KnownPlace[] = [],
+  sources: AddressSources = {}
+): Promise<AddressResolution> {
+  // The official postcode and street register is asked alongside; its verdict travels with the answer and never blocks it.
+  const checking = sources.checker && input.address.trim()
+    ? sources.checker.check({ address: input.address, city: expandCity(input.city ?? null, rules.length ? rules : undefined) }).catch(() => null)
+    : Promise.resolve(undefined);
+  const result = await resolveCore(routing, input, researcher, rules, places, sources.places);
+  const check = await checking;
+  return check === undefined ? result : { ...result, check };
+}
+
+async function resolveCore(
+  routing: RoutingProvider,
+  input: { address: string; city?: string | null; company?: string | null },
+  researcher: AddressResearcher | undefined,
+  rules: AddressRuleRecord[],
+  places: KnownPlace[],
+  companySearch?: PlaceSearch
 ): Promise<AddressResolution> {
   const sourceAddress = input.address.trim();
   if (!sourceAddress) throw new RoutingError("Адрес не может быть пустым.", 400);
@@ -72,6 +94,20 @@ export async function resolveAddressWithFallback(
   // The same door (street, house number, postcode) is in the address book: its coordinates need no geocoder.
   const place = findKnownPlace({ ...input, city }, places);
   if (place) return knownPlaceResolution(place, sourceAddress);
+
+  // No street with a house number, only a company in a town ("BLG, Bremen"): a business directory knows the plant better.
+  if (companySearch && input.company?.trim() && anchor && !addressParts(sourceAddress, city).street) {
+    const town = await anchored();
+    const hit = town ? await companySearch.findCompany(input.company, town).catch(() => null) : null;
+    if (hit) {
+      const km = await farFromCity(hit, hit.city);
+      if (km === null) {
+        attempts.push(`TomTom: ${input.company.trim()} у ${anchor.query}`);
+        return { ...hit, sourceAddress, resolvedAddress: hit.label, precision: "EXACT", attempts };
+      }
+      attempts.push(`TomTom: ${hit.label}: ${Math.round(km)} км от ${anchor.query}, отброшено`);
+    }
+  }
 
   const candidates = buildAddressCandidates(sourceAddress, city, input.company);
   let lastNotFound: unknown;
