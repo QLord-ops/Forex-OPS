@@ -244,7 +244,7 @@ function StatusProfile({ customer, editable, onSaved }: { customer: Detail; edit
       weColumnLabel: form.we.trim() || null, showASchild: form.showASchild, showAppSped: form.showAppSped
     } } }), 'Настройки статуса сохранены.')
   }}>
-    <p className="page-subtitle customer-form-wide">Ежедневный список для заказчика: блоки — его линии. Список видно на странице «Статус», оттуда же скачивается Excel.</p>
+    <p className="page-subtitle customer-form-wide">Ежедневный список для заказчика: блоки — его линии. Список видно на странице «Статус»: каждый диспетчер скачивает там Excel со своими машинами. Без галочки статус формируется вручную, кнопкой на той же странице.</p>
     <fieldset className="customer-fieldset" disabled={!editable}>
       <label className="customer-check customer-form-wide"><input type="checkbox" checked={form.enabled} onChange={(event) => setForm({ ...form, enabled: event.target.checked })} />Формировать статус автоматически каждый день</label>
       <label><span className="field-label">Время (Берлин)</span><input className="field-input" type="time" value={form.dueLocalTime} onChange={(event) => setForm({ ...form, dueLocalTime: event.target.value })} /></label>

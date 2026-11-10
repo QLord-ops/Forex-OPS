@@ -158,17 +158,22 @@ describe('status lists per customer', () => {
     await new CustomerService(app()).migrateFromLines(admin);
     const after = new DailyStatusService(app(), deps());
     const lists = await after.lists();
-    expect(lists.map((list) => [list.key, list.dueLocalTime])).toEqual([['SCHNELLECKE', '07:00']]);
+    // Walter has a line but no daily list in its profile: its status is made by the button only, never at 07:00.
+    expect(lists.map((list) => [list.key, list.dueLocalTime, list.auto])).toEqual([['SCHNELLECKE', '07:00', true], ['WALTER_TESLA', '07:00', false]]);
     expect(lists[0].groups.map((group) => group.code)).toEqual(['NORD', 'SUED', 'ALLGEMEIN']);
 
     const at = new Date('2026-11-09T06:00:00Z');
     expect(await after.runIfDue(at)).toBe('GENERATED');
     const list = await after.get('2026-11-09', at);
     expect(list.list).toMatchObject({ key: 'SCHNELLECKE', name: 'Schnellecke', columns: { we: 'WE in Northeim', aSchild: true, appSped: true } });
-    // 727 is on a Schnellecke line but excluded by the profile; Walter's 2853 has its own customer without a list.
+    // 727 is on a Schnellecke line but excluded by the profile; Walter's 2853 is in Walter's own list.
     expect(list.rows.map((row) => row.vehicleNumber).sort()).toEqual(['124', '777', '9724']);
+    expect(await db.dailyStatusReport.count()).toBe(1);
     expect((await db.dailyStatusReport.findFirstOrThrow()).customerId).toBe(lists[0].customerId);
-    await expect(after.get('2026-11-09', at, 'WALTER_TESLA')).rejects.toMatchObject({ statusCode: 404 });
+    expect(await after.get('2026-11-09', at, 'WALTER_TESLA')).toMatchObject({ report: null, list: { auto: false } });
+    const walter = await after.generate('2026-11-09', at, admin, { list: 'WALTER_TESLA' });
+    expect(walter.rows.map((row) => row.vehicleNumber)).toEqual(['2853']);
+    await expect(after.get('2026-11-09', at, 'NOBODY')).rejects.toMatchObject({ statusCode: 404 });
   });
 
   it('builds a second customer\'s list at its own time and with its own columns', async () => {

@@ -41,6 +41,19 @@ export function isMine(me: string | null, vehicle: { assignedDispatcherId: strin
   return Boolean(vehicle.customerLineId && myLines.has(vehicle.customerLineId));
 }
 
+export type StatusOwner = { id: string; source: 'TAKEN' | 'LINE' };
+/**
+ * Whose Excel a truck's status line goes into: the dispatcher who took it; a free truck goes to the only dispatcher
+ * of its line, or to the only one whose main line it is. Otherwise nobody's — every truck is in at most one Excel.
+ */
+export function statusOwnerOf(vehicle: { assignedDispatcherId: string | null }, lineDispatchers: ReadonlyArray<{ dispatcherId: string; isPrimary: boolean }>): StatusOwner | null {
+  if (vehicle.assignedDispatcherId) return { id: vehicle.assignedDispatcherId, source: 'TAKEN' };
+  const all = [...new Set(lineDispatchers.map((item) => item.dispatcherId))];
+  if (all.length === 1) return { id: all[0]!, source: 'LINE' };
+  const primary = [...new Set(lineDispatchers.filter((item) => item.isPrimary).map((item) => item.dispatcherId))];
+  return primary.length === 1 ? { id: primary[0]!, source: 'LINE' } : null;
+}
+
 export type CustomerInput ={ name: string; slug?: string; category?: CustomerCategory; aliases?: string[]; color?: string | null; profile?: unknown };
 export type LineInput = { code: string; name: string; departmentCompany?: string | null; departmentAddress?: string | null; departmentCity?: string | null; sortIndex?: number; active?: boolean };
 

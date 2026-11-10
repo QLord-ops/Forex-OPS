@@ -26,3 +26,14 @@
 .status-yes { color: rgb(var(--tx-15803d)); font-weight: 600; }
 .status-no { color: rgb(var(--tx-b91c1c)); }
 .status-error { display: block; margin-top: 4px; font-size: .75rem; color: rgb(var(--tx-b91c1c)); }
+.status-scope { width: fit-content; max-width: 100%; margin-left: 0; overflow-x: auto; }
+.status-tab-note { margin-left: 2px; color: rgb(var(--tx-61748a)); font-size: .75rem; font-weight: 400; }
+.status-customer-select { display: grid; gap: 4px; max-width: 320px; }
+.status-owner { display: grid; gap: 8px; }
+.status-owner + .status-owner { margin-top: 12px; }
+.status-owner-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.status-owner-title { display: flex; align-items: baseline; gap: 8px; font-size: 1rem; font-weight: 600; color: rgb(var(--tx-18344d)); }
+.status-owner-note { font-size: .8125rem; color: rgb(var(--tx-92400e)); }
+.status-take { display: flex; width: fit-content; align-items: center; gap: 2px; margin-top: 4px; border: 1px solid rgb(var(--ln-e2e8f0)); border-radius: 6px; padding: 1px 6px; color: rgb(var(--tx-334155)); font-size: .6875rem; font-weight: 500; }
+.status-take:hover { background: rgb(var(--bg-f8fafc)); }
+.status-take:focus-visible { outline: 2px solid rgb(var(--ln-0ea5e9)); outline-offset: 1px; }
