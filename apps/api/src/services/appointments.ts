@@ -1,13 +1,24 @@
 import type { PrismaClient } from "@prisma/client";
 import type { CurrentPosition } from "../domain.js";
 import { EtaService } from "./eta.js";
+import { hasTermin, isTerminFollower, terminFollowerIds, terminLeadIndex } from "./termin-groups.js";
 import { TourPlanConflictError } from "./tours.js";
 
 export type AppointmentRisk = "ON_TIME" | "RISK" | "LATE" | "UNKNOWN";
 export type AppointmentAction = "LEAVE_BY" | "LEAVE_NOW" | "IN_TRANSIT" | "ARRIVED" | "UNKNOWN_POSITION";
 
+/** PLACE: the Termin of the whole place, kept on its first stop. STOP: a Termin of this stop only. */
+export type AppointmentScope = "PLACE" | "STOP";
+
 export interface AppointmentAnalysis {
+  /** The stop the Termin is kept on; it differs from the requested one when the place has an earlier stop. */
   stopId: string;
+  requestedStopId: string;
+  appliedToStopId: string;
+  /** Later stops of the same place that are served under this Termin. */
+  sharedStopIds: string[];
+  /** Set when the Termin covers several stops of one place: their numbers in the tour, the first keeps the Termin. */
+  sharedPlace: { sequences: number[]; city: string | null } | null;
   tourId: string;
   vehicleId: string;
   version: number;
@@ -34,6 +45,7 @@ export type AppointmentApplyOptions = {
   references?: string[];
   source?: "DISPATCHER" | "DOCUMENT";
   document?: { kind: string; label: string | null };
+  scope?: AppointmentScope;
 };
 
 export class AppointmentService {
@@ -43,9 +55,10 @@ export class AppointmentService {
     private readonly getPosition?: (vehicleId: string, now: Date) => Promise<CurrentPosition>
   ) {}
 
-  async preview(stopId: string, input: AppointmentInput, now = new Date()): Promise<AppointmentAnalysis> {
+  async preview(requestedStopId: string, input: AppointmentInput, now = new Date(), scope: AppointmentScope = "PLACE"): Promise<AppointmentAnalysis> {
     const slot = parseSlot(input);
     const appointmentAt = slot.deadline;
+    const { stopId, sharedStopIds, sharedPlace } = await this.terminTarget(requestedStopId, scope);
     const context = await this.readContext(stopId);
     assertEditableStop(context.stop.completedAt, context.stop.tour.status);
 
@@ -117,6 +130,10 @@ export class AppointmentService {
 
     return {
       stopId,
+      requestedStopId,
+      appliedToStopId: stopId,
+      sharedStopIds,
+      sharedPlace,
       tourId: context.stop.tourId,
       vehicleId: context.vehicle.id,
       version: context.stop.tour.planVersion,
@@ -136,10 +153,11 @@ export class AppointmentService {
     };
   }
 
-  async apply(stopId: string, input: AppointmentInput & { version: number }, now = new Date(), options: AppointmentApplyOptions = {}): Promise<AppointmentAnalysis> {
+  async apply(requestedStopId: string, input: AppointmentInput & { version: number }, now = new Date(), options: AppointmentApplyOptions = {}): Promise<AppointmentAnalysis> {
     const slot = parseSlot(input);
     const slotInput = { appointmentAt: slot.appointmentAt?.toISOString() ?? null, windowStartAt: slot.windowStartAt?.toISOString() ?? null, windowEndAt: slot.windowEndAt?.toISOString() ?? null };
-    const decision = await this.preview(stopId, slotInput, now);
+    const decision = await this.preview(requestedStopId, slotInput, now, options.scope);
+    const stopId = decision.appliedToStopId;
     if (decision.version !== input.version) {
       throw new TourPlanConflictError("Маршрут изменился. Обновите данные и рассчитайте термин повторно.");
     }
@@ -184,6 +202,8 @@ export class AppointmentService {
             windowStartAt: slotInput.windowStartAt,
             windowEndAt: slotInput.windowEndAt,
             source: options.source ?? "DISPATCHER",
+            requestedStopId,
+            sharedStopIds: decision.sharedStopIds,
             document: options.document ?? null,
             addedReferences: options.references ?? [],
             appliedAt: now.toISOString(),
@@ -199,7 +219,25 @@ export class AppointmentService {
       });
     });
 
-    return this.preview(stopId, slotInput, now);
+    return { ...await this.preview(stopId, slotInput, now, "STOP"), requestedStopId, sharedStopIds: decision.sharedStopIds, sharedPlace: decision.sharedPlace };
+  }
+
+  /**
+   * Unloading and loading at one plant share one Termin, kept on the first open stop of the place: a Termin given
+   * for the later stop is stored there. A stop that already has its own Termin keeps it for itself. Scope STOP gives
+   * the later stop a Termin of its own only next to the Termin of the place: without one it would be the place's.
+   */
+  private async terminTarget(stopId: string, scope: AppointmentScope): Promise<Pick<AppointmentAnalysis, "stopId" | "sharedStopIds" | "sharedPlace">> {
+    const stop = await this.db.stop.findUniqueOrThrow({ where: { id: stopId }, include: { tour: { include: { stops: { orderBy: { sequence: "asc" } } } } } });
+    const stops = stop.tour.stops;
+    const index = stops.findIndex((item) => item.id === stopId);
+    let lead = isTerminFollower(stops, index) ? terminLeadIndex(stops, index) : index;
+    // History is immutable: a finished first stop keeps what it had, the Termin goes to the next open stop of the place.
+    while (lead < index && stops[lead].completedAt) lead += 1;
+    if (scope === "STOP" && lead < index && hasTermin(stops[lead])) return { stopId, sharedStopIds: [], sharedPlace: null };
+    const sharedStopIds = terminFollowerIds(stops, lead);
+    const sequences = [stops[lead], ...stops.filter((item) => sharedStopIds.includes(item.id))].map((item) => item.sequence);
+    return { stopId: stops[lead].id, sharedStopIds, sharedPlace: sharedStopIds.length ? { sequences, city: stops[lead].city } : null };
   }
 
   private async readContext(stopId: string) {

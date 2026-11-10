@@ -3,7 +3,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { api } from '../lib/api'
 import { formatDateTime, formatDurationMinutes, shortAddress } from '../lib/format'
-import type { AppointmentAnalysis, Tour } from '../types/domain'
+import { sharedTerminNote, sharedTerminOf } from '../lib/tours'
+import type { AppointmentAnalysis, Stop, Tour } from '../types/domain'
 
 export function AppointmentPlanner({ tour, onChange }: { tour: Tour; onChange: () => Promise<unknown> }) {
   const pendingStops = useMemo(
@@ -13,7 +14,8 @@ export function AppointmentPlanner({ tour, onChange }: { tour: Tour; onChange: (
   const initialStop = pendingStops.find((stop) => stop.appointmentAt) ?? pendingStops[0]
   const [open, setOpen] = useState(Boolean(initialStop?.appointmentAt))
   const [stopId, setStopId] = useState(initialStop?.id ?? '')
-  const [appointmentLocal, setAppointmentLocal] = useState(() => toLocalDateTime(initialStop?.appointmentAt))
+  const [appointmentLocal, setAppointmentLocal] = useState(() => toLocalDateTime(terminOf(tour.stops ?? [], initialStop)))
+  const [onlyThisStop, setOnlyThisStop] = useState(false)
   const [analysis, setAnalysis] = useState<AppointmentAnalysis | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -21,6 +23,12 @@ export function AppointmentPlanner({ tour, onChange }: { tour: Tour; onChange: (
   const [manualAddress, setManualAddress] = useState('')
 
   const selectedStop = pendingStops.find((stop) => stop.id === stopId) ?? pendingStops[0]
+  const sharedWith = selectedStop ? sharedTerminOf(tour.stops ?? [], selectedStop)?.lead : undefined
+  const lead = sharedWith && !sharedWith.completedAt ? sharedWith : null
+  const canSplit = Boolean(lead && (lead.appointmentAt || lead.appointmentWindowStartAt))
+  const scope = onlyThisStop && canSplit ? 'STOP' as const : undefined
+  const keptOn = analysis ? (tour.stops ?? []).find((stop) => stop.id === (analysis.appliedToStopId ?? selectedStop?.id)) : undefined
+  const saved = Boolean(analysis && keptOn?.appointmentAt && new Date(keptOn.appointmentAt).getTime() === new Date(analysis.appointmentAt).getTime())
 
   const calculate = useCallback(async () => {
     if (!selectedStop) return
@@ -33,14 +41,14 @@ export function AppointmentPlanner({ tour, onChange }: { tour: Tour; onChange: (
     setError('')
     setSuccess('')
     try {
-      setAnalysis(await api.previewAppointment(selectedStop.id, appointmentAt))
+      setAnalysis(await api.previewAppointment(selectedStop.id, appointmentAt, scope))
     } catch (requestError) {
       setError((requestError as Error).message)
       setAnalysis(null)
     } finally {
       setBusy(false)
     }
-  }, [appointmentLocal, selectedStop])
+  }, [appointmentLocal, scope, selectedStop])
 
   useEffect(() => {
     if (!selectedStop || !open || analysis || busy || !appointmentLocal) return
@@ -52,7 +60,8 @@ export function AppointmentPlanner({ tour, onChange }: { tour: Tour; onChange: (
   function selectStop(id: string) {
     const stop = pendingStops.find((item) => item.id === id)
     setStopId(id)
-    setAppointmentLocal(toLocalDateTime(stop?.appointmentAt))
+    setAppointmentLocal(toLocalDateTime(terminOf(tour.stops ?? [], stop)))
+    setOnlyThisStop(false)
     setAnalysis(null)
     setError('')
     setSuccess('')
@@ -64,9 +73,9 @@ export function AppointmentPlanner({ tour, onChange }: { tour: Tour; onChange: (
     setBusy(true)
     setError('')
     try {
-      const result = await api.applyAppointment(selectedStop.id, { appointmentAt, version: analysis.version })
+      const result = await api.applyAppointment(selectedStop.id, { appointmentAt, version: analysis.version, scope })
       setAnalysis(result)
-      setSuccess('Термин прикреплён к заказу. ETA и предупреждения обновлены.')
+      setSuccess(`${sharedTerminNote(result.sharedPlace, true) || 'Термин прикреплён к заказу.'} ETA и предупреждения обновлены.`)
       await onChange()
     } catch (requestError) {
       setError((requestError as Error).message)
@@ -123,6 +132,23 @@ export function AppointmentPlanner({ tour, onChange }: { tour: Tour; onChange: (
               ))}
             </select>
           </label>
+          {lead ? <p className="text-xs text-slate-600">Одно место с точкой {lead.sequence}: выгрузка и загрузка идут под одним Termin — он сохраняется на точке {lead.sequence}.</p> : null}
+          {lead && canSplit ? (
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={onlyThisStop}
+                disabled={busy}
+                onChange={(event) => {
+                  setOnlyThisStop(event.target.checked)
+                  setAnalysis(null)
+                  setSuccess('')
+                }}
+              />
+              <span>Только для этой точки — отдельный Termin, у точки {lead.sequence} остаётся свой</span>
+            </label>
+          ) : null}
           <label className="block text-sm">
             <span className="field-label">Новый термин</span>
             <input
@@ -145,7 +171,8 @@ export function AppointmentPlanner({ tour, onChange }: { tour: Tour; onChange: (
             <AppointmentResult
               analysis={analysis}
               busy={busy}
-              saved={Boolean(selectedStop.appointmentAt && new Date(selectedStop.appointmentAt).getTime() === new Date(analysis.appointmentAt).getTime())}
+              saved={saved}
+              note={sharedTerminNote(analysis.sharedPlace, saved)}
               onApply={() => void apply()}
             />
           ) : null}
@@ -166,11 +193,13 @@ function AppointmentResult({
   analysis,
   busy,
   saved,
+  note,
   onApply
 }: {
   analysis: AppointmentAnalysis
   busy: boolean
   saved: boolean
+  note: string
   onApply: () => void
 }) {
   const riskLabel = analysis.risk === 'ON_TIME'
@@ -191,6 +220,7 @@ function AppointmentResult({
       {analysis.bufferMinutes !== null ? <p>Запас по верхней ETA: {analysis.bufferMinutes >= 0 ? formatDurationMinutes(analysis.bufferMinutes) : `опоздание ${formatDurationMinutes(Math.abs(analysis.bufferMinutes))}`}</p> : null}
       <p>{analysis.message}</p>
       {analysis.preliminary ? <p className="text-xs">Расчёт предварительный: GPS отсутствует или исходные часы машины заполнены не полностью.</p> : null}
+      {note ? <p>{note}</p> : null}
       {saved ? (
         <p className="text-xs font-semibold uppercase tracking-wide">Термин прикреплён к заказу</p>
       ) : (
@@ -198,6 +228,14 @@ function AppointmentResult({
       )}
     </div>
   )
+}
+
+/** The second operation at a place has no Termin of its own: the form starts from the one it goes under. */
+function terminOf(stops: Stop[], stop?: Stop): string | null {
+  if (!stop) return null
+  if (stop.appointmentAt) return stop.appointmentAt
+  const lead = sharedTerminOf(stops, stop)?.lead
+  return lead && !lead.completedAt ? lead.appointmentAt ?? null : null
 }
 
 function toLocalDateTime(value?: string | null): string {

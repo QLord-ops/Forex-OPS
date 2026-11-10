@@ -286,22 +286,23 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ version })
     }),
-  previewAppointment: (stopId: string, appointmentAt: string) =>
+  /** scope 'STOP' keeps the Termin on this stop alone; by default it is the Termin of the whole place. */
+  previewAppointment: (stopId: string, appointmentAt: string, scope?: 'PLACE' | 'STOP') =>
     request<AppointmentAnalysis>(`/stops/${stopId}/appointment/preview`, {
       method: 'POST',
-      body: JSON.stringify({ appointmentAt })
+      body: JSON.stringify({ appointmentAt, scope })
     }),
-  previewAppointmentSlot: (stopId: string, slot: { appointmentAt?: string | null; windowStartAt?: string | null; windowEndAt?: string | null }) =>
-    request<AppointmentAnalysis>(`/stops/${stopId}/appointment/preview`, { method: 'POST', body: JSON.stringify(slot) }),
+  previewAppointmentSlot: (stopId: string, slot: { appointmentAt?: string | null; windowStartAt?: string | null; windowEndAt?: string | null }, scope?: 'PLACE' | 'STOP') =>
+    request<AppointmentAnalysis>(`/stops/${stopId}/appointment/preview`, { method: 'POST', body: JSON.stringify({ ...slot, scope }) }),
   matchAppointment: (document: AppointmentDocument) =>
     request<AppointmentMatch>('/appointments/match', { method: 'POST', body: JSON.stringify(document) }),
-  applyAppointmentDocument: (payload: { stopId: string; version: number; fingerprint: string; pendingId?: string | null; document: AppointmentDocument }) =>
+  applyAppointmentDocument: (payload: { stopId: string; version: number; fingerprint: string; pendingId?: string | null; document: AppointmentDocument; scope?: 'PLACE' | 'STOP' }) =>
     request<AppointmentAnalysis>('/appointments/from-document', { method: 'POST', body: JSON.stringify(payload) }),
   savePendingAppointment: (payload: { fingerprint: string; document: AppointmentDocument }) =>
     request<{ id: string; status: string }>('/appointments/pending', { method: 'POST', body: JSON.stringify(payload) }),
   pendingAppointments: () => request<{ items: PendingAppointment[] }>('/appointments/pending'),
   dismissPendingAppointment: (id: string) => request<{ ok: true }>(`/appointments/pending/${encodeURIComponent(id)}/dismiss`, { method: 'POST', body: '{}' }),
-  applyAppointment: (stopId: string, payload: { appointmentAt: string; version: number }) =>
+  applyAppointment: (stopId: string, payload: { appointmentAt: string; version: number; scope?: 'PLACE' | 'STOP' }) =>
     request<AppointmentAnalysis>(`/stops/${stopId}/appointment`, {
       method: 'PUT',
       body: JSON.stringify(payload)

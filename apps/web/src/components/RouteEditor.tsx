@@ -3,12 +3,21 @@ import { AddressInput } from './AddressInput'
 import { suggestionAddress } from '../lib/address-book'
 import { withZuladungStop } from '../lib/zuladung'
 import { formatDateTime, formatDurationMinutes, metersToKm } from '../lib/format'
+import { sharedTerminLeadIndex, terminText } from '../lib/tours'
 import type { Stop, Tour } from '../types/domain'
 import { localDateTime, operationsRequest } from './VehicleOperationsPanel'
 
-interface DraftStop { id?: string; type: 'LOAD' | 'UNLOAD'; address: string; instructions?: string | null; city?: string | null; company?: string | null; appointmentAt?: string | null; serviceMinMinutes?: number; serviceMaxMinutes?: number; latitude?: number; longitude?: number; arrivedAt?: string | null }
+interface DraftStop { id?: string; type: 'LOAD' | 'UNLOAD'; address: string; instructions?: string | null; city?: string | null; company?: string | null; appointmentAt?: string | null; serviceMinMinutes?: number; serviceMaxMinutes?: number; latitude?: number; longitude?: number; arrivedAt?: string | null; terminSharedWithStopId?: string | null; moved?: boolean }
 interface Summary { distanceMeters: number; durationSeconds: number; roads: string[]; etaWindows?: { stopId: string; earliest: string; latest: string }[] }
 interface Preview { id: string; version: number; expiresAt: string; before: Summary; after: Summary; affectedTourIds: string[] }
+/** Unloading and loading at one plant go under one Termin: the second stop says whose Termin it follows. */
+function SharedTerminHint({ stops, index }: { stops: DraftStop[]; index: number }) {
+  const lead = sharedTerminLeadIndex(stops, index)
+  if (lead < 0) return null
+  const time = terminText({ appointmentAt: stops[lead].appointmentAt })
+  return <p className="text-xs text-slate-600">Общий Termin с точкой {lead + 1}{time ? ` · ${time}` : ''} — одно место, свой срок нужен только при отдельном окне.</p>
+}
+
 const draft = (stop: Stop): DraftStop => ({ ...stop, serviceMinMinutes: stop.serviceMinMinutes ?? 60, serviceMaxMinutes: stop.serviceMaxMinutes ?? 120 })
 
 export function RouteEditor({ tour, onChange, zuladungRequest = 0 }: { tour: Tour; onChange: () => Promise<unknown>; zuladungRequest?: number }) {
@@ -59,10 +68,11 @@ export function RouteEditor({ tour, onChange, zuladungRequest = 0 }: { tour: Tou
       {stops.map((stop, index) => <fieldset key={stop.id ?? `new-${index}`} className="space-y-2 rounded border p-3" disabled={busy || Boolean(stop.arrivedAt)}>
         <legend className="px-1 text-sm font-semibold">Точка {index + 1}{stop.type === 'LOAD' && /zuladung/i.test(stop.instructions ?? '') ? ' · Zuladung' : ''}{stop.arrivedAt ? ' · прибытие подтверждено (изменение запрещено)' : ''}</legend>
         <label className="block text-sm">Тип<select className="input" value={stop.type} onChange={e => change(index, { type: e.target.value as DraftStop['type'] })}><option value="LOAD">Загрузка</option><option value="UNLOAD">Выгрузка</option></select></label>
-        <label className="block text-sm">Адрес<AddressInput className="input" required value={stop.address} onChange={value => change(index, { address: value, latitude: undefined, longitude: undefined })} placeholder="Фирма, улица или город"
-          onPick={item => change(index, { address: suggestionAddress(item), city: item.city ?? stop.city, company: stop.company || item.company, latitude: item.latitude, longitude: item.longitude })} /></label>
+        <label className="block text-sm">Адрес<AddressInput className="input" required value={stop.address} onChange={value => change(index, { address: value, latitude: undefined, longitude: undefined, moved: true })} placeholder="Фирма, улица или город"
+          onPick={item => change(index, { address: suggestionAddress(item), city: item.city ?? stop.city, company: stop.company || item.company, latitude: item.latitude, longitude: item.longitude, moved: true })} /></label>
         <label className="block text-sm">Город<input className="input" value={stop.city ?? ''} onChange={e => change(index, { city: e.target.value })} /></label>
         <label className="block text-sm">Срок (необязательно)<input className="input" type="datetime-local" value={stop.appointmentAt ? localDateTime(stop.appointmentAt) : ''} onChange={e => change(index, { appointmentAt: e.target.value ? new Date(e.target.value).toISOString() : null })} /></label>
+        <SharedTerminHint stops={stops} index={index} />
         <div className="grid grid-cols-2 gap-2"><label className="text-sm">Стоянка, минимум<input className="input" type="number" min="0" required value={stop.serviceMinMinutes} onChange={e => change(index, { serviceMinMinutes: Number(e.target.value) })} /></label><label className="text-sm">Стоянка, максимум<input className="input" type="number" min={stop.serviceMinMinutes} required value={stop.serviceMaxMinutes} onChange={e => change(index, { serviceMaxMinutes: Number(e.target.value) })} /></label></div>
         <div className="flex gap-2"><button type="button" className="secondary-button" disabled={index === 0 || Boolean(stops[index - 1]?.arrivedAt)} onClick={() => move(index, -1)} aria-label={`Переместить точку ${index + 1} вверх`}>↑</button><button type="button" className="secondary-button" disabled={index === stops.length - 1 || Boolean(stops[index + 1]?.arrivedAt)} onClick={() => move(index, 1)} aria-label={`Переместить точку ${index + 1} вниз`}>↓</button><button type="button" className="secondary-button" onClick={() => { setStops(previous => previous.filter((_, i) => i !== index)); setPreview(null) }}>Удалить</button></div>
       </fieldset>)}

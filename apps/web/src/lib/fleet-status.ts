@@ -134,10 +134,13 @@ export function needsDecision(row: DashboardVehicle, notified: ReadonlySet<strin
   return getAttention(row, now).rank <= 2
 }
 
-/** The next stop belongs to a customer who always sends a Termin, and it has not come yet. */
+/**
+ * The next stop belongs to a customer who always sends a Termin, and it has not come yet.
+ * The second operation at a place goes under the Termin of the first and never waits for its own.
+ */
 export function terminNeeded(row: DashboardVehicle) {
   const stop = row.tour ? currentStopOf(row.tour) : null
-  return Boolean(stop?.terminRequired && !stop.appointmentAt && !stop.appointmentWindowStartAt)
+  return Boolean(stop?.terminRequired && !stop.terminSharedWithStopId && !stop.appointmentAt && !stop.appointmentWindowStartAt)
 }
 
 export function matchesFleetFilter(row: DashboardVehicle, filter: FleetFilter, notified: ReadonlySet<string> = new Set(), now = Date.now()) {

@@ -36,6 +36,7 @@ import { VEHICLE_CLOCK_LIMITS } from './services/vehicle-clock.js';
 import { bindWebfleetObject, listWebfleetBindings, unbindWebfleetVehicle, WebfleetSyncService, WebfleetTelemetryService, distanceMeters, DEFAULT_ARRIVAL_RADIUS_METERS, type AutoArrivalHandler, type AutoStopEventHandler } from './services/webfleet.js';
 import { buildVehicleCard, readDriverBudget, readDriverHours, suggestWebfleetBindings, vehicleObjectUid, WebfleetDetailsSync, WebfleetLiveStore, WebfleetTrackService } from './services/webfleet-live.js';
 import { TerminService } from './services/termin-service.js';
+import { withTerminGroups } from './services/termin-groups.js';
 import { VehicleBriefService } from './services/vehicle-brief.js';
 import { calculateRiskColor, calculateSimulatedDuration } from './services/simulation.js';
 import { forecastDrive } from './services/vehicle-clock.js';
@@ -770,16 +771,18 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const input = z.object({ radiusMeters: z.number().int().min(100).max(5000).nullable() }).parse(request.body ?? {});
     return operationsService.setArrivalRadius(idParams.parse(request.params).id, input.radiusMeters, new Date(), auditActor(request));
   });
+  const appointmentScope = z.enum(['PLACE', 'STOP']);
   app.post('/stops/:id/appointment/preview', async request => {
     const stopId = idParams.parse(request.params).id;
-    const input = z.object({ appointmentAt: z.string().datetime().nullable().optional(), windowStartAt: z.string().datetime().nullable().optional(), windowEndAt: z.string().datetime().nullable().optional() }).parse(request.body);
-    return appointmentService.preview(stopId, input);
+    const input = z.object({ appointmentAt: z.string().datetime().nullable().optional(), windowStartAt: z.string().datetime().nullable().optional(), windowEndAt: z.string().datetime().nullable().optional(), scope: appointmentScope.optional() }).parse(request.body);
+    return appointmentService.preview(stopId, input, new Date(), input.scope);
   });
   app.put('/stops/:id/appointment', async request => {
     const stopId = idParams.parse(request.params).id;
-    const input = versionInput.extend({ appointmentAt: z.string().datetime() }).parse(request.body);
-    const analysis = await appointmentService.apply(stopId, input);
-    await audit(request, 'STOP_APPOINTMENT_SET', 'Stop', stopId, { vehicleId: analysis.vehicleId, stopId, metadata: { appointmentAt: input.appointmentAt } });
+    const input = versionInput.extend({ appointmentAt: z.string().datetime(), scope: appointmentScope.optional() }).parse(request.body);
+    const analysis = await appointmentService.apply(stopId, input, new Date(), { scope: input.scope });
+    await audit(request, 'STOP_APPOINTMENT_SET', 'Stop', analysis.appliedToStopId, { vehicleId: analysis.vehicleId, stopId: analysis.appliedToStopId,
+      metadata: { appointmentAt: input.appointmentAt, requestedStopId: stopId, sharedStopIds: analysis.sharedStopIds, scope: input.scope ?? 'PLACE' } });
     await refreshAlertsForVehicle(analysis.vehicleId);
     return analysis;
   });
@@ -1359,14 +1362,15 @@ export async function buildApp(options: BuildAppOptions = {}) {
       }
     });
     const schedule = etaService.calculateVehicleSchedule(vehicle.tours);
-    const items = vehicle.tours.flatMap((tour) => buildTimelineItems(tour));
+    const tours = vehicle.tours.map((tour) => ({ ...tour, stops: withTerminGroups(tour.stops) }));
+    const items = tours.flatMap((tour) => buildTimelineItems(tour));
     return {
       vehicle: toIsoObject(vehicle),
-      tours: vehicle.tours.map(toIsoObject),
+      tours: tours.map(toIsoObject),
       items,
       disclaimer: CALCULATED_POSITION_DISCLAIMER,
       schedule: schedule.map(toIsoObject),
-      chain: vehicle.tours.flatMap((tour) =>
+      chain: tours.flatMap((tour) =>
         tour.stops.map((stop) => ({
           ...toIsoObject(stop),
           orderNumber: tour.orderNumber,

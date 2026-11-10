@@ -60,3 +60,35 @@ test('термин без тура сохраняется как ожидающ�
   await expect.poll(() => calls.pending).toMatchObject({ fingerprint: document.fingerprint, document: { company: 'Beispielwerk München' } })
   await expect(review).toHaveCount(0)
 })
+
+test('выгрузка и Leergut на одном заводе — один общий Termin', async ({ page }) => {
+  const unload = { ...candidate, stopId: 'stop-u', company: 'VW Salzgitter', address: 'Industriestraße Nord 1, 38239 Salzgitter', city: 'Salzgitter',
+    appointmentAt: '2026-11-04T07:00:00.000Z', reasons: ['LKW 900', 'город Salzgitter', 'выгрузка'] }
+  const calls = await setup(page, { status: 'MATCHED', vehicle: { status: 'MATCHED', vehicleId: vehicle.id, vehicleNumber: '900', plate: 'GÖ-FX900' }, candidates: [unload] })
+  const previews: Array<{ stopId: string; scope?: string }> = []
+  await page.route('**/api/stops/*/appointment/preview', async (route) => {
+    const stopId = new URL(route.request().url()).pathname.split('/')[3]
+    const scope = route.request().postDataJSON().scope as string | undefined
+    previews.push({ stopId, scope })
+    const own = scope === 'STOP'
+    await json(route, { stopId, requestedStopId: stopId, appliedToStopId: stopId, sharedStopIds: own ? [] : ['stop-l'], sharedPlace: own ? null : { sequences: [2, 3], city: 'Salzgitter' },
+      tourId: 'tour-m', vehicleId: vehicle.id, version: 4, generatedAt: new Date().toISOString(), appointmentAt: '2026-11-04T10:00:00.000Z', earliestArrival: null, latestArrival: null,
+      recommendedStartAt: '2026-11-04T05:40:00.000Z', bufferMinutes: 30, risk: 'ON_TIME', action: 'LEAVE_BY', message: '', preliminary: false })
+  })
+  await page.goto('/orders/new')
+  await page.getByRole('main').locator('input[type="file"]').setInputFiles({ name: 'Delivery_Slip.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.7 termin') })
+
+  const review = page.getByRole('dialog', { name: 'Проверка термина' })
+  await expect(review.getByRole('radio', { name: /LKW 900 · A-900 · 2\. Выгрузка/ })).toBeChecked()
+  await expect(review).toContainText('Termin общий для точек 2 и 3 (Salzgitter) — сохранится на точке 2.')
+  expect(previews.at(-1)).toEqual({ stopId: 'stop-u', scope: undefined })
+
+  // The slip is for the Leergut loading alone: it gets a Termin of its own, the unloading keeps 08:00.
+  const own = review.getByRole('checkbox', { name: 'Только для точки 3 — у неё свой Termin, у точки 2 остаётся прежний' })
+  await own.check()
+  await expect.poll(() => previews.at(-1)).toEqual({ stopId: 'stop-l', scope: 'STOP' })
+  await expect(review).not.toContainText('Termin общий для точек')
+  await expect(own).toBeChecked()
+  await review.getByRole('button', { name: 'Применить' }).click()
+  await expect.poll(() => calls.apply).toMatchObject({ stopId: 'stop-l', scope: 'STOP', version: 4, fingerprint: document.fingerprint })
+})

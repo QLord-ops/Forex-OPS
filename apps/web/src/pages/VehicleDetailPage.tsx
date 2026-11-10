@@ -13,6 +13,7 @@ import { usePolling } from '../hooks/usePolling'
 import { useVehiclePosition } from '../hooks/useVehiclePosition'
 import { api } from '../lib/api'
 import { routeProgress } from '../lib/route-progress'
+import { sharedTerminOf } from '../lib/tours'
 import {
   positionSourceText,
   formatDateTime,
@@ -187,6 +188,9 @@ function TourSummary({ tour, position }: { tour?: Tour | null; position?: Curren
 
   const stops = tour.stops?.slice().sort((a, b) => a.sequence - b.sequence) ?? []
   const progress = routeProgress(stops, null, position)
+  const last = stops.at(-1)
+  // Leergut after unloading at the same plant goes under the Termin of the unloading.
+  const deadline = last?.appointmentAt ?? (last ? sharedTerminOf(stops, last)?.lead.appointmentAt : null)
 
   return (
     <section className="work-surface min-w-0 p-4">
@@ -208,7 +212,7 @@ function TourSummary({ tour, position }: { tour?: Tour | null; position?: Curren
         </div>
         <div>
           <dt className="text-slate-500">Срок</dt>
-          <dd className="font-semibold">{formatAppointment(stops.at(-1)?.appointmentAt)}</dd>
+          <dd className="font-semibold">{formatAppointment(deadline)}</dd>
         </div>
         <div>
           <dt className="text-slate-500">Откуда</dt>

@@ -6,6 +6,7 @@ import { dailyRestOf } from './rest-at-stop.js';
 import { RoutingError, type RoutingProvider } from './routing.js';
 import { calculateSimulatedDuration, parseGeometry } from './simulation.js';
 import { driverBudgetFromWebfleet, planTermin, type DriverBudget, type PlannerStop, type TerminPlan } from './termin-planner.js';
+import { withTerminGroups } from './termin-groups.js';
 import { breakdownTiming, snapshotVehicleClock } from './tours.js';
 import type { TruckRouteProfile } from './traffic-routing.js';
 import type { DriverHours } from './webfleet-live.js';
@@ -99,9 +100,12 @@ export class TerminService {
     const stops = built.stops;
     const origin = built.origin;
     const cursor = built.cursor;
+    // The second operation at a place is served under the Termin of the first: the question is about that one.
+    const leadOf = new Map(tours.flatMap(tour => withTerminGroups(tour.stops).filter(s => s.terminSharedWithStopId).map(s => [s.id, s.terminSharedWithStopId!] as const)));
     let targetIndex: number;
     if (input.stopId) {
-      targetIndex = stops.findIndex(s => s.stopId === input.stopId);
+      const lead = stops.findIndex(s => s.stopId === leadOf.get(input.stopId!));
+      targetIndex = lead >= 0 ? lead : stops.findIndex(s => s.stopId === input.stopId);
       if (targetIndex < 0) {
         const owned = await this.db.stop.findUnique({ where: { id: input.stopId }, include: { tour: { select: { vehicleId: true } } } });
         throw new AssistantError(owned?.tour.vehicleId === vehicleId ? 'Эта точка уже завершена: Termin для неё не нужен.' : 'Точка не принадлежит выбранной машине.', 400);
@@ -116,10 +120,13 @@ export class TerminService {
       targetIndex = stops.length - 1;
     } else {
       const activeCount = active ? active.stops.filter(s => !s.completedAt).length : 0;
-      targetIndex = stops.findIndex(s => s.terminRequired && !s.appointmentAt);
-      if (targetIndex < 0) targetIndex = stops.findIndex(s => !s.appointmentAt && !s.appointmentWindowStartAt);
+      const follows = (s: PlannerStop) => Boolean(s.stopId && leadOf.has(s.stopId));
+      targetIndex = stops.findIndex(s => s.terminRequired && !s.appointmentAt && !follows(s));
+      if (targetIndex < 0) targetIndex = stops.findIndex(s => !s.appointmentAt && !s.appointmentWindowStartAt && !follows(s));
       if (targetIndex < 0 && activeCount) targetIndex = activeCount - 1;
       if (targetIndex < 0) targetIndex = stops.length - 1;
+      const lead = stops.findIndex(s => Boolean(s.stopId) && s.stopId === leadOf.get(stops[targetIndex]?.stopId ?? ''));
+      if (lead >= 0) targetIndex = lead;
     }
     if (!stops.length || targetIndex < 0) throw new AssistantError('Нет точек для расчёта Termin: у машины нет активного тура. Назовите адрес точки.');
     // An open Zuladung of this tour or of a tour driven before it can still delay the target: warn, never add time.

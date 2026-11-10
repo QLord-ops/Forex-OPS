@@ -7,7 +7,7 @@ import { AssignmentBar } from './AssignmentBar'
 import { RouteEditor } from './RouteEditor'
 import { api, documentFileUrl } from '../lib/api'
 import { classNames, formatDateTime, formatDelay, shortAddress, statusLabel, stopTypeLabel } from '../lib/format'
-import { currentStopOf, followingTours, sortedStops, terminOf, tourCancellable } from '../lib/tours'
+import { currentStopOf, followingTours, sharedTerminOf, sortedStops, terminOf, tourCancellable } from '../lib/tours'
 import { ZULADUNG_NOTE, zuladungBeforeStopId, zuladungState } from '../lib/zuladung'
 import { berlinClock, courseText, durationBetween, formatDurationMs, formatFuel, formatWholeKm, share, tripsWithParking, workState } from '../lib/telemetry-format'
 import type { CardFeedStatus, Coordinate, DashboardVehicle, DrivingTimes, Stop, Tour, VehicleCardData } from '../types/domain'
@@ -358,7 +358,7 @@ function TourTab({ vehicleId, row }: { vehicleId: string; row: DashboardVehicle 
                     {stops.length ? <ol className="truck-card-stops">
                       {stops.map((stop) => <li key={stop.id}>
                         <span className="truck-card-stop-seq">{stop.sequence}</span>
-                        <span className="min-w-0"><strong>{stopTypeLabel(stop.type)} · {shortAddress(stop)}</strong><span className="truck-card-muted">{stopState(stop)}</span></span>
+                        <span className="min-w-0"><strong>{stopTypeLabel(stop.type)} · {shortAddress(stop)}</strong><span className="truck-card-muted">{stopState(stop, stops)}</span></span>
                       </li>)}
                     </ol> : <p className="truck-card-note">Точек в туре нет.</p>}
                   </div> : null}
@@ -407,7 +407,7 @@ function CurrentTour({ tour, row, busy, onRemove }: { tour: Tour; row: Dashboard
       <div className="truck-card-grid">
         <Cell label="Следующая точка" value={target ? `${stopTypeLabel(target.type)} · ${shortAddress(target)}` : '–'} />
         <Cell label="ETA" value={target?.arrivedAt ? `на месте с ${formatDateTime(target.arrivedAt)}` : formatDateTime(row.eta)} />
-        <Cell label="Срок" value={target?.appointmentAt ? formatDateTime(target.appointmentAt) : 'без срока'} />
+        <Cell label="Срок" value={target?.appointmentAt ? formatDateTime(target.appointmentAt) : (target && sharedTerminOf(stops, target)?.label) || 'без срока'} />
         <Cell label="Отклонение" value={formatDelay(row.delayMinutes)} warn={(row.delayMinutes ?? 0) > 0} />
       </div>
       {zuladung === 'OPEN' ? <div className="truck-card-zuladung" role="note">
@@ -419,7 +419,7 @@ function CurrentTour({ tour, row, busy, onRemove }: { tour: Tour; row: Dashboard
       <ol className="truck-card-stops">
         {stops.map((stop) => <li key={stop.id} className={classNames(stop.completedAt && 'truck-card-stop-done', stop.id === target?.id && 'truck-card-stop-current')}>
           <span className="truck-card-stop-seq">{stop.sequence}</span>
-          <span className="min-w-0"><strong>{stopTypeLabel(stop.type)} · {shortAddress(stop)}</strong><span className="truck-card-muted">{stopState(stop)}{stop.type === 'LOAD' && /zuladung/i.test(stop.instructions ?? '') ? ' · Zuladung' : ''}</span>
+          <span className="min-w-0"><strong>{stopTypeLabel(stop.type)} · {shortAddress(stop)}</strong><span className="truck-card-muted">{stopState(stop, stops)}{stop.type === 'LOAD' && /zuladung/i.test(stop.instructions ?? '') ? ' · Zuladung' : ''}</span>
             {stop.id === zuladungBefore ? <span className="truck-card-zuladung-tag">перед ней возможна Zuladung</span> : null}
             {stop.id === target?.id && marking?.stopId === stop.id ? <form className="truck-card-mark" onSubmit={(event) => { event.preventDefault(); void markStop(stop) }}>
               <label className="truck-card-muted">Фактическое время<input className="field-input h-8" type="datetime-local" value={marking.time} required onChange={(event) => setMarking({ ...marking, time: event.target.value })} /></label>
@@ -442,13 +442,14 @@ function localDateTimeNow(date = new Date()) {
   return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16)
 }
 
-function stopState(stop: Stop) {
+function stopState(stop: Stop, stops: Stop[]) {
   const done = stop.type === 'LOAD' ? 'BELADEN' : 'ENTLADEN'
   if (stop.completedAt) return `${done} ${formatDateTime(stop.completedAt)}`
   if (stop.arrivedAt) return `прибыл ${formatDateTime(stop.arrivedAt)} · ждёт ${done}`
   if (stop.appointmentAt) return `впереди · срок ${formatDateTime(stop.appointmentAt)}`
   if (stop.appointmentWindowStartAt) return `впереди · окно ${formatDateTime(stop.appointmentWindowStartAt)}–${formatDateTime(stop.appointmentWindowEndAt)}`
-  return 'впереди · без срока'
+  const shared = sharedTerminOf(stops, stop)
+  return shared ? `впереди · ${shared.label}` : 'впереди · без срока'
 }
 
 function RemoveButton({ busy, orderNumber, onClick }: { busy: boolean; orderNumber: string; onClick: () => void }) {

@@ -51,7 +51,7 @@ export function registerAppointmentDocumentRoutes(app: FastifyInstance, deps: {
   app.post('/appointments/from-document', editors, async (request) => {
     const input = z.object({
       stopId: z.string().min(1).max(64), version: z.number().int().nonnegative(), fingerprint,
-      pendingId: z.string().min(1).max(64).nullable().default(null), document: documentSchema
+      pendingId: z.string().min(1).max(64).nullable().default(null), document: documentSchema, scope: z.enum(['PLACE', 'STOP']).optional()
     }).parse(request.body);
     const previous = await pending.findByFingerprint(input.fingerprint);
     if (previous?.status === 'ATTACHED') {
@@ -67,12 +67,15 @@ export function registerAppointmentDocumentRoutes(app: FastifyInstance, deps: {
     };
     const label = document.documentType ?? (document.kind === 'VW_FAHRTENSCHEIN' ? 'Fahrtenschein' : document.kind === 'DECKBLATT' ? 'Deckblatt' : 'Termin');
     const analysis = await appointments.apply(input.stopId, { ...time, version: input.version }, new Date(), {
-      source: 'DOCUMENT', references: document.references.map((item) => item.value), document: { kind: document.kind, label }
+      source: 'DOCUMENT', references: document.references.map((item) => item.value), document: { kind: document.kind, label }, scope: input.scope
     });
-    if (input.pendingId) await pending.attach(input.pendingId, input.stopId);
-    await pending.save(document, input.fingerprint, 'ATTACHED', { vehicleId: analysis.vehicleId, attachedStopId: input.stopId });
-    await audit(request, 'STOP_APPOINTMENT_SET', 'Stop', input.stopId, { vehicleId: analysis.vehicleId, tourId: analysis.tourId, stopId: input.stopId,
-      metadata: { ...time, source: 'DOCUMENT', documentKind: document.kind, references: document.references.map((item) => item.value) } });
+    // A slip for the second operation of a place lands on the stop that keeps the Termin of the place.
+    const stopId = analysis.appliedToStopId;
+    if (input.pendingId) await pending.attach(input.pendingId, stopId);
+    await pending.save(document, input.fingerprint, 'ATTACHED', { vehicleId: analysis.vehicleId, attachedStopId: stopId });
+    await audit(request, 'STOP_APPOINTMENT_SET', 'Stop', stopId, { vehicleId: analysis.vehicleId, tourId: analysis.tourId, stopId,
+      metadata: { ...time, source: 'DOCUMENT', documentKind: document.kind, references: document.references.map((item) => item.value),
+        requestedStopId: input.stopId, sharedStopIds: analysis.sharedStopIds } });
     await deps.refreshAlertsForVehicle(analysis.vehicleId);
     return analysis;
   });

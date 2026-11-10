@@ -55,6 +55,8 @@ export interface Stop {
   plannedAt?: string | null
   departureDeadlineAt?: string | null
   terminRequired?: boolean
+  /** The earlier stop of the same place whose Termin also covers this one (unloading and loading at one plant). */
+  terminSharedWithStopId?: string | null
   loadingMeters?: number | null
   referenceNumbers?: string[] | null
   referenceNumbersJson?: string | null
@@ -446,7 +448,13 @@ export interface AddressResolution extends GeocodeResult {
 }
 
 export interface AppointmentAnalysis {
+  /** The stop the Termin is kept on: the first open stop of the place, not always the one that was asked about. */
   stopId: string
+  requestedStopId?: string
+  appliedToStopId?: string
+  sharedStopIds?: string[]
+  /** Set when the Termin covers several stops of one place: their numbers in the tour, the first keeps the Termin. */
+  sharedPlace?: { sequences: number[]; city: string | null } | null
   tourId: string
   vehicleId: string
   version: number

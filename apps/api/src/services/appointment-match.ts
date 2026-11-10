@@ -2,6 +2,7 @@ import type { PrismaClient } from '@prisma/client';
 
 import type { AppointmentDocument } from './pdf-order-import.js';
 import { normalizeRouteText } from './pdf-order-import.js';
+import { hasTermin, samePlace } from './termin-groups.js';
 import { normalizePlate } from './webfleet.js';
 
 const DAY_MS = 24 * 3600_000;
@@ -132,8 +133,20 @@ export async function matchAppointment(db: PrismaClient, document: AppointmentDo
       windowEndAt: stop.appointmentWindowEndAt?.toISOString() ?? null, score, reasons
     });
   }
-  candidates.sort((a, b) => b.score - a.score || a.sequence - b.sequence);
-  const top = candidates.slice(0, 3);
+  // Unloading and loading at one plant share one Termin: the pair is one candidate, the stop that keeps the Termin.
+  const records = new Map(stops.map((stop) => [stop.id, stop]));
+  const before = (candidate: AppointmentCandidate) => candidates.find((other) => other.tourId === candidate.tourId
+    && other.sequence === candidate.sequence - 1 && samePlace(records.get(other.stopId)!, records.get(candidate.stopId)!));
+  const ranked = candidates.filter((candidate) => {
+    if (hasTermin(records.get(candidate.stopId)!)) return true;
+    let lead = before(candidate);
+    if (!lead) return true;
+    for (let earlier = before(lead); earlier; earlier = before(earlier)) lead = earlier;
+    if (candidate.score > lead.score) Object.assign(lead, { score: candidate.score, reasons: candidate.reasons });
+    return false;
+  });
+  ranked.sort((a, b) => b.score - a.score || a.sequence - b.sequence);
+  const top = ranked.slice(0, 3);
   const status = !top.length ? 'NONE' : top.length === 1 || top[0].score - top[1].score >= CLEAR_LEAD ? 'MATCHED' : 'AMBIGUOUS';
   return { status, vehicle, candidates: top };
 }

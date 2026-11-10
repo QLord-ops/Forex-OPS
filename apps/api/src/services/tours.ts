@@ -20,7 +20,7 @@ import {
 import type { RoutingProvider } from "./routing.js";
 import { OFF_ROUTE_METERS, projectOnLine, splitAtProjection } from "./route-projection.js";
 import { cleanTravelled } from "./travelled-path.js";
-import { requiresTermin } from "./address-rules.js";
+import { mergeAddressRules, requiresTermin, type AddressRuleRecord } from "./address-rules.js";
 import { applyStopTime, createUnknownClockState, evaluateClockPlan, forecastDrive, type ClockState, type VehicleClockPlan } from "./vehicle-clock.js";
 import { forecastEta, WebfleetEngine, type DriverEtaInput } from "./termin-planner.js";
 import {
@@ -35,6 +35,7 @@ import {
   serializeGeometry,
   splitGeometryAtProgress
 } from "./simulation.js";
+import { isTerminFollower, metersBetween, samePlace, SAME_SPOT_METERS, shareTerminAtSamePlace, withTerminGroups } from "./termin-groups.js";
 import { writeAuditLog, type AuditActor } from "./audit-log.js";
 import type { AutoStopEventInput } from "./webfleet.js";
 
@@ -144,6 +145,7 @@ export class TourService {
     const context = await readPlanningContext(this.db, input);
     const orderedStops = [...input.stops].sort((a, b) => a.sequence - b.sequence);
     const plan = await prepareTourPlan(this.routingProvider, orderedStops, context.previousTour?.stops[0], context.vehicle.maxSpeedKmh);
+    const terminRules = await readTerminRules(this.db);
     // A tour with an earlier load date goes before later ones; the tour after it gets a new transfer leg.
     const next = context.insertBefore;
     const nextTransfer = next?.firstStop
@@ -177,7 +179,7 @@ export class TourService {
           plannedStartAt
         }
       });
-      await persistTourPlan(tx, tour.id, plan);
+      await persistTourPlan(tx, tour.id, plan, terminRules);
       if (next && nextTransfer) await relinkFollowingTour(tx, tour.id, next, nextTransfer);
       if (status === "ACTIVE" && input.trailerPlate?.trim()) {
         await updateCurrentTrailer(tx, context.vehicle.id, tour.id, input.trailerPlate.trim());
@@ -199,6 +201,7 @@ export class TourService {
     validateTourInput({ ...input.tour, vehicleId: "pending" });
     const orderedStops = [...input.tour.stops].sort((a, b) => a.sequence - b.sequence);
     const plan = await prepareTourPlan(this.routingProvider, orderedStops, undefined, 85);
+    const terminRules = await readTerminRules(this.db);
     return this.db.$transaction(async (tx) => {
       const vehicle = await tx.vehicle.create({ data: {
         vehicleNumber: input.vehicle.vehicleNumber.trim(),
@@ -215,7 +218,7 @@ export class TourService {
         queueIndex: 0,
         plannedStartAt: tourStartFromStops(orderedStops)
       } });
-      await persistTourPlan(tx, tour.id, plan);
+      await persistTourPlan(tx, tour.id, plan, terminRules);
       if (input.tour.trailerPlate?.trim()) {
         await tx.operationEvent.create({ data: {
           vehicleId: vehicle.id, tourId: tour.id, type: "TRAILER_CHANGED",
@@ -239,6 +242,7 @@ export class TourService {
     const context = await readPlanningContext(this.db, input, tourId);
     const orderedStops = [...input.stops].sort((a, b) => a.sequence - b.sequence);
     const plan = await prepareTourPlan(this.routingProvider, orderedStops, context.previousTour?.stops[0], context.vehicle.maxSpeedKmh);
+    const terminRules = await readTerminRules(this.db);
 
     return this.db.$transaction(async (tx) => {
       assertPlanningContextUnchanged(context, await readPlanningContext(tx, input, tourId));
@@ -264,7 +268,7 @@ export class TourService {
           plannedStartAt: tourStartFromStops(orderedStops)
         }
       });
-      await persistTourPlan(tx, tourId, plan);
+      await persistTourPlan(tx, tourId, plan, terminRules);
       await writeAuditLog(tx, actor, { action: "TOUR_UPDATED", entityType: "Tour", entityId: tourId,
         vehicleId: input.vehicleId, tourId, metadata: { orderNumber: input.orderNumber } });
 
@@ -816,11 +820,13 @@ async function prepareTourPlan(
   previousFinalStop: Stop | undefined,
   maxSpeedKmh: number
 ) {
-  const stops: Array<CreateTourInput["stops"][number] & Coordinate> = [];
+  const located: Array<CreateTourInput["stops"][number] & Coordinate> = [];
   for (const stopInput of orderedStops) {
     const coordinate = await resolveStopCoordinate(routingProvider, stopInput);
-    stops.push({ ...stopInput, ...coordinate });
+    located.push({ ...stopInput, ...coordinate });
   }
+  // Unloading and loading at one plant are served under one Termin: it is kept on the first of the two stops.
+  const stops = shareTerminAtSamePlace(located);
 
   const legs: Array<{
     fromIndex: number;
@@ -835,7 +841,9 @@ async function prepareTourPlan(
   }> = [];
   for (let toIndex = previousFinalStop ? 0 : 1; toIndex < stops.length; toIndex += 1) {
     const fromStop = toIndex === 0 ? previousFinalStop! : stops[toIndex - 1];
-    const route = await routingProvider.calculateRoute(toCoordinate(fromStop), toCoordinate(stops[toIndex]));
+    const route = toIndex > 0 && sameSpot(stops[toIndex - 1], stops[toIndex])
+      ? standingRoute(stops[toIndex])
+      : await routingProvider.calculateRoute(toCoordinate(fromStop), toCoordinate(stops[toIndex]));
     const simulatedDurationSeconds = calculateSimulatedDuration(route.distanceMeters, route.durationSeconds, maxSpeedKmh);
     legs.push({
       fromIndex: toIndex - 1,
@@ -852,13 +860,32 @@ async function prepareTourPlan(
   return { stops, legs };
 }
 
+type PlannedStop = CreateTourInput["stops"][number] & Coordinate;
+
+/** Two operations of one place on one spot: the truck does not drive between them, so the router is not asked. */
+function sameSpot(from: PlannedStop, to: PlannedStop): boolean {
+  const meters = metersBetween(from, to);
+  return meters !== null && meters <= SAME_SPOT_METERS && samePlace(from, to);
+}
+
+function standingRoute(stop: PlannedStop): RouteResult {
+  return { geometry: [toCoordinate(stop), toCoordinate(stop)], distanceMeters: 0, durationSeconds: 0, provider: "same-place" };
+}
+
+/** Learned and built-in rules that say where a Termin always arrives; an unreadable table leaves the built-in list. */
+async function readTerminRules(db: Pick<PrismaClient, "addressRule">): Promise<AddressRuleRecord[]> {
+  const stored = await Promise.resolve().then(() => db.addressRule.findMany()).catch(() => []);
+  return mergeAddressRules(stored);
+}
+
 async function persistTourPlan(
   tx: Prisma.TransactionClient,
   tourId: string,
-  plan: Awaited<ReturnType<typeof prepareTourPlan>>
+  plan: Awaited<ReturnType<typeof prepareTourPlan>>,
+  terminRules: AddressRuleRecord[]
 ): Promise<void> {
   const stopIds: string[] = [];
-  for (const stop of plan.stops) {
+  for (const [index, stop] of plan.stops.entries()) {
     const created = await tx.stop.create({
       data: {
         tourId,
@@ -884,7 +911,9 @@ async function persistTourPlan(
         plannedAt: toNullableDate(stop.plannedAt),
         departureDeadlineAt: toNullableDate(stop.departureDeadlineAt),
         // VW, BLG, Mercedes, Seifert, Audi, Rudolph, Rhenus always send a Termin: until it arrives the stop shows «Termin нужен».
-        terminRequired: !stop.appointmentAt && !stop.appointmentWindowStartAt && requiresTermin(`${stop.company ?? ""} ${stop.address}`)
+        // The second operation at the same place is served under the Termin of the first and never waits for its own.
+        terminRequired: !stop.appointmentAt && !stop.appointmentWindowStartAt && !isTerminFollower(plan.stops, index)
+          && requiresTermin(`${stop.company ?? ""} ${stop.address}`, terminRules, stop)
       }
     });
     stopIds.push(created.id);
@@ -1023,7 +1052,7 @@ export function enrichTour(tour: TourAggregate, now = new Date(), driver: Driver
   const currentDelayMinutes = nextStop ? calculateLateMinutes(eta, nextStop.appointmentAt) : 0;
   return {
     ...toIsoObject(tour),
-    stops: tour.stops.map(toIsoObject),
+    stops: withTerminGroups(tour.stops).map(toIsoObject),
     legs: tour.legs.map((leg) => {
       const snapshot = snapshotVehicleClock(tour.vehicle, leg, now);
       const progress = leg.status === "COMPLETED" ? 1 : snapshot.progress;
@@ -1048,7 +1077,7 @@ export function toDashboardTourSummary(tour: TourAggregate) {
   const { vehicle: _vehicle, legs: _legs, events: _events, alerts: _alerts, stops, ...summary } = tour;
   return {
     ...toIsoObject(summary),
-    stops: stops.map(toIsoObject)
+    stops: withTerminGroups(stops).map(toIsoObject)
   };
 }
 

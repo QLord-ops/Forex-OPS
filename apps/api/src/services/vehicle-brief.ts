@@ -6,12 +6,15 @@ import { dailyRestOf, type DailyRest } from './rest-at-stop.js';
 import { berlinLocal, formatSeconds } from './termin-planner.js';
 import { stopLabel, type DriverHoursReader } from './termin-service.js';
 import type { DriverHours } from './webfleet-live.js';
+import { withTerminGroups } from './termin-groups.js';
 import { zuladungState, type ZuladungState } from './zuladung.js';
 
 export type BriefStop = {
   stopId: string; tourId: string; sequence: number; type: string; label: string; company: string | null; city: string | null; address: string;
   appointmentAt: string | null; appointmentAtLocal: string | null; windowStartAt: string | null; windowEndAt: string | null; plannedAt: string | null;
   terminRequired: boolean; serviceMinMinutes: number; serviceMaxMinutes: number; arrivedAt: string | null; completedAt: string | null;
+  /** The stop whose Termin also covers this one: the second operation at the same place. */
+  terminSharedWithStopId: string | null;
   eta: { earliest: string | null; earliestLocal: string | null; latest: string | null; latestLocal: string | null; risk: RiskColor; preliminary: boolean } | null;
 };
 export type VehicleBrief = {
@@ -52,11 +55,12 @@ export class VehicleBriefService {
       return row ? { earliest: row.earliestArrival?.toISOString() ?? null, earliestLocal: row.earliestArrival ? berlinLocal(row.earliestArrival, now) : null,
         latest: row.latestArrival?.toISOString() ?? null, latestLocal: row.latestArrival ? berlinLocal(row.latestArrival, now) : null, risk: row.riskColor, preliminary: row.preliminary } : null;
     };
-    const brief = (tour: typeof tours[number]): BriefStop[] => tour.stops.map(stop => ({
+    const brief = (tour: typeof tours[number]): BriefStop[] => withTerminGroups(tour.stops).map(stop => ({
       stopId: stop.id, tourId: tour.id, sequence: stop.sequence, type: stop.type, label: stopLabel(stop), company: stop.company ?? null, city: stop.city ?? null, address: stop.address,
       appointmentAt: stop.appointmentAt?.toISOString() ?? null, appointmentAtLocal: stop.appointmentAt ? berlinLocal(stop.appointmentAt, now) : null,
       windowStartAt: stop.appointmentWindowStartAt?.toISOString() ?? null, windowEndAt: stop.appointmentWindowEndAt?.toISOString() ?? null, plannedAt: stop.plannedAt?.toISOString() ?? null,
-      terminRequired: stop.terminRequired, serviceMinMinutes: stop.serviceMinMinutes, serviceMaxMinutes: stop.serviceMaxMinutes,
+      terminRequired: stop.terminRequired && !stop.terminSharedWithStopId, terminSharedWithStopId: stop.terminSharedWithStopId,
+      serviceMinMinutes: stop.serviceMinMinutes, serviceMaxMinutes: stop.serviceMaxMinutes,
       arrivedAt: stop.arrivedAt?.toISOString() ?? null, completedAt: stop.completedAt?.toISOString() ?? null, eta: stop.completedAt ? null : etaOf(stop.id)
     }));
     const active = tours.find(tour => tour.status === 'ACTIVE') ?? null;
