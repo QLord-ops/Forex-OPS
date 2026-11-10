@@ -100,3 +100,45 @@ for (const role of ['admin', 'dispatcher'] as const) {
     expect(lineBox.x + lineBox.width).toBeLessThanOrEqual(reviewBox.x + reviewBox.width + 0.5)
   })
 }
+
+test('тот же файл второй раз: сохранённый ответ с пометкой, «Прочитать заново ИИ» читает файл заново', async ({ page }) => {
+  const vehicle = { id: 'veh-1', vehicleNumber: '125', licensePlate: 'B-125', maxSpeedKmh: 85 }
+  const reused = { code: 'DOCUMENT_REUSED', message: 'Этот файл уже читался — показан сохранённый ответ ИИ, разобранный по текущим правилам.' }
+  const preview = (warnings: unknown[]) => ({ source: 'OPENAI', detectedLayout: 'PDF', documentKind: 'ORDER', warnings, aiAvailable: true, documentId: 'doc-1', documentReused: true, answerReused: warnings.length > 0,
+    drafts: [{ orderNumber: '71123515', vehicleNumber: '125', vehiclePlate: null, trailerPlate: null, tourRemarks: null, warnings: [], stops: [
+      { sequence: 1, type: 'LOAD', company: 'Lager', address: 'Rudolf-Diesel-Straße 2, 14974 Ludwigsfelde', city: 'Ludwigsfelde', appointmentLocal: null, confidence: 1 },
+      { sequence: 2, type: 'UNLOAD', company: 'TST Süderelbe', address: 'Dradenauer Deichweg 3, 21129 Hamburg', city: 'Hamburg', appointmentLocal: null, confidence: 1 }
+    ] }] })
+  const reparsed: unknown[] = []
+  await signedIn(page, 'dispatcher', async (route, path) => {
+    if (path === '/vehicles' && route.request().method() === 'GET') { await json(route, [vehicle]); return true }
+    if (path === '/imports/pdf/preview') { await json(route, preview([reused])); return true }
+    if (path === '/documents/doc-1/reparse') { reparsed.push(route.request().postDataJSON()); await json(route, { ...preview([]), readMs: 6800 }); return true }
+    if (path === '/geocode' || path === '/geocode/resolve') { await json(route, { address: 'x', latitude: 53.08, longitude: 8.8, city: 'Hamburg', provider: 'e2e', precision: 'EXACT' }); return true }
+    if (path.startsWith('/vehicles/veh-1')) { await json(route, path.endsWith('/tours') ? [] : vehicle); return true }
+    return false
+  })
+  await page.goto('/vehicles')
+  await page.getByRole('button', { name: /меню$/ }).click()
+  await page.getByRole('button', { name: 'ИИ-диспетчер' }).click()
+  await page.getByRole('button', { name: 'Прикрепить Auftrag' }).click()
+  await page.locator('.dispatcher-import-host input[type="file"]').setInputFiles({ name: 'auftrag.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.7 e2e') })
+  await expect(page.getByLabel('Номер Auftrag')).toHaveValue('71123515')
+  const review = page.getByRole('region', { name: 'Проверка Auftrag' })
+  await expect(review.getByText('Этот файл уже читался')).toBeVisible()
+  const again = review.getByRole('button', { name: 'Прочитать заново ИИ' })
+  await expect(again).toBeVisible()
+
+  await page.setViewportSize({ width: 393, height: 851 })
+  const reviewBox = (await review.boundingBox())!
+  const buttonBox = (await again.boundingBox())!
+  expect(buttonBox.x).toBeGreaterThanOrEqual(reviewBox.x)
+  expect(buttonBox.x + buttonBox.width).toBeLessThanOrEqual(reviewBox.x + reviewBox.width + 0.5)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true)
+  if (process.env.A2_SHOTS) await page.screenshot({ path: 'test-results/a2-reused-393.png' })
+
+  await again.click()
+  await expect(review.getByText('Этот файл уже читался')).toHaveCount(0)
+  await expect(again).toHaveCount(0)
+  expect(reparsed).toEqual([{ customerId: null }])
+})
