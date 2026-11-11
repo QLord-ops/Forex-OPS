@@ -519,3 +519,20 @@ CREATE TABLE "PushSubscription" (
 );
 CREATE UNIQUE INDEX "PushSubscription_endpoint_key" ON "PushSubscription"("endpoint");
 CREATE INDEX "PushSubscription_dispatcherId_idx" ON "PushSubscription"("dispatcherId");
+
+CREATE TABLE "DispatcherCover" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "absentDispatcherId" TEXT NOT NULL,
+    "coverDispatcherId" TEXT NOT NULL,
+    "lineIdsJson" TEXT,
+    "startsAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "endsAt" DATETIME NOT NULL,
+    "endedAt" DATETIME,
+    "endedByDispatcherId" TEXT,
+    "createdByDispatcherId" TEXT,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "DispatcherCover_absentDispatcherId_fkey" FOREIGN KEY ("absentDispatcherId") REFERENCES "Dispatcher" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT "DispatcherCover_coverDispatcherId_fkey" FOREIGN KEY ("coverDispatcherId") REFERENCES "Dispatcher" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+CREATE INDEX "DispatcherCover_absentDispatcherId_endsAt_idx" ON "DispatcherCover"("absentDispatcherId", "endsAt");
+CREATE INDEX "DispatcherCover_coverDispatcherId_endsAt_idx" ON "DispatcherCover"("coverDispatcherId", "endsAt");

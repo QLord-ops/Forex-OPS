@@ -39,6 +39,7 @@ const modelOrder = [
   "customerLine",
   "dispatcherLine",
   "pushSubscription",
+  "dispatcherCover",
   "vehicle",
   "tour",
   "stop",
@@ -102,6 +103,10 @@ function assertRelations(data) {
   for (const row of data.dispatcherLine) {
     requireId(dispatcherIds.has(row.dispatcherId), `DispatcherLine has missing dispatcher ${row.dispatcherId}`);
     requireId(lineIds.has(row.lineId), `DispatcherLine has missing line ${row.lineId}`);
+  }
+  for (const row of data.dispatcherCover) {
+    requireId(dispatcherIds.has(row.absentDispatcherId), `DispatcherCover ${row.id} has missing dispatcher ${row.absentDispatcherId}`);
+    requireId(dispatcherIds.has(row.coverDispatcherId), `DispatcherCover ${row.id} has missing dispatcher ${row.coverDispatcherId}`);
   }
   for (const row of data.vehicle) {
     if (row.customerLineId) requireId(lineIds.has(row.customerLineId), `Vehicle ${row.id} has missing customer line ${row.customerLineId}`);
