@@ -1,4 +1,4 @@
-import { Bell, Building2, ChartColumn, ClipboardList, FileText, Map as MapIcon, Menu, Route, Settings, Truck, Users } from 'lucide-react'
+import { Bell, Building2, ChartColumn, ClipboardList, FileText, Map as MapIcon, Menu, Route, Settings, Truck } from 'lucide-react'
 import { useRef } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 
@@ -16,13 +16,13 @@ import { needsAttention } from '../lib/alerts'
 
 /** `also` keeps a section lit on the pages that belong to it. */
 const navItems = [
-  { to: '/', label: 'Диспозиция', icon: MapIcon, also: [] as string[] },
+  // «Команда» opens from the dispatch screen: a ninth section would push the whole bar into «Меню» on a laptop.
+  { to: '/', label: 'Диспозиция', icon: MapIcon, also: ['/team'] as string[] },
   { to: '/orders/new', label: 'Auftrag', icon: FileText, also: [] },
   { to: '/vehicles', label: 'Машины', icon: Truck, also: [] },
   { to: '/customers', label: 'Заказчики', icon: Building2, also: [] },
   { to: '/tours', label: 'Туры', icon: Route, also: [] },
   { to: '/status', label: 'Статус', icon: ClipboardList, also: [] },
-  { to: '/team', label: 'Команда', icon: Users, also: [] },
   { to: '/analytics', label: 'Аналитика', icon: ChartColumn, also: ['/history', '/alerts'] },
   { to: '/settings', label: 'Настройки', icon: Settings, also: ['/dispatchers', '/help'] }
 ]
@@ -56,7 +56,7 @@ function TopBar() {
   const headerRef = useRef<HTMLElement>(null)
   useTopbarFit(headerRef, termin > 0)
   const isActive = (item: (typeof navItems)[number]) => item.to === '/'
-    ? location.pathname === '/'
+    ? location.pathname === '/' || item.also.some((path) => location.pathname.startsWith(path))
     : location.pathname.startsWith(item.to) || item.also.some((path) => location.pathname.startsWith(path))
   const links = (className: string, onClick?: () => void) => navItems.map((item) => (
     <NavLink key={item.to} to={item.to} end={item.to === '/'} onClick={onClick} className={isActive(item) ? `${className} ${className}-active` : className} aria-current={isActive(item) ? 'page' : undefined}>

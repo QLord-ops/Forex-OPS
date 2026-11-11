@@ -1,5 +1,6 @@
-import { CalendarOff, Undo2, UserPlus } from 'lucide-react'
+import { CalendarOff, Undo2, UserPlus, Users } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
+import { Link } from 'react-router-dom'
 
 import { usePolling } from '../hooks/usePolling'
 import { teamApi, type TeamCover, type TeamOverview } from '../lib/api'
@@ -126,6 +127,7 @@ export function CoverPanel() {
     <div className="cover-actions">
       <button type="button" className="cover-button" aria-expanded={mode === 'take'} onClick={() => setMode(mode === 'take' ? null : 'take')}><UserPlus className="h-4 w-4" aria-hidden="true" />Подменить коллегу</button>
       <button type="button" className="cover-button" aria-expanded={mode === 'give'} onClick={() => setMode(mode === 'give' ? null : 'give')}><CalendarOff className="h-4 w-4" aria-hidden="true" />Меня нет</button>
+      <Link to="/team" className="cover-button"><Users className="h-4 w-4" aria-hidden="true" />Команда</Link>
     </div>
     <MyCovers team={team} onChanged={() => void refetch()} />
     {mode ? <CoverForm key={mode} team={team} mode={mode} onDone={done} onCancel={() => setMode(null)} /> : null}
