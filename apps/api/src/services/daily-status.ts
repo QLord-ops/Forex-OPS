@@ -12,7 +12,8 @@ import { distanceMeters } from './webfleet.js';
 import type { DriverHours, WebfleetDrivingTimes } from './webfleet-live.js';
 import { withZuladungNote } from './zuladung.js';
 import { parseProfile } from './customer-profile.js';
-import { statusOwnerOf, type StatusOwner } from './customers.js';
+import { coveredStatusOwner, coverResolver } from './covers.js';
+import type { StatusOwner } from './customers.js';
 
 /** The list before customers existed: Schnellecke, blocks NORD / SÜD / LuFe. Used until a Schnellecke customer is set up. */
 export const STATUS_LINE = 'SCHNELLECKE';
@@ -384,7 +385,8 @@ export class DailyStatusService {
       return [group < 0 ? groupOrder.length : group, Number.parseInt(draft.vehicleNumber, 10) || Number.MAX_SAFE_INTEGER, draft.vehicleNumber] as const;
     };
     drafts.sort((a, b) => { const [ga, na, sa] = order(a), [gb, nb, sb] = order(b); return ga - gb || na - nb || sa.localeCompare(sb); });
-    const owners = new Map(vehicles.map((vehicle) => [vehicle.id, statusOwnerOf(vehicle, vehicle.customerLine?.dispatchers ?? [])]));
+    const resolver = await coverResolver(this.db, now);
+    const owners = new Map(vehicles.map((vehicle) => [vehicle.id, coveredStatusOwner(resolver, vehicle, vehicle.customerLine?.dispatchers ?? [])]));
     const keep = new Set(drafts.map((draft) => draft.vehicleId));
     const removed = await this.db.dailyStatusRow.findMany({ where: { reportId: report.id, vehicleId: { notIn: [...keep] } }, select: { id: true, vehicleNumber: true } });
     await this.db.$transaction(async (tx) => {
@@ -464,13 +466,14 @@ export class DailyStatusService {
     const report = await this.db.dailyStatusReport.findUnique({ where: { line_date: { line: list.key, date: dayKey } }, include: { rows: { orderBy: { sortIndex: 'asc' } } } });
     if (!report) return { date: dayKey, list: config, lists, report: null, rows: [], owners: [], editable: dayKey === berlinToday(now) };
     const { rows, ...meta } = report;
-    const owned = await this.ownersOf(rows, dayKey === berlinToday(now));
+    const owned = await this.ownersOf(rows, dayKey === berlinToday(now), now);
     const names = await this.dispatcherNames([...owned.values()]);
     const withOwner = rows.map((row) => {
       const owner = owned.get(row.id) ?? null;
       const person = owner ? names.get(owner.id) : undefined;
       return { ...row, flags: flagsOf(row.detailsJson), shown: presentRow(row, dayKey), edited: Boolean(row.editedAt),
-        owner: owner ? { ...owner, name: person?.name ?? 'Диспетчер удалён', active: person?.active ?? false } : null };
+        owner: owner ? { ...owner, name: person?.name ?? 'Диспетчер удалён', active: person?.active ?? false,
+          coverForName: owner.coverFor ? names.get(owner.coverFor)?.name ?? null : null } : null };
     });
     const counts = new Map<string, number>();
     for (const row of withOwner) if (row.owner) counts.set(row.owner.id, (counts.get(row.owner.id) ?? 0) + 1);
@@ -480,18 +483,19 @@ export class DailyStatusService {
   }
 
   /** Today's owner is read live, so a truck taken or handed over moves at once; a past day keeps the owner of its morning. */
-  private async ownersOf(rows: Array<{ id: string; vehicleId: string | null; detailsJson: string | null }>, live: boolean): Promise<Map<string, StatusOwner | null>> {
+  private async ownersOf(rows: Array<{ id: string; vehicleId: string | null; detailsJson: string | null }>, live: boolean, now: Date): Promise<Map<string, StatusOwner | null>> {
     const result = new Map(rows.map((row) => [row.id, ownerOf(row.detailsJson)]));
     if (!live) return result;
     const ids = rows.flatMap((row) => row.vehicleId ? [row.vehicleId] : []);
-    const vehicles = await this.db.vehicle.findMany({ where: { id: { in: ids } }, select: { id: true, assignedDispatcherId: true, customerLine: { select: { dispatchers: LINE_DISPATCHERS } } } });
-    const current = new Map(vehicles.map((vehicle) => [vehicle.id, statusOwnerOf(vehicle, vehicle.customerLine?.dispatchers ?? [])]));
+    const vehicles = await this.db.vehicle.findMany({ where: { id: { in: ids } }, select: { id: true, assignedDispatcherId: true, customerLineId: true, customerLine: { select: { dispatchers: LINE_DISPATCHERS } } } });
+    const resolver = await coverResolver(this.db, now);
+    const current = new Map(vehicles.map((vehicle) => [vehicle.id, coveredStatusOwner(resolver, vehicle, vehicle.customerLine?.dispatchers ?? [])]));
     for (const row of rows) if (row.vehicleId && current.has(row.vehicleId)) result.set(row.id, current.get(row.vehicleId) ?? null);
     return result;
   }
 
   private async dispatcherNames(owners: Array<StatusOwner | null>) {
-    const ids = [...new Set(owners.flatMap((owner) => owner ? [owner.id] : []))];
+    const ids = [...new Set(owners.flatMap((owner) => owner ? [owner.id, ...(owner.coverFor ? [owner.coverFor] : [])] : []))];
     const people = ids.length ? await this.db.dispatcher.findMany({ where: { id: { in: ids } }, select: { id: true, displayName: true, active: true } }) : [];
     return new Map(people.map((person) => [person.id, { name: person.displayName, active: person.active }]));
   }
@@ -500,7 +504,7 @@ export class DailyStatusService {
     const row = await this.db.dailyStatusRow.findUnique({ where: { id }, include: { report: true } });
     if (!row) throw new DailyStatusError('Строка не найдена.', 404);
     if (row.report.date !== berlinToday(now)) throw new DailyStatusError('Прошлые списки только для чтения.', 409);
-    const owner = (await this.ownersOf([row], true)).get(row.id) ?? null;
+    const owner = (await this.ownersOf([row], true, now)).get(row.id) ?? null;
     // Each dispatcher sends the customer their own trucks: a colleague's line is theirs (or an admin's) to change.
     if (actor.role === 'dispatcher' && actor.dispatcherId && owner && owner.id !== actor.dispatcherId) {
       const name = (await this.dispatcherNames([owner])).get(owner.id)?.name ?? 'другой диспетчер';
@@ -536,6 +540,7 @@ function flagsOf(details: string | null): StatusFlag[] {
 function ownerOf(details: string | null): StatusOwner | null {
   try {
     const owner = details ? (JSON.parse(details) as { owner?: StatusOwner | null }).owner : null;
-    return owner && typeof owner.id === 'string' && (owner.source === 'TAKEN' || owner.source === 'LINE') ? { id: owner.id, source: owner.source } : null;
+    return owner && typeof owner.id === 'string' && (owner.source === 'TAKEN' || owner.source === 'LINE')
+      ? { id: owner.id, source: owner.source, ...(typeof owner.coverFor === 'string' ? { coverFor: owner.coverFor } : {}) } : null;
   } catch { return null; }
 }

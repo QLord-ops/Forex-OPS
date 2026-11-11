@@ -8,6 +8,7 @@ import { LazyMapPanel } from '../components/LazyMapPanel'
 import { DecisionGroups } from '../components/OperationsNotifications'
 import { needsAttention } from '../lib/alerts'
 import { QuickOrderPanel } from '../components/QuickOrderPanel'
+import { CoverPanel } from '../components/CoverPanel'
 import { TruckCard } from '../components/TruckCard'
 import { EmptyState, ErrorState, LoadingState } from '../components/States'
 import { useNotifications } from '../context/notifications'
@@ -272,11 +273,13 @@ export function DashboardPage() {
               </button>)}
             </div> : null}
           </div>
+          <CoverPanel />
           {me && activeScope === 'MINE' && !hasMine ? <p className="fleet-scope-hint">У вас пока нет машин. Откройте «Весь парк» или «Свободные» и нажмите «Взять себе» в карточке машины.</p> : null}
           <div className="fleet-list">
             {visibleVehicles.length ? visibleVehicles.map((row) => (
               <VehicleRow key={row.vehicle.id} row={row} selected={selected?.vehicle.id === row.vehicle.id} open={cardId === row.vehicle.id}
-                pinned={pinned.includes(row.vehicle.id)} owner={me && activeScope !== 'MINE' && !row.mine ? (row.assignedTo ? `ведёт ${row.assignedTo.name}` : 'свободна') : null}
+                pinned={pinned.includes(row.vehicle.id)} owner={!me ? null : row.cover ? (row.mine ? `за ${row.cover.absent.name}` : `ведёт ${row.cover.by.name} за ${row.cover.absent.name}`)
+                  : activeScope !== 'MINE' && !row.mine ? (row.assignedTo ? `ведёт ${row.assignedTo.name}` : 'свободна') : null}
                 busy={actingId === row.vehicle.id}
                 onOpen={() => {
                   if (cardId === row.vehicle.id) { closeCard(); return }

@@ -12,6 +12,7 @@
 .status-table { width: 100%; min-width: 1100px; table-layout: fixed; border-collapse: collapse; font-size: .8125rem; }
 .status-table th, .status-table td { border-bottom: 1px solid rgb(var(--ln-e2e8f0)); padding: 6px 8px; text-align: left; vertical-align: top; }
 .status-table thead th { font-size: .6875rem; font-weight: 700; color: rgb(var(--tx-61748a)); white-space: nowrap; }
+.status-cover { color: rgb(var(--tx-78350f)); font-size: .6875rem; font-weight: 500; }
 .status-lkw { font-weight: 700; color: rgb(var(--tx-b91c1c)); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .status-remark { overflow-wrap: anywhere; }
 .status-remark > span:first-child { white-space: pre-wrap; }

@@ -135,6 +135,8 @@ export interface DashboardVehicle {
   /** Dispatcher who looks after the truck; null = free. */
   assignedTo?: { id: string; name: string } | null
   mine?: boolean
+  /** The truck's dispatcher is away: who looks after it and until when. */
+  cover?: { id: string; absent: { id: string; name: string }; by: { id: string; name: string }; endsAt: string } | null
   from?: Stop | null
   to?: Stop | null
   appointmentAt?: string | null
