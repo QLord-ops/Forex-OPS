@@ -787,8 +787,10 @@ type TourRemarkStop = {
   cargo: string | null;
   /** "Lager --> VW SZ --> Lager": the truck loads again at this unloading place. */
   thenLoad?: boolean;
+  /** "87 Wolfertschwenden": the postcode of the place starts with 87. */
+  postalPrefix?: string | null;
 };
-type TourRemarkPart = { label: string; references: string[]; cargo: string | null };
+type TourRemarkPart = { label: string; references: string[]; cargo: string | null; postalPrefix?: string | null };
 type ReconciledStop = ParsedStop & { provenance?: StopProvenance; aliasApplied?: boolean; samePlaceAsPrevious?: boolean };
 type DepartmentDetails = {
   company: string | null;
@@ -863,6 +865,7 @@ export function parseTourRemarksRoute(tourRemarks: string | null, learned: Learn
     addressSource: isDepartmentLabel(part.label, learned) ? "DEPARTMENT" as const : "TOUR_REMARKS" as const,
     references: part.references,
     cargo: part.cargo,
+    ...(part.postalPrefix ? { postalPrefix: part.postalPrefix } : {}),
     ...(part.thenLoad && !isDepartmentLabel(part.label, learned) ? { thenLoad: true } : {})
   });
   const route = [...loads.map(toStop("LOAD")), ...unloads.map(toStop("UNLOAD"))];
@@ -899,9 +902,13 @@ function tourRemarkLabelParts(member: string, learned: LearnedImportRules): Tour
   const words: string[] = [];
   const references: string[] = [];
   let cargo: string | null = null;
-  for (const raw of member.split(/\s+/)) {
+  let postalPrefix: string | null = null;
+  const parts = member.split(/\s+/).filter(Boolean);
+  for (const [index, raw] of parts.entries()) {
     const word = raw.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
     if (!word) continue;
+    // "87 Wolfertschwenden", "38239 Salzgitter": a postcode or its first digits written before the town.
+    if (index === 0 && /^(?:\d{1,3}|\d{5})$/u.test(word) && /^\p{L}/u.test(parts[1] ?? "")) { postalPrefix = word; continue; }
     const key = normalizeRouteText(word);
     if (key in learned.ignoreLabels) cargo = cargo ?? learned.ignoreLabels[key] ?? null;
     else if (REFERENCE_TOKEN.test(word)) references.push(word.toLocaleUpperCase("de-DE"));
@@ -910,7 +917,7 @@ function tourRemarkLabelParts(member: string, learned: LearnedImportRules): Tour
   // A learned label of several words ("leer gut") is dropped as a whole.
   const label = words.join(" ").trim();
   if (label && normalizeRouteText(label) in learned.ignoreLabels) return { label: "", references, cargo: cargo ?? learned.ignoreLabels[normalizeRouteText(label)] ?? null };
-  return { label, references, cargo };
+  return { label, references, cargo, ...(postalPrefix && label ? { postalPrefix } : {}) };
 }
 
 /** Stops of one route side with their registration codes and cargo words taken out of the place names. */
@@ -928,6 +935,7 @@ export function splitTourRemarkParts(value: string, learned: LearnedImportRules 
         const base = named[0] ?? { label: "", references: [], cargo: null };
         return base.label
           ? [{
+              ...(base.postalPrefix ? { postalPrefix: base.postalPrefix } : {}),
               label: base.label,
               references: [...new Set([...base.references, ...orphan.flatMap((member) => member.references)])],
               cargo: base.cargo ?? orphan.find((member) => member.cargo)?.cargo ?? null
@@ -954,7 +962,7 @@ function reconcileStopsWithTourRemarks(
   const routeStops = route.map((writtenStop, sequence): ReconciledStop => {
     // "VW SZ": the addresses of this Auftrag say what SZ is before the rows are ranked.
     const decoded = decodeRouteCity(writtenStop, candidates, used, learned);
-    const routeStop = decoded?.routeStop ?? writtenStop;
+    let routeStop = decoded?.routeStop ?? writtenStop;
     if (decoded?.source === "ADDRESS") {
       warnings.push({ code: "ABBREVIATION_FROM_ADDRESS", stopIndex: sequence, field: "city",
         message: `«${writtenStop.cityHint}» — это ${routeStop.cityHint}: так написан адрес в Auftrag.` });
@@ -992,12 +1000,23 @@ function reconcileStopsWithTourRemarks(
       return { ...placeholderStop({ ...routeStop, label: "Abteilung" }, sequence + 1, department.sourcePage ?? tourRemarksSourcePage), provenance: "PLACEHOLDER" as const };
     }
     const companyTokens = tourRemarkCompanyTokens(routeStop);
+    // A misspelt town ("Wolfertschwerden") is forgiven only when no free row prints the town as written.
+    const spelling = !candidates.some((candidate, index) => !used.has(index) && townMatch(routeStop, candidate, false));
+    const written = routeStop;
     const ranked = candidates
-      .map((candidate, index) => ({ candidate, index, score: tourRemarkMatchScore(routeStop, candidate, learned) }))
+      .map((candidate, index) => ({ candidate, index, score: tourRemarkMatchScore(written, candidate, learned, spelling) }))
       // A named company ("BLG Bremen") only takes rows of that company; the city alone is not enough.
       .filter((match) => !used.has(match.index) && match.score > 0 && (!companyTokens.length || mentionsCompany(match.candidate, companyTokens, learned)))
       .sort((left, right) => right.score - left.score || right.candidate.confidence - left.candidate.confidence);
-    const selected = ranked[0];
+    let selected = ranked[0];
+    let companyDiffers = false;
+    if ((!selected || selected.score < 40) && companyTokens.length && !receiverFromNotes(routeStop, candidates, sequence + 1)) {
+      // The address is printed in the Auftrag: the only free row of that town is the place, whatever the company is called there.
+      const inTown = candidates.map((candidate, index) => ({ candidate, index, score: 40 }))
+        .filter((row) => !used.has(row.index) && townMatch(written, row.candidate, spelling)
+          && !route.some((other, position) => position !== sequence && namesRow(other, row.candidate, learned)));
+      if (inTown.length === 1) { selected = inTown[0]!; companyDiffers = true; }
+    }
     if (!selected || selected.score < 40) {
       const fromNotes = receiverFromNotes(routeStop, candidates, sequence + 1);
       if (fromNotes) {
@@ -1018,14 +1037,25 @@ function reconcileStopsWithTourRemarks(
       } else {
         warnings.push({
           code: "TOUR_REMARKS_STOP_NOT_FOUND", stopIndex: sequence, field: "address",
-          message: `Для точки «${routeStop.label}» из Tourbemerkung не найден надёжный адрес; проверьте его вручную.`,
+          message: `Для точки «${routeStop.label}» из Tourbemerkung не найден надёжный адрес${routeStop.postalPrefix ? ` (индекс начинается на ${routeStop.postalPrefix})` : ""}; проверьте его вручную.`,
           ...(tourRemarksSourcePage ? { page: tourRemarksSourcePage } : {})
         });
       }
       const placeholder = placeholderStop(routeStop, sequence + 1, tourRemarksSourcePage, learned);
-      return { ...withLearnedStopType(withTourRemarkDetails(placeholder, routeStop), learned), provenance: "PLACEHOLDER" as const, aliasApplied: placeholder.company !== shortLabel(routeStop) };
+      return { ...withLearnedStopType(withTourRemarkDetails(placeholder, routeStop), learned), provenance: "PLACEHOLDER" as const, aliasApplied: Boolean(placeholder.company) && placeholder.company !== shortLabel(routeStop) };
     }
     used.add(selected.index);
+    const rowTown = cleanCity(townOf(selected.candidate));
+    if (rowTown && townMatch(routeStop, selected.candidate, true) === "SPELLING") {
+      warnings.push({ code: "TOUR_REMARKS_CITY_SPELLING", stopIndex: sequence, field: "city",
+        message: `В Tourbemerkung «${routeStop.cityHint}» — это ${rowTown}: так напечатан адрес в Auftrag.` });
+      routeStop = { ...routeStop, label: `${routeStop.label.slice(0, routeStop.label.lastIndexOf(routeStop.cityHint))}${rowTown}`.trim(), cityHint: rowTown };
+    }
+    if (companyDiffers) {
+      warnings.push({ code: "TOUR_REMARKS_COMPANY_DIFFERS", stopIndex: sequence, field: "company",
+        message: `В Tourbemerkung «${written.label}», в таблице в ${rowTown ?? written.cityHint} одна строка — «${selected.candidate.company ?? selected.candidate.address}». Взят её адрес; проверьте фирму.` });
+      return { ...withLearnedStopType(withTourRemarkDetails({ ...selected.candidate, type: routeStop.type, confidence: Math.min(selected.candidate.confidence, 0.6) }, routeStop), learned), provenance: "TOUR_REMARKS" as const };
+    }
     const duplicates = ranked.filter((match) =>
       match.index !== selected.index && sameTourRemarkCity(routeStop, match.candidate) && (!companyTokens.length || mentionsCompany(match.candidate, companyTokens, learned)));
     duplicates.forEach((match) => used.add(match.index));
@@ -1168,8 +1198,8 @@ function withLearnedStopType(stop: ParsedStop, learned: LearnedImportRules): Par
 
 /** Words of a Tourbemerkung label that name the company, not the city: "BLG Bremen" → ["blg"]. */
 export function tourRemarkCompanyTokens(routeStop: TourRemarkStop): string[] {
-  const city = normalizeRouteText(routeStop.cityHint);
-  return normalizeRouteText(routeStop.label).split(" ").filter((token) => token.length >= 2 && token !== city && !COMPANY_STOPWORDS.has(token));
+  const city = normalizeRouteText(routeStop.cityHint).split(" ");
+  return normalizeRouteText(routeStop.label).split(" ").filter((token) => token.length >= 2 && !city.includes(token) && !COMPANY_STOPWORDS.has(token));
 }
 
 function mentionsCompany(stop: ParsedStop, tokens: string[], learned: LearnedImportRules = BUILT_IN_IMPORT_RULES): boolean {
@@ -1178,14 +1208,63 @@ function mentionsCompany(stop: ParsedStop, tokens: string[], learned: LearnedImp
     text.includes(` ${token} `) || (token.length >= 5 && text.includes(token)) || aliasKeys(token, learned).some((alias) => text.includes(alias)));
 }
 
-function tourRemarkMatchScore(routeStop: TourRemarkStop, stop: ParsedStop, learned: LearnedImportRules = BUILT_IN_IMPORT_RULES): number {
-  const city = normalizeRouteText(cleanCity(stop.city) ?? inferCityFromAddress(stop.address) ?? "");
+/** The town of a printed row without its postcode: "D 87787 Wolfertschwenden" → "Wolfertschwenden". */
+function townOf(stop: ParsedStop): string {
+  return (cleanCity(stop.city) ?? inferCityFromAddress(stop.address) ?? "").replace(/^\s*(?:D\s*[-–]?\s*)?\d{5}\s+/iu, "").trim();
+}
+
+function postcodeOf(stop: ParsedStop): string | null {
+  return [stop.address, stop.city].filter(Boolean).join(" ").match(/\b\d{5}\b/)?.[0] ?? null;
+}
+
+/** False only when the row prints a postcode that starts differently from the digits written before the town. */
+function postcodeFits(routeStop: TourRemarkStop, stop: ParsedStop): boolean {
+  const postcode = postcodeOf(stop);
+  return !routeStop.postalPrefix || !postcode || postcode.startsWith(routeStop.postalPrefix);
+}
+
+/** Two spellings of one town: equal, or one or two letters apart in a name long enough for that to be a typo. */
+export function sameTownSpelling(left: string, right: string): boolean {
+  const a = normalizeRouteText(left).replace(/ /g, ""), b = normalizeRouteText(right).replace(/ /g, "");
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const shorter = Math.min(a.length, b.length);
+  const allowed = shorter >= 8 ? 2 : shorter >= 5 ? 1 : 0;
+  if (!allowed || Math.abs(a.length - b.length) > allowed || a[0] !== b[0]) return false;
+  let previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= a.length; i += 1) {
+    const current = [i];
+    for (let j = 1; j <= b.length; j += 1) current[j] = Math.min(previous[j]! + 1, current[j - 1]! + 1, previous[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1));
+    previous = current;
+  }
+  return previous[b.length]! <= allowed;
+}
+
+/** How the row's town answers the town of the Tourbemerkung stop; a misspelling counts only when `spelling` allows it. */
+function townMatch(routeStop: TourRemarkStop, stop: ParsedStop, spelling: boolean): "EXACT" | "SPELLING" | null {
+  const town = normalizeRouteText(townOf(stop)), hint = normalizeRouteText(routeStop.cityHint);
+  if (!town || !hint || !postcodeFits(routeStop, stop)) return null;
+  if (town === hint || normalizeRouteText(cleanCity(stop.city) ?? "") === hint) return "EXACT";
+  return spelling && sameTownSpelling(town, hint) ? "SPELLING" : null;
+}
+
+/** Another stop of the Tourbemerkung names this row by its company and town: the row is its own. */
+function namesRow(routeStop: TourRemarkStop, stop: ParsedStop, learned: LearnedImportRules): boolean {
+  const tokens = tourRemarkCompanyTokens(routeStop);
+  return tokens.length > 0 && Boolean(townMatch(routeStop, stop, true)) && mentionsCompany(stop, tokens, learned);
+}
+
+function tourRemarkMatchScore(routeStop: TourRemarkStop, stop: ParsedStop, learned: LearnedImportRules = BUILT_IN_IMPORT_RULES, spelling = false): number {
+  if (!postcodeFits(routeStop, stop)) return 0;
+  const town = townMatch(routeStop, stop, spelling);
+  const city = town === "EXACT" ? normalizeRouteText(routeStop.cityHint) : normalizeRouteText(cleanCity(stop.city) ?? inferCityFromAddress(stop.address) ?? "");
   const cityHint = normalizeRouteText(routeStop.cityHint);
   const primary = normalizeRouteText([stop.company, stop.address, stop.city, stop.sourceExcerpt].filter(Boolean).join(" "));
   const secondary = normalizeRouteText(stop.instructions ?? "");
   const tokens = normalizeRouteText(routeStop.label).split(" ").filter((token) => token.length >= 2);
-  let score = city && cityHint && city === cityHint ? 100 : 0;
+  let score = city && cityHint && city === cityHint ? 100 : town === "SPELLING" ? 90 : 0;
   if (cityHint && primary.includes(cityHint)) score += 45;
+  if (routeStop.postalPrefix && postcodeOf(stop)?.startsWith(routeStop.postalPrefix)) score += 30;
   for (const token of tokens) {
     if (primary.includes(token) || aliasKeys(token, learned).some((alias) => primary.includes(alias))) score += 12;
     else if (secondary.includes(token)) score += 1;
@@ -1216,8 +1295,7 @@ function withTourRemarkDetails(stop: ParsedStop, routeStop: TourRemarkStop): Par
 }
 
 function sameTourRemarkCity(routeStop: TourRemarkStop, stop: ParsedStop): boolean {
-  const city = normalizeRouteText(cleanCity(stop.city) ?? inferCityFromAddress(stop.address) ?? "");
-  return Boolean(city && city === normalizeRouteText(routeStop.cityHint));
+  return townMatch(routeStop, stop, false) === "EXACT";
 }
 
 function mergeDuplicateStopDetails(primary: ParsedStop, duplicates: ParsedStop[]): ParsedStop {
@@ -1271,7 +1349,8 @@ function shortLabel(routeStop: TourRemarkStop): string {
 function placeholderStop(routeStop: TourRemarkStop, sequence: number, sourcePage: number | null, learned: LearnedImportRules = BUILT_IN_IMPORT_RULES): ParsedStop {
   // "Seifert Bremen" → company "Seifert", city Bremen; the address is completed from the address rules or by the dispatcher.
   const shortName = shortLabel(routeStop);
-  const companyName = learned.aliases[normalizeRouteText(shortName)] ?? shortName;
+  // "87 Wolfertschwenden" names a town by its postcode area, not a company.
+  const companyName = routeStop.postalPrefix && shortName === routeStop.label ? null : learned.aliases[normalizeRouteText(shortName)] ?? shortName;
   return {
     sequence,
     type: routeStop.type,
