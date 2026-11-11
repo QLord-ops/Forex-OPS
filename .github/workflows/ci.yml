@@ -56,7 +56,8 @@ jobs:
         run: npm audit --audit-level=high
 
   e2e:
-    runs-on: ubuntu-latest
+    # ubuntu-latest moved to 26.04, where this Playwright cannot install Chromium yet.
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Checkout
