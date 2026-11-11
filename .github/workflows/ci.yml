@@ -73,7 +73,8 @@ jobs:
         run: npm ci
 
       - name: Install Chromium
-        run: npx playwright install --with-deps chromium
+        # No --with-deps: the runner image already has Chromium's libraries, and apt mirrors failing must not fail the tests.
+        run: npx playwright install chromium
 
       - name: Run browser scenarios
         run: npm run test:e2e
