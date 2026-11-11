@@ -18,7 +18,7 @@ async function mock(page: Page) {
   await page.route('**/api/**', async route => {
     const path = new URL(route.request().url()).pathname.replace(/^\/api/, '')
     const covered = cover()
-    if (path === '/auth/session') return json(route, { authenticated: true, role: 'dispatcher', csrfToken: 'e2e', dispatcherId: ANNA.id, displayName: ANNA.name })
+    if (path === '/auth/session') return json(route, { authenticated: true, role: 'dispatcher', csrfToken: 'e2e', dispatcherId: ANNA.id, displayName: ANNA.name, onboardingCompletedAt: '2026-11-01T00:00:00Z' })
     if (path === '/notifications') return json(route, { notifications: [] })
     if (path === '/dashboard') {
       const mark = covered ? { id: covered.id, absent: BEN, by: ANNA, endsAt: covered.endsAt } : null

@@ -16,7 +16,7 @@ test('«Мои» по умолчанию, весь парк с хозяевам�
   ]
   await page.route('**/api/**', async route => {
     const path = new URL(route.request().url()).pathname.replace(/^\/api/, '')
-    if (path === '/auth/session') return json(route, { authenticated: true, role: 'dispatcher', csrfToken: 'e2e', dispatcherId: 'd-anna', displayName: 'Anna Beispiel' })
+    if (path === '/auth/session') return json(route, { authenticated: true, role: 'dispatcher', csrfToken: 'e2e', dispatcherId: 'd-anna', displayName: 'Anna Beispiel', onboardingCompletedAt: '2026-11-01T00:00:00Z' })
     if (path === '/notifications') return json(route, { notifications: [] })
     if (path === '/dashboard') return json(route, { me: 'd-anna', vehicles: rows() })
     if (path === '/vehicles/v-free/assignment') {
