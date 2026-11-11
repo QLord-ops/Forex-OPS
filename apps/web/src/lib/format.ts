@@ -105,6 +105,7 @@ export function operationEventLabel(type?: string | null): string {
     ROUTE_REPLANNED: 'Маршрут изменён',
     APPOINTMENT_ATTACHED: 'Термин прикреплён',
     REROUTE_ACCEPTED: 'Объезд принят',
+    ROUTE_REBUILT_AUTO: 'Маршрут перестроен автоматически',
     TRAFFIC_REFRESH: 'Данные о трафике обновлены',
     TRUCK_PROFILE_UPDATED: 'Параметры грузовика обновлены'
   }

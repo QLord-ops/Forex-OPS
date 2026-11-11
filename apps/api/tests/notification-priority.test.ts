@@ -142,4 +142,11 @@ describe('reading the information block at once', () => {
       expect((await send({ ids: 'all' })).statusCode).toBe(400);
     } finally { await app.close(); }
   });
+
+  it('a detour whose route was rebuilt by itself is information; without a rebuild it still needs the dispatcher', () => {
+    const asked = prioritize([note('asked', 'ROUTE_DEVIATION', { payload: { legId: 'l1' } })], facts([]), now);
+    const told = prioritize([note('told', 'ROUTE_DEVIATION', { payload: { legId: 'l1', rebuilt: true } })], facts([]), now);
+    expect(asked[0]).toMatchObject({ priority: 'ACTION' });
+    expect(told[0]).toMatchObject({ priority: 'INFO', urgent: false });
+  });
 });
