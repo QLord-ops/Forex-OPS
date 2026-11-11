@@ -6,6 +6,13 @@ import { TrafficRoutingService, type TrafficRefreshSource, type TrafficRouteResu
 import { calculateSimulatedDuration, parseGeometry, splitGeometryAtProgress } from './simulation.js';
 import { cleanTravelled } from './travelled-path.js';
 import { OFF_ROUTE_METERS } from './route-projection.js';
+import { writeAuditLog, type AuditActor } from './audit-log.js';
+
+/** What the dispatcher is told after the route was rebuilt from the truck's GPS position. */
+export type AutoReroute = { distanceMeters: number; eta: string | null; previousEta: string | null; mainRoads: string[]; live: boolean };
+// A driver wandering through a town must not spend the routing quota: one automatic rebuild per leg in ten minutes.
+const AUTO_REROUTE_INTERVAL_MS = 600_000;
+const AUTO_REROUTE_ACTOR: AuditActor = { role: 'system', sessionId: 'route-deviation' };
 
 type StoredRouteOption = { id: string; route: TrafficRouteResult };
 type TrafficDetails = {
@@ -13,6 +20,7 @@ type TrafficDetails = {
   checkedAt?: string; attemptedAt?: string; providerStatus?: string; warning?: string;
   activeRoute?: TrafficRouteResult; proposals?: RouteAlternativeProposal[];
   travelledGeometry?: Coordinate[]; travelledStitches?: number[]; refreshIntervalSeconds?: number; reason?: string;
+  autoReroutedAt?: string;
 };
 
 export function trafficRefreshInterval(remainingQuota: number, movingVehicles: number, now: Date): number {
@@ -106,6 +114,43 @@ export class TrafficOperationsService {
           payload: { checkedAt: now.toISOString(), roadNumbers: refreshed.activeRoute.roadNumbers } });
       }
       return this.status(vehicleId, now);
+    } finally { this.inFlight.delete(vehicleId); }
+  }
+
+  /**
+   * The driver left the planned line: the route to the next stop is planned afresh from the real GPS position and
+   * becomes the tour's route. Only fresh Webfleet GPS triggers it; a route without live traffic is still better than
+   * a line the truck is no longer on. Null: nothing was changed.
+   */
+  async rerouteFromGps(vehicleId: string, now = new Date()): Promise<AutoReroute | null> {
+    if (this.inFlight.has(vehicleId)) return null;
+    this.inFlight.add(vehicleId);
+    try {
+      const context = await this.context(vehicleId);
+      const position = await this.getPosition(vehicleId, now);
+      if (!context.leg || context.leg.toStop.arrivedAt || position.etaSource !== 'GPS' || !position.position) return null;
+      const last = Date.parse(context.details.autoReroutedAt ?? '');
+      if (last && now.getTime() - last < AUTO_REROUTE_INTERVAL_MS) return null;
+      const refreshed = await this.routing.refreshCurrentRoute({ origin: position.position, destination: context.leg.toStop,
+        options: { source: 'background', includeInstructions: true, truck: truckProfile(context.vehicle.truckProfile, context.vehicle.maxSpeedKmh) } });
+      const route = refreshed.activeRoute;
+      if (route.geometry.length < 2 || !(route.distanceMeters > 0)) return null;
+      const live = route.providerStatus === 'live-traffic';
+      const details: TrafficDetails = { ...context.details, routeOptions: undefined, autoReroutedAt: now.toISOString(), attemptedAt: now.toISOString(),
+        providerStatus: route.providerStatus, warning: route.warning, activeRoute: route, proposals: live ? refreshed.alternatives : [],
+        ...(live ? { checkedAt: now.toISOString() } : {}) };
+      try {
+        await this.applyRoute(context, route, details, now, 'ROUTE_REBUILT_AUTO', gpsTravelled(position));
+      } catch (error) {
+        // The dispatcher changed the tour in the same second: their change stands.
+        if (error instanceof TourPlanConflictError) return null;
+        throw error;
+      }
+      await writeAuditLog(this.db, AUTO_REROUTE_ACTOR, { action: 'ROUTE_REBUILT_AUTO', entityType: 'Vehicle', entityId: vehicleId, vehicleId, tourId: context.leg.tourId,
+        metadata: { legId: context.leg.id, offRouteMeters: position.offRouteMeters ?? null, distanceMeters: route.distanceMeters, providerStatus: route.providerStatus } });
+      const after = await this.getPosition(vehicleId, now).catch(() => null);
+      return { distanceMeters: route.distanceMeters, eta: after?.eta ?? null, previousEta: position.eta ?? null,
+        mainRoads: route.mainRoads ?? route.roadNumbers.slice(0, 2), live };
     } finally { this.inFlight.delete(vehicleId); }
   }
 

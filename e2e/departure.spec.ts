@@ -136,3 +136,38 @@ test('BELADEN записан сам после выезда из города: �
   await expect.poll(() => reverted).toMatchObject({ reason: expect.stringContaining('Отменено') })
   await expect(decisions.getByRole('article')).toHaveCount(0)
 })
+
+test('отклонение от маршрута: маршрут перестроен сам, уведомление только «для сведения»', async ({ page }) => {
+  let acked = false
+  const note = (rebuilt: boolean) => ({ id: rebuilt ? 'n-told' : 'n-asked', vehicleId: rebuilt ? 'v1' : 'v2', stopId: null, type: 'ROUTE_DEVIATION', createdAt: new Date().toISOString(),
+    priority: rebuilt ? 'INFO' : 'ACTION', urgent: false, resolved: false, resolvedReason: null, leadId: rebuilt ? 'n-told' : 'n-asked', stackSize: 1,
+    message: rebuilt ? 'LKW 949 поехал по другому маршруту. Новый маршрут построен от позиции GPS: 312 км через A7, A38. ETA 14:20 (было 13:50).'
+      : 'LKW 125 отклонилась от маршрута: ≈ 3,1 км от проложенной линии по GPS Webfleet. Посмотрите варианты маршрута.',
+    payloadJson: JSON.stringify(rebuilt ? { legId: 'l1', rebuilt: true, distanceMeters: 312_400, live: true } : { legId: 'l2' }) })
+  await page.route('**/api/**', async (route) => {
+    const path = new URL(route.request().url()).pathname.replace(/^\/api/, '')
+    if (path === '/auth/session') return json(route, { authenticated: true, role: 'dispatcher', csrfToken: 'e2e' })
+    if (path === '/notifications') return json(route, { notifications: acked ? [note(false)] : [note(true), note(false)] })
+    if (path === '/notifications/n-told/ack') { acked = true; return json(route, { ok: true }) }
+    if (path === '/dashboard') return json(route, { vehicles: [
+      { vehicle: truck('v1', '949'), statusText: 'MOVING', operationVersion: 1, tour: { id: 't-a', vehicleId: 'v1', orderNumber: 'A-1', status: 'ACTIVE', stops: [stop('a')] } },
+      { vehicle: truck('v2', '125'), statusText: 'MOVING', operationVersion: 1, tour: { id: 't-b', vehicleId: 'v2', orderNumber: 'B-1', status: 'ACTIVE', stops: [stop('b')] } }
+    ] })
+    if (path.endsWith('/current-position')) return json(route, { status: 'MOVING' })
+    return json(route, { error: 'not mocked' }, 404)
+  })
+  await page.route('https://tile.openstreetmap.org/**', (route) => route.abort())
+  await page.goto('/')
+  const decisions = page.getByRole('region', { name: 'Требует решения' })
+  // The detour nobody could rebuild still asks for the dispatcher: the routes first.
+  const asked = decisions.getByRole('article').filter({ hasText: 'LKW 125 отклонилась от маршрута' })
+  await expect(asked.locator('.decision-card-actions button')).toHaveText(['Варианты маршрута', 'Понятно'])
+  // The rebuilt one only informs: «Понятно» first, the other routes stay one click away.
+  await decisions.getByText('Для сведения').click()
+  const told = decisions.getByRole('article').filter({ hasText: 'поехал по другому маршруту' })
+  await expect(told).toContainText('LKW 949 поехал по другому маршруту')
+  await expect(told).toContainText('Новый маршрут построен от позиции GPS: 312 км через A7, A38. ETA 14:20 (было 13:50).')
+  await expect(told.locator('.decision-card-actions button')).toHaveText(['Понятно', 'Варианты маршрута'])
+  await told.getByRole('button', { name: 'Понятно' }).click()
+  await expect(decisions.getByRole('article').filter({ hasText: 'поехал по другому маршруту' })).toHaveCount(0)
+})

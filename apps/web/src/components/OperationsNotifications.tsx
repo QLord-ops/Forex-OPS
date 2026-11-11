@@ -62,13 +62,14 @@ export function DecisionCard({ item, stop, onSelect, openLink = false, nested = 
     actions = [{ label: 'Понятно', primary: true, run: () => void state.resolve(item, 'ack') }]
     if (item.stopId && !item.resolved) actions.push({ label: `Отменить ${done}`, run: () => void state.resolve(item, 'revert-event') })
   } else if (item.type === 'ROUTE_DEVIATION') {
-    tone = 'late'; Icon = Route
-    title = `${vehicle ? `LKW ${vehicle}` : 'Машина'} отклонилась от маршрута`
-    detail = item.message
-    actions = [
-      { label: 'Варианты маршрута', primary: true, run: () => { state.hide(item.id); void state.resolve(item, 'ack'); navigate(`/?vehicleId=${encodeURIComponent(item.vehicleId)}&routes=1`) } },
-      { label: 'Понятно', run: () => void state.resolve(item, 'ack') }
-    ]
+    const rebuilt = routeRebuilt(item.payloadJson)
+    const options = { label: 'Варианты маршрута', run: () => { state.hide(item.id); void state.resolve(item, 'ack'); navigate(`/?vehicleId=${encodeURIComponent(item.vehicleId)}&routes=1`) } }
+    const seen = { label: 'Понятно', run: () => void state.resolve(item, 'ack') }
+    tone = rebuilt ? 'info' : 'late'; Icon = Route
+    title = `${vehicle ? `LKW ${vehicle}` : 'Машина'} ${rebuilt ? 'поехал по другому маршруту' : 'отклонилась от маршрута'}`
+    detail = rebuilt ? item.message.replace(/^LKW \S+ поехал по другому маршруту\.\s*/u, '') : item.message
+    // The route is already rebuilt: nothing has to be decided, the other routes stay one click away.
+    actions = rebuilt ? [{ ...seen, primary: true }, options] : [{ ...options, primary: true }, seen]
   } else if (item.type === 'TERMIN_MET') {
     const onTime = /вовремя/.test(item.message)
     tone = onTime ? 'ok' : 'late'; Icon = CalendarCheck
@@ -157,6 +158,9 @@ export function DecisionGroups({ items, stopOf, onSelect, openLink = false }: { 
   </div>
 }
 
+function routeRebuilt(payloadJson?: string | null) {
+  try { return (JSON.parse(payloadJson ?? '{}') as { rebuilt?: boolean }).rebuilt === true } catch { return false }
+}
 function restStopType(payloadJson?: string | null) {
   try { return (JSON.parse(payloadJson ?? '{}') as { stopType?: string }).stopType ?? null } catch { return null }
 }

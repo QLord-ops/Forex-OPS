@@ -78,7 +78,8 @@ function classify(item: PriorityInput, facts: PriorityFacts, superseded: Set<str
     case "ROUTE_DEVIATION": {
       const target = typeof payload.legId === "string" ? facts.stops.get(facts.legTarget.get(payload.legId) ?? "") : null;
       const reason = superseded.has(item.id) ? "есть новее" : target?.arrivedAt ? "машина уже на точке" : null;
-      return { priority: "ACTION" as const, urgent: false, reason };
+      // The route was rebuilt by itself: the dispatcher only has to know.
+      return { priority: payload.rebuilt === true ? "INFO" as const : "ACTION" as const, urgent: false, reason };
     }
     case "PREDICTED_ARRIVAL":
       return { priority: "RISK" as const, urgent: false, reason: stop?.arrivedAt ? "прибытие уже записано" : null };
