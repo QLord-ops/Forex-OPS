@@ -23,9 +23,20 @@ afterAll(async () => { await db?.$disconnect(); if (directory) await rm(director
 beforeEach(async () => { await db.vehicle.deleteMany(); });
 
 it('adapts the interval to remaining free quota and disables exhausted background budget', () => {
-  expect(trafficRefreshInterval(18000, 1, now)).toBe(600);
-  expect(trafficRefreshInterval(10, 30, now)).toBeGreaterThan(600);
-  expect(trafficRefreshInterval(0, 30, now)).toBe(Infinity);
+  expect(trafficRefreshInterval(18000, 1, now).normal).toBe(600);
+  expect(trafficRefreshInterval(10, 30, now).normal).toBeGreaterThan(600);
+  expect(trafficRefreshInterval(0, 30, now).normal).toBe(Infinity);
+  expect(trafficRefreshInterval(0, 30, now, 2).important).toBe(Infinity);
+});
+
+it('checks a truck in a jam or late for its Termin every 5 minutes while the quota lasts', () => {
+  expect(trafficRefreshInterval(14400, 1, now, 1)).toEqual({ normal: 600, important: 300 });
+  // 20 days left, 2 000 requests: the important trucks still go twice as often and the month's budget holds.
+  const tight = trafficRefreshInterval(2000, 4, now, 2);
+  expect(tight.normal).toBeGreaterThan(600);
+  expect(tight.important).toBe(Math.ceil(tight.normal / 2));
+  const secondsLeft = (Date.UTC(2026, 10, 1) - now.getTime()) / 1000;
+  expect(secondsLeft / tight.normal * 4 + secondsLeft / tight.important * 2).toBeLessThanOrEqual(2000);
 });
 
 async function fixture(label: string) {

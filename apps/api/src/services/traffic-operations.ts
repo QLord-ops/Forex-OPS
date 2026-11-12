@@ -23,10 +23,20 @@ type TrafficDetails = {
   autoReroutedAt?: string;
 };
 
-export function trafficRefreshInterval(remainingQuota: number, movingVehicles: number, now: Date): number {
-  if (remainingQuota <= 0) return Number.POSITIVE_INFINITY;
+const NORMAL_MIN_SECONDS = 600;
+const IMPORTANT_MIN_SECONDS = 300;
+
+/**
+ * Seconds between background traffic checks. An important truck (stuck in a jam of 10+ min or late for its Termin) is
+ * checked twice as often as the rest — every 5 min (owner, 12.11.2026); both stretch together when the free monthly
+ * quota would not last until the month ends.
+ */
+export function trafficRefreshInterval(remainingQuota: number, normalVehicles: number, now: Date, importantVehicles = 0): { normal: number; important: number } {
+  if (remainingQuota <= 0) return { normal: Number.POSITIVE_INFINITY, important: Number.POSITIVE_INFINITY };
   const monthEnd = Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1);
-  return Math.max(600, Math.ceil((monthEnd - now.getTime()) / 1000 * movingVehicles / remainingQuota));
+  const weight = normalVehicles + importantVehicles * (NORMAL_MIN_SECONDS / IMPORTANT_MIN_SECONDS);
+  const normal = Math.max(NORMAL_MIN_SECONDS, Math.ceil((monthEnd - now.getTime()) / 1000 * weight / remainingQuota));
+  return { normal, important: Math.max(IMPORTANT_MIN_SECONDS, Math.ceil(normal * IMPORTANT_MIN_SECONDS / NORMAL_MIN_SECONDS)) };
 }
 
 export class TrafficOperationsService {
@@ -67,14 +77,16 @@ export class TrafficOperationsService {
           priority: Number((details.activeRoute?.trafficDelaySeconds ?? 0) >= 600) + Number(Boolean(leg?.toStop.appointmentAt && position.delayMinutes > 0)) });
       }
       const quota = await this.routing.quotaStatus('background', now);
-      const interval = trafficRefreshInterval(quota?.availableForSource ?? 0, moving.length, now);
+      const important = moving.filter((item) => item.priority > 0).length;
+      const intervals = trafficRefreshInterval(quota?.availableForSource ?? 0, moving.length - important, now, important);
       moving.sort((a, b) => b.priority - a.priority || a.due - b.due);
       // Sequential requests keep the free-quota reserve deterministic and avoid bursts.
       for (const item of moving) {
         const { context } = item;
         if (!context.leg) continue;
+        const interval = item.priority > 0 ? intervals.important : intervals.normal;
         const refreshIntervalSeconds = Number.isFinite(interval) ? interval : null;
-        const reason = !Number.isFinite(interval) ? 'Бесплатная квота недоступна.' : interval > 600 ? 'Интервал увеличен из-за бесплатной квоты.' : null;
+        const reason = !Number.isFinite(interval) ? 'Бесплатная квота недоступна.' : intervals.normal > NORMAL_MIN_SECONDS ? 'Интервал увеличен из-за бесплатной квоты.' : null;
         // Write only when something changed: a rewrite every 15 s would void the dispatcher's open previews.
         if (context.details.refreshIntervalSeconds !== refreshIntervalSeconds || (context.details.reason ?? null) !== reason) {
           await this.db.leg.updateMany({ where: { id: context.leg.id, updatedAt: context.leg.updatedAt }, data: { routeDetails: JSON.stringify({ ...context.details, refreshIntervalSeconds, reason }) } });

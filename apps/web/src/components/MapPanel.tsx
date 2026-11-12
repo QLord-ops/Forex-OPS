@@ -8,6 +8,7 @@ import { boundsFor, geometryToCoordinates, stopCoordinates, toBrokenLine, toLine
 import { calculatedPositionLabel } from '../lib/format'
 import { useStableValue } from '../hooks/useStableValue'
 import { formatDelay, formatKm, INCIDENT_TITLES, trafficIncidents, type TrafficIncident } from '../lib/traffic-incidents'
+import { TRAFFIC_COLORS, trafficFlowLayer } from '../lib/traffic-flow'
 import type { MapRouteAlternative, MapRouteStop } from '../lib/route-preview'
 import { roadShieldLabel, roadShields, visibleShields } from '../lib/road-shields'
 import { THEME_EVENT, currentTheme, type Theme } from '../lib/theme'
@@ -578,13 +579,12 @@ export function MapPanel({
 const ROUTE_BLUE = '#1a73e8'
 const PREVIEW_BLUE = '#174ea6'
 const ALT_GREY = '#8fa3bf'
-const TRAFFIC_COLORS = { SLOW: '#f29900', JAM: '#d93025', STANDSTILL: '#8b0000', CLOSED: '#202124' } as const
 const TRAFFIC_LABELS = { SLOW: 'медленно', JAM: 'пробка', STANDSTILL: 'стоит', CLOSED: 'перекрыто' } as const
 const LINE_WIDTH = ['interpolate', ['linear'], ['zoom'], 5, 4.5, 10, 8.5, 14, 13] as unknown as number
 const CASING_WIDTH = ['interpolate', ['linear'], ['zoom'], 5, 7.5, 10, 12, 14, 17] as unknown as number
 const TRAFFIC_COLOR = ['match', ['get', 'level'], 'SLOW', TRAFFIC_COLORS.SLOW, 'JAM', TRAFFIC_COLORS.JAM, 'STANDSTILL', TRAFFIC_COLORS.STANDSTILL, 'CLOSED', TRAFFIC_COLORS.CLOSED, ROUTE_BLUE] as unknown as string
-const TRAFFIC_FLOW_OPACITY = 0.72
-const TRAFFIC_FLOW_OPACITY_WITH_ROUTE = 0.4
+const TRAFFIC_FLOW_OPACITY = 0.9
+const TRAFFIC_FLOW_OPACITY_WITH_ROUTE = 0.5
 
 const STALE_TRAFFIC_MS = 30 * 60_000
 
@@ -661,7 +661,7 @@ function renderMapContent(map: Map, fullRoute: Coordinate[], position?: CurrentP
   upsertRouteLayer(map, 'preview-traffic', trafficFeatures(preview, previewTraffic), { 'line-color': TRAFFIC_COLOR, 'line-width': LINE_WIDTH })
   // The route must stand out: dim the city-wide traffic layer while a route is shown.
   if (map.getLayer('traffic-flow')) {
-    map.setPaintProperty('traffic-flow', 'raster-opacity', fullRoute.length > 1 || preview.length > 1 ? TRAFFIC_FLOW_OPACITY_WITH_ROUTE : TRAFFIC_FLOW_OPACITY)
+    map.setPaintProperty('traffic-flow', 'line-opacity',fullRoute.length > 1 || preview.length > 1 ? TRAFFIC_FLOW_OPACITY_WITH_ROUTE : TRAFFIC_FLOW_OPACITY)
   }
 }
 
@@ -696,15 +696,17 @@ function styleFor(mode: MapMode, traffic: boolean, theme: Theme): StyleSpecifica
   }
   const layers: StyleSpecification['layers'] = [{ id: 'base', type: 'raster', source: 'base' }]
   if (traffic) {
+    // Vector flow tiles: only the slow stretches are drawn, along the road and thick enough to see at country zoom (as in Webfleet).
     sources.traffic = {
-      type: 'raster',
-      tiles: [`https://api.tomtom.com/traffic/map/4/tile/flow/relative0/{z}/{x}/{y}.png?key=${key}`],
-      tileSize: 256
+      type: 'vector',
+      tiles: [`https://api.tomtom.com/traffic/map/4/tile/flow/relative-delay/{z}/{x}/{y}.pbf?key=${key}`],
+      maxzoom: 18
     }
-    layers.push({ id: 'traffic-flow', type: 'raster', source: 'traffic', paint: { 'raster-opacity': 0.72 } })
+    layers.push(trafficFlowLayer(TRAFFIC_FLOW_OPACITY))
   }
   return { version: 8, sources, layers }
 }
+
 
 function tomTomMapKey(): string | undefined {
   return (import.meta.env.VITE_TOMTOM_MAPS_KEY || import.meta.env.VITE_TOMTOM_MAP_KEY) as string | undefined
