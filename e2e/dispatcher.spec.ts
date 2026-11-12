@@ -305,6 +305,25 @@ test.describe('окно «Маршрут»', () => {
     expect(requests[0]).toMatchObject({ originAddress: 'Berlin', stops: [{ address: 'Hamburg' }, { address: 'München' }] })
   })
 
+  test('длинный адрес из Auftrag не выталкивает время прибытия за панель', async ({ page }) => {
+    const requests: Array<Record<string, unknown>> = []
+    const form = await openRouteWindow(page, requests)
+    await form.getByLabel('Старт: номер машины или адрес').fill('125')
+    const address = 'TALLAG Königsee, (Industrie- und Gewerbegebiet 8), Industrie- und Gewerbegebiet 8, 07426 Königsee-Rottenbach'
+    await form.getByLabel('Конечный адрес').fill(address)
+    await form.getByRole('button', { name: 'Проложить маршрут' }).click()
+    const row = form.locator('.route-builder-eta li').first()
+    await expect(row).toContainText('TALLAG')
+    const overflow = await form.evaluate((element) => {
+      const boxes: Array<{ scroll: number; client: number }> = []
+      for (let node: HTMLElement | null = element; node && boxes.length < 4; node = node.parentElement) boxes.push({ scroll: node.scrollWidth, client: node.clientWidth })
+      return boxes.filter((box) => box.scroll > box.client + 1)
+    })
+    expect(overflow).toEqual([])
+    const time = await row.locator('time').boundingBox(), box = await form.boundingBox()
+    expect(time!.x + time!.width).toBeLessThanOrEqual(box!.x + box!.width)
+  })
+
   test('не даёт поставить машину не первой точкой', async ({ page }) => {
     const requests: Array<Record<string, unknown>> = []
     const form = await openRouteWindow(page, requests)

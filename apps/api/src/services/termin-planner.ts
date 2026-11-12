@@ -275,7 +275,7 @@ export function driverBudgetAfterRest(times: WebfleetDrivingTimes, startsAt: Dat
  * 11 h rest would miss and a reduced rest is still allowed, the rest is 9 h and the plan says so. The engine that made
  * the chosen forecast is returned, so a chain of stops continues from it.
  */
-export function forecastEta(engine: DriveEngine, driveSeconds: number, from: Date, deadlineAt: Date | null, startsAt: Date | null = null): { endAt: Date; plan: DriveEtaPlan; engine: DriveEngine } {
+export function forecastEta(engine: DriveEngine, driveSeconds: number, from: Date, deadlineAt: Date | null, startsAt: Date | null = null): { endAt: Date; plan: DriveEtaPlan; engine: DriveEngine; pieces: Piece[] } {
   const start = startsAt && startsAt > from ? startsAt : from;
   const run = (restSeconds: number) => { const copy = engine.clone(); return { engine: copy, ...copy.drive(driveSeconds, start, restSeconds) }; };
   let chosen = run(DAILY_REST_SECONDS);
@@ -284,7 +284,7 @@ export function forecastEta(engine: DriveEngine, driveSeconds: number, from: Dat
   if (rests && deadlineAt && chosen.endAt > deadlineAt && engine.canReduceRest()) { chosen = run(REDUCED_REST_SECONDS); reduced = true; }
   const rest = chosen.pieces.find(piece => piece.type === 'DAILY_REST') ?? null;
   return {
-    endAt: chosen.endAt, engine: chosen.engine,
+    endAt: chosen.endAt, engine: chosen.engine, pieces: chosen.pieces,
     plan: {
       hours: engine.source, preliminary: engine.preliminary, driveSeconds: Math.round(driveSeconds),
       breakSeconds: Math.round(chosen.pieces.filter(piece => piece.type === 'BREAK').reduce((sum, piece) => sum + piece.durationSeconds, 0)),
