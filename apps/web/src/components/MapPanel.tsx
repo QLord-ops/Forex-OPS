@@ -26,7 +26,7 @@ const osmStyle: StyleSpecification = {
       attribution: import.meta.env.VITE_MAP_ATTRIBUTION || '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>'
     }
   },
-  layers: [{ id: 'osm', type: 'raster', source: 'osm' }]
+  layers: [{ id: 'osm', type: 'raster', source: 'osm', paint: { 'raster-fade-duration': 0 } }]
 }
 
 const fallbackSatelliteStyle: StyleSpecification = {
@@ -39,7 +39,7 @@ const fallbackSatelliteStyle: StyleSpecification = {
       attribution: 'Tiles © Esri'
     }
   },
-  layers: [{ id: 'satellite', type: 'raster', source: 'satellite' }]
+  layers: [{ id: 'satellite', type: 'raster', source: 'satellite', paint: { 'raster-fade-duration': 0 } }]
 }
 
 const CAMERA_STORAGE_KEY = 'ops-dashboard-map-camera'
@@ -197,6 +197,10 @@ export function MapPanel({
     const updateFleetLabels = () => containerRef.current?.classList.toggle('fleet-labels-hidden', (mapRef.current?.getZoom() ?? 0) < FLEET_LABEL_MIN_ZOOM)
     mapRef.current.on('zoom', updateFleetLabels)
     updateFleetLabels()
+    // While zooming, traffic waits for the final zoom: otherwise the TomTom tiles of every zoom level passed are fetched and
+    // read on the way, which made zooming stutter (owner, 12.11.2026).
+    mapRef.current.on('zoomstart', () => setTrafficVisible(mapRef.current, false))
+    mapRef.current.on('zoomend', () => setTrafficVisible(mapRef.current, true))
     mapRef.current.on('moveend', () => {
       const map = mapRef.current
       if (!map) return
@@ -472,12 +476,19 @@ export function MapPanel({
         const element = markers.get(shield.id)?.getElement()
         if (!element) return []
         const point = map.project(shield.coordinate)
-        const width = element.offsetWidth || 32
-        const height = element.offsetHeight || 20
+        // A shield off the map has no size: the one measured while it was shown is kept.
+        if (element.offsetWidth) Object.assign(element.dataset, { width: String(element.offsetWidth), height: String(element.offsetHeight) })
+        const width = Number(element.dataset.width) || 32
+        const height = Number(element.dataset.height) || 20
         return [{ id: shield.id, box: { left: point.x - width / 2, top: point.y - height / 2, right: point.x + width / 2, bottom: point.y + height / 2 } }]
       })
       const visible = visibleShields(candidates, blockers)
-      for (const [id, marker] of markers) marker.getElement().classList.toggle('road-shield-hidden', !visible.has(id))
+      // A hidden shield leaves the map: the map would otherwise move it with every frame of a pan or zoom.
+      for (const [id, marker] of markers) {
+        const shown = marker.getElement().isConnected
+        if (visible.has(id) && !shown) marker.addTo(map)
+        else if (!visible.has(id) && shown) marker.remove()
+      }
     }
     declutterShieldsRef.current()
   }, [shields, incidents, styleVersion])
@@ -682,19 +693,22 @@ function warningIcon() {
   return svg
 }
 
-/** Every line except the grey travelled part, which moves with the truck and is drawn on its own (above these, below the preview). */
+/**
+ * Every line except the grey travelled part, which moves with the truck and is drawn on its own (above these, below the preview).
+ * A casing and its line share one source: the map cuts each source into tiles again at every zoom level.
+ */
 function renderRouteLayers(map: Map, fullRoute: Coordinate[], breaks: number[] | null, traffic?: TrafficSegment[], previewRoute?: Coordinate[], previewTraffic?: TrafficSegment[], previewAlternatives?: MapRouteAlternative[]) {
   upsertRouteLayer(map, 'route-casing', toBrokenLine(fullRoute, breaks), { 'line-color': '#ffffff', 'line-width': CASING_WIDTH, 'line-opacity': 0.95 })
-  upsertRouteLayer(map, 'route-main', toBrokenLine(fullRoute, breaks), { 'line-color': ROUTE_BLUE, 'line-width': LINE_WIDTH })
+  addLineLayer(map, 'route-main', 'route-casing-source', { 'line-color': ROUTE_BLUE, 'line-width': LINE_WIDTH })
   upsertRouteLayer(map, 'route-traffic', trafficFeatures(fullRoute, traffic), { 'line-color': TRAFFIC_COLOR, 'line-width': LINE_WIDTH })
   const preview = previewRoute ?? []
   const alternatives = { type: 'FeatureCollection' as const, features: (previewAlternatives ?? []).filter((item) => item.geometry.length >= 2)
     .map((item) => ({ type: 'Feature' as const, properties: { id: item.id }, geometry: { type: 'LineString' as const, coordinates: item.geometry } })) }
   upsertRouteLayer(map, 'preview-alt-casing', alternatives, { 'line-color': '#ffffff', 'line-width': CASING_WIDTH, 'line-opacity': 0.9 })
-  upsertRouteLayer(map, 'preview-alt', alternatives, { 'line-color': ALT_GREY, 'line-width': LINE_WIDTH })
-  upsertRouteLayer(map, 'preview-alt-hit', alternatives, { 'line-color': '#000000', 'line-width': 20, 'line-opacity': 0 })
+  addLineLayer(map, 'preview-alt', 'preview-alt-casing-source', { 'line-color': ALT_GREY, 'line-width': LINE_WIDTH })
+  addLineLayer(map, 'preview-alt-hit', 'preview-alt-casing-source', { 'line-color': '#000000', 'line-width': 20, 'line-opacity': 0 })
   upsertRouteLayer(map, 'preview-casing', toLineString(preview), { 'line-color': '#ffffff', 'line-width': CASING_WIDTH, 'line-opacity': 0.95 })
-  upsertRouteLayer(map, 'preview-main', toLineString(preview), { 'line-color': PREVIEW_BLUE, 'line-width': LINE_WIDTH })
+  addLineLayer(map, 'preview-main', 'preview-casing-source', { 'line-color': PREVIEW_BLUE, 'line-width': LINE_WIDTH })
   upsertRouteLayer(map, 'preview-traffic', trafficFeatures(preview, previewTraffic), { 'line-color': TRAFFIC_COLOR, 'line-width': LINE_WIDTH })
   // The route must stand out: dim the city-wide traffic layer while a route is shown.
   if (map.getLayer('traffic-flow')) {
@@ -723,7 +737,7 @@ function styleFor(mode: MapMode, traffic: boolean, theme: Theme): StyleSpecifica
   const night = theme === 'dark' && mode !== 'satellite'
   if (!key) {
     if (mode === 'satellite') return fallbackSatelliteStyle
-    return night ? { ...osmStyle, layers: [{ id: 'osm', type: 'raster', source: 'osm', paint: OSM_NIGHT_PAINT }] } : osmStyle
+    return night ? { ...osmStyle, layers: [{ id: 'osm', type: 'raster', source: 'osm', paint: { ...OSM_NIGHT_PAINT, 'raster-fade-duration': 0 } }] } : osmStyle
   }
   const baseTile = mode === 'satellite'
     ? `https://api.tomtom.com/map/1/tile/sat/main/{z}/{x}/{y}.jpg?key=${key}`
@@ -731,7 +745,8 @@ function styleFor(mode: MapMode, traffic: boolean, theme: Theme): StyleSpecifica
   const sources: StyleSpecification['sources'] = {
     base: { type: 'raster', tiles: [baseTile], tileSize: 256, attribution: '© TomTom, © OpenStreetMap contributors' }
   }
-  const layers: StyleSpecification['layers'] = [{ id: 'base', type: 'raster', source: 'base' }]
+  // Tiles appear at once: fading each new tile in kept the map redrawing through a whole zoom.
+  const layers: StyleSpecification['layers'] = [{ id: 'base', type: 'raster', source: 'base', paint: { 'raster-fade-duration': 0 } }]
   if (traffic) {
     // Vector flow tiles: only the slow stretches are drawn, along the road and thick enough to see at country zoom (as in Webfleet).
     sources.traffic = {
@@ -880,5 +895,15 @@ function upsertRouteLayer(map: Map, id: string, data: GeoJSON.Feature | GeoJSON.
     return
   }
   map.addSource(sourceId, { type: 'geojson', data })
+  addLineLayer(map, id, sourceId, paint, beforeId)
+}
+
+/** A line layer over a source that already exists (a second look of the same line); added once, then left alone. */
+function addLineLayer(map: Map, id: string, sourceId: string, paint: Record<string, unknown>, beforeId?: string) {
+  if (map.getLayer(id)) return
   map.addLayer({ id, type: 'line', source: sourceId, layout: { 'line-cap': 'round', 'line-join': 'round' }, paint } as Parameters<Map['addLayer']>[0], beforeId)
+}
+
+function setTrafficVisible(map: Map | null, visible: boolean) {
+  if (map?.getLayer('traffic-flow')) map.setLayoutProperty('traffic-flow', 'visibility', visible ? 'visible' : 'none')
 }
