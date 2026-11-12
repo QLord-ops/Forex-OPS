@@ -400,6 +400,8 @@ model Dispatcher {
   vehicles Vehicle[]
   lines    DispatcherLine[]
   pushSubscriptions PushSubscription[]
+  coversAsAbsent DispatcherCover[] @relation("CoverAbsent")
+  coversAsCover  DispatcherCover[] @relation("CoverActing")
 }
 
 /// A phone or browser that receives push notifications for a dispatcher. Endpoint and keys only (no device data);
@@ -662,6 +664,28 @@ model CustomerLine {
   dispatchers DispatcherLine[]
 
   @@unique([customerId, code])
+}
+
+/// One dispatcher works for another for a while (holiday, illness, end of shift). The lines and trucks of the absent
+/// dispatcher are not rewritten: when the cover ends, everything is theirs again by itself.
+model DispatcherCover {
+  id String @id @default(cuid())
+  absentDispatcherId String
+  coverDispatcherId String
+  /// JSON array of CustomerLine ids; null = every line and every truck the absent dispatcher took.
+  lineIdsJson String?
+  startsAt DateTime @default(now())
+  endsAt DateTime
+  endedAt DateTime?
+  endedByDispatcherId String?
+  createdByDispatcherId String?
+  createdAt DateTime @default(now())
+
+  absent Dispatcher @relation("CoverAbsent", fields: [absentDispatcherId], references: [id], onDelete: Cascade)
+  cover  Dispatcher @relation("CoverActing", fields: [coverDispatcherId], references: [id], onDelete: Cascade)
+
+  @@index([absentDispatcherId, endsAt])
+  @@index([coverDispatcherId, endsAt])
 }
 
 /// Which lines a dispatcher works on; the primary line sets the default customer of an import.
