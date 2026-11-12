@@ -208,7 +208,7 @@ export async function teamOverview(db: PrismaClient, me: string | null, now = ne
       absent: { id: cover.absentDispatcherId, name: names.get(cover.absentDispatcherId) ?? 'Диспетчер отключён' },
       cover: { id: cover.coverDispatcherId, name: names.get(cover.coverDispatcherId) ?? 'Диспетчер отключён' },
       allLines: cover.lineIds === null,
-      lines: [...handed].filter((lineId) => includes(cover, lineId)).flatMap((lineId) => lineById.get(lineId) ?? []),
+      lines: lines.filter((line) => handed.has(line.id) && includes(cover, line.id)).map((line) => lineById.get(line.id)!),
       vehicleCount: vehicles.filter((vehicle) => isMine(cover.absentDispatcherId, vehicle, theirs) && includes(cover, vehicle.customerLineId)).length
     };
   };
@@ -226,10 +226,8 @@ export async function teamOverview(db: PrismaClient, me: string | null, now = ne
       }),
       vehicleCount: acting.filter((vehicle) => isMine(person.id, vehicle, mine)).length,
       // Lines with trucks this dispatcher took by hand and does not run: «Только выбранные линии» offers them too.
-      takenLines: [...new Set(taken)].filter((lineId) => !ownLines.has(lineId)).flatMap((lineId) => {
-        const line = lineById.get(lineId);
-        return line ? [{ ...line, vehicleCount: taken.filter((item) => item === lineId).length }] : [];
-      }),
+      takenLines: lines.filter((line) => taken.includes(line.id) && !ownLines.has(line.id))
+        .map((line) => ({ ...lineById.get(line.id)!, vehicleCount: taken.filter((item) => item === line.id).length })),
       away: presented.filter((cover) => cover.absent.id === person.id),
       covering: presented.filter((cover) => cover.cover.id === person.id)
     };
