@@ -284,7 +284,7 @@ const trafficService = new TrafficOperationsService(prisma, tourService, notific
 const routeDeviation = new RouteDeviationService(prisma, currentPosition, (input) => notificationService.publish(input),
   (vehicleId, now) => trafficService.rerouteFromGps(vehicleId, now));
 const restAtStop: RestAtStopService = new RestAtStopService(prisma, webfleetLive, (input) => notificationService.publish(input));
-const scenarioService = new RouteScenarioService(prisma, routingService, currentPosition);
+const scenarioService = new RouteScenarioService(prisma, routingService, currentPosition, driverBudget);
 const driverHours = (vehicleId: string, now: Date) => readDriverHours(prisma, webfleetLive, vehicleId, now);
 const terminService = new TerminService(prisma, routingService, currentPosition, driverHours);
 const briefService = new VehicleBriefService(prisma, etaService, currentPosition, driverHours, async (id, now) => (await webfleetTelemetry.latest(id, now))?.address ?? null);

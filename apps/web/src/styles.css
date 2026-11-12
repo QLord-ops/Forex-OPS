@@ -534,13 +534,15 @@ main a:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .route-add-point:hover:not(:disabled) { border-color: rgb(var(--ln-2563eb)); background: rgb(var(--bg-eff6ff)); }
 .route-add-point:disabled { color: rgb(var(--tx-64748b)); cursor: not-allowed; }
 .route-add-point:focus-visible { outline: 2px solid rgb(var(--ln-2563eb)); outline-offset: 2px; }
-.route-builder-result { margin-top: .75rem; border: 1px solid rgb(var(--ln-dbe4ef)); border-radius: .65rem; background: rgb(var(--bg-ffffff)); padding: .65rem; }
+.route-builder-result { min-width: 0; margin-top: .75rem; border: 1px solid rgb(var(--ln-dbe4ef)); border-radius: .65rem; background: rgb(var(--bg-ffffff)); padding: .65rem; }
 .route-builder-total { display: flex; flex-wrap: wrap; align-items: baseline; gap: .5rem; }
 .route-builder-total strong { color: rgb(var(--tx-0f172a)); font-size: 1.05rem; font-variant-numeric: tabular-nums; }
 .route-builder-total span { color: rgb(var(--tx-334155)); font-size: .78rem; font-weight: 750; }
 .route-builder-source { margin-top: .15rem; color: rgb(var(--tx-64748b)); font-size: .7rem; font-weight: 700; }
-.route-builder-eta { display: grid; gap: .3rem; margin-top: .55rem; }
-.route-builder-eta li { display: flex; align-items: center; gap: .45rem; color: rgb(var(--tx-0f172a)); font-size: .75rem; }
+/* A long Auftrag address is cut with "…" so the distance and the arrival time always stay in the panel. */
+.route-builder-eta { display: grid; grid-template-columns: minmax(0, 1fr); gap: .3rem; margin-top: .55rem; }
+.route-builder-eta li { display: flex; min-width: 0; align-items: center; gap: .45rem; color: rgb(var(--tx-0f172a)); font-size: .75rem; }
+.route-builder-eta .route-builder-address { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .route-builder-eta .route-point-number { margin-top: 0; width: 1.25rem; height: 1.25rem; flex-basis: 1.25rem; background: rgb(var(--bg-d97706)); }
 .route-builder-eta time { margin-left: auto; flex: 0 0 auto; color: rgb(var(--tx-334155)); font-weight: 800; font-variant-numeric: tabular-nums; }
 .preview-stop-marker { border-color: rgb(var(--ln-d97706)); background: rgb(var(--bg-fffbeb)); color: rgb(var(--tx-92400e)); }

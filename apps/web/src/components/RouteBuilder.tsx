@@ -221,7 +221,7 @@ export function RouteBuilder({ vehicles, selectedVehicleNumber, onPreview }: {
       <p className="route-builder-source">{live ? 'TomTom · с учётом пробок' : 'Без актуальных пробок'}{result.vehicleNumber ? ` · старт LKW ${result.vehicleNumber}` : ''}</p>
       <ol className="route-builder-eta">{result.stops.map((stop, index) => {
         const leg = legs[index] ? chosenOption(legs[index], choice[index]) : undefined
-        return <li key={index}><span className="route-point-number">{index + 2}</span><span className="min-w-0 truncate">{stop.address}</span>
+        return <li key={index}><span className="route-point-number">{index + 2}</span><span className="route-builder-address" title={stop.address}>{stop.address}</span>
           {leg ? <span className="route-builder-leg-km" title="Расстояние от предыдущей точки">{formatRouteKm(leg.distanceMeters)}</span> : null}
           <time>{stop.latestArrival ? formatAppointment(stop.latestArrival) : '—'}</time></li>
       })}</ol>

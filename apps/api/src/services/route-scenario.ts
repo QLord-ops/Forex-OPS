@@ -6,6 +6,7 @@ import type { TrafficRouteResult, TrafficSection, TruckRouteProfile } from './tr
 import { snapshotVehicleClock } from './tours.js';
 import { applyStopTime, forecastDrive, type ClockState, type VehicleClockSegment } from './vehicle-clock.js';
 import { calculateSimulatedDuration } from './simulation.js';
+import { forecastEta, WebfleetEngine, type DriveEngine, type DriverEtaInput } from './termin-planner.js';
 
 const date = z.string().datetime({ offset: true });
 export const routeScenarioInputSchema = z.object({
@@ -38,7 +39,8 @@ export const routeScenarioInputSchema = z.object({
   .refine(input => !input.legChoices || input.legChoices.length === input.stops.length, { message: 'Выбор вариантов не совпадает с точками маршрута.' });
 export type RouteScenarioInput = z.input<typeof routeScenarioInputSchema>;
 type Risk = 'ON_TIME' | 'RISK' | 'LATE' | 'UNKNOWN';
-type Cursor = { at: Date; clock: ClockState };
+/** `engine`: the driver's tachograph hours from Webfleet; without them the vehicle's calculated clock. */
+type Cursor = { at: Date; clock: ClockState; engine: DriveEngine | null };
 type PlannedStop = {
   address: string; type: string; coords: Coordinate; appointmentAt?: Date | null;
   appointmentWindowStartAt?: Date | null; appointmentWindowEndAt?: Date | null;
@@ -64,7 +66,8 @@ export type ScenarioStopResult = {
 /** Forecast only. The only allowed writes are those inside the shared routing quota store. */
 export class RouteScenarioService {
   constructor(private readonly db: PrismaClient, private readonly routing: RoutingProvider,
-    private readonly getPosition: (id: string, now: Date) => Promise<CurrentPosition>) {}
+    private readonly getPosition: (id: string, now: Date) => Promise<CurrentPosition>,
+    private readonly getDriver: (vehicleId: string, now: Date) => Promise<DriverEtaInput | null> = async () => null) {}
 
   async calculate(raw: RouteScenarioInput, now = new Date()) {
     const input = routeScenarioInputSchema.parse(raw);
@@ -79,14 +82,17 @@ export class RouteScenarioService {
     const currentStop = tours.find(t => t.status === 'ACTIVE')?.stops.find(s => !s.completedAt);
     const activeLeg = tours.flatMap(t => t.legs).find(l => ['ACTIVE', 'ARRIVED'].includes(l.status) && l.toStopId === currentStop?.id && !currentStop.arrivedAt);
     const snapshot = snapshotVehicleClock(vehicle, activeLeg ?? null, now);
+    // The same hours as the tour's ETA: the tachograph in Webfleet first, the calculated clock only without it.
+    const driver = await this.getDriver(vehicle.id, now).catch(() => null);
     const warnings = new Set<string>();
-    let preliminary = snapshot.clockState.kind !== 'KNOWN' || !position.position;
-    if (snapshot.clockState.kind !== 'KNOWN') warnings.add('Не заполнены исходные часы машины. Прогноз предварительный.');
+    const clockUnknown = !driver && snapshot.clockState.kind !== 'KNOWN';
+    let preliminary = clockUnknown || !position.position;
+    if (clockUnknown) warnings.add('Не заполнены исходные часы машины. Прогноз предварительный.');
     if (!position.position) warnings.add('Неизвестна начальная позиция машины. Время прибытия не определено.');
     if (position.telemetryStale) { preliminary = true; warnings.add('Позиция машины устарела.'); }
     if (vehicle.manualStoppedAt) { preliminary = true; warnings.add('Машина остановлена. Расчёт условный и не возобновляет движение.'); }
     const breakdowns = vehicle.issues;
-    let availableAt = now;
+    let availableAt = driver?.startsAt && driver.startsAt > now ? driver.startsAt : now;
     if (breakdowns.length) {
       preliminary = true;
       warnings.add('Есть незакрытая поломка. Прогноз зависит от окончания ремонта.');
@@ -95,9 +101,9 @@ export class RouteScenarioService {
     const stopCoords = await geocodeStops(this.routing, input.stops);
     const truck: TruckRouteProfile = { maxSpeedKmh: vehicle.maxSpeedKmh };
     if (vehicle.truckProfile) { try { Object.assign(truck, JSON.parse(vehicle.truckProfile)); } catch { warnings.add('Параметры грузовика недоступны.'); } }
-    let early: Cursor = { at: availableAt, clock: snapshot.clockState };
+    let early: Cursor = { at: now, clock: snapshot.clockState, engine: driver ? new WebfleetEngine(driver.budget) : null };
     early = wait(early, availableAt);
-    let late = structuredClone(early);
+    let late = cloneCursor(early);
     let origin = position.position;
     const geometry: Coordinate[] = [];
     const trafficSegments: ScenarioTrafficSegment[] = [];
@@ -127,8 +133,9 @@ export class RouteScenarioService {
         }
         if (seconds === undefined) hadMissingRoute = true;
         else {
-          const a = forecastDrive(early.clock, seconds, early.at), b = forecastDrive(late.clock, seconds, late.at);
-          early = { at: new Date(a.endAt), clock: a.state }; late = { at: new Date(b.endAt), clock: b.state };
+          const deadline = stop.appointmentAt ?? stop.appointmentWindowEndAt ?? null;
+          const a = drive(early, seconds, deadline), b = drive(late, seconds, deadline);
+          early = a.cursor; late = b.cursor;
           earlySegments = a.segments; lateSegments = b.segments;
           requiresDailyRest ||= [...a.segments, ...b.segments].some(segment => segment.type === 'DAILY_REST');
           [...a.warnings, ...b.warnings].forEach(code => { const text = clockWarningText(code); if (text) collect.add(text); });
@@ -168,7 +175,7 @@ export class RouteScenarioService {
       early = wait(early, requested); late = wait(late, requested);
     }
     const startRange = { earliest: early.at.toISOString(), latest: late.at.toISOString() };
-    const baselineEarly = structuredClone(early), baselineLate = structuredClone(late), baselineOrigin = origin;
+    const baselineEarly = cloneCursor(early), baselineLate = cloneCursor(late), baselineOrigin = origin;
     const stops: ScenarioStopResult[] = [];
     for (const [index, stop] of input.stops.entries()) {
       const coords = stopCoords[index];
@@ -205,7 +212,7 @@ export class RouteScenarioService {
     const draftHadMissingRoute = hadMissingRoute;
     const runPass = async () => { collect = new Set<string>(); hadMissingRoute = draftHadMissingRoute; try { return await projectQueue(); } finally { collect = warnings; } };
     const changed = input.includeQueueImpact && downstream.length ? await runPass() : [];
-    early = baselineEarly; late = baselineLate; origin = baselineOrigin;
+    early = cloneCursor(baselineEarly); late = cloneCursor(baselineLate); origin = baselineOrigin;
     const baseline = changed.length ? await runPass() : [];
     return { vehicleId: vehicle.id, vehicleNumber: vehicle.vehicleNumber, operationVersion: vehicle.operationVersion,
       tourVersions: tours.map(t => ({ id: t.id, version: t.planVersion })), startMode: input.startMode,
@@ -275,7 +282,27 @@ export class RouteScenarioService {
 
 function wait(cursor: Cursor, until: Date): Cursor {
   const at = new Date(Math.max(cursor.at.getTime(), until.getTime()));
-  return { at, clock: applyStopTime(cursor.clock, Math.max(0, (at.getTime() - Date.parse(cursor.clock.updatedAt)) / 1000), cursor.clock.updatedAt).state };
+  if (cursor.engine) {
+    // A stay of 45 min counts as a break and one of 9–11 h as a daily rest on the tachograph.
+    const engine = cursor.engine.clone();
+    if (at > cursor.at) engine.idle((at.getTime() - cursor.at.getTime()) / 1000, cursor.at);
+    return { at, clock: cursor.clock, engine };
+  }
+  return { at, clock: applyStopTime(cursor.clock, Math.max(0, (at.getTime() - Date.parse(cursor.clock.updatedAt)) / 1000), cursor.clock.updatedAt).state, engine: null };
+}
+function cloneCursor(cursor: Cursor): Cursor {
+  return { at: new Date(cursor.at), clock: structuredClone(cursor.clock), engine: cursor.engine?.clone() ?? null };
+}
+/** One drive on the driver's hours; on the tachograph a 9 h rest is taken instead of 11 h when that saves the Termin. */
+function drive(cursor: Cursor, seconds: number, deadline: Date | null): { cursor: Cursor; segments: VehicleClockSegment[]; warnings: string[] } {
+  if (cursor.engine) {
+    const result = forecastEta(cursor.engine, seconds, cursor.at, deadline);
+    const segments = result.pieces.filter(piece => piece.type !== 'SERVICE').map(piece => ({ type: piece.type as VehicleClockSegment['type'],
+      startAt: piece.startAt.toISOString(), endAt: piece.endAt.toISOString(), durationSeconds: Math.round(piece.durationSeconds) }));
+    return { cursor: { at: result.endAt, clock: cursor.clock, engine: result.engine }, segments, warnings: [...result.engine.warnings] };
+  }
+  const result = forecastDrive(cursor.clock, seconds, cursor.at);
+  return { cursor: { at: new Date(result.endAt), clock: result.state, engine: null }, segments: result.segments, warnings: result.warnings };
 }
 function classify(early: Date, late: Date, deadline: Date): Risk { return early > deadline ? 'LATE' : late > deadline ? 'RISK' : 'ON_TIME'; }
 export function berlinDayEnd(now: Date): Date {

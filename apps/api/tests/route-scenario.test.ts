@@ -6,10 +6,11 @@ import { registerRouteScenarioRoutes } from '../src/routes/route-scenario.js';
 import { RouteScenarioService, berlinDayEnd } from '../src/services/route-scenario.js';
 import { createInitialClockState } from '../src/services/vehicle-clock.js';
 import { RoutingError } from '../src/services/routing.js';
+import type { DriverBudget, DriverEtaInput } from '../src/services/termin-planner.js';
 
 const now = new Date('2026-10-16T08:00:00Z');
 const coords = { latitude: 52, longitude: 13 };
-function fixture(options: { clock?: string | null; position?: boolean; tours?: unknown[]; issues?: unknown[]; drivingSeconds?: number } = {}) {
+function fixture(options: { clock?: string | null; position?: boolean; tours?: unknown[]; issues?: unknown[]; drivingSeconds?: number; driver?: DriverEtaInput | null } = {}) {
   const vehicle = { id: 'v1', vehicleNumber: '125', operationVersion: 2, maxSpeedKmh: 85, truckProfile: null,
     manualStoppedAt: null, issues: options.issues ?? [], tours: options.tours ?? [],
     clockState: options.clock === undefined ? JSON.stringify(createInitialClockState({ effectiveAt: now, drivingSeconds: options.drivingSeconds })) : options.clock };
@@ -19,7 +20,8 @@ function fixture(options: { clock?: string | null; position?: boolean; tours?: u
     durationSeconds: 3600, provider: 'test', providerStatus: 'live-traffic' }));
   const routing = { calculateRoute: route, geocode: vi.fn().mockResolvedValue({ ...coords, label: 'A', provider: 'test' }), calculateMultiStopRoute: route };
   const getPosition = vi.fn().mockResolvedValue({ position: options.position === false ? null : coords } as CurrentPosition);
-  return { service: new RouteScenarioService(db, routing, getPosition), route, vehicle, findUniqueOrThrow, getPosition, routing };
+  const getDriver = vi.fn().mockResolvedValue(options.driver ?? null);
+  return { service: new RouteScenarioService(db, routing, getPosition, getDriver), route, vehicle, findUniqueOrThrow, getPosition, routing };
 }
 const visit = { address: 'A', type: 'VISIT' as const, coords };
 const stop = (id: string, sequence: number) => ({ id, sequence, type: 'UNLOAD', address: id, latitude: 53, longitude: 14,
@@ -115,6 +117,40 @@ describe('draft route scenario', () => {
     expect(response.statusCode).toBe(400);
     expect(calculate).not.toHaveBeenCalled();
     await app.close();
+  });
+});
+
+describe('driver hours from the tachograph', () => {
+  const budget = (overrides: Partial<DriverBudget> = {}): DriverBudget => ({ referenceTime: now.toISOString(), workState: 5, activitySince: now.toISOString(),
+    continuousDriveLeftSeconds: 4.5 * 3600, breakSeconds: 45 * 60, dailyDriveLeftSeconds: 9 * 3600, drivenTodaySeconds: 0, maxDailyDriveSeconds: 9 * 3600,
+    shiftEndAt: null, restLatestAt: null, restSeconds: 11 * 3600, weeklyDriveLeftSeconds: null, extendedShiftsLeft: null, reducedRestsLeft: null,
+    earliestNextShiftAt: null, breakRemainingSeconds: 0, ...overrides });
+
+  it('plans on the Webfleet tachograph even when the calculated clock is empty', async () => {
+    const { service } = fixture({ clock: null, driver: { budget: budget({ continuousDriveLeftSeconds: 30 * 60 }), startsAt: null } });
+    const result = await service.calculate({ vehicleId: 'v1', stops: [visit] }, now);
+    expect(result.warnings).not.toContain('Не заполнены исходные часы машины. Прогноз предварительный.');
+    expect(result.preliminary).toBe(false);
+    // 30 min to the break the tachograph asks for, 45 min break, the other 30 min.
+    expect(result.stops[0].earliestArrival).toBe('2026-10-16T09:45:00.000Z');
+    expect(result.stops[0].segments.earliest.map(segment => segment.type)).toEqual(['DRIVE', 'BREAK', 'DRIVE']);
+  });
+
+  it('counts an hour of unloading as the break and rests when the day is driven out', async () => {
+    const { service } = fixture({ clock: null, driver: { budget: budget({ continuousDriveLeftSeconds: 3600, dailyDriveLeftSeconds: 2 * 3600 }), startsAt: null } });
+    const result = await service.calculate({ vehicleId: 'v1', stops: [{ address: 'A', type: 'UNLOAD', coords }, { address: 'B', type: 'UNLOAD', coords }, { address: 'C', type: 'VISIT', coords }] }, now);
+    expect(result.stops[0].earliestArrival).toBe('2026-10-16T09:00:00.000Z');
+    // Unloading 09:00–10:00 is the break: the next hour is driven straight through.
+    expect(result.stops[1].earliestArrival).toBe('2026-10-16T11:00:00.000Z');
+    expect(result.stops[2].segments.earliest.map(segment => segment.type)).toEqual(['DAILY_REST', 'DRIVE']);
+    expect(result.requiresDailyRest).toBe(true);
+  });
+
+  it('starts the plan when the driver may start again after the rest', async () => {
+    const startsAt = new Date('2026-10-16T12:00:00Z');
+    const { service } = fixture({ clock: null, driver: { budget: budget(), startsAt } });
+    const result = await service.calculate({ vehicleId: 'v1', stops: [visit] }, now);
+    expect(result.stops[0].earliestArrival).toBe('2026-10-16T13:00:00.000Z');
   });
 });
 
