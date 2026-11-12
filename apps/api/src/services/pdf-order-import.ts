@@ -69,7 +69,7 @@ const appointmentRule = (carriers: string[]) =>
   "FIRST decide documentKind. APPOINTMENT is a delivery or pick-up slot slip of a plant or receiver: e.g. 'Fahrtenschein' (LKWcontrol), 'Deckblatt zur Warenanlieferung' (mRoad, Cover Sheet for Incoming Goods), 'Zeitfenster', 'Slotbuchung', 'Avis'. It names one place, one time or window and usually one truck. ORDER is a transport order (Auftrag) with a route of loading and unloading stops. For ORDER fill drafts and set appointment to null. For APPOINTMENT return drafts as an empty array and fill appointment: " +
   "company is the plant or receiver where the truck must be, e.g. the header 'MAN Truck & Bus SE München', 'Volkswagen AG Wolfsburg', 'Werk 065, Düsseldorf', 'Standort Werk Mannheim'. The Spedition/Spediteur/Frachtführer/Carrier (for example " + [...carriers.map((name) => promptValue(name, 60)), "Logtrans"].join(", ") + ") is the transport company itself and is NEVER the company or place. 'Fabrikat' is the brand of the truck, never the company. Put a plant number or gate (Werk 065, Tor, Entladezone) into site; city is the city of that plant. " +
   "plate is the truck registration (Kennzeichen, LKW-Kennzeichen Zugfahrzeug, Fahrzeug-Kennzeichen); trailerPlate the trailer registration; null when the field is empty. " +
-  "Time: a single planned arrival (Geplante Ankunft, Anlieferdatum with time, Termin) is appointmentLocal. A slot with from and to (Von/Bis) or a delivery time together with a latest arrival (Späteste Ankunft) is the window windowStartLocal/windowEndLocal and appointmentLocal stays null. A date without time goes to appointmentDateLocal. 'Standgeld ab' is only standgeldFromLocal, never the appointment. The printing time of the document (e.g. a timestamp in the header) is never the appointment. " +
+  "Time: a single planned arrival (Geplante Ankunft, Anlieferdatum with time, Termin) is appointmentLocal. A slot with from and to (Von/Bis) or a delivery time together with a latest arrival (Späteste Ankunft) is the window windowStartLocal/windowEndLocal and appointmentLocal stays null. A date field and separate Von/Bis time fields belong together: Anlieferdatum 13.11.2026 with Von 12:00 and Bis 12:30 is the window 2026-11-13T12:00 to 2026-11-13T12:30. A slip printed from a web form (mRoad) puts every value in a box below or beside its label; when the page itself is given with its text, take from the page which value belongs to which label. A date without time goes to appointmentDateLocal. 'Standgeld ab' is only standgeldFromLocal, never the appointment. The printing time of the document (e.g. a timestamp in the header) is never the appointment. " +
   "stopType: UNLOAD when the slip is for unloading or incoming goods (Entladung, Warenanlieferung), LOAD when only for loading; if both Entladung and Beladung (empties, Leergut) appear, stopType is UNLOAD and positions list them. references: every identifier with its printed label, e.g. Fahrt-ID, Borderonummer, Leergut-Auftrags-Nr, Leergut-Abholavisierungs-Nr, Relation, ZF-Code; never a phone number. positions: short lines like 'A36 Entladung 4 LE'. Never copy a driver phone number anywhere.";
 
 
@@ -471,20 +471,33 @@ export async function importPdfPreview(
   const extractStarted = Date.now();
   const text = options.pdfText === undefined ? await extractPdfText(buffer) : options.pdfText;
   const textual = hasTextLayer(text);
+  const slip = textual && isTerminSlipText(text);
+  const file = {
+    type: "input_file",
+    filename: sanitizeFilename(filename, ".pdf"),
+    file_data: `data:application/pdf;base64,${buffer.toString("base64")}`,
+    detail: "high"
+  };
+  const textPart = (intro: string) => ({ type: "input_text", text: `${intro}\n${pagesAsText(text!)}` });
   return importVisualOrderPreview({
     layout: "PDF",
-    readMode: textual ? "text" : "file",
+    readMode: textual && !slip ? "text" : "file",
     extractMs: Date.now() - extractStarted,
-    content: textual
-      ? { type: "input_text", text: `Text of the PDF, page by page in [Seite N] blocks (rows of its tables are lines, columns are separated by wider spaces):\n${pagesAsText(text)}` }
-      : {
-        type: "input_file",
-        filename: sanitizeFilename(filename, ".pdf"),
-        file_data: `data:application/pdf;base64,${buffer.toString("base64")}`,
-        detail: "high"
-      },
+    content: slip
+      ? [file, textPart("Text layer of the same PDF, for the exact characters; which value belongs to which label and which box is ticked is seen on the page above:")]
+      : textual
+        ? textPart("Text of the PDF, page by page in [Seite N] blocks (rows of its tables are lines, columns are separated by wider spaces):")
+        : file,
     options
   }) as Promise<PdfImportPreview>;
+}
+
+// An mRoad Deckblatt is a web form printed to PDF: as text its values drift away from their labels (Von 12:00 and
+// Bis 12:30 land on different lines) and the ticked boxes vanish. A slip is one page, so its page goes along.
+const TERMIN_SLIP_WORDS = /deckblatt|warenanlieferung|fahrtenschein|mroad|lkwcontrol|slotbuchung/i;
+
+export function isTerminSlipText(text: { pages: string[] }): boolean {
+  return text.pages.length <= 2 && TERMIN_SLIP_WORDS.test(text.pages.join("\n"));
 }
 
 export async function importImagePreview(
@@ -517,7 +530,7 @@ async function importVisualOrderPreview(input: {
   layout: "PDF" | "IMAGE";
   readMode?: "text" | "file";
   extractMs?: number;
-  content: Record<string, unknown>;
+  content: Record<string, unknown> | Array<Record<string, unknown>>;
   options: PdfOrderImportOptions;
 }): Promise<DocumentImportPreview> {
   const { layout, content, options } = input;
@@ -555,7 +568,7 @@ async function importVisualOrderPreview(input: {
         {
           role: "user",
           content: [
-            content,
+            ...(Array.isArray(content) ? content : [content]),
             {
               type: "input_text",
               text: readingContext(options)

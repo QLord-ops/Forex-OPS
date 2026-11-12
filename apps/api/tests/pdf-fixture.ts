@@ -36,6 +36,23 @@ export function buildTextPdf(pages: FixturePage[]): Buffer {
   return Buffer.from(body, "latin1");
 }
 
+/** One page like an mRoad Deckblatt printed from the browser: each value sits a little below its label. */
+export function deckblattPdf(): Buffer {
+  return buildTextPdf([[
+    { y: 800, cells: [{ x: 40, text: "12.11.26, 13:10" }, { x: 250, text: "mRoad - mobile ROuting And Delivery" }] },
+    { y: 760, cells: [{ x: 60, text: "Deckblatt zur Warenanlieferung" }] },
+    { y: 730, cells: [{ x: 60, text: "Werk" }, { x: 300, text: "Spediteur: 17848466" }] },
+    { y: 712, cells: [{ x: 62, text: "065, Düsseldorf" }, { x: 300, text: "Name: Schnellecke Transportlogistik" }] },
+    { y: 690, cells: [{ x: 60, text: "Borderonummer" }] },
+    { y: 672, cells: [{ x: 62, text: "15015236" }] },
+    { y: 640, cells: [{ x: 60, text: "Anlieferdatum" }, { x: 160, text: "LKW-Kennzeichen" }, { x: 290, text: "Fabrikat" }, { x: 400, text: "Von:" }, { x: 430, text: "12:00" }, { x: 480, text: "Bis:" }] },
+    { y: 626, cells: [{ x: 62, text: "13.11.2026" }, { x: 162, text: "B-CY3010" }, { x: 292, text: "Mercedes Benz" }, { x: 505, text: "12:30" }] },
+    { y: 600, cells: [{ x: 60, text: "Leergutaufnahme (Leergutplatz)" }, { x: 250, text: "Ja" }, { x: 280, text: "Nein" }] },
+    { y: 560, cells: [{ x: 60, text: "Fahrzeugtyp" }] },
+    { y: 540, cells: [{ x: 60, text: "Megatrailer" }, { x: 200, text: "(1)" }, { x: 300, text: "Sattelauflieger" }, { x: 440, text: "(4)" }] }
+  ]]);
+}
+
 /** Two pages like a generated Auftrag: letterhead, Tourbemerkung and a stop table with columns. */
 export function auftragPdf(): Buffer {
   return buildTextPdf([
