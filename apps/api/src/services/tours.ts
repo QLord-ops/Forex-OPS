@@ -604,7 +604,7 @@ export class TourService {
           stopId: stop.id,
           type: eventType,
           timestamp: now,
-          note: options.auto ? "Автоматически по GPS Webfleet: машина выехала из города" : note
+          note: options.auto ? (options.auto.meta.nextStop ? "Автоматически по GPS Webfleet: машина приехала на следующую точку" : "Автоматически по GPS Webfleet: машина выехала из города") : note
         }
       });
       await writeAuditLog(tx, actor, { action: eventType, entityType: "Stop", entityId: stop.id,
@@ -639,12 +639,14 @@ export class TourService {
         const record: AutoStopEventRecord = { eventId: recorded.id, eventType, at: now.toISOString(), before,
           activated: activated ? { tourId: activated.tour.id, transferLeg: activated.transferLeg } : null, meta: options.auto.meta };
         await tx.operationEvent.create({ data: { vehicleId: stop.tour.vehicleId, tourId: stop.tourId, stopId: stop.id, type: "STOP_EVENT_AUTO",
-          reason: "Выехала из города после стоянки на точке", payloadJson: JSON.stringify(record), createdAt: options.auto.detectedAt } });
+          reason: options.auto.meta.nextStop ? "Приехала на следующую точку после стоянки на этой" : "Выехала из города после стоянки на точке", payloadJson: JSON.stringify(record), createdAt: options.auto.detectedAt } });
         const done = eventType === "LOADED" ? "BELADEN" : "ENTLADEN";
         const place = stop.city || stop.address;
         await tx.notification.create({ data: {
           dedupKey: `auto-stop-event:${stop.id}:${recorded.id}`, vehicleId: stop.tour.vehicleId, stopId: stop.id, type: "AUTO_STOP_EVENT",
-          message: `LKW ${stop.tour.vehicle.vehicleNumber} выехала из ${place} — вероятно ${eventType === "LOADED" ? "загружена" : "выгружена"}. ${done} записан автоматически на ${berlinClock(now)} (выезд с точки по GPS Webfleet). Если это ошибка, отмените.`,
+          message: options.auto.meta.nextStop
+            ? `LKW ${stop.tour.vehicle.vehicleNumber} после стоянки в ${place} приехала на следующую точку ${options.auto.meta.nextStop} — вероятно ${eventType === "LOADED" ? "загружена" : "выгружена"}. ${done} записан автоматически на ${berlinClock(now)} (выезд с точки по GPS Webfleet). Если это ошибка, отмените.`
+            : `LKW ${stop.tour.vehicle.vehicleNumber} выехала из ${place} — вероятно ${eventType === "LOADED" ? "загружена" : "выгружена"}. ${done} записан автоматически на ${berlinClock(now)} (выезд с точки по GPS Webfleet). Если это ошибка, отмените.`,
           payloadJson: JSON.stringify({ stopType: stop.type, at: now.toISOString(), source: "WEBFLEET_AUTO", ...options.auto.meta })
         } });
       }
