@@ -187,7 +187,7 @@ export interface TeamCover {
 }
 export interface TeamOverview {
   me: string | null
-  dispatchers: Array<{ id: string; name: string; lines: Array<TeamLine & { isPrimary: boolean }>; vehicleCount: number; away: TeamCover[]; covering: TeamCover[] }>
+  dispatchers: Array<{ id: string; name: string; lines: Array<TeamLine & { isPrimary: boolean }>; takenLines?: Array<TeamLine & { vehicleCount: number }>; vehicleCount: number; away: TeamCover[]; covering: TeamCover[] }>
   unowned: Array<TeamLine & { vehicleCount: number }>
   covers: TeamCover[]
 }

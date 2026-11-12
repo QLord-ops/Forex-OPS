@@ -46,7 +46,14 @@ export function CoverForm({ team, mode, absentId, onDone, onCancel }: { team: Te
   const [until, setUntil] = useState(defaultUntil)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const lines = team.dispatchers.find((person) => person.id === absent)?.lines ?? []
+  const person = team.dispatchers.find((item) => item.id === absent)
+  const own = person?.lines ?? []
+  // Without lines of their own a dispatcher hands over the trucks they took, by the line those trucks run on.
+  const lines = [
+    ...own.map((line) => ({ ...line, taken: null as number | null })),
+    ...(person?.takenLines ?? []).filter((line) => !own.some((item) => item.id === line.id)).map((line) => ({ ...line, taken: line.vehicleCount }))
+  ]
+  const nobody = mode === 'give' ? 'У вас' : 'У коллеги'
   const ready = Boolean(absent && stand && absent !== stand && until && (allLines || picked.length))
 
   async function submit(event: FormEvent) {
@@ -79,10 +86,11 @@ export function CoverForm({ team, mode, absentId, onDone, onCancel }: { team: Te
       <legend className="field-label">Что передаётся</legend>
       <label className="cover-check"><input type="radio" name="cover-scope" checked={allLines} onChange={() => setAllLines(true)} />Все линии и взятые машины</label>
       <label className="cover-check"><input type="radio" name="cover-scope" checked={!allLines} disabled={!lines.length} onChange={() => setAllLines(false)} />Только выбранные линии</label>
+      {absent && !lines.length ? <p className="cover-hint">{nobody} нет линий и взятых машин на линиях — передаётся всё.</p> : null}
       {!allLines ? <div className="cover-line-list">
         {lines.map((line) => <label key={line.id} className="cover-check">
           <input type="checkbox" checked={picked.includes(line.id)} onChange={(event) => setPicked(event.target.checked ? [...picked, line.id] : picked.filter((id) => id !== line.id))} />
-          {line.customer} · {line.name}
+          {line.customer} · {line.name}{line.taken !== null ? <span className="cover-line-note"> — взятых машин: {line.taken}</span> : null}
         </label>)}
       </div> : null}
     </fieldset>

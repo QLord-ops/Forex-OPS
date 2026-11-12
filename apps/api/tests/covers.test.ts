@@ -149,4 +149,29 @@ describe('what follows the cover', () => {
     expect(team.unowned).toEqual([expect.objectContaining({ name: 'EMPTY', vehicleCount: 1 })]);
     expect(JSON.stringify(team)).not.toContain('"login"');
   });
+
+  it('a dispatcher without lines hands over the trucks they took, line by line', async () => {
+    const dora = (await sqlite.dispatcher.create({ data: { login: 'dora', displayName: 'Dora Neu', role: 'dispatcher', passwordHash: 'x' } })).id;
+    ids.dora = dora;
+    const taken = await Promise.all([['601', 'SUED'], ['602', 'SUED'], ['603', 'TESLA'], ['604', null]].map(([vehicleNumber, code]) =>
+      sqlite.vehicle.create({ data: { vehicleNumber: vehicleNumber!, customerLineId: code ? ids[code] : null, assignedDispatcherId: dora } })));
+    try {
+      const before = await teamOverview(db(), dora, now);
+      expect(before.dispatchers.find((person) => person.id === dora)).toMatchObject({ lines: [],
+        takenLines: [expect.objectContaining({ name: 'SUED', vehicleCount: 2 }), expect.objectContaining({ name: 'TESLA', vehicleCount: 1 })] });
+      // Ben runs SUED himself: his taken truck there is not offered twice.
+      expect(before.dispatchers.find((person) => person.id === ids.ben)!.takenLines).toEqual([]);
+
+      await start('dora', 'anna', ['SUED'], 'dora');
+      expect(await mineOf('anna')).toEqual(['101', '601', '602']);
+      expect(await mineOf('dora')).toEqual(['603', '604']);
+      const after = await teamOverview(db(), dora, now);
+      expect(after.covers[0]).toMatchObject({ allLines: false, vehicleCount: 2, lines: [{ name: 'SUED' }] });
+      await expect(start('dora', 'cem', ['NORD'], 'dora')).rejects.toMatchObject({ statusCode: 400, message: expect.stringContaining('нет ни закрепления, ни взятых машин') });
+    } finally {
+      await sqlite.dispatcherCover.deleteMany();
+      await sqlite.vehicle.deleteMany({ where: { id: { in: taken.map((vehicle) => vehicle.id) } } });
+      await sqlite.dispatcher.delete({ where: { id: dora } });
+    }
+  });
 });
