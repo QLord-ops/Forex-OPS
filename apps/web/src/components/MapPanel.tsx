@@ -1,5 +1,5 @@
 import 'maplibre-gl/dist/maplibre-gl.css'
-import { GeoJSONSource, LngLatBounds, Map, Marker, Popup, setWorkerUrl, type StyleSpecification } from 'maplibre-gl'
+import { GeoJSONSource, LngLatBounds, Map, Marker, Popup, setWorkerUrl, type StyleSpecification, type VectorTileSource } from 'maplibre-gl'
 import mapLibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
 import { Layers, LocateFixed, Minus, Plus, TriangleAlert } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -8,7 +8,7 @@ import { boundsFor, geometryToCoordinates, stopCoordinates, toBrokenLine, toLine
 import { calculatedPositionLabel } from '../lib/format'
 import { useStableValue } from '../hooks/useStableValue'
 import { formatDelay, formatKm, INCIDENT_TITLES, trafficIncidents, type TrafficIncident } from '../lib/traffic-incidents'
-import { TRAFFIC_COLORS, trafficFlowLayer } from '../lib/traffic-flow'
+import { TRAFFIC_COLORS, TRAFFIC_MAX_TILE_ZOOM, TRAFFIC_REFRESH_MS, trafficFlowLayer, trafficTileUrl } from '../lib/traffic-flow'
 import type { MapRouteAlternative, MapRouteStop } from '../lib/route-preview'
 import { roadShieldLabel, roadShields, visibleShields } from '../lib/road-shields'
 import { THEME_EVENT, currentTheme, type Theme } from '../lib/theme'
@@ -177,7 +177,10 @@ export function MapPanel({
       container: containerRef.current,
       style: styleFor(initialModeRef.current, initialTrafficRef.current, initialThemeRef.current),
       center: readCamera()?.center ?? [10.4515, 51.1657],
-      zoom: readCamera()?.zoom ?? 5.2
+      zoom: readCamera()?.zoom ?? 5.2,
+      // TomTom traffic tiles expire within about a minute; reloading and re-reading every visible tile each time made the
+      // map stutter (owner, 12.11.2026). Traffic is refreshed on our own schedule instead (TRAFFIC_REFRESH_MS).
+      refreshExpiredTiles: false
     })
     // Grey route variants: a wide invisible line makes them easy to hit with a finger.
     mapRef.current.on('click', 'preview-alt-hit', (event) => {
@@ -252,6 +255,22 @@ export function MapPanel({
     try { window.localStorage.setItem('ops-dashboard-map-labels', labels ? '1' : '0') } catch { /* convenience only */ }
   }, [labels])
 
+  // Fresh traffic every few minutes, never in the middle of a pan or zoom and not while the tab is hidden.
+  useEffect(() => {
+    const map = mapRef.current
+    const key = tomTomMapKey()
+    if (!map || !traffic || !key) return
+    const refresh = () => {
+      const source = map.getSource('traffic') as VectorTileSource | undefined
+      if (!source || document.hidden) return
+      const apply = () => source.setTiles([trafficTileUrl(key)])
+      if (map.isMoving()) map.once('idle', apply)
+      else apply()
+    }
+    const timer = window.setInterval(refresh, TRAFFIC_REFRESH_MS)
+    return () => window.clearInterval(timer)
+  }, [traffic])
+
   useEffect(() => {
     if (fitRouteRequest) setCameraRequest('route')
   }, [fitRouteRequest])
@@ -271,13 +290,32 @@ export function MapPanel({
     return () => observer.disconnect()
   }, [])
 
+  // A driving truck only moves the grey travelled part: the route lines are sent to the map again only when they change.
+  const routeBreaks = useStableValue(position?.routeBreaks ?? null)
+  const routeTraffic = position?.trafficSegments
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !styleReadyRef.current) return
+    renderRouteLayers(map, fullRoute, routeBreaks, routeTraffic, previewRoute, previewTraffic, previewAlternatives)
+  }, [fullRoute, routeBreaks, routeTraffic, previewRoute, previewTraffic, previewAlternatives, styleVersion])
+
+  const travelledGeometry = position?.travelledGeometry
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !styleReadyRef.current) return
+    upsertRouteLayer(map, 'route-travelled', toBrokenLine(geometryToCoordinates(travelledGeometry), routeBreaks), { 'line-color': '#9aa0a6', 'line-width': LINE_WIDTH },
+      map.getLayer('preview-alt-casing') ? 'preview-alt-casing' : undefined)
+  }, [travelledGeometry, routeBreaks, styleVersion])
+
+  const positionRef = useRef(position)
+  positionRef.current = position
   useEffect(() => {
     const map = mapRef.current
     if (!map) return
 
     if (!styleReadyRef.current) return
     const render = () => {
-      renderMapContent(map, fullRoute, position, previewRoute, previewTraffic, previewAlternatives)
+      const position = positionRef.current
       stopMarkersRef.current.forEach((marker) => marker.remove())
       // Same stages as the route drawer: finished stops green, the current one blue and larger.
       const currentId = stops.slice().sort((a, b) => a.sequence - b.sequence).find((stop) => !stop.completedAt)?.id
@@ -299,7 +337,7 @@ export function MapPanel({
       }
     }
     render()
-  }, [fullRoute, position, previewRoute, previewTraffic, previewAlternatives, stops, styleVersion, tour?.id])
+  }, [fullRoute, previewRoute, stops, styleVersion, tour?.id])
 
   useEffect(() => {
     const map = mapRef.current
@@ -335,10 +373,11 @@ export function MapPanel({
 
   // Jams on the route get a small icon; a click shows what the jam costs. The truck's own route counts from
   // where the truck is now, a preview from its start.
+  const travelledIndex = useMemo(() => Math.max(0, geometryToCoordinates(travelledGeometry).length - 1), [travelledGeometry])
   const incidents = useMemo(() => previewRoute?.length
     ? trafficIncidents(previewRoute, previewTraffic)
-    : trafficIncidents(fullRoute, position?.trafficSegments, { startIndex: Math.max(0, geometryToCoordinates(position?.travelledGeometry).length - 1) }),
-  [fullRoute, position?.trafficSegments, position?.travelledGeometry, previewRoute, previewTraffic])
+    : trafficIncidents(fullRoute, routeTraffic, { startIndex: travelledIndex }),
+  [fullRoute, routeTraffic, travelledIndex, previewRoute, previewTraffic])
   const incidentsCheckedAt = previewRoute?.length ? null : position?.trafficCheckedAt ?? null
   const incidentFromTruck = !previewRoute?.length
 
@@ -395,8 +434,8 @@ export function MapPanel({
   // Which Autobahn the route takes: a blue A7 / yellow B3 shield on each stretch ahead, like on the road signs.
   const shields = useMemo(() => previewRoute?.length
     ? roadShields(previewRoute, previewRoads)
-    : roadShields(fullRoute, position?.roadSegments, { startIndex: Math.max(0, geometryToCoordinates(position?.travelledGeometry).length - 1) }),
-  [fullRoute, position?.roadSegments, position?.travelledGeometry, previewRoute, previewRoads])
+    : roadShields(fullRoute, position?.roadSegments, { startIndex: travelledIndex }),
+  [fullRoute, position?.roadSegments, travelledIndex, previewRoute, previewRoads])
 
   useEffect(() => {
     const map = mapRef.current
@@ -643,13 +682,11 @@ function warningIcon() {
   return svg
 }
 
-function renderMapContent(map: Map, fullRoute: Coordinate[], position?: CurrentPosition | null, previewRoute?: Coordinate[], previewTraffic?: TrafficSegment[], previewAlternatives?: MapRouteAlternative[]) {
-  const travelled = geometryToCoordinates(position?.travelledGeometry)
-  const breaks = position?.routeBreaks ?? null
+/** Every line except the grey travelled part, which moves with the truck and is drawn on its own (above these, below the preview). */
+function renderRouteLayers(map: Map, fullRoute: Coordinate[], breaks: number[] | null, traffic?: TrafficSegment[], previewRoute?: Coordinate[], previewTraffic?: TrafficSegment[], previewAlternatives?: MapRouteAlternative[]) {
   upsertRouteLayer(map, 'route-casing', toBrokenLine(fullRoute, breaks), { 'line-color': '#ffffff', 'line-width': CASING_WIDTH, 'line-opacity': 0.95 })
   upsertRouteLayer(map, 'route-main', toBrokenLine(fullRoute, breaks), { 'line-color': ROUTE_BLUE, 'line-width': LINE_WIDTH })
-  upsertRouteLayer(map, 'route-traffic', trafficFeatures(fullRoute, position?.trafficSegments), { 'line-color': TRAFFIC_COLOR, 'line-width': LINE_WIDTH })
-  upsertRouteLayer(map, 'route-travelled', toBrokenLine(travelled, breaks), { 'line-color': '#9aa0a6', 'line-width': LINE_WIDTH })
+  upsertRouteLayer(map, 'route-traffic', trafficFeatures(fullRoute, traffic), { 'line-color': TRAFFIC_COLOR, 'line-width': LINE_WIDTH })
   const preview = previewRoute ?? []
   const alternatives = { type: 'FeatureCollection' as const, features: (previewAlternatives ?? []).filter((item) => item.geometry.length >= 2)
     .map((item) => ({ type: 'Feature' as const, properties: { id: item.id }, geometry: { type: 'LineString' as const, coordinates: item.geometry } })) }
@@ -699,8 +736,8 @@ function styleFor(mode: MapMode, traffic: boolean, theme: Theme): StyleSpecifica
     // Vector flow tiles: only the slow stretches are drawn, along the road and thick enough to see at country zoom (as in Webfleet).
     sources.traffic = {
       type: 'vector',
-      tiles: [`https://api.tomtom.com/traffic/map/4/tile/flow/relative-delay/{z}/{x}/{y}.pbf?key=${key}`],
-      maxzoom: 18
+      tiles: [trafficTileUrl(key)],
+      maxzoom: TRAFFIC_MAX_TILE_ZOOM
     }
     layers.push(trafficFlowLayer(TRAFFIC_FLOW_OPACITY))
   }
@@ -835,7 +872,7 @@ function markerDescription(vehicleNumber?: string | null, source?: CurrentPositi
   return `${vehicleNumber ? `LKW ${vehicleNumber}` : 'Грузовик'} · ${source === 'WEBFLEET' ? 'фактическая позиция Webfleet GPS' : source === 'MANUAL' ? 'позиция, указанная диспетчером вручную' : calculatedPositionLabel}`
 }
 
-function upsertRouteLayer(map: Map, id: string, data: GeoJSON.Feature | GeoJSON.FeatureCollection, paint: Record<string, unknown>) {
+function upsertRouteLayer(map: Map, id: string, data: GeoJSON.Feature | GeoJSON.FeatureCollection, paint: Record<string, unknown>, beforeId?: string) {
   const sourceId = `${id}-source`
   const source = map.getSource(sourceId) as GeoJSONSource | undefined
   if (source) {
@@ -843,5 +880,5 @@ function upsertRouteLayer(map: Map, id: string, data: GeoJSON.Feature | GeoJSON.
     return
   }
   map.addSource(sourceId, { type: 'geojson', data })
-  map.addLayer({ id, type: 'line', source: sourceId, layout: { 'line-cap': 'round', 'line-join': 'round' }, paint } as Parameters<Map['addLayer']>[0])
+  map.addLayer({ id, type: 'line', source: sourceId, layout: { 'line-cap': 'round', 'line-join': 'round' }, paint } as Parameters<Map['addLayer']>[0], beforeId)
 }
