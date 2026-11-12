@@ -41,7 +41,8 @@ export function isMine(me: string | null, vehicle: { assignedDispatcherId: strin
   return Boolean(vehicle.customerLineId && myLines.has(vehicle.customerLineId));
 }
 
-export type StatusOwner = { id: string; source: 'TAKEN' | 'LINE' };
+/** `coverFor`: the absent dispatcher whose truck or line this owner looks after for now. */
+export type StatusOwner = { id: string; source: 'TAKEN' | 'LINE'; coverFor?: string };
 /**
  * Whose Excel a truck's status line goes into: the dispatcher who took it; a free truck goes to the only dispatcher
  * of its line, or to the only one whose main line it is. Otherwise nobody's — every truck is in at most one Excel.

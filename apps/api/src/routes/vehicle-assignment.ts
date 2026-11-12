@@ -2,6 +2,7 @@ import type { PrismaClient } from '@prisma/client';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { writeAuditLog } from '../services/audit-log.js';
+import { coverResolver } from '../services/covers.js';
 
 const body = z.object({
   action: z.enum(['take', 'release', 'handover', 'reassign']),
@@ -28,15 +29,21 @@ export function registerVehicleAssignmentRoutes(app: FastifyInstance, prisma: Pr
     const isAdmin = session.role === 'admin';
     if (!me && input.action !== 'reassign' && !(isAdmin && input.action === 'release')) throw fail('Машины закрепляются за личным аккаунтом. Войдите под своим логином.', 400);
 
+    // While I stand in for a colleague, their trucks are mine to release or hand over.
+    const standsIn = async () => {
+      if (!me || !input.expectedDispatcherId) return false;
+      const vehicle = await prisma.vehicle.findUnique({ where: { id }, select: { customerLineId: true } });
+      return (await coverResolver(prisma)).actingFor(input.expectedDispatcherId, vehicle?.customerLineId ?? null) === me;
+    };
     let target: string | null;
     if (input.action === 'take') {
       if (input.expectedDispatcherId !== null) throw fail('Машину ведёт другой диспетчер. Забрать её может администратор.', 403);
       target = me;
     } else if (input.action === 'release') {
-      if (input.expectedDispatcherId !== me && !isAdmin) throw fail('Освободить можно только свою машину.', 403);
+      if (input.expectedDispatcherId !== me && !isAdmin && !await standsIn()) throw fail('Освободить можно только свою машину.', 403);
       target = null;
     } else if (input.action === 'handover') {
-      if (input.expectedDispatcherId !== me) throw fail('Передать можно только свою машину.', 403);
+      if (input.expectedDispatcherId !== me && !await standsIn()) throw fail('Передать можно только свою машину.', 403);
       if (!input.toDispatcherId || input.toDispatcherId === me) throw fail('Выберите коллегу.', 400);
       target = input.toDispatcherId;
     } else {

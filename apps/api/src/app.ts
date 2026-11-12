@@ -70,6 +70,8 @@ import { resolveImportCustomer, vehicleKey, type ImportCustomer } from './servic
 import { scoreDraft } from './services/field-confidence.js';
 import { berlinToday } from './services/order-dates.js';
 import { registerCustomerRoutes } from './routes/customers.js';
+import { registerCoverRoutes } from './routes/covers.js';
+import { coverResolver, vehiclesVisibleTo } from './services/covers.js';
 import { ImportLearningService } from './services/import-learning.js';
 import { registerImportRuleRoutes } from './routes/import-rules.js';
 import { registerAppointmentDocumentRoutes } from './routes/appointments.js';
@@ -118,13 +120,7 @@ const pushService = new PushService(prisma);
  * other dispatchers work on, once the dispatcher has lines of their own. The shared login sees everything.
  */
 async function visibleTo(dispatcherId: string | null | undefined): Promise<(vehicleId: string) => boolean> {
-  if (!dispatcherId) return () => true;
-  const myLines = await customerService.linesOf(dispatcherId);
-  const others = new Set((await prisma.vehicle.findMany({ where: { OR: [
-    { assignedDispatcherId: { not: null, notIn: [dispatcherId] } },
-    ...(myLines.length ? [{ assignedDispatcherId: null, customerLineId: { not: null, notIn: myLines }, customerLine: { dispatchers: { some: {} } } }] : [])
-  ] }, select: { id: true } })).map((vehicle) => vehicle.id));
-  return (vehicleId) => !others.has(vehicleId);
+  return vehiclesVisibleTo(prisma, dispatcherId);
 }
 const ORDER_DOCUMENT_SYSTEM_ACTOR: AuditActor = { role: 'system', sessionId: 'order-documents' };
 
@@ -452,6 +448,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   registerOrderDocumentRoutes(app, orderDocuments);
   registerImportRuleRoutes(app, importLearning);
   registerCustomerRoutes(app, customerService);
+  registerCoverRoutes(app, prisma);
   registerPushRoutes(app, pushService);
   await registerRouteScenarioRoutes(app, { service: scenarioService });
 
@@ -1481,7 +1478,11 @@ export async function buildApp(options: BuildAppOptions = {}) {
   app.get("/dashboard", async (request) => {
     const generatedAt = new Date();
     const me = request.dispatcherSession?.dispatcherId ?? null;
-    const myLines = new Set(await customerService.linesOf(me));
+    const covers = await coverResolver(prisma);
+    const myLines = await covers.linesOf(prisma, me);
+    const lineStaff = await prisma.dispatcherLine.findMany({ select: { dispatcherId: true, lineId: true } });
+    const dispatcherNames = new Map((await prisma.dispatcher.findMany({ select: { id: true, displayName: true } })).map((person) => [person.id, person.displayName]));
+    const person = (id: string) => ({ id, name: dispatcherNames.get(id) ?? 'Диспетчер удалён' });
     const vehicles = await prisma.vehicle.findMany({
       include: {
         assignedDispatcher: { select: { id: true, displayName: true } },
@@ -1577,8 +1578,13 @@ export async function buildApp(options: BuildAppOptions = {}) {
         }),
         operationVersion: vehicle.operationVersion,
         assignedTo: vehicle.assignedDispatcher ? { id: vehicle.assignedDispatcher.id, name: vehicle.assignedDispatcher.displayName } : null,
-        // «Мои»: taken by me, or on one of my lines and not taken by a colleague.
-        mine: isMine(me, vehicle, myLines),
+        // «Мои»: taken by me, or on one of my lines and not taken by a colleague — or by a colleague I stand in for.
+        mine: isMine(me, covers.vehicle(vehicle), myLines),
+        cover: (() => {
+          const owner = vehicle.assignedDispatcherId ?? lineStaff.find((item) => item.lineId === vehicle.customerLineId && covers.coverOf(item.dispatcherId, item.lineId))?.dispatcherId;
+          const cover = owner ? covers.coverOf(owner, vehicle.customerLineId) : null;
+          return cover ? { id: cover.id, absent: person(cover.absentDispatcherId), by: person(cover.coverDispatcherId), endsAt: cover.endsAt.toISOString() } : null;
+        })(),
         customer: vehicle.customerLine ? { id: vehicle.customerLine.customer.id, name: vehicle.customerLine.customer.name, slug: vehicle.customerLine.customer.slug, color: vehicle.customerLine.customer.color } : null,
         line: vehicle.customerLine ? { id: vehicle.customerLine.id, code: vehicle.customerLine.code, name: vehicle.customerLine.name } : null,
         tour: activeTour ? toDashboardTourSummary(activeTour) : null,

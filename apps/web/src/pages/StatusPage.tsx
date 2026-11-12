@@ -203,6 +203,7 @@ function StatusRow({ row, columns, editable, onSaved, onTake, busy: pageBusy }: 
 
   return <tr>
     <th scope="row" className="status-lkw">{row.vehicleNumber}
+      {row.owner?.coverForName ? <span className="status-cover"> за {row.owner.coverForName}</span> : null}
       {onTake ? <button type="button" className="status-take" disabled={pageBusy} aria-label={`Взять себе LKW ${row.vehicleNumber}`} onClick={onTake}>
         <UserPlus className="h-3.5 w-3.5" aria-hidden="true" />Взять</button> : null}
     </th>

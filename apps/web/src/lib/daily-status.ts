@@ -12,7 +12,7 @@ export interface DailyStatusRow {
   /** Whose Excel the line goes into: the dispatcher who took the truck, or the dispatcher of its line; null = nobody's. */
   owner?: DailyStatusOwner | null
 }
-export interface DailyStatusOwner { id: string; name: string; source: 'TAKEN' | 'LINE'; active: boolean }
+export interface DailyStatusOwner { id: string; name: string; source: 'TAKEN' | 'LINE'; active: boolean; coverForName?: string | null }
 export interface DailyStatusReport {
   id: string; line: string; date: string; status: 'GENERATING' | 'READY' | 'FAILED'; preliminary: boolean
   generatedAt: string | null; generatedByRole: 'system' | 'admin' | 'dispatcher'

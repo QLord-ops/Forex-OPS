@@ -1,4 +1,4 @@
-import { Bot, Building2, ChartColumn, ChevronRight, CircleHelp, ClipboardList, GraduationCap, Route, Settings, Truck, Users } from 'lucide-react'
+import { Bot, Building2, ChartColumn, ChevronRight, CircleHelp, ClipboardList, GraduationCap, Route, Settings, Truck, Users, UsersRound } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
 import { AlertToggle } from '../components/AlertToggle'
@@ -20,6 +20,7 @@ export function MorePage() {
     { to: '/tours', label: 'Туры', icon: Route },
     { to: '/vehicles', label: 'Машины и Webfleet', note: 'добавить, привязать', icon: Truck },
     { to: '/customers', label: 'Заказчики', icon: Building2 },
+    { to: '/team', label: 'Команда', note: 'подменить коллегу', icon: UsersRound },
     { to: '/analytics', label: 'Аналитика', icon: ChartColumn },
     ...(role === 'admin' ? [{ to: '/dispatchers', label: 'Диспетчеры', icon: Users }] : []),
     { to: '/settings', label: 'Настройки', note: 'рабочие часы, правила', icon: Settings }

@@ -19,6 +19,7 @@ const SettingsPage = lazy(() => import('./pages/SettingsPage').then((module) => 
 const DecisionsPage = lazy(() => import('./pages/DecisionsPage').then((module) => ({ default: module.DecisionsPage })))
 const MorePage = lazy(() => import('./pages/MorePage').then((module) => ({ default: module.MorePage })))
 const DispatchersPage = lazy(() => import('./pages/DispatchersPage').then((module) => ({ default: module.DispatchersPage })))
+const TeamPage = lazy(() => import('./pages/TeamPage').then((module) => ({ default: module.TeamPage })))
 const CustomersPage = lazy(() => import('./pages/CustomersPage').then((module) => ({ default: module.CustomersPage })))
 const CustomerPage = lazy(() => import('./pages/CustomerPage').then((module) => ({ default: module.CustomerPage })))
 const HelpPage = lazy(() => import('./pages/HelpPage').then((module) => ({ default: module.HelpPage })))
@@ -46,6 +47,7 @@ export function App() {
         <Route path="history" element={page(<HistoryPage />)} />
         <Route path="dispatchers" element={page(<DispatchersPage />)} />
         <Route path="analytics" element={page(<AnalyticsPage />)} />
+        <Route path="team" element={page(<TeamPage />)} />
         <Route path="customers" element={page(<CustomersPage />)} />
         <Route path="customers/:id" element={page(<CustomerPage />)} />
         <Route path="settings" element={page(<SettingsPage />)} />

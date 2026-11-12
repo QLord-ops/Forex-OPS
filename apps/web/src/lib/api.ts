@@ -178,6 +178,26 @@ export const customersApi = {
   migrate: () => request<{ result: Array<{ slug: string; created: boolean; lines: number; vehicles: number }> }>('/customers/migrate-from-lines', json('POST', {})).then((result) => result.result)
 }
 
+export interface TeamLine { id: string; name: string; customer: string; color: string | null }
+export interface TeamCover {
+  id: string; startsAt: string; endsAt: string
+  absent: { id: string; name: string }; cover: { id: string; name: string }
+  /** Every line and every truck the absent dispatcher took. */
+  allLines: boolean; lines: TeamLine[]; vehicleCount: number
+}
+export interface TeamOverview {
+  me: string | null
+  dispatchers: Array<{ id: string; name: string; lines: Array<TeamLine & { isPrimary: boolean }>; vehicleCount: number; away: TeamCover[]; covering: TeamCover[] }>
+  unowned: Array<TeamLine & { vehicleCount: number }>
+  covers: TeamCover[]
+}
+/** Who works on what right now, and covering a colleague. */
+export const teamApi = {
+  overview: () => request<TeamOverview>('/team'),
+  startCover: (input: { absentDispatcherId: string; coverDispatcherId: string; lineIds: string[] | null; endsAt: string }) => request<{ id: string; endsAt: string }>('/covers', json('POST', input)),
+  endCover: (id: string) => request<{ id: string }>(`/covers/${encodeURIComponent(id)}/end`, json('POST', {}))
+}
+
 export const accountsApi = {
   list: () => request<DispatcherAccount[]>('/dispatchers'),
   directory: () => request<Array<{ id: string; displayName: string }>>('/dispatchers/directory'),

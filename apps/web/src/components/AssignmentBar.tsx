@@ -39,7 +39,7 @@ export function AssignmentBar({ row }: { row: DashboardVehicle }) {
     <div className="assignment-bar" aria-live="polite">
       <span className="assignment-owner">
         <UserCheck className="h-4 w-4" aria-hidden="true" />
-        {!owner ? 'Свободна' : row.mine ? 'Моя машина' : `Ведёт ${owner.name}`}
+        {row.cover ? (row.mine ? `Веду за ${row.cover.absent.name}` : `Ведёт ${row.cover.by.name} за ${row.cover.absent.name}`) : !owner ? 'Свободна' : row.mine ? 'Моя машина' : `Ведёт ${owner.name}`}
       </span>
       <span className="assignment-actions">
         {!owner && me ? <button type="button" className="assignment-button assignment-button-primary" disabled={busy} onClick={() => void change({ action: 'take' })}><UserPlus className="h-4 w-4" aria-hidden="true" />Взять себе</button> : null}
