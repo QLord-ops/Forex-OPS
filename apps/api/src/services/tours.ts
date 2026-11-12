@@ -23,6 +23,7 @@ import { cleanTravelled } from "./travelled-path.js";
 import { mergeAddressRules, requiresTermin, type AddressRuleRecord } from "./address-rules.js";
 import { applyStopTime, createUnknownClockState, evaluateClockPlan, forecastDrive, type ClockState, type VehicleClockPlan } from "./vehicle-clock.js";
 import { forecastEta, WebfleetEngine, type DriverEtaInput } from "./termin-planner.js";
+import { autoWindowStart } from "./stop-window.js";
 import {
   calculateDistanceTravelled,
   calculateEta,
@@ -349,8 +350,11 @@ export class TourService {
       const stop = await tx.stop.findUniqueOrThrow({ where: { id: stopId }, include: { tour: true } });
       if (!stop.completedAt || stop.completedAt.getTime() !== at.getTime()) throw new TourPlanConflictError("Автоотметка уже отменена или точка изменилась.");
       const vehicleId = stop.tour.vehicleId;
-      const later = await tx.event.count({ where: { vehicleId, id: { not: record.eventId }, timestamp: { gte: at } } });
-      const arrivedSince = await tx.stop.count({ where: { id: { not: stopId }, arrivedAt: { gte: at }, tour: { vehicleId } } });
+      // Only this tour and the one it started matter: other tours' events can be later when the automatic one was dated
+      // back to a stay in the past.
+      const tourIds = [stop.tourId, ...(record.activated ? [record.activated.tourId] : [])];
+      const later = await tx.event.count({ where: { vehicleId, tourId: { in: tourIds }, id: { not: record.eventId }, timestamp: { gte: at } } });
+      const arrivedSince = await tx.stop.count({ where: { id: { not: stopId }, arrivedAt: { gte: at }, tourId: { in: tourIds } } });
       if (later || arrivedSince) throw new TourPlanConflictError("После автоотметки машина уже прибыла на следующую точку. Исправьте тур вручную.");
       const expected = record.activated ? "COMPLETED" : "ACTIVE";
       if (stop.tour.status !== expected) throw new TourPlanConflictError("Тур изменился после автоотметки. Исправьте его вручную.");
@@ -365,6 +369,7 @@ export class TourService {
         await tx.leg.update({ where: { id: leg.id }, data: { status: leg.status, startedAt: leg.startedAt ? new Date(leg.startedAt) : null,
           finishedAt: leg.finishedAt ? new Date(leg.finishedAt) : null, drivePlan: leg.drivePlan } });
       }
+      const arrivalDropped = await dropForeignAutoArrival(tx, stop, at, now, actor);
       if (record.activated) await tx.tour.update({ where: { id: record.activated.tourId }, data: { status: "QUEUED", planVersion: { increment: 1 } } });
       await tx.tour.update({ where: { id: stop.tourId }, data: { status: record.before.tour.status, planVersion: { increment: 1 },
         completedAt: record.before.tour.completedAt ? new Date(record.before.tour.completedAt) : null,
@@ -376,7 +381,7 @@ export class TourService {
       await tx.operationEvent.create({ data: { vehicleId, tourId: stop.tourId, stopId, type: "STOP_EVENT_REVERTED", reason: note,
         payloadJson: JSON.stringify({ autoEventId: auto.id, eventType: record.eventType, at: record.at }), createdAt: now } });
       await writeAuditLog(tx, actor, { action: "STOP_EVENT_REVERTED", entityType: "Stop", entityId: stopId, vehicleId, tourId: stop.tourId, stopId,
-        metadata: { event: record.eventType, at: record.at, reason: reason?.trim() || null }, createdAt: now });
+        metadata: { event: record.eventType, at: record.at, reason: reason?.trim() || null, arrivalDropped }, createdAt: now });
     });
     return { ok: true };
   }
@@ -1121,6 +1126,34 @@ export function toIsoObject<T extends Record<string, unknown>>(value: T): T {
   return Object.fromEntries(
     Object.entries(value).map(([key, item]) => [key, item instanceof Date ? item.toISOString() : item])
   ) as T;
+}
+
+/**
+ * Undoing an automatic BELADEN/ENTLADEN whose GPS arrival came from a stay of another trip (before the stop's time window,
+ * or before the truck's other tour was done) drops that arrival too, so the real one is found when the truck comes.
+ * Only for a stop without an incoming leg: a leg already bounds the arrival to after it started.
+ */
+async function dropForeignAutoArrival(tx: Prisma.TransactionClient, stop: Stop & { tour: Tour }, leftAt: Date, now: Date, actor?: AuditActor): Promise<boolean> {
+  const arrivedAt = stop.arrivedAt;
+  if (!arrivedAt || await tx.leg.count({ where: { toStopId: stop.id } })) return false;
+  const confirmed = await tx.operationEvent.findFirst({ where: { stopId: stop.id, type: "ARRIVAL_CONFIRMED" }, orderBy: { createdAt: "desc" } });
+  let source: string | null = null;
+  try { source = (JSON.parse(confirmed?.payloadJson ?? "{}") as { source?: string }).source ?? null; } catch { /* Legacy payload. */ }
+  if (source !== "WEBFLEET_AUTO") return false;
+  const windowStart = autoWindowStart(stop);
+  const otherDone = await tx.event.findFirst({ where: { vehicleId: stop.tour.vehicleId, tourId: { not: stop.tourId }, type: { in: ["LOADED", "UNLOADED"] } },
+    orderBy: { timestamp: "desc" }, select: { timestamp: true } });
+  const foreign = (windowStart && leftAt < windowStart) || (otherDone && arrivedAt < otherDone.timestamp);
+  if (!foreign) return false;
+  const changed = await tx.stop.updateMany({ where: { id: stop.id, arrivedAt, completedAt: null }, data: { arrivedAt: null } });
+  if (!changed.count) return false;
+  const reason = "Автоприбытие было по стоянке другого рейса";
+  await tx.notification.updateMany({ where: { stopId: stop.id, type: { in: ["AUTO_ARRIVAL", "TERMIN_MET"] }, acknowledgedAt: null }, data: { acknowledgedAt: now } });
+  await tx.operationEvent.create({ data: { vehicleId: stop.tour.vehicleId, tourId: stop.tourId, stopId: stop.id, type: "ARRIVAL_REVERTED", reason,
+    payloadJson: JSON.stringify({ previousArrivedAt: arrivedAt, previousSource: source }), createdAt: now } });
+  await writeAuditLog(tx, actor, { action: "ARRIVAL_REVERTED", entityType: "Stop", entityId: stop.id, vehicleId: stop.tour.vehicleId, tourId: stop.tourId, stopId: stop.id,
+    metadata: { previousArrivedAt: arrivedAt.toISOString(), previousSource: source, reason }, createdAt: now });
+  return true;
 }
 
 async function activateNextQueuedTour(tx: Prisma.TransactionClient, vehicleId: string, startedAt: Date): Promise<{ tour: Tour; transferLeg: LegState | null } | null> {
