@@ -6,7 +6,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { PrismaClient } from '../src/generated/sqlite-client/index.js';
 import { berlinLocalToDate, matchAppointment } from '../src/services/appointment-match.js';
 import { AppointmentService } from '../src/services/appointments.js';
-import { importPdfPreview, type AppointmentDocument } from '../src/services/pdf-order-import.js';
+import { importPdfPreview, isTerminSlipText, type AppointmentDocument } from '../src/services/pdf-order-import.js';
+import { deckblattPdf } from './pdf-fixture.js';
 import { documentFingerprint, PendingAppointmentService } from '../src/services/pending-appointments.js';
 import { migrateTestDatabase } from './test-database.js';
 
@@ -49,6 +50,31 @@ describe('recognising Termin slips (synthetic copies of the dispatcher examples)
     expect(mroad.appointment?.warnings.map((item) => item.code)).toContain('PLATE_MISSING');
     const both = await recognise({ documentType: 'Deckblatt', city: 'Mannheim', appointmentLocal: '2026-11-04T14:00', windowStartLocal: '2026-11-04T14:00', windowEndLocal: '2026-11-04T15:00' });
     expect(both.appointment).toMatchObject({ appointmentLocal: null, windowStartLocal: '2026-11-04T14:00', windowEndLocal: '2026-11-04T15:00' });
+  });
+
+  it('sends an mRoad Deckblatt printout as its page together with the text, so the values stay with their labels', async () => {
+    let body: { input: Array<{ role: string; content: unknown }> } | null = null;
+    const fetchImpl = vi.fn(async (_url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+      body = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ output_text: JSON.stringify({ documentKind: 'APPOINTMENT', drafts: [], warnings: [], appointment: { ...blank,
+        documentType: 'Deckblatt zur Warenanlieferung', plate: 'B-CY3010', company: 'Werk 065', site: 'Werk 065', city: 'Düsseldorf', stopType: 'UNLOAD',
+        windowStartLocal: '2026-11-13T12:00', windowEndLocal: '2026-11-13T12:30', references: [{ label: 'Borderonummer', value: '15015236' }] } }) }));
+    });
+    const preview = await importPdfPreview(deckblattPdf(), 'DB Düsse 13.11_.pdf', { apiKey: 'test-key', fetchImpl: fetchImpl as typeof fetch, now: new Date('2026-11-12T12:10:00Z') });
+    const content = body!.input[1].content as Array<{ type: string; text?: string }>;
+    expect(content.map((part) => part.type)).toEqual(['input_file', 'input_text', 'input_text']);
+    expect(content[1].text).toContain('065, Düsseldorf');
+    expect(content[1].text).toContain('B-CY3010');
+    expect(JSON.stringify(body!.input[0])).toContain('Anlieferdatum 13.11.2026 with Von 12:00 and Bis 12:30 is the window 2026-11-13T12:00 to 2026-11-13T12:30');
+    expect(preview.readMode).toBe('file');
+    expect(preview.appointment).toMatchObject({ kind: 'DECKBLATT', plate: 'B-CY3010', city: 'Düsseldorf', windowStartLocal: '2026-11-13T12:00', windowEndLocal: '2026-11-13T12:30' });
+  });
+
+  it('a long Auftrag that mentions a Deckblatt is still read as text only', () => {
+    expect(isTerminSlipText({ pages: ['Deckblatt zur Warenanlieferung'] })).toBe(true);
+    expect(isTerminSlipText({ pages: ['LKWcontrol Fahrtenschein', 'Seite 2'] })).toBe(true);
+    expect(isTerminSlipText({ pages: ['Transportauftrag', 'Deckblatt beilegen', 'Seite 3'] })).toBe(false);
+    expect(isTerminSlipText({ pages: ['Transportauftrag Nr. 20566316 Tourbemerkung: Zwickau für MB Düsseldorf'] })).toBe(false);
   });
 
   it('keeps an Auftrag on the order path', async () => {
