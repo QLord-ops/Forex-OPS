@@ -1,6 +1,15 @@
 import type { LayerSpecification } from 'maplibre-gl'
 
 export const TRAFFIC_COLORS = { SLOW: '#f29900', JAM: '#d93025', STANDSTILL: '#8b0000', CLOSED: '#202124' } as const
+/** How often the map fetches new traffic tiles. MapLibre's own reload of expired tiles is off: it made the map stutter. */
+export const TRAFFIC_REFRESH_MS = 5 * 60_000
+/** Closer in, the zoom-12 tiles are scaled up: far fewer tiles to fetch and read while zooming. */
+export const TRAFFIC_MAX_TILE_ZOOM = 12
+
+/** The refresh slot in the address: the browser fetches new tiles once per slot and reuses them inside it. */
+export function trafficTileUrl(key: string, now = Date.now()) {
+  return `https://api.tomtom.com/traffic/map/4/tile/flow/relative-delay/{z}/{x}/{y}.pbf?key=${encodeURIComponent(key)}&t=${Math.floor(now / TRAFFIC_REFRESH_MS)}`
+}
 
 const LEVEL = ['coalesce', ['get', 'traffic_level'], 1]
 const ONE_SIDE = ['==', ['get', 'traffic_road_coverage'], 'one_side']
