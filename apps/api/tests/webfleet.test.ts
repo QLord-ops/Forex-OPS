@@ -598,6 +598,81 @@ describe('leaving the town after a real stay at the stop', () => {
     expect((await db.stop.findUniqueOrThrow({ where: { id: unloadId } })).completedAt).toBeNull();
   });
 
+  describe('only near the stop\'s planned time (GÖ FX 727, 12.11)', () => {
+    const nearHamburg = (meters: number) => ({ latitude: HAMBURG.latitude + meters / 111_000, longitude: HAMBURG.longitude });
+    const hour = 3600_000;
+
+    it('tomorrow\'s loading does not take this morning\'s stay at the same plant', async () => {
+      const scenario = await arrivalScenario('WIN-TOMORROW', { autoStopEvent: true });
+      await db.stop.update({ where: { id: scenario.stopId }, data: { plannedAt: new Date(at(0).getTime() + 24 * hour) } });
+      for (let minute = 0; minute <= 25; minute += 1) await scenario.feed(minute, north(100), true);
+      await leaveTown(scenario.feed);
+      expect(await db.stop.findUniqueOrThrow({ where: { id: scenario.stopId } })).toMatchObject({ arrivedAt: null, completedAt: null });
+      expect(await db.notification.count({ where: { stopId: scenario.stopId } })).toBe(0);
+    });
+
+    it('a stay up to 12 h before the planned time is the arrival, timed at the zone entry', async () => {
+      const scenario = await arrivalScenario('WIN-EVENING', { autoStopEvent: true });
+      await db.stop.update({ where: { id: scenario.stopId }, data: { appointmentAt: new Date(at(0).getTime() + 11 * hour) } });
+      for (let minute = 0; minute <= 25; minute += 1) await scenario.feed(minute, north(100), true);
+      expect((await db.stop.findUniqueOrThrow({ where: { id: scenario.stopId } })).arrivedAt).toEqual(at(0));
+      await leaveTown(scenario.feed);
+      expect((await db.stop.findUniqueOrThrow({ where: { id: scenario.stopId } })).completedAt).toEqual(at(25));
+    });
+
+    it('a truck that waits overnight arrives once the window opens, timed when it came', async () => {
+      const scenario = await arrivalScenario('WIN-NIGHT');
+      await db.stop.update({ where: { id: scenario.stopId }, data: { appointmentAt: new Date(at(0).getTime() + 13 * hour) } });
+      for (let minute = 0; minute <= 5; minute += 1) await scenario.feed(minute, north(100), true);
+      expect((await db.stop.findUniqueOrThrow({ where: { id: scenario.stopId } })).arrivedAt).toBeNull();
+      // Webfleet keeps the parked position; the unit keeps reporting.
+      for (const minute of [61, 62]) {
+        await scenario.feed(minute, north(100), true);
+      }
+      expect((await db.stop.findUniqueOrThrow({ where: { id: scenario.stopId } })).arrivedAt).toEqual(at(0));
+    });
+
+    it('a tour entered after the truck finished another trip there does not take that trip\'s stay', async () => {
+      const first = await arrivalScenario('WIN-REUSE', { autoStopEvent: true });
+      for (let minute = 0; minute <= 25; minute += 1) await first.feed(minute, north(100), true);
+      await leaveTown(first.feed);
+      await first.operations.confirmArrival(first.tour.stops[1].id, at(200), at(201), dispatcher);
+      await first.tours.recordUnloaded(first.tour.stops[1].id, at(230), undefined, dispatcher);
+      // The dispatcher enters the same trip again for later: the truck is free, so the tour is active at once.
+      const again = await first.tours.createTour({ vehicleId: first.vehicle.id, orderNumber: 'ORD-WIN-REUSE-2', stops: [
+        { sequence: 1, type: 'LOAD', address: 'Berlin', city: 'Berlin', ...BERLIN },
+        { sequence: 2, type: 'UNLOAD', address: 'Hamburg', city: 'Hamburg', ...HAMBURG }
+      ] });
+      expect(again.status).toBe('ACTIVE');
+      await first.feed(240, nearHamburg(-20_000), false);
+      await first.feed(241, nearHamburg(-21_000), false);
+      expect(await db.stop.findUniqueOrThrow({ where: { id: again.stops[0].id } })).toMatchObject({ arrivedAt: null, completedAt: null });
+      expect(await db.notification.count({ where: { stopId: again.stops[0].id } })).toBe(0);
+    });
+
+    it('«Отменить» works after the other tour\'s later events and drops the arrival taken from that trip', async () => {
+      const first = await arrivalScenario('WIN-UNDO');
+      await first.operations.confirmArrival(first.stopId, at(0), at(1), dispatcher);
+      await first.tours.recordLoaded(first.stopId, at(25), undefined, dispatcher);
+      await first.operations.confirmArrival(first.tour.stops[1].id, at(200), at(201), dispatcher);
+      await first.tours.recordUnloaded(first.tour.stops[1].id, at(230), undefined, dispatcher);
+      const again = await first.tours.createTour({ vehicleId: first.vehicle.id, orderNumber: 'ORD-WIN-UNDO-2', stops: [
+        { sequence: 1, type: 'LOAD', address: 'Berlin', city: 'Berlin', ...BERLIN },
+        { sequence: 2, type: 'UNLOAD', address: 'Hamburg', city: 'Hamburg', ...HAMBURG }
+      ] });
+      const stopId = again.stops[0].id;
+      // What the old rule recorded: the morning stay of the finished trip as this tour's arrival and BELADEN.
+      await first.operations.confirmArrival(stopId, at(0), at(240), SYSTEM_WEBFLEET_ACTOR, { source: 'WEBFLEET_AUTO', meta: { retroactive: true } });
+      await first.tours.recordAutoStopEvent({ stopId, at: at(25), now: at(240),
+        meta: { enteredAt: at(0).toISOString(), leftZoneAt: at(25).toISOString(), stayMinutes: 25, distanceMeters: 250_000 } }, SYSTEM_WEBFLEET_ACTOR);
+
+      await first.tours.revertAutoStopEvent(stopId, at(250), dispatcher);
+      expect(await db.stop.findUniqueOrThrow({ where: { id: stopId } })).toMatchObject({ arrivedAt: null, completedAt: null });
+      expect(await db.operationEvent.findFirstOrThrow({ where: { stopId, type: 'ARRIVAL_REVERTED' } })).toMatchObject({ reason: 'Автоприбытие было по стоянке другого рейса' });
+      expect(await db.auditLog.findFirstOrThrow({ where: { stopId, action: 'STOP_EVENT_REVERTED' } })).toMatchObject({ actorRole: 'dispatcher' });
+    });
+  });
+
   it('cannot be undone once the truck has arrived at the next stop', async () => {
     const { stopId, tour, tours, operations, feed } = await stood('TOWN-7');
     await leaveTown(feed);

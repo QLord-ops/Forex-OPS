@@ -1,5 +1,6 @@
 import type { PrismaClient } from '@prisma/client';
 import { BUILT_IN_RULES, normalizePattern } from './address-rules.js';
+import { autoWindowStart } from './stop-window.js';
 
 const PROVIDER = 'WEBFLEET';
 export const DEFAULT_ARRIVAL_RADIUS_METERS = 500;
@@ -240,7 +241,10 @@ export class WebfleetTelemetryService {
 
     const stay = lastInside ? stayBefore(history, history.indexOf(lastInside), outside) : null;
     const onAutoStopEvent = this.onAutoStopEvent;
-    if (onAutoStopEvent && stay && stay.seconds >= AUTO_STOP_EVENT_MIN_STAY_SECONDS) {
+    // Leaving long before the stop's planned time is not this stop's BELADEN/ENTLADEN: the dispatcher is asked instead.
+    const windowStart = autoWindowStart(stop);
+    const inWindow = !windowStart || leftAt >= windowStart;
+    if (onAutoStopEvent && inWindow && stay && stay.seconds >= AUTO_STOP_EVENT_MIN_STAY_SECONDS) {
       const record = async (nextStop?: string) => {
         try {
           await onAutoStopEvent({ stopId: stop.id, at: leftAt, now, meta: { enteredAt: stay.enteredAt.toISOString(), leftZoneAt: leftAt.toISOString(),
@@ -280,6 +284,13 @@ export class WebfleetTelemetryService {
     return true;
   }
 
+  /** The last BELADEN/ENTLADEN of the truck's other tours: a stay before it belonged to them, not to this tour. */
+  private async otherToursDoneAt(vehicleId: string, tourId: string): Promise<Date | null> {
+    const event = await this.db.event.findFirst({ where: { vehicleId, tourId: { not: tourId }, type: { in: ['LOADED', 'UNLOADED'] } },
+      orderBy: { timestamp: 'desc' }, select: { timestamp: true } });
+    return event?.timestamp ?? null;
+  }
+
   /** Where the truck goes after this stop: the next stop of the tour, else the first stop of the next tour. */
   private async nextStopOf(vehicleId: string, stops: ZoneStop[], stop: ZoneStop): Promise<ZoneStop | null> {
     const index = stops.findIndex((item) => item.id === stop.id);
@@ -312,7 +323,8 @@ export class WebfleetTelemetryService {
   private async retroactiveArrival(vehicleId: string, tourId: string, stop: ZoneStop, previousStop: ZoneStop | null, current: WebfleetPosition, now: Date): Promise<Date | null> {
     if (!this.onAutoArrival) return null;
     const leg = await this.db.leg.findFirst({ where: { tourId, toStopId: stop.id } });
-    const since = Math.max(current.recordedAt.getTime() - ARRIVAL_HISTORY_SECONDS * 1000, leg?.startedAt?.getTime() ?? 0);
+    const usedUntil = await this.otherToursDoneAt(vehicleId, tourId);
+    const since = Math.max(current.recordedAt.getTime() - ARRIVAL_HISTORY_SECONDS * 1000, leg?.startedAt?.getTime() ?? 0, (usedUntil?.getTime() ?? -1) + 1);
     const history = await this.db.vehicleTelemetry.findMany({
       where: { vehicleId, provider: PROVIDER, recordedAt: { gte: new Date(since), lte: current.recordedAt } },
       orderBy: { recordedAt: 'desc' }, take: ARRIVAL_HISTORY_ROWS
@@ -325,6 +337,9 @@ export class WebfleetTelemetryService {
       if (ring && ring.longestStandstillSeconds >= NEAR_ARRIVAL_MIN_STANDSTILL_SECONDS) { stay = ring; near = true; }
     }
     if (!stay) return null;
+    // A stay that was over long before the stop's planned time was another trip to the same place.
+    const windowStart = autoWindowStart(stop);
+    if (windowStart && stay.lastInsideAt < windowStart) return null;
     const reverted = await this.db.operationEvent.findFirst({ where: { stopId: stop.id, type: 'ARRIVAL_REVERTED' }, orderBy: { createdAt: 'desc' } });
     if (reverted && reverted.createdAt >= stay.enteredAt) return null;
     try {
@@ -395,9 +410,14 @@ export class WebfleetTelemetryService {
       await this.warnPreviousTourOpen(vehicleId, tour, stop, current, observedAt);
       return none;
     }
+    // Standing at the place long before the stop's planned time is another trip (tomorrow's loading at today's plant).
+    const windowStart = autoWindowStart(stop);
+    if (windowStart && observedAt < windowStart) return none;
 
+    const usedUntil = await this.otherToursDoneAt(vehicleId, tour.id);
+    const since = Math.max(current.recordedAt.getTime() - ARRIVAL_HISTORY_SECONDS * 1000, (usedUntil?.getTime() ?? -1) + 1);
     const history = await this.db.vehicleTelemetry.findMany({
-      where: { vehicleId, provider: PROVIDER, recordedAt: { gte: new Date(current.recordedAt.getTime() - ARRIVAL_HISTORY_SECONDS * 1000), lte: current.recordedAt } },
+      where: { vehicleId, provider: PROVIDER, recordedAt: { gte: new Date(since), lte: current.recordedAt } },
       orderBy: { recordedAt: 'desc' }, take: ARRIVAL_HISTORY_ROWS
     });
     let enteredAt: Date | null = null;
@@ -450,7 +470,8 @@ export class WebfleetTelemetryService {
   }
 }
 
-type ZoneStop = { id: string; latitude: number; longitude: number; arrivalRadiusMeters: number | null; type: string; city: string | null; address: string };
+type ZoneStop = { id: string; latitude: number; longitude: number; arrivalRadiusMeters: number | null; type: string; city: string | null; address: string;
+  appointmentAt?: Date | null; appointmentWindowStartAt?: Date | null; plannedAt?: Date | null };
 type TelemetryRow = { latitude: number; longitude: number; speedKmh: number | null; recordedAt: Date; rawJson: string | null };
 
 function previousStopOf<T extends ZoneStop>(stops: T[], stop: ZoneStop): T | null {
