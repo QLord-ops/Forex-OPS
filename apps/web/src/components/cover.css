@@ -20,6 +20,7 @@
 .cover-form .cover-check { display: flex; min-height: 28px; align-items: center; gap: 8px; color: rgb(var(--tx-0f172a)); font-size: .8125rem; }
 .cover-check input { width: 16px; height: 16px; flex: none; }
 .cover-hint { color: rgb(var(--tx-64748b)); font-size: .75rem; }
+.cover-line-note { color: rgb(var(--tx-64748b)); }
 .cover-error { color: rgb(var(--tx-b91c1c)); font-size: .75rem; }
 .cover-form-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .cover-tag { display: inline-flex; align-items: center; border-radius: 4px; background: rgb(var(--bg-fef3c7)); padding: 1px 6px; color: rgb(var(--tx-78350f)); font-size: .6875rem; font-weight: 500; white-space: nowrap; }

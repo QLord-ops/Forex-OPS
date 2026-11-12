@@ -12,7 +12,7 @@ const line = (id: string, name: string, customer: string, color: string) => ({ i
 const SUED = line('l-sued', 'Süd', 'Schnellecke', '#1d4ed8'), NORD = line('l-nord', 'Nord', 'Schnellecke', '#1d4ed8'), TESLA = line('l-tesla', 'Tesla', 'Walter (Tesla)', '#b91c1c')
 
 /** Anna works on Süd; Ben on Nord and Tesla with one truck taken. A cover of Ben moves his two trucks to Anna. */
-async function mock(page: Page) {
+async function mock(page: Page, options: { annaWithoutLines?: boolean } = {}) {
   const state: { cover: null | { id: string; endsAt: string; lineIds: string[] | null }; started: unknown; ended: string | null } = { cover: null, started: null, ended: null }
   const cover = () => state.cover ? { id: state.cover.id, startsAt: '2026-11-11T08:00:00.000Z', endsAt: state.cover.endsAt, absent: BEN, cover: ANNA, allLines: state.cover.lineIds === null, lines: [NORD, TESLA], vehicleCount: 2 } : null
   await page.route('**/api/**', async route => {
@@ -31,7 +31,9 @@ async function mock(page: Page) {
     if (path === '/team') return json(route, {
       me: ANNA.id,
       dispatchers: [
-        { ...ANNA, lines: [{ ...SUED, isPrimary: true }], vehicleCount: covered ? 3 : 1, away: [], covering: covered ? [covered] : [] },
+        options.annaWithoutLines
+          ? { ...ANNA, lines: [], takenLines: [{ ...SUED, vehicleCount: 5 }, { ...TESLA, vehicleCount: 1 }], vehicleCount: 6, away: [], covering: [] }
+          : { ...ANNA, lines: [{ ...SUED, isPrimary: true }], vehicleCount: covered ? 3 : 1, away: [], covering: covered ? [covered] : [] },
         { ...BEN, lines: [{ ...NORD, isPrimary: true }, { ...TESLA, isPrimary: false }], vehicleCount: covered ? 0 : 2, away: covered ? [covered] : [], covering: [] }
       ],
       unowned: [{ ...line('l-lufe', 'LuFe', 'Schnellecke', '#1d4ed8'), vehicleCount: 3 }],
@@ -94,6 +96,21 @@ test('«Меня нет»: только выбранные линии уходя
   await form.getByLabel('Кому передать').selectOption(BEN.id)
   await form.getByLabel('Только выбранные линии').check()
   await expect(form.getByRole('button', { name: 'Передать' })).toBeDisabled()
+  await form.getByLabel('Schnellecke · Süd').check()
+  await form.getByRole('button', { name: 'Передать' }).click()
+  await expect.poll(() => state.started).toMatchObject({ absentDispatcherId: ANNA.id, coverDispatcherId: BEN.id, lineIds: ['l-sued'] })
+})
+
+test('«Меня нет» без своих линий: выбираются линии взятых машин', async ({ page }) => {
+  const state = await mock(page, { annaWithoutLines: true })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Меня нет' }).click()
+  const form = page.getByRole('form', { name: 'Меня нет: передать линии' })
+  await form.getByLabel('Кому передать').selectOption(BEN.id)
+  await expect(form.getByLabel('Только выбранные линии')).toBeEnabled()
+  await form.getByLabel('Только выбранные линии').check()
+  await expect(form).toContainText('Schnellecke · Süd — взятых машин: 5')
+  await shot(page, 'cover-taken-lines')
   await form.getByLabel('Schnellecke · Süd').check()
   await form.getByRole('button', { name: 'Передать' }).click()
   await expect.poll(() => state.started).toMatchObject({ absentDispatcherId: ANNA.id, coverDispatcherId: BEN.id, lineIds: ['l-sued'] })
