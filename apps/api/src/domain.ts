@@ -14,6 +14,7 @@ export type RouteResult = {
 
 export type GeocodeResult = Coordinate & {
   city?: string | null;
+  postalCode?: string | null;
   label: string;
   provider: string;
 };

@@ -36,6 +36,22 @@ describe('a door of the address book', () => {
     const second = place('Volkswagen AG Werk Salzgitter', 'Tor 3', '38239', 'Salzgitter');
     expect(findKnownPlace({ address: 'Salzgitter', city: 'Salzgitter', company: 'Volkswagen AG Werk Salzgitter' }, [...book, second])).toBeNull();
   });
+
+  it('tells two towns of one name apart by the postcode printed in the city field (Petershagen)', () => {
+    const westfalen = place('Muster Logistik', 'Industriestraße 12', '32469', 'Petershagen', 52.38, 8.97);
+    const brandenburg = place('Muster Logistik', 'Industriestraße 12', '15370', 'Petershagen', 52.53, 13.79);
+    const both = [brandenburg, westfalen];
+    expect(findKnownPlace({ address: 'Industriestraße 12', city: '32469 Petershagen', company: 'Muster Logistik' }, both)).toBe(westfalen);
+    expect(findKnownPlace({ address: 'Petershagen', city: 'D-32469 Petershagen', company: 'Muster Logistik' }, both)).toBe(westfalen);
+    expect(findKnownPlace({ address: 'Petershagen', city: 'Petershagen', company: 'Muster Logistik' }, both)).toBeNull();
+  });
+
+  it('does not use a learned rule of a namesake town with another postcode without measuring it', () => {
+    const rule = { kind: 'SITE', pattern: 'muster logistik petershagen', company: 'Muster Logistik', street: 'Industriestraße 12', postalCode: '15370', city: 'Petershagen',
+      latitude: 52.53, longitude: 13.79, builtIn: false } as unknown as AddressRuleRecord;
+    expect(resolveWithoutGeocoder({ address: 'Petershagen', city: '32469 Petershagen', company: 'Muster Logistik' }, [rule], [])).toBeNull();
+    expect(resolveWithoutGeocoder({ address: 'Petershagen', city: '15370 Petershagen', company: 'Muster Logistik' }, [rule], [])).toMatchObject({ latitude: 52.53 });
+  });
 });
 
 describe('coordinates without the geocoder', () => {

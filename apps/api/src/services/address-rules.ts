@@ -88,12 +88,15 @@ export function findSiteRule(companyName: string | null | undefined, city: strin
   const companyPattern = normalizePattern(companyName);
   if (!companyPattern) return null;
   const cityPattern = normalizePattern(expandCity(city, rules));
-  const candidates = [cityPattern ? `${companyPattern} ${cityPattern}` : null, companyPattern].filter((value): value is string => Boolean(value));
+  // A rule learned from "Petershagen" also serves "D-32469 Petershagen"; resolution then measures it against the postcode's town.
+  const townPattern = cityPattern.replace(/(?:^|\s)(?:d\s)?\d{5}(?=\s|$)/g, " ").trim().replace(/\s+/g, " ");
+  const candidates = [cityPattern ? `${companyPattern} ${cityPattern}` : null, townPattern && townPattern !== cityPattern ? `${companyPattern} ${townPattern}` : null, companyPattern]
+    .filter((value): value is string => Boolean(value));
   for (const pattern of candidates) {
     const rule = rules.find((item) => item.kind === "SITE" && item.pattern === pattern && (item.street || item.latitude !== null));
     if (!rule) continue;
     const ruleCity = normalizePattern(rule.city);
-    if (pattern === companyPattern && cityPattern && ruleCity && ruleCity !== cityPattern && !ruleCity.endsWith(` ${cityPattern}`)) continue;
+    if (pattern === companyPattern && townPattern && ruleCity && ruleCity !== townPattern && !ruleCity.endsWith(` ${townPattern}`)) continue;
     return rule;
   }
   return null;

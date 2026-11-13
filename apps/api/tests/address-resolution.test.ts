@@ -23,13 +23,61 @@ describe("address resolution fallback", () => {
     ]);
   });
 
-  it("falls back to postcode and city, then to city", () => {
+  it("falls back to postcode and city, and to the bare city only when no postcode was printed", () => {
     expect(buildAddressCandidates("Sickingenstr. 28-38, D 10553 Berlin", "Berlin")).toEqual([
       { query: "Sickingenstraße 28-38, 10553 Berlin", precision: "EXACT" },
       { query: "Sickingenstraße, 10553 Berlin", precision: "STREET" },
-      { query: "10553 Berlin", precision: "POSTCODE_CITY" },
-      { query: "Berlin", precision: "CITY" }
+      { query: "10553 Berlin", precision: "POSTCODE_CITY" }
     ]);
+    expect(buildAddressCandidates("Sickingenstr. 28-38, Berlin", "Berlin").at(-1)).toEqual({ query: "Berlin", precision: "CITY" });
+  });
+
+  describe("a town name shared by several towns (Petershagen, 13.11)", () => {
+    const westfalen = { latitude: 52.38, longitude: 8.97 };
+    const brandenburg = { latitude: 52.53, longitude: 13.79 };
+
+    it("puts the postcode of the city field into every query", () => {
+      expect(buildAddressCandidates("Industriestraße 12, Petershagen", "32469 Petershagen")).toEqual([
+        { query: "Industriestraße 12, 32469 Petershagen", precision: "EXACT" },
+        { query: "Industriestraße, 32469 Petershagen", precision: "STREET" },
+        { query: "32469 Petershagen", precision: "POSTCODE_CITY" }
+      ]);
+      expect(buildAddressCandidates("Petershagener Straße 4", "32469 Petershagen")[0])
+        .toEqual({ query: "Petershagener Straße 4, 32469 Petershagen", precision: "EXACT" });
+      expect(buildAddressCandidates("Petershagen", "D-32469 Petershagen", "Muster Logistik")).toEqual([
+        { query: "Muster Logistik, 32469 Petershagen", precision: "POSTCODE_CITY" },
+        { query: "32469 Petershagen", precision: "POSTCODE_CITY" }
+      ]);
+    });
+
+    it("drops the namesake with another postcode even though the town name matches", async () => {
+      const geocode = vi.fn(async (query: string) => {
+        if (query === "Industriestraße 12, 32469 Petershagen") {
+          return { label: "Industriestraße 12, 15370 Petershagen/Eggersdorf", city: "Petershagen", postalCode: "15370", ...brandenburg, provider: "nominatim" };
+        }
+        if (query === "Industriestraße, 32469 Petershagen") {
+          return { label: "Industriestraße, 32469 Petershagen", city: "Petershagen", postalCode: "32469", latitude: 52.39, longitude: 8.95, provider: "nominatim" };
+        }
+        if (query === "32469 Petershagen") return { label: "32469 Petershagen", city: "Petershagen", postalCode: "32469", ...westfalen, provider: "nominatim" };
+        throw new RoutingError("Адрес не найден.", 404);
+      });
+
+      const result = await resolveAddressWithFallback({ geocode } as unknown as RoutingProvider, { address: "Industriestraße 12", city: "32469 Petershagen" });
+
+      expect(result).toMatchObject({ latitude: 52.39, longitude: 8.95, precision: "STREET" });
+      expect(result.attempts.some((attempt) => attempt.includes("15370") && attempt.includes("отброшено"))).toBe(true);
+    });
+
+    it("keeps another postcode of the same town when it lies inside the town", async () => {
+      const geocode = vi.fn(async (query: string) => {
+        if (query === "32469 Petershagen") return { label: "32469 Petershagen", city: "Petershagen", postalCode: "32469", ...westfalen, provider: "nominatim" };
+        return { label: "Mindener Straße 1, 32457 Petershagen", city: "Petershagen", postalCode: "32457", latitude: 52.36, longitude: 8.99, provider: "nominatim" };
+      });
+
+      const result = await resolveAddressWithFallback({ geocode } as unknown as RoutingProvider, { address: "Mindener Straße 1, 32469 Petershagen", city: "Petershagen" });
+
+      expect(result).toMatchObject({ latitude: 52.36, precision: "EXACT" });
+    });
   });
 
   it("does not hide a provider outage behind an approximate city result", async () => {

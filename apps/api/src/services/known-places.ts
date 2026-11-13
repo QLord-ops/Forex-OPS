@@ -31,14 +31,14 @@ const postcodeOf = (address: string | null | undefined) => (address ?? '').match
 export function findKnownPlace(stop: StopPlace, places: KnownPlace[]): KnownPlace | null {
   const address = (stop.address ?? '').trim();
   if (!address) return null;
-  const postcode = postcodeOf(address);
+  const postcode = postcodeOf(address) ?? postcodeOf(stop.city);
   const street = streetKey(address.split(',')[0]);
   if (street && postcode) {
     return places.find((place) => place.postalCode === postcode && streetKey(place.street) === street) ?? null;
   }
   if (street) return null;
   const company = nameKey(stop.company);
-  const city = fold(stop.city).replace(/[^a-z]/g, '');
+  const city = fold((stop.city ?? '').replace(/\b(?:D\s*[-–]?\s*)?\d{5}\b/gi, '')).replace(/[^a-z]/g, '');
   if (company.length < 4 || !city) return null;
   const same = places.filter((place) => nameKey(place.name) === company && fold(place.city).replace(/[^a-z]/g, '') === city && (!postcode || place.postalCode === postcode));
   return same.length === 1 ? same[0] : null;
@@ -62,9 +62,11 @@ export function resolveWithoutGeocoder(stop: StopPlace, rules: AddressRuleRecord
   if (!sourceAddress) return null;
   const city = expandCity(stop.city ?? null, rules.length ? rules : undefined);
   const site = findSiteRule(stop.company, city, rules);
-  // A rule may be used without the distance check only when it names the stop's own town or postcode.
+  // A rule may be used without the distance check only when it names the stop's own town or postcode; the same town
+  // name with another printed postcode may be a namesake ("Petershagen"), so the geocoder path measures it instead.
+  const stopPostcode = postcodeOf(sourceAddress) ?? postcodeOf(stop.city);
   const siteFits = site && site.latitude !== null && site.longitude !== null
-    && ((site.postalCode && site.postalCode === postcodeOf(sourceAddress)) || (site.city && city && fold(site.city) === fold(city)));
+    && (site.postalCode && stopPostcode ? site.postalCode === stopPostcode : Boolean(site.city && city && fold(site.city) === fold(city)));
   if (site && siteFits) {
     const text = [site.company, site.street, [site.postalCode, site.city].filter(Boolean).join(' ')].filter(Boolean).join(', ');
     return { latitude: site.latitude!, longitude: site.longitude!, city: site.city ?? undefined, label: text, provider: 'address-rule',

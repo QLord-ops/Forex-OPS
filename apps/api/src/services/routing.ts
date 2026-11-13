@@ -170,6 +170,7 @@ export class OsrmRoutingProvider implements RoutingProvider {
           town?: string;
           village?: string;
           municipality?: string;
+          postcode?: string;
         };
       }>;
       const first = data[0];
@@ -184,7 +185,8 @@ export class OsrmRoutingProvider implements RoutingProvider {
         latitude: Number(first.lat),
         longitude: Number(first.lon),
         provider: "nominatim",
-        city: first.address?.city ?? first.address?.town ?? first.address?.village ?? first.address?.municipality
+        city: first.address?.city ?? first.address?.town ?? first.address?.village ?? first.address?.municipality,
+        postalCode: first.address?.postcode?.match(/\b\d{5}\b/)?.[0] ?? null
       };
     } catch (error) {
       if (this.allowMock) return this.fallback.geocode(address);
