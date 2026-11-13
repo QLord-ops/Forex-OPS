@@ -23,6 +23,10 @@ export const AUTO_STOP_EVENT_DISTANCE_METERS = 10_000;
 // stood there 5 min (owner, 12.11.2026). Only for stops whose zone the dispatcher did not choose by hand.
 export const NEAR_ARRIVAL_RADIUS_METERS = 1_000;
 export const NEAR_ARRIVAL_MIN_STANDSTILL_SECONDS = 300;
+// Driving into the stop's own zone is the arrival once two GPS points in a row inside it are this slow (owner, 13.11.2026:
+// a truck creeping in the queue at a plant gate never stood 3 min in one go). A truck passing by is faster.
+export const ENTRY_MAX_SPEED_KMH = 15;
+export const ENTRY_MIN_SLOW_POINTS = 2;
 // The stay at a stop is measured in the wide ring only when the next stop is farther than this.
 const WIDE_STAY_NEXT_STOP_METERS = 2_000;
 // Two stops this close are one place: the truck never leaves, so nothing tells what was done.
@@ -134,7 +138,7 @@ export type AutoArrivalInput = {
   stopId: string;
   arrivedAt: Date;
   now: Date;
-  meta: { enteredAt: string; distanceMeters?: number; radiusMeters?: number; stoppedSince?: string; leftZoneAfter?: string; standstillSeconds?: number; retroactive?: boolean; zone?: string; place?: string | null };
+  meta: { enteredAt: string; distanceMeters?: number; radiusMeters?: number; stoppedSince?: string | null; leftZoneAfter?: string; standstillSeconds?: number; retroactive?: boolean; zone?: string; place?: string | null; trigger?: string; slowPoints?: number };
 };
 export type AutoArrivalHandler = (input: AutoArrivalInput) => Promise<{ applied?: boolean } | unknown>;
 export type AutoStopEventInput = {
@@ -330,7 +334,7 @@ export class WebfleetTelemetryService {
       orderBy: { recordedAt: 'desc' }, take: ARRIVAL_HISTORY_ROWS
     });
     const inZone = zoneStay(history, stop);
-    let stay = inZone && inZone.longestStandstillSeconds >= ARRIVAL_MIN_STANDSTILL_SECONDS ? inZone : null;
+    let stay = inZone && (inZone.longestStandstillSeconds >= ARRIVAL_MIN_STANDSTILL_SECONDS || inZone.longestSlowRun >= ENTRY_MIN_SLOW_POINTS) ? inZone : null;
     let near = false;
     if (!stay && stop.arrivalRadiusMeters === null) {
       const ring = zoneStay(history, stop, NEAR_ARRIVAL_RADIUS_METERS, (row) => withinStop(row, previousStop));
@@ -381,13 +385,15 @@ export class WebfleetTelemetryService {
   }
 
   /**
-   * Geofence arrival from real GPS only: fresh position inside the stop zone and standing still
-   * for ARRIVAL_MIN_STANDSTILL_SECONDS. The arrival time is when the truck entered the zone.
+   * Geofence arrival from real GPS only: fresh position inside the stop zone, and either standing still for
+   * ARRIVAL_MIN_STANDSTILL_SECONDS or two points in a row inside it no faster than ENTRY_MAX_SPEED_KMH.
+   * The arrival time is when the truck entered the zone.
    */
   private async detectArrival(vehicleId: string, current: WebfleetPosition, now: Date): Promise<ArrivalDecision> {
     const none: ArrivalDecision = { suggested: false, confirmed: false };
     const stopped = isStopped(current.standstill, current.speedKmh);
-    if (!stopped || !positionFreshness(current.recordedAt, current.lastContactAt ?? null, stopped, now).fresh) return none;
+    if (!positionFreshness(current.recordedAt, current.lastContactAt ?? null, stopped, now).fresh) return none;
+    if (!stopped && !isSlow(current.standstill, current.speedKmh)) return none;
     // A standing truck keeps its pos_time, so the standstill lasts until the last contact.
     const observedAt = current.lastContactAt && current.lastContactAt > current.recordedAt && current.lastContactAt <= now ? current.lastContactAt : current.recordedAt;
     const tour = await this.db.tour.findFirst({
@@ -403,11 +409,12 @@ export class WebfleetTelemetryService {
     const atNamedPlace = distance > plannedRadius && distance <= PLANT_GATE_MAX_METERS && webfleetPlaceMatchesStop(current.address, stop);
     // Stopped near the stop but not in its zone. Not while the truck still stands at the stop it has just finished.
     const previousStop = previousStopOf(tour.stops, stop);
-    const near = !atNamedPlace && stop.arrivalRadiusMeters === null && distance > plannedRadius && distance <= NEAR_ARRIVAL_RADIUS_METERS && !withinStop(current, previousStop);
+    // The ring takes in roads around the stop: only a standing truck counts there, never one driving by.
+    const near = stopped && !atNamedPlace && stop.arrivalRadiusMeters === null && distance > plannedRadius && distance <= NEAR_ARRIVAL_RADIUS_METERS && !withinStop(current, previousStop);
     const radiusMeters = atNamedPlace ? Math.ceil(distance + GATE_MARGIN_METERS) : near ? NEAR_ARRIVAL_RADIUS_METERS : plannedRadius;
     const minStandstillSeconds = near ? NEAR_ARRIVAL_MIN_STANDSTILL_SECONDS : ARRIVAL_MIN_STANDSTILL_SECONDS;
     if (distance > radiusMeters) {
-      await this.warnPreviousTourOpen(vehicleId, tour, stop, current, observedAt);
+      if (stopped) await this.warnPreviousTourOpen(vehicleId, tour, stop, current, observedAt);
       return none;
     }
     // Standing at the place long before the stop's planned time is another trip (tomorrow's loading at today's plant).
@@ -423,6 +430,9 @@ export class WebfleetTelemetryService {
     let enteredAt: Date | null = null;
     let stoppedSince: Date | null = null;
     let stoppedRun = true;
+    let slowSince: Date | null = null;
+    let slowPoints = 0;
+    let slowRun = true;
     let leftZoneAt: Date | null = null;
     for (const row of history) {
       if (distanceMeters(row.latitude, row.longitude, stop.latitude, stop.longitude) > radiusMeters || (near && withinStop(row, previousStop))) { leftZoneAt = row.recordedAt; break; }
@@ -431,9 +441,13 @@ export class WebfleetTelemetryService {
       const standstill = isRecord(payload) && typeof payload.standstill === 'boolean' ? payload.standstill : null;
       if (stoppedRun && isStopped(standstill, row.speedKmh)) stoppedSince = row.recordedAt;
       else stoppedRun = false;
+      if (slowRun && isSlow(standstill, row.speedKmh)) { slowSince = row.recordedAt; slowPoints += 1; }
+      else slowRun = false;
     }
-    if (!enteredAt || !stoppedSince) return none;
-    if ((observedAt.getTime() - stoppedSince.getTime()) / 1000 < minStandstillSeconds) return none;
+    if (!enteredAt) return none;
+    const stood = Boolean(stoppedSince) && (observedAt.getTime() - stoppedSince!.getTime()) / 1000 >= minStandstillSeconds;
+    const droveIn = !near && slowPoints >= ENTRY_MIN_SLOW_POINTS;
+    if (!stood && !droveIn) return none;
 
     // After a dispatcher reverted an arrival here, wait until the truck has left the zone and come back.
     const reverted = await this.db.operationEvent.findFirst({ where: { stopId: stop.id, type: 'ARRIVAL_REVERTED' }, orderBy: { createdAt: 'desc' } });
@@ -441,9 +455,10 @@ export class WebfleetTelemetryService {
 
     const leg = tour.legs.find((item) => item.toStopId === stop.id);
     // A wide zone (named gate, the 1 km ring) includes the approach road, so the arrival is when the truck stopped there.
-    const zoneEntry = atNamedPlace || near ? stoppedSince : enteredAt;
+    const zoneEntry = atNamedPlace || near ? (stood ? stoppedSince! : slowSince!) : enteredAt;
     const arrivedAt = leg?.startedAt && leg.startedAt > zoneEntry ? leg.startedAt : zoneEntry;
-    const meta = { distanceMeters: Math.round(distance), radiusMeters, enteredAt: enteredAt.toISOString(), stoppedSince: stoppedSince.toISOString(),
+    const meta = { distanceMeters: Math.round(distance), radiusMeters, enteredAt: enteredAt.toISOString(), stoppedSince: stoppedSince?.toISOString() ?? null,
+      ...(stood ? {} : { trigger: 'ENTRY', slowPoints }),
       ...(atNamedPlace ? { zone: 'WEBFLEET_PLACE', place: current.address?.slice(0, 120) ?? null } : near ? { zone: 'NEAR' } : {}) };
 
     if (this.onAutoArrival) {
@@ -491,6 +506,8 @@ export function zoneStay(history: TelemetryRow[], stop: ZoneStop, radius = stop.
   let enteredAt = history[start].recordedAt;
   let longestStandstillSeconds = 0;
   let runEnd: Date | null = null;
+  let slowRun = 0;
+  let longestSlowRun = 0;
   for (let index = start; index < history.length && inside(history[index]); index += 1) {
     const row = history[index];
     enteredAt = row.recordedAt;
@@ -500,8 +517,10 @@ export function zoneStay(history: TelemetryRow[], stop: ZoneStop, radius = stop.
       if (!runEnd) runEnd = row.recordedAt;
       longestStandstillSeconds = Math.max(longestStandstillSeconds, (runEnd.getTime() - row.recordedAt.getTime()) / 1000);
     } else runEnd = null;
+    slowRun = isSlow(standstill, row.speedKmh) ? slowRun + 1 : 0;
+    longestSlowRun = Math.max(longestSlowRun, slowRun);
   }
-  return { enteredAt, lastInsideAt: history[start].recordedAt, longestStandstillSeconds };
+  return { enteredAt, lastInsideAt: history[start].recordedAt, longestStandstillSeconds, longestSlowRun };
 }
 
 /** In a newest-first history: how long the truck had been inside the zone up to the row at `lastInside`. */
@@ -929,6 +948,11 @@ export function distanceMeters(aLat: number, aLon: number, bLat: number, bLon: n
 
 function toRadians(value: number) {
   return value * Math.PI / 180;
+}
+
+/** Standing, or creeping (a queue at a gate): no faster than ENTRY_MAX_SPEED_KMH. */
+function isSlow(standstill: boolean | null | undefined, speedKmh: number | null | undefined) {
+  return isStopped(standstill, speedKmh) || (typeof speedKmh === 'number' && speedKmh <= ENTRY_MAX_SPEED_KMH);
 }
 
 function isStopped(standstill: boolean | null | undefined, speedKmh: number | null | undefined) {
