@@ -70,10 +70,13 @@ async function resolveCore(
     }
     return anchorPoint;
   };
-  /** Kilometres from the town when the result lies too far from it; null when it is plausible or cannot be checked. */
-  const farFromCity = async (point: { latitude: number; longitude: number }, resultCity?: string | null): Promise<number | null> => {
+  /**
+   * Kilometres from the town when the result lies too far from it; null when it is plausible or cannot be checked.
+   * The town's name alone is not proof: there are three Petershagens, so another postcode means measuring the distance.
+   */
+  const farFromCity = async (point: { latitude: number; longitude: number }, resultCity?: string | null, resultPostalCode?: string | null): Promise<number | null> => {
     if (!anchor) return null;
-    if (resultCity && sameCity(resultCity, anchor.city)) return null;
+    if (resultCity && sameCity(resultCity, anchor.city) && !postcodesDiffer(anchor.postalCode, resultPostalCode)) return null;
     const town = await anchored();
     if (!town) return null;
     const km = distanceKm(town, point);
@@ -100,7 +103,7 @@ async function resolveCore(
     const town = await anchored();
     const hit = town ? await companySearch.findCompany(input.company, town).catch(() => null) : null;
     if (hit) {
-      const km = await farFromCity(hit, hit.city);
+      const km = await farFromCity(hit, hit.city, hit.postalCode);
       if (km === null) {
         attempts.push(`TomTom: ${input.company.trim()} у ${anchor.query}`);
         return { ...hit, sourceAddress, resolvedAddress: hit.label, precision: "EXACT", attempts };
@@ -117,7 +120,7 @@ async function resolveCore(
     attempts.push(candidate.query);
     try {
       const result = await routing.geocode(candidate.query);
-      const km = await farFromCity(result, result.city);
+      const km = await farFromCity(result, result.city, result.postalCode);
       if (km !== null) {
         attempts.push(`${result.label}: ${Math.round(km)} км от ${anchor!.query}, отброшено`);
         lastNotFound = { statusCode: 404 };
@@ -149,7 +152,7 @@ async function resolveCore(
       attempts.push(candidate.address);
       try {
         const result = await routing.geocode(candidate.address);
-        const km = await farFromCity(result, result.city);
+        const km = await farFromCity(result, result.city, result.postalCode);
         if (km !== null) { attempts.push(`${result.label}: ${Math.round(km)} км от ${anchor!.query}, отброшено`); continue; }
         return {
           ...result,
@@ -173,12 +176,20 @@ async function resolveCore(
 }
 
 /** The town a stop belongs to, as a geocoder query: "14974 Ludwigsfelde" when the postcode is printed, else the city. */
-export function cityAnchor(address: string, city?: string | null): { query: string; city: string } | null {
+export function cityAnchor(address: string, city?: string | null): { query: string; city: string; postalCode?: string } | null {
   const normalizedAddress = normalizeGermanAddress(address);
   const postalCode = normalizedAddress.match(/\b\d{5}\b/)?.[0] ?? (city ?? "").match(/\b\d{5}\b/)?.[0];
   const effectiveCity = normalizeCity(city) || extractCityFromAddress(normalizedAddress, postalCode);
   if (!effectiveCity || /\d/.test(effectiveCity)) return null;
-  return { query: postalCode ? `${postalCode} ${effectiveCity}` : effectiveCity, city: effectiveCity };
+  return { query: postalCode ? `${postalCode} ${effectiveCity}` : effectiveCity, city: effectiveCity, ...(postalCode ? { postalCode } : {}) };
+}
+
+/**
+ * The printed postcode and the found one are not the same: maybe another district of a big town, maybe another town
+ * of the same name ("32469 Petershagen" and "15370 Petershagen"). Only the distance can tell, so the name is not enough.
+ */
+export function postcodesDiffer(printed?: string | null, found?: string | null): boolean {
+  return Boolean(printed && found && printed !== found);
 }
 
 function sameCity(left: string, right: string): boolean {
@@ -202,29 +213,43 @@ export function buildAddressCandidates(address: string, city?: string | null, co
   const postalCode = addressPostalCode ?? (city ?? "").match(/\b\d{5}\b/)?.[0];
   const cityFromAddress = extractCityFromAddress(normalizedAddress, addressPostalCode);
   const effectiveCity = normalizedCity || cityFromAddress;
+  // The postcode travels with the town in every query: "Petershagen" alone is three towns, "32469 Petershagen" one.
+  const town = postalCode && effectiveCity ? `${postalCode} ${effectiveCity}` : effectiveCity;
+  const inTown = (value: string) => postalCode && !addressPostalCode && effectiveCity ? withPostcode(value, effectiveCity, town) : appendCity(value, effectiveCity);
   // Only a city was printed ("Bremen" for "Seifert & BLG Bremen"): the company in that city first, the bare city last,
   // and never a city centre presented as an exact address.
   if (company?.trim() && effectiveCity && normalizeForCompare(normalizedAddress) === normalizeForCompare(effectiveCity)) {
     return dedupeCandidates([
-      { query: `${company.trim()}, ${effectiveCity}`, precision: "POSTCODE_CITY" },
-      { query: effectiveCity, precision: "CITY" }
+      { query: `${company.trim()}, ${town}`, precision: "POSTCODE_CITY" },
+      { query: town, precision: postalCode ? "POSTCODE_CITY" : "CITY" }
     ]);
   }
 
   return dedupeCandidates([
-    { query: exact, precision: "EXACT" },
+    { query: postalCode && !addressPostalCode && effectiveCity ? inTown(normalizedAddress) : exact, precision: "EXACT" },
     ...(street && street !== normalizedAddress
-      ? [{ query: appendCity(street, effectiveCity), precision: "STREET" as const }]
+      ? [{ query: inTown(street), precision: "STREET" as const }]
       : []),
     ...(postalCode && effectiveCity
-      ? [{ query: `${postalCode} ${effectiveCity}`, precision: "POSTCODE_CITY" as const }]
+      ? [{ query: town, precision: "POSTCODE_CITY" as const }]
       : []),
     // The company in the city finds a plant or warehouse when no street was printed ("BLG, Bremen").
     ...(company?.trim() && effectiveCity && !normalizedAddress.match(/\d/)
-      ? [{ query: `${company.trim()}, ${effectiveCity}`, precision: "POSTCODE_CITY" as const }]
+      ? [{ query: `${company.trim()}, ${town}`, precision: "POSTCODE_CITY" as const }]
       : []),
-    ...(effectiveCity ? [{ query: effectiveCity, precision: "CITY" as const }] : [])
+    // The bare town name only when no postcode was printed: with one, it may land in a namesake hundreds of km away.
+    ...(effectiveCity && !postalCode ? [{ query: effectiveCity, precision: "CITY" as const }] : [])
   ]);
+}
+
+/** "Lange Str. 5, Petershagen" + 32469 → "Lange Str. 5, 32469 Petershagen". */
+function withPostcode(address: string, city: string, town: string): string {
+  const segments = address.split(",").map((item) => item.trim());
+  const at = segments.map((item) => normalizeForCompare(item)).lastIndexOf(normalizeForCompare(city));
+  if (at === 0 && segments.length === 1) return town;
+  if (at < 1) return `${address}, ${town}`;
+  segments[at] = town;
+  return segments.join(", ");
 }
 
 function normalizeGermanAddress(value: string): string {

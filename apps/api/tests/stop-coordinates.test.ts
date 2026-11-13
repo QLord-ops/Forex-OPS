@@ -20,7 +20,7 @@ class WrongTownRouting extends MockRoutingProvider {
   readonly queries: string[] = [];
   async geocode(query: string) {
     this.queries.push(query);
-    if (/^Lager, Ludwigsfelde$/i.test(query)) return place('Lagerstraße, 20095 Hamburg, Deutschland', 'Hamburg', HAMBURG);
+    if (/^Lager, (?:14974 )?Ludwigsfelde$/i.test(query)) return place('Lagerstraße, 20095 Hamburg, Deutschland', 'Hamburg', HAMBURG);
     if (/Ludwigsfelde/i.test(query)) return place(`${query}, Deutschland`, 'Ludwigsfelde', LUDWIGSFELDE);
     if (/Hamburg/i.test(query)) return place(`${query}, Deutschland`, 'Hamburg', HAMBURG);
     throw new RoutingError('Адрес не найден.', 404);
