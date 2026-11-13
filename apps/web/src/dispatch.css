@@ -243,6 +243,19 @@ button.decision-card-title:focus-visible { outline: 2px solid var(--focus); outl
 .map-traffic-legend-stale { color: rgb(var(--tx-b45309)) !important; }
 .map-panel-card .map-zoom, .map-panel-card .map-layers { top: 12px; }
 .map-panel-card .map-provider-note, .map-panel-card .map-legend { bottom: 12px; }
+.map-diagnostics { position: absolute; z-index: 12; top: 128px; right: 16px; max-height: calc(100% - 144px); overflow-y: auto; display: grid; gap: 8px; width: min(320px, calc(100% - 32px)); border: 1px solid rgb(var(--ln-e3e8ef)); border-radius: 10px; background: rgb(var(--bg-ffffff)); padding: 12px; color: rgb(var(--tx-0f172a)); font-size: .8125rem; line-height: 1.4; box-shadow: 0 8px 24px rgb(var(--shadow-rgb) / 0.16); }
+.map-diagnostics header { display: flex; align-items: center; justify-content: space-between; }
+.map-diagnostics header strong { font-weight: 600; }
+.map-diagnostics header button { width: 24px; height: 24px; border-radius: 6px; color: rgb(var(--tx-475569)); font-size: 1rem; line-height: 1; cursor: pointer; }
+.map-diagnostics header button:hover { background: rgb(var(--bg-f1f5f9)); }
+.map-diagnostics dl { display: grid; gap: 4px; margin: 0; }
+.map-diagnostics dl div { display: grid; grid-template-columns: 116px minmax(0, 1fr); gap: 8px; }
+.map-diagnostics dt { color: rgb(var(--tx-64748b)); }
+.map-diagnostics dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.map-diagnostics label { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; }
+.map-diagnostics label input { margin-top: 3px; }
+.map-diagnostics small { color: rgb(var(--tx-64748b)); }
+.map-diagnostics-warning { margin: 0; border-left: 3px solid rgb(var(--ln-dc2626)); padding-left: 8px; color: rgb(var(--tx-dc2626)); }
 .map-panel-card .map-traffic-legend { top: auto; bottom: 12px; left: 12px; max-width: calc(100% - 24px); }
 .map-error, .dashboard-sync-warning { position: absolute; z-index: 8; top: 76px; left: 50%; border-radius: 10px; padding: 8px 12px; font-size: .8125rem; font-weight: 500; box-shadow: 0 8px 24px rgb(var(--shadow-rgb) / 0.16); transform: translateX(-50%); }
 .map-error { border: 1px solid rgb(var(--ln-fecaca)); background: rgb(var(--bg-fff1f2)); color: rgb(var(--tx-9f1239)); }

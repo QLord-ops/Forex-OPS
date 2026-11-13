@@ -1,13 +1,14 @@
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { GeoJSONSource, LngLatBounds, Map, Marker, Popup, setWorkerUrl, type StyleSpecification, type VectorTileSource } from 'maplibre-gl'
 import mapLibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
-import { Layers, LocateFixed, Minus, Plus, TriangleAlert } from 'lucide-react'
+import { Gauge, Layers, LocateFixed, Minus, Plus, TriangleAlert } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { boundsFor, geometryToCoordinates, stopCoordinates, toBrokenLine, toLineString, trafficFeatures } from '../lib/geometry'
 import { calculatedPositionLabel } from '../lib/format'
 import { useStableValue } from '../hooks/useStableValue'
 import { formatDelay, formatKm, INCIDENT_TITLES, trafficIncidents, type TrafficIncident } from '../lib/traffic-incidents'
+import { gestureFps, mapPixelRatio, readLiteChoice, rendererKind, rendererLabel, SLOW_GESTURES_FOR_LITE, slowStreak, type LiteChoice } from '../lib/map-quality'
 import { TRAFFIC_COLORS, TRAFFIC_MAX_TILE_ZOOM, TRAFFIC_REFRESH_MS, trafficFlowLayer, trafficTileUrl } from '../lib/traffic-flow'
 import type { MapRouteAlternative, MapRouteStop } from '../lib/route-preview'
 import { roadShieldLabel, roadShields, visibleShields } from '../lib/road-shields'
@@ -43,6 +44,7 @@ const fallbackSatelliteStyle: StyleSpecification = {
 }
 
 const CAMERA_STORAGE_KEY = 'ops-dashboard-map-camera'
+const LITE_STORAGE_KEY = 'ops-dashboard-map-lite'
 // Raster tiles look empty at street level; automatic fits never zoom closer than this.
 const FIT_MAX_ZOOM = 13
 const MIN_RESTORED_ZOOM = 4
@@ -137,6 +139,13 @@ export function MapPanel({
   const [mode, setMode] = useState<MapMode>(() => readMapMode())
   const [traffic, setTraffic] = useState(() => readTraffic())
   const [labels, setLabels] = useState(() => readLabels())
+  // «Лёгкий режим»: fewer pixels to draw. On by the dispatcher's choice, or by itself once panning and zooming prove slow.
+  const [liteChoice, setLiteChoice] = useState<LiteChoice>(() => readLiteChoice(readStored(LITE_STORAGE_KEY)))
+  const [autoLite, setAutoLite] = useState(false)
+  const lite = liteChoice === 'on' || (liteChoice === 'auto' && autoLite)
+  const initialLiteRef = useRef(lite)
+  const [diagnostics, setDiagnostics] = useState<MapDiagnostics | null>(null)
+  const gestureRef = useRef<{ frames: number[]; fps: number | null; slow: number }>({ frames: [], fps: null, slow: 0 })
   const [cameraRequest, setCameraRequest] = useState<'vehicle' | 'route' | null>(null)
   const initialModeRef = useRef(mode)
   const initialTrafficRef = useRef(traffic)
@@ -180,8 +189,13 @@ export function MapPanel({
       zoom: readCamera()?.zoom ?? 5.2,
       // TomTom traffic tiles expire within about a minute; reloading and re-reading every visible tile each time made the
       // map stutter (owner, 12.11.2026). Traffic is refreshed on our own schedule instead (TRAFFIC_REFRESH_MS).
-      refreshExpiredTiles: false
+      refreshExpiredTiles: false,
+      pixelRatio: mapPixelRatio(initialLiteRef.current, window.devicePixelRatio)
     })
+    // How smooth each pan and zoom really is on this computer: shown in the diagnostics, and two slow ones in a row switch
+    // the light mode on.
+    mapRef.current.on('movestart', () => { gestureRef.current.frames = [] })
+    mapRef.current.on('render', () => { if (mapRef.current?.isMoving()) gestureRef.current.frames.push(performance.now()) })
     // Grey route variants: a wide invisible line makes them easy to hit with a finger.
     mapRef.current.on('click', 'preview-alt-hit', (event) => {
       const id = event.features?.[0]?.properties?.id
@@ -206,6 +220,11 @@ export function MapPanel({
       if (!map) return
       reclusterRef.current()
       declutterShieldsRef.current()
+      const gesture = gestureRef.current
+      const fps = gestureFps(gesture.frames)
+      if (fps !== null) gesture.fps = fps
+      gesture.slow = slowStreak(gesture.slow, fps)
+      if (gesture.slow >= SLOW_GESTURES_FOR_LITE) setAutoLite(true)
       const center = map.getCenter()
       window.localStorage.setItem(CAMERA_STORAGE_KEY, JSON.stringify({
         center: [center.lng, center.lat],
@@ -274,6 +293,20 @@ export function MapPanel({
     const timer = window.setInterval(refresh, TRAFFIC_REFRESH_MS)
     return () => window.clearInterval(timer)
   }, [traffic])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+    const ratio = mapPixelRatio(lite, window.devicePixelRatio)
+    if (map.getPixelRatio() !== ratio) map.setPixelRatio(ratio)
+    gestureRef.current.slow = 0
+  }, [lite])
+
+  const chooseLite = (on: boolean) => {
+    setLiteChoice(on ? 'on' : 'off')
+    try { window.localStorage.setItem(LITE_STORAGE_KEY, on ? 'on' : 'off') } catch { /* convenience only */ }
+  }
+  const toggleDiagnostics = () => setDiagnostics((open) => open ? null : readDiagnostics(mapRef.current, gestureRef.current.fps))
 
   useEffect(() => {
     if (fitRouteRequest) setCameraRequest('route')
@@ -618,11 +651,42 @@ export function MapPanel({
           <button type="button" aria-pressed={mode === 'satellite'} onClick={() => setMode('satellite')}>Спутник</button>
         </div>
         <button type="button" className="map-layer-button map-layer-icon" aria-pressed={labels} onClick={() => setLabels((value) => !value)} aria-label="Номера машин на карте" title="Номера машин на карте"><Layers className="h-4 w-4" aria-hidden="true" /></button>
+        {sourceNote ? <button type="button" className="map-layer-button map-layer-icon" aria-pressed={lite} aria-expanded={Boolean(diagnostics)} aria-controls="map-diagnostics" onClick={toggleDiagnostics} aria-label="Скорость карты" title={lite ? 'Скорость карты: лёгкий режим включён' : 'Скорость карты'}><Gauge className="h-4 w-4" aria-hidden="true" /></button> : null}
       </div>
-      {sourceNote ? <div className="map-provider-note">{tomTomMapKey() ? (traffic ? 'TomTom · пробки онлайн' : 'TomTom · без пробок') : 'OSM · без live-пробок'}</div> : null}
+      {sourceNote ? <div className="map-provider-note">{tomTomMapKey() ? (traffic ? 'TomTom · пробки онлайн' : 'TomTom · без пробок') : 'OSM · без live-пробок'}{lite ? ' · лёгкий режим' : ''}</div> : null}
+      {sourceNote && diagnostics ? <MapDiagnosticsCard info={diagnostics} lite={lite} auto={liteChoice === 'auto' && autoLite} onLite={chooseLite} onClose={() => setDiagnostics(null)} /> : null}
       <TrafficLegend segments={previewRoute?.length ? previewTraffic : position?.trafficSegments} checkedAt={previewRoute?.length ? null : position?.trafficCheckedAt} />
     </section>
   )
+}
+
+type MapDiagnostics = { renderer: string | null; fps: number | null; canvas: [number, number]; scale: number }
+
+function readDiagnostics(map: Map | null, fps: number | null): MapDiagnostics {
+  const canvas = map?.getCanvas()
+  let renderer: string | null = null
+  try {
+    const gl = canvas?.getContext('webgl2') ?? canvas?.getContext('webgl')
+    const info = gl?.getExtension('WEBGL_debug_renderer_info')
+    if (gl && info) renderer = String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL))
+  } catch { /* The browser may hide the graphics card. */ }
+  return { renderer, fps, canvas: [canvas?.width ?? 0, canvas?.height ?? 0], scale: Math.round(window.devicePixelRatio * 100) }
+}
+
+/** What draws the map on this computer and how fast: the answer to «карта тормозит» without guessing. */
+function MapDiagnosticsCard({ info, lite, auto, onLite, onClose }: { info: MapDiagnostics; lite: boolean; auto: boolean; onLite: (on: boolean) => void; onClose: () => void }) {
+  const kind = rendererKind(info.renderer)
+  return <div id="map-diagnostics" className="map-diagnostics" role="dialog" aria-label="Скорость карты">
+    <header><strong>Скорость карты</strong><button type="button" onClick={onClose} aria-label="Закрыть">×</button></header>
+    <dl>
+      <div><dt>Рисует</dt><dd>{kind === 'software' ? 'процессор (без видеокарты)' : kind === 'gpu' ? `видеокарта ${rendererLabel(info.renderer)}` : 'не определено'}</dd></div>
+      <div><dt>Кадров в секунду</dt><dd>{info.fps === null ? 'подвигайте карту и откройте снова' : `${info.fps} при последнем движении`}</dd></div>
+      <div><dt>Холст</dt><dd>{info.canvas[0]} × {info.canvas[1]} пикс., масштаб экрана {info.scale} %</dd></div>
+    </dl>
+    {kind === 'software' ? <p className="map-diagnostics-warning">В браузере выключено аппаратное ускорение, поэтому карта тормозит. Chrome: Настройки → Система → «Использовать графическое ускорение», затем перезапустить браузер.</p> : null}
+    <label><input type="checkbox" checked={lite} onChange={(event) => onLite(event.target.checked)} /> Лёгкий режим: быстрее, линии чуть менее чёткие</label>
+    {auto ? <small>Включён сам: карта двигалась медленнее 24 кадров в секунду.</small> : null}
+  </div>
 }
 
 // Google-style route: white casing, blue line, congestion on top, travelled part grey.
