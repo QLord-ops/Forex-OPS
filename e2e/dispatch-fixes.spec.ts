@@ -52,6 +52,34 @@ test('маркеры остаются привязаны к карте посл�
   await expect.poll(async () => (await center())?.[0] ?? 0, { timeout: 5000 }).toBeLessThan(7.5)
 })
 
+test('«Скорость карты»: видно, чем рисуется карта и сколько кадров; лёгкий режим уменьшает холст и запоминается', async ({ page }) => {
+  await dashboard(page)
+  await page.addInitScript(() => { if (!window.localStorage.getItem('ops-dashboard-map-lite')) window.localStorage.setItem('ops-dashboard-map-lite', 'off') })
+  await page.goto('/?vehicleId=v1')
+  await expect(page.locator('.fleet-marker').first()).toBeAttached()
+  const canvasWidth = () => page.evaluate(() => document.querySelector<HTMLCanvasElement>('.maplibregl-canvas')!.width)
+  const full = await canvasWidth()
+  const button = page.getByRole('button', { name: 'Скорость карты' })
+  await button.click()
+  const card = page.getByRole('dialog', { name: 'Скорость карты' })
+  await expect(card).toContainText('Рисует')
+  await expect(card).toContainText('Кадров в секунду')
+  await expect(card).toContainText(/масштаб экрана \d+ %/)
+  expect(await textClashes(page, '.map-diagnostics')).toEqual([])
+
+  await card.getByRole('checkbox', { name: /Лёгкий режим/ }).check()
+  await expect.poll(canvasWidth).toBeLessThan(full * 0.8)
+  await expect(button).toHaveAttribute('aria-pressed', 'true')
+  expect(await page.evaluate(() => window.localStorage.getItem('ops-dashboard-map-lite'))).toBe('on')
+  await card.getByRole('button', { name: 'Закрыть' }).click()
+  await expect(card).toBeHidden()
+
+  await page.reload()
+  await expect(page.locator('.fleet-marker').first()).toBeAttached()
+  await expect(page.getByRole('button', { name: 'Скорость карты' })).toHaveAttribute('aria-pressed', 'true')
+  await expect.poll(canvasWidth).toBeLessThan(full * 0.8)
+})
+
 test('на маршруте впереди машины видно табличку автобана с номером', async ({ page }) => {
   await dashboard(page)
   await page.goto('/?vehicleId=v1')
