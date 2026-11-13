@@ -77,12 +77,12 @@ async function arrivalScenario(name: string, options: { radius?: number; autoSto
   return { vehicle, tour, stopId: tour.stops[0].id, operations, tours, feed };
 }
 
-it('sets the arrival automatically after three minutes standing inside the 500 m zone, timed at zone entry', async () => {
+it('sets the arrival automatically on the second slow point inside the 500 m zone, timed at zone entry', async () => {
   const { stopId, feed } = await arrivalScenario('AUTO-OK');
   await feed(0, north(2000), false);
   await feed(1, north(300), false);
-  for (const minute of [2, 3, 4]) expect((await feed(minute, north(120), true)).arrivalConfirmed).toBe(false);
-  const result = await feed(5, north(100), true);
+  expect((await feed(2, north(120), true)).arrivalConfirmed).toBe(false);
+  const result = await feed(3, north(100), true);
   expect(result).toMatchObject({ arrivalConfirmed: true, arrivalSuggested: false });
   expect((await db.stop.findUniqueOrThrow({ where: { id: stopId } })).arrivedAt).toEqual(at(1));
   const events = await db.operationEvent.findMany({ where: { stopId, type: 'ARRIVAL_CONFIRMED' } });
@@ -91,7 +91,7 @@ it('sets the arrival automatically after three minutes standing inside the 500 m
   expect(await db.notification.count({ where: { stopId, type: 'AUTO_ARRIVAL', acknowledgedAt: null } })).toBe(1);
   expect(await db.auditLog.findFirst({ where: { stopId, action: 'ARRIVAL_CONFIRMED' } })).toMatchObject({ actorRole: 'system', actorSessionId: 'webfleet-auto' });
   // Further positions do not create a second arrival.
-  await feed(6, north(100), true);
+  await feed(4, north(100), true);
   expect(await db.operationEvent.count({ where: { stopId, type: 'ARRIVAL_CONFIRMED' } })).toBe(1);
 });
 
@@ -151,11 +151,59 @@ it('does not widen the zone for a truck standing 2.5 km away at a place Webfleet
   expect((await db.stop.findUniqueOrThrow({ where: { id: stopId } })).arrivedAt).toBeNull();
 });
 
-it('waits while the truck has stood in the zone for less than three minutes', async () => {
+it('one point inside the zone is not yet the arrival', async () => {
   const { stopId, feed } = await arrivalScenario('AUTO-SHORT');
-  for (const minute of [0, 1, 2]) await feed(minute, north(100), true);
+  await feed(0, north(100), true);
   expect((await db.stop.findUniqueOrThrow({ where: { id: stopId } })).arrivedAt).toBeNull();
 });
+
+describe('driving into the zone (owner, 13.11: a queue at the VW gate never stood 3 min in one go)', () => {
+  const move = (name: string, scenario: Awaited<ReturnType<typeof arrivalScenario>>) => {
+    const auto = new WebfleetTelemetryService(db as unknown as PostgresPrismaClient, (input) =>
+      scenario.operations.confirmArrival(input.stopId, input.arrivedAt, input.now, SYSTEM_WEBFLEET_ACTOR, { source: 'WEBFLEET_AUTO', meta: input.meta }))
+    return (minute: number, point: { latitude: number; longitude: number }, speedKmh: number) =>
+      auto.applyPosition({ objectUid: `wf-${name}`, objectNo: name, ...point, standstill: false, speedKmh, recordedAt: at(minute) }, new Date(at(minute).getTime() + 30_000))
+  }
+
+  it('a truck creeping into the zone has arrived on its second slow point, timed when it drove in', async () => {
+    const scenario = await arrivalScenario('ENTRY-QUEUE')
+    const feed = move('ENTRY-QUEUE', scenario)
+    await feed(0, north(3000), 70)
+    await feed(1, north(450), 12)
+    expect((await db.stop.findUniqueOrThrow({ where: { id: scenario.stopId } })).arrivedAt).toBeNull()
+    await feed(2, north(300), 6)
+    expect((await db.stop.findUniqueOrThrow({ where: { id: scenario.stopId } })).arrivedAt).toEqual(at(1))
+    const event = await db.operationEvent.findFirstOrThrow({ where: { stopId: scenario.stopId, type: 'ARRIVAL_CONFIRMED' } })
+    expect(JSON.parse(event.payloadJson)).toMatchObject({ source: 'WEBFLEET_AUTO', trigger: 'ENTRY', slowPoints: 2 })
+  })
+
+  it('a truck driving through the zone at speed is not an arrival', async () => {
+    const scenario = await arrivalScenario('ENTRY-PASS')
+    const feed = move('ENTRY-PASS', scenario)
+    await feed(0, north(400), 45)
+    await feed(1, north(-300), 40)
+    await feed(2, north(-2000), 60)
+    expect((await db.stop.findUniqueOrThrow({ where: { id: scenario.stopId } })).arrivedAt).toBeNull()
+  })
+
+  it('creeping in the 1 km ring is not enough: the ring still needs a standing truck', async () => {
+    const scenario = await arrivalScenario('ENTRY-RING')
+    const feed = move('ENTRY-RING', scenario)
+    for (const minute of [0, 1, 2, 3]) await feed(minute, north(800), 10)
+    expect((await db.stop.findUniqueOrThrow({ where: { id: scenario.stopId } })).arrivedAt).toBeNull()
+  })
+
+  it('a stop passed slowly earlier is recorded afterwards when the truck leaves (retroactive)', async () => {
+    const { vehicle, stopId, feed } = await arrivalScenario('ENTRY-RETRO')
+    for (const [minute, meters, speed] of [[0, 300, 10], [1, 200, 8], [2, 250, 12]] as const) {
+      await db.vehicleTelemetry.create({ data: { vehicleId: vehicle.id, provider: 'WEBFLEET', externalId: 'wf-ENTRY-RETRO', latitude: north(meters).latitude, longitude: north(meters).longitude,
+        speedKmh: speed, recordedAt: at(minute), receivedAt: at(minute), rawJson: JSON.stringify({ standstill: false }) } })
+    }
+    await feed(3, north(1200), false)
+    await feed(4, north(2500), false)
+    expect((await db.stop.findUniqueOrThrow({ where: { id: stopId } })).arrivedAt).toEqual(at(0))
+  })
+})
 
 it('ignores a truck passing through the zone without stopping', async () => {
   const { stopId, feed } = await arrivalScenario('AUTO-PASS');
