@@ -68,3 +68,37 @@ export class ImportJobs {
     return [...this.jobs.values()].filter((job) => job.state.status === 'running').length;
   }
 }
+
+/**
+ * How many readings run at once and how many wait their turn. Five dispatchers upload their Auftrag in the same
+ * minutes of the morning: the third one waits for a free place instead of being told to try again later.
+ */
+export class ImportSlots {
+  private running = 0;
+  private readonly waiting: Array<() => void> = [];
+
+  constructor(private readonly max = 2, private readonly maxWaiting = 8) {}
+
+  /** A place in line, or null when the line itself is full. `ready` resolves when the reading may start; `leave` frees the place. */
+  enter(): { ready: Promise<void>; leave: () => void } | null {
+    let started = false, left = false;
+    let start: () => void = () => undefined;
+    const ready = new Promise<void>((resolve) => { start = () => { started = true; this.running += 1; resolve(); }; });
+    if (this.running < this.max) start();
+    else if (this.waiting.length >= this.maxWaiting) return null;
+    else this.waiting.push(start);
+    return {
+      ready,
+      leave: () => {
+        if (left) return;
+        left = true;
+        if (!started) { this.waiting.splice(this.waiting.indexOf(start), 1); return; }
+        this.running -= 1;
+        this.waiting.shift()?.();
+      }
+    };
+  }
+
+  get queued() { return this.waiting.length; }
+  get active() { return this.running; }
+}
