@@ -60,7 +60,7 @@ import { writeAuditLog, type AuditActor } from './services/audit-log.js';
 import { matchAppointment } from './services/appointment-match.js';
 import { documentFingerprint, PendingAppointmentService } from './services/pending-appointments.js';
 import { OrderDocumentService } from './services/order-documents.js';
-import { ImportJobError, ImportJobs, type ImportJobHandle } from './services/import-jobs.js';
+import { ImportJobError, ImportJobs, ImportSlots, type ImportJobHandle } from './services/import-jobs.js';
 import { TelemetryRetention, TELEMETRY_SYSTEM_ACTOR } from './services/telemetry-retention.js';
 import { registerOrderDocumentRoutes, registerOrderReparseRoute } from './routes/order-documents.js';
 import { CustomerService, isMine } from './services/customers.js';
@@ -452,7 +452,9 @@ export async function buildApp(options: BuildAppOptions = {}) {
   registerPushRoutes(app, pushService);
   await registerRouteScenarioRoutes(app, { service: scenarioService });
 
-  let activeOrderImports = 0;
+  // AI readings (PDF, screenshots, re-reading) share two places; Excel is read locally and has its own.
+  const importSlots = new ImportSlots();
+  const excelSlots = new ImportSlots();
   // Reading an Auftrag may take minutes: the upload answers 202 with a job after this wait and the page asks for the result.
   // A serverless host cannot work on after the answer, so there the upload waits almost as long as its proxy allows.
   const importJobs = new ImportJobs();
@@ -843,12 +845,10 @@ export async function buildApp(options: BuildAppOptions = {}) {
     if (!request.isMultipart()) {
       return reply.status(400).send({ error: "Файл Excel необходимо отправить как multipart/form-data в поле 'file'." });
     }
-    if (activeOrderImports >= 2) {
-      return reply.status(429).send({ error: "Слишком много одновременных импортов Excel. Повторите попытку позже." });
-    }
-
-    activeOrderImports += 1;
+    const slot = excelSlots.enter();
+    if (!slot) return reply.status(429).send({ error: "Сейчас читается много Auftrag. Повторите через минуту." });
     try {
+      await slot.ready;
       const file = await request.file({ limits: { fileSize: 5 * 1024 * 1024 } });
       if (!file) return reply.status(400).send({ error: "Excel-Datei fehlt." });
 
@@ -909,7 +909,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
         aiAvailable: result.aiAvailable
       }), customerContext)), { buffer, filename, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }, request);
     } finally {
-      activeOrderImports -= 1;
+      slot.leave();
     }
   });
 
@@ -917,9 +917,10 @@ export async function buildApp(options: BuildAppOptions = {}) {
     documents: orderDocuments, customers: customerService, db: prisma, jobs: importJobs, owner: importOwner, waitMs: importWaitMs,
     store: (preview, file, request) => withStoredDocument(preview, { buffer: file.content, filename: file.filename, mimeType: file.mimeType }, request),
     read: async (file, previewJson, customerContext, request) => {
-      if (activeOrderImports >= 2) return { status: 429, error: "Слишком много одновременных импортов заказов. Повторите попытку позже." };
-      activeOrderImports += 1;
+      const slot = importSlots.enter();
+      if (!slot) return { status: 429, error: "Сейчас читается много Auftrag. Повторите через минуту." };
       try {
+        await slot.ready;
         // Excel is read by its columns, not by a profile: only the customer of the stored parse changes.
         if (file.mimeType !== "application/pdf" && !isSupportedImageMimeType(file.mimeType)) {
           return { preview: await withFieldConfidence(await withCustomer(JSON.parse(previewJson) as ScorablePreview & { warnings: Array<{ code: string; message: string }> }, customerContext)) };
@@ -937,7 +938,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
           return { status: 502, error: "Не удалось прочитать Auftrag заново. Повторите попытку позже." };
         }
       } finally {
-        activeOrderImports -= 1;
+        slot.leave();
       }
     },
     recompute: async (file, previewJson, customerContext) => {
@@ -953,11 +954,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
     if (!request.isMultipart()) {
       return reply.status(400).send({ error: "PDF-заказ необходимо отправить как multipart/form-data в поле 'file'." });
     }
-    if (activeOrderImports >= 2) {
-      return reply.status(429).send({ error: "Слишком много одновременных импортов заказов. Повторите попытку позже." });
-    }
-
-    activeOrderImports += 1;
+    const slot = importSlots.enter();
+    if (!slot) return reply.status(429).send({ error: "Сейчас читается много Auftrag. Повторите через минуту." });
     let handedOff = false;
     try {
       const file = await request.file({ limits: { fileSize: 20 * 1024 * 1024 } });
@@ -987,6 +985,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
       const contextMs = Date.now() - contextStarted;
       handedOff = true;
       const job = importJobs.start(importOwner(request), async () => {
+        // Two readings at a time; this one waits for its turn while the page shows that the Auftrag is being read.
+        await slot.ready;
         try {
           const started = Date.now();
           const read = reused ?? await pdfImport(buffer, filename, customerContext);
@@ -999,10 +999,10 @@ export async function buildApp(options: BuildAppOptions = {}) {
           request.log.error({ err: error }, "Не удалось распознать PDF-заказ");
           throw new ImportJobError("Не удалось прочитать PDF-заказ. Проверьте файл и повторите попытку.", 502);
         }
-      }, () => { activeOrderImports -= 1; });
+      }, () => slot.leave());
       return answerImportJob(job, reply);
     } finally {
-      if (!handedOff) activeOrderImports -= 1;
+      if (!handedOff) slot.leave();
     }
   });
 
@@ -1010,11 +1010,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
     if (!request.isMultipart()) {
       return reply.status(400).send({ error: "Скриншот необходимо отправить как multipart/form-data в поле 'file'." });
     }
-    if (activeOrderImports >= 2) {
-      return reply.status(429).send({ error: "Слишком много одновременных импортов заказов. Повторите попытку позже." });
-    }
-
-    activeOrderImports += 1;
+    const slot = importSlots.enter();
+    if (!slot) return reply.status(429).send({ error: "Сейчас читается много Auftrag. Повторите через минуту." });
     let handedOff = false;
     try {
       const file = await request.file({ limits: { fileSize: 10 * 1024 * 1024 } });
@@ -1045,6 +1042,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
       handedOff = true;
       const mimeType = file.mimetype;
       const job = importJobs.start(importOwner(request), async () => {
+        // Two readings at a time; this one waits for its turn while the page shows that the Auftrag is being read.
+        await slot.ready;
         try {
           const started = Date.now();
           const read = reused ?? await imageImport(buffer, filename, mimeType, customerContext);
@@ -1057,10 +1056,10 @@ export async function buildApp(options: BuildAppOptions = {}) {
           request.log.error({ err: error }, "Не удалось распознать скриншот заказа");
           throw new ImportJobError("Не удалось прочитать скриншот. Проверьте файл и повторите попытку.", 502);
         }
-      }, () => { activeOrderImports -= 1; });
+      }, () => slot.leave());
       return answerImportJob(job, reply);
     } finally {
-      if (!handedOff) activeOrderImports -= 1;
+      if (!handedOff) slot.leave();
     }
   });
 
