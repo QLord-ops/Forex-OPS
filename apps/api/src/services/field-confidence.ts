@@ -11,7 +11,7 @@ export type ReasonCode =
   | 'AI_UNSURE' | 'NO_EVIDENCE' | 'MISSING'
   | 'ADDRESS_NO_HOUSE_NUMBER' | 'ADDRESS_NO_POSTCODE' | 'DATE_INVALID' | 'DATE_PAST'
   | 'ADDRESS_RULE' | 'DEPARTMENT' | 'ALIAS_APPLIED' | 'PLACEHOLDER' | 'FROM_OTHER_STOP_NOTE'
-  | 'TOUR_REMARKS_MATCH' | 'WARNING' | 'OFTEN_CORRECTED';
+  | 'TOUR_REMARKS_MATCH' | 'WARNING' | 'OFTEN_CORRECTED' | 'NOT_IN_DOCUMENT';
 
 export type FieldScore = { score: number; level: FieldLevel; reasons: ReasonCode[]; evidence: string | null };
 /** What the model said about one field: its own certainty and the shortest quote that shows the value. */
@@ -136,6 +136,8 @@ function scoreStopField(stop: StopLike, field: StopField, index: number, draft: 
   if ((field === 'type' || field === 'company') && stop.provenance === 'TOUR_REMARKS') scorer.raise(0.1, 'TOUR_REMARKS_MATCH');
 
   if (draft.warnings.some((warning) => warning.stopIndex === index && warning.field === field && !INFORMATIVE_WARNINGS.has(warning.code))) scorer.cap(LEVEL_CHECK, 'WARNING');
+  // An address the document does not print was made up: red, whatever the model said about it.
+  if (field === 'address' && draft.warnings.some((warning) => warning.stopIndex === index && warning.code === 'ADDRESS_NOT_IN_DOCUMENT')) scorer.cap(0.4, 'NOT_IN_DOCUMENT');
 
   const rate = context.correctionRate?.[field] ?? 0;
   if (rate >= 0.2 && !stop.ruleApplied) scorer.lower(Math.min(0.25, rate * 0.5), 'OFTEN_CORRECTED');

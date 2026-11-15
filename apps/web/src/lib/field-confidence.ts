@@ -27,6 +27,7 @@ const REASON_LABEL: Record<string, string> = {
   FROM_OTHER_STOP_NOTE: 'взято из примечания к другой точке',
   WARNING: 'есть предупреждение',
   OFTEN_CORRECTED: 'у этого заказчика поле часто правят',
+  NOT_IN_DOCUMENT: 'адреса нет в тексте Auftrag',
   CITY_ONLY_GEOCODE: 'на карте найден только город'
 }
 
