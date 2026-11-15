@@ -7,7 +7,7 @@ import { PrismaClient } from '../src/generated/sqlite-client/index.js';
 import { MockRoutingProvider } from '../src/services/routing.js';
 import { OperationsService, SYSTEM_WEBFLEET_ACTOR } from '../src/services/operations.js';
 import { TourService } from '../src/services/tours.js';
-import { bindWebfleetObject, distanceMeters, webfleetPlaceMatchesStop, fetchObjectReport, listWebfleetBindings, matchWebfleetObject, parseWebfleetObjectRow, unbindWebfleetVehicle, WebfleetError, WebfleetSyncService, WebfleetTelemetryService } from '../src/services/webfleet.js';
+import { bindWebfleetObject, distanceMeters, webfleetPlaceMatchesStop, fetchObjectReport, listWebfleetBindings, matchWebfleetObject, parseWebfleetObjectRow, unbindWebfleetVehicle, WebfleetError, zoneRadiusOf, WebfleetSyncService, WebfleetTelemetryService } from '../src/services/webfleet.js';
 import { asAppDatabase, migrateTestDatabase } from './test-database.js';
 
 let db: PrismaClient;
@@ -77,7 +77,7 @@ async function arrivalScenario(name: string, options: { radius?: number; autoSto
   return { vehicle, tour, stopId: tour.stops[0].id, operations, tours, feed };
 }
 
-it('sets the arrival automatically on the second slow point inside the 500 m zone, timed at zone entry', async () => {
+it('sets the arrival automatically on the second slow point inside the core of the zone, timed at zone entry', async () => {
   const { stopId, feed } = await arrivalScenario('AUTO-OK');
   await feed(0, north(2000), false);
   await feed(1, north(300), false);
@@ -87,7 +87,7 @@ it('sets the arrival automatically on the second slow point inside the 500 m zon
   expect((await db.stop.findUniqueOrThrow({ where: { id: stopId } })).arrivedAt).toEqual(at(1));
   const events = await db.operationEvent.findMany({ where: { stopId, type: 'ARRIVAL_CONFIRMED' } });
   expect(events).toHaveLength(1);
-  expect(JSON.parse(events[0].payloadJson)).toMatchObject({ source: 'WEBFLEET_AUTO', radiusMeters: 500 });
+  expect(JSON.parse(events[0].payloadJson)).toMatchObject({ source: 'WEBFLEET_AUTO', radiusMeters: 1000 });
   expect(await db.notification.count({ where: { stopId, type: 'AUTO_ARRIVAL', acknowledgedAt: null } })).toBe(1);
   expect(await db.auditLog.findFirst({ where: { stopId, action: 'ARRIVAL_CONFIRMED' } })).toMatchObject({ actorRole: 'system', actorSessionId: 'webfleet-auto' });
   // Further positions do not create a second arrival.
@@ -211,28 +211,45 @@ it('ignores a truck passing through the zone without stopping', async () => {
   expect((await db.stop.findUniqueOrThrow({ where: { id: stopId } })).arrivedAt).toBeNull();
 });
 
-it('uses 500 m by default and a larger zone when the stop has one', async () => {
-  const outside = await arrivalScenario('AUTO-800');
-  for (const minute of [0, 1, 2, 3, 4]) await outside.feed(minute, north(800), true);
+it('uses a zone of 1 km by default and a larger one when the stop has it', async () => {
+  const outside = await arrivalScenario('AUTO-1200');
+  for (const minute of [0, 1, 2, 3, 4]) await outside.feed(minute, north(1200), true);
   expect((await db.stop.findUniqueOrThrow({ where: { id: outside.stopId } })).arrivedAt).toBeNull();
 
-  const wide = await arrivalScenario('AUTO-WIDE', { radius: 1000 });
-  for (const minute of [0, 1, 2, 3, 4]) await wide.feed(minute, north(800), true);
+  const wide = await arrivalScenario('AUTO-WIDE', { radius: 2000 });
+  for (const minute of [0, 1, 2, 3, 4]) await wide.feed(minute, north(1200), true);
   expect((await db.stop.findUniqueOrThrow({ where: { id: wide.stopId } })).arrivedAt).toEqual(at(0));
 });
 
-describe('stopped near the stop, within 1 km', () => {
-  it('counts as the arrival after five minutes standing, timed when the truck stopped', async () => {
+it('ends the zone halfway to a next stop in the same town', () => {
+  expect(zoneRadiusOf({ arrivalRadiusMeters: null })).toBe(1000);
+  expect(zoneRadiusOf({ arrivalRadiusMeters: null }, 1200)).toBe(600);
+  expect(zoneRadiusOf({ arrivalRadiusMeters: null }, 350)).toBe(250);
+  expect(zoneRadiusOf({ arrivalRadiusMeters: 2000 }, 1200)).toBe(2000);
+});
+
+describe('in the outer part of the zone, 500 m to 1 km from the address (owner, 15.11)', () => {
+  it('standing three minutes is the arrival, timed when the truck stopped; the stop keeps no radius of its own', async () => {
     const { stopId, feed } = await arrivalScenario('NEAR-1');
     await feed(0, north(3000), false);
     await feed(1, north(800), false);
-    for (const minute of [2, 3, 4, 5, 6]) await feed(minute, north(800), true);
+    for (const minute of [2, 3, 4]) await feed(minute, north(800), true);
     expect((await db.stop.findUniqueOrThrow({ where: { id: stopId } })).arrivedAt).toBeNull();
-    expect((await feed(7, north(800), true)).arrivalConfirmed).toBe(true);
+    expect((await feed(5, north(800), true)).arrivalConfirmed).toBe(true);
     const stop = await db.stop.findUniqueOrThrow({ where: { id: stopId } });
-    expect(stop).toMatchObject({ arrivedAt: at(2), arrivalRadiusMeters: 1000 });
+    expect(stop).toMatchObject({ arrivedAt: at(2), arrivalRadiusMeters: null });
     const event = await db.operationEvent.findFirstOrThrow({ where: { stopId, type: 'ARRIVAL_CONFIRMED' } });
-    expect(JSON.parse(event.payloadJson)).toMatchObject({ source: 'WEBFLEET_AUTO', zone: 'NEAR', radiusMeters: 1000 });
+    expect(JSON.parse(event.payloadJson)).toMatchObject({ source: 'WEBFLEET_AUTO', zone: 'OUTER', radiusMeters: 1000 });
+  });
+
+  it('a truck that stood 800 m away and left is still at the stop until it is past the zone', async () => {
+    const { stopId, feed } = await arrivalScenario('NEAR-STAY', { autoStopEvent: true });
+    for (let minute = 0; minute <= 25; minute += 1) await feed(minute, north(800), true);
+    expect((await db.stop.findUniqueOrThrow({ where: { id: stopId } })).arrivedAt).toEqual(at(0));
+    expect(await db.notification.count({ where: { stopId, type: 'STOP_DEPARTED' } })).toBe(0);
+    await feed(26, north(1100), false);
+    await feed(27, north(1100), true);
+    expect(await db.notification.count({ where: { stopId, type: 'STOP_DEPARTED' } })).toBe(0);
   });
 
   it('keeps a zone the dispatcher chose by hand', async () => {
@@ -566,11 +583,71 @@ describe('leaving the town after a real stay at the stop', () => {
     expect((await db.stop.findUniqueOrThrow({ where: { id: stopId } })).completedAt).toBeNull();
   });
 
-  it('with the next stop at the same place the dispatcher is asked as before', async () => {
-    const { stopId, feed } = await stood('TOWN-4C', 25, { unloadAt: north(250) });
-    await feed(26, north(2000), false);
-    await feed(27, north(3000), false);
-    expect((await notes(stopId)).map((item) => item.type)).toEqual(['STOP_DEPARTED']);
+  describe('unloading and loading at the same place (owner, 15.11)', () => {
+    /** LOAD far away (done), then ENTLADEN and BELADEN of Leergut at one plant, then the last ENTLADEN in Hamburg. */
+    async function onePlace(name: string, minutes: number) {
+      const vehicle = await db.vehicle.create({ data: { vehicleNumber: name, licensePlate: `B-${name}` } });
+      const tours = new TourService(asAppDatabase(db), new MockRoutingProvider());
+      const tour = await tours.createTour({ vehicleId: vehicle.id, orderNumber: `ORD-${name}`, stops: [
+        { sequence: 1, type: 'LOAD', address: 'Leipzig', city: 'Leipzig', latitude: 51.34, longitude: 12.37 },
+        { sequence: 2, type: 'UNLOAD', address: 'Werk Berlin', city: 'Berlin', ...BERLIN },
+        { sequence: 3, type: 'LOAD', address: 'Werk Berlin Leergut', city: 'Berlin', ...north(200) },
+        { sequence: 4, type: 'UNLOAD', address: 'Hamburg', city: 'Hamburg', ...HAMBURG }
+      ] });
+      const operations = new OperationsService(asAppDatabase(db), tours);
+      await operations.confirmArrival(tour.stops[0].id, at(-120), at(-119), dispatcher, { source: 'DISPATCHER' });
+      await tours.recordLoaded(tour.stops[0].id, at(-90));
+      const auto = new WebfleetTelemetryService(db as unknown as PostgresPrismaClient, (input) =>
+        operations.confirmArrival(input.stopId, input.arrivedAt, input.now, SYSTEM_WEBFLEET_ACTOR, { source: 'WEBFLEET_AUTO', meta: input.meta }),
+      (input) => tours.recordAutoStopEvent(input, SYSTEM_WEBFLEET_ACTOR));
+      const feed: Feed = (minute, point, standstill) =>
+        auto.applyPosition({ objectUid: `wf-${name}`, objectNo: name, ...point, standstill, recordedAt: at(minute) }, new Date(at(minute).getTime() + 30_000));
+      for (let minute = 0; minute <= minutes; minute += 1) await feed(minute, north(100), true);
+      const [, unload, load, last] = tour.stops;
+      expect((await db.stop.findUniqueOrThrow({ where: { id: unload.id } })).arrivedAt).toEqual(at(0));
+      return { tour, tours, feed, unload, load, last, minutes };
+    }
+    const stopOf = (id: string) => db.stop.findUniqueOrThrow({ where: { id } });
+
+    it('records ENTLADEN and BELADEN together when the truck leaves the town: one note, nothing to click', async () => {
+      const { tour, feed, unload, load } = await onePlace('PLACE-1', 40);
+      await leaveTown(feed, 41);
+      expect(await stopOf(unload.id)).toMatchObject({ arrivedAt: at(0), completedAt: at(40) });
+      expect(await stopOf(load.id)).toMatchObject({ arrivedAt: at(40), completedAt: at(40) });
+      expect((await db.event.findMany({ where: { tourId: tour.id, timestamp: at(40) }, orderBy: { id: 'asc' } })).map((item) => item.type).sort()).toEqual(['LOADED', 'UNLOADED']);
+      const found = await db.notification.findMany({ where: { vehicleId: tour.vehicleId, type: { in: ['AUTO_STOP_EVENT', 'STOP_DEPARTED'] } } });
+      expect(found.map((item) => item.type)).toEqual(['AUTO_STOP_EVENT']);
+      expect(found[0]).toMatchObject({ stopId: load.id, acknowledgedAt: null });
+      expect(found[0].message).toContain('вероятно выгружена и загружена. ENTLADEN и BELADEN записаны автоматически');
+      expect(JSON.parse(found[0].payloadJson)).toMatchObject({ stopTypes: ['UNLOAD', 'LOAD'], chain: [unload.id, load.id] });
+      expect(await db.auditLog.count({ where: { tourId: tour.id, action: { in: ['LOADED', 'UNLOADED'] }, actorRole: 'system' } })).toBe(2);
+      const onward = await db.leg.findFirstOrThrow({ where: { tourId: tour.id, fromStopId: load.id } });
+      expect(onward).toMatchObject({ status: 'ACTIVE', startedAt: at(40) });
+    });
+
+    it('«Отменить» undoes both, and the arrival that came with the second one', async () => {
+      const { tour, tours, feed, unload, load } = await onePlace('PLACE-2', 40);
+      const legsBefore = await legsOf(tour.id);
+      await leaveTown(feed, 41);
+      await tours.revertAutoStopEvent(load.id, at(46), dispatcher, 'Ещё не загружена');
+      expect(await stopOf(unload.id)).toMatchObject({ arrivedAt: at(0), completedAt: null });
+      expect(await stopOf(load.id)).toMatchObject({ arrivedAt: null, completedAt: null });
+      expect(await legsOf(tour.id)).toEqual(legsBefore);
+      expect((await db.event.findMany({ where: { tourId: tour.id, type: { endsWith: '_REVERTED' } } })).map((item) => item.type).sort()).toEqual(['LOADED_REVERTED', 'UNLOADED_REVERTED']);
+      expect(await db.notification.count({ where: { vehicleId: tour.vehicleId, type: 'AUTO_STOP_EVENT', acknowledgedAt: null } })).toBe(0);
+      await expect(tours.revertAutoStopEvent(load.id, at(47), dispatcher)).rejects.toThrow(/уже отменена/);
+    });
+
+    it('after a short stay asks about both in one question', async () => {
+      const { tour, feed, unload, load } = await onePlace('PLACE-3', 10);
+      await feed(11, north(2000), false);
+      await feed(12, north(3000), false);
+      expect(await stopOf(unload.id)).toMatchObject({ completedAt: null });
+      expect(await stopOf(load.id)).toMatchObject({ arrivedAt: null, completedAt: null });
+      const found = await db.notification.findMany({ where: { vehicleId: tour.vehicleId, type: { in: ['AUTO_STOP_EVENT', 'STOP_DEPARTED'] } } });
+      expect(found.map((item) => item.type)).toEqual(['STOP_DEPARTED']);
+      expect(found[0].message).toContain('без ENTLADEN и BELADEN. Выгружена и загружена?');
+    });
   });
 
   it('a GPS jump out of the zone in the middle does not cut the stay short', async () => {
