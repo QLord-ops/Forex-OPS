@@ -20,6 +20,9 @@ export function streetKey(street: string | null | undefined): string {
   return raw.replace(/strasse\b/g, 'str').replace(/str\./g, 'str').replace(/[^a-z0-9]/g, '');
 }
 
+/** Places learned from where trucks stood at them (stay-places.ts). */
+export const STAY_PROVIDER = 'gps-stay';
+
 const nameKey = (name: string | null | undefined) => fold(name).replace(/\b(gmbh|ag|se|kg|co|mbh|ohg|ug|werk)\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
 const postcodeOf = (address: string | null | undefined) => (address ?? '').match(/\b\d{5}\b/)?.[0] ?? null;
 
@@ -34,13 +37,17 @@ export function findKnownPlace(stop: StopPlace, places: KnownPlace[]): KnownPlac
   const postcode = postcodeOf(address) ?? postcodeOf(stop.city);
   const street = streetKey(address.split(',')[0]);
   if (street && postcode) {
-    return places.find((place) => place.postalCode === postcode && streetKey(place.street) === street) ?? null;
+    const doors = places.filter((place) => place.postalCode === postcode && streetKey(place.street) === street);
+    // Where trucks really stood beats the postal point of the same door.
+    return doors.find((place) => place.provider === STAY_PROVIDER) ?? doors[0] ?? null;
   }
   if (street) return null;
   const company = nameKey(stop.company);
   const city = fold((stop.city ?? '').replace(/\b(?:D\s*[-–]?\s*)?\d{5}\b/gi, '')).replace(/[^a-z]/g, '');
   if (company.length < 4 || !city) return null;
   const same = places.filter((place) => nameKey(place.name) === company && fold(place.city).replace(/[^a-z]/g, '') === city && (!postcode || place.postalCode === postcode));
+  const stood = same.filter((place) => place.provider === STAY_PROVIDER);
+  if (stood.length === 1) return stood[0];
   return same.length === 1 ? same[0] : null;
 }
 
@@ -86,7 +93,7 @@ export class KnownPlaces {
     if (this.cache && now - this.cache.at < this.ttlMs) return this.cache.places;
     const rows = await this.db.knownAddress.findMany({ where: { active: true }, select: { source: true, name: true, street: true, postalCode: true, city: true, latitude: true, longitude: true }, take: 5000 });
     const places = rows.map((row) => ({ name: row.name, street: row.street, postalCode: row.postalCode, city: row.city, latitude: row.latitude, longitude: row.longitude,
-      provider: row.source === 'WEBFLEET' ? 'webfleet-address' : 'ops-address' }));
+      provider: row.source === 'WEBFLEET' ? 'webfleet-address' : row.source === 'GPS_STAY' ? STAY_PROVIDER : 'ops-address' }));
     this.cache = { at: now, places };
     return places;
   }

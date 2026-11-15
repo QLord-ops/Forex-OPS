@@ -79,6 +79,7 @@ import type { CustomerEvidence, DocumentImportPreview, ImportCustomerContext, Re
 import { storedAnswerOf } from './services/order-documents.js';
 import { KnownPlaces, resolveWithoutGeocoder } from './services/known-places.js';
 import { OwnAddressBook } from './services/own-addresses.js';
+import { StayPlaces } from './services/stay-places.js';
 import { readingFromStore } from './services/import-reuse.js';
 
 function auditActor(request: FastifyRequest): AuditActor | undefined {
@@ -110,6 +111,9 @@ const pendingAppointments = new PendingAppointmentService(prisma);
 const orderDocuments = new OrderDocumentService(prisma);
 const knownPlaces = new KnownPlaces(prisma);
 const ownAddresses = new OwnAddressBook(prisma, () => knownPlaces.reset());
+// Where the truck really stood is learned after every BELADEN/ENTLADEN; it never delays or blocks the event itself.
+const stayPlaces = new StayPlaces(prisma, () => knownPlaces.reset());
+const learnStay = (stopIds: string[]) => { for (const id of stopIds) void stayPlaces.learn(id).catch(() => undefined); };
 const telemetryRetention = new TelemetryRetention(prisma);
 const importLearning = new ImportLearningService(prisma, addressRules);
 const customerService = new CustomerService(prisma);
@@ -261,7 +265,7 @@ const autoArrival: AutoArrivalHandler | undefined = process.env.AUTO_ARRIVAL_ENA
 const webfleetLive = new WebfleetLiveStore();
 // BELADEN/ENTLADEN by itself once the truck stood at the stop and left the town (real GPS); AUTO_STOP_EVENT_ENABLED=false keeps asking.
 const autoStopEvent: AutoStopEventHandler | undefined = process.env.AUTO_STOP_EVENT_ENABLED === 'false' ? undefined
-  : (input) => tourService.recordAutoStopEvent(input, SYSTEM_WEBFLEET_ACTOR);
+  : async (input) => { const tour = await tourService.recordAutoStopEvent(input, SYSTEM_WEBFLEET_ACTOR); learnStay(input.chainStopIds ?? [input.stopId]); return tour; };
 const webfleetSync = new WebfleetSyncService(prisma, undefined, undefined, autoArrival, (positions, now) => webfleetLive.setObjects(positions, now), autoStopEvent);
 const webfleetDetails = new WebfleetDetailsSync(webfleetLive);
 const addressBook = new AddressBookSync(prisma);
@@ -1340,6 +1344,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const arrival = await stopEventArrival(id, body.manual);
     const tour = await tourService.recordLoaded(id, body.timestamp ? new Date(body.timestamp) : new Date(), manualNote(body.note, arrival), auditActor(request), arrival);
     if (arrival.manual) await audit(request, 'STOP_EVENT_WITHOUT_GPS', 'Stop', id, { vehicleId: tour.vehicleId, tourId: tour.id, stopId: id, metadata: { event: 'LOADED' } });
+    learnStay([id]);
     await refreshAlertsForVehicle(tour.vehicleId);
     return enrichTourLive(tour);
   });
@@ -1350,6 +1355,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const arrival = await stopEventArrival(id, body.manual);
     const tour = await tourService.recordUnloaded(id, body.timestamp ? new Date(body.timestamp) : new Date(), manualNote(body.note, arrival), auditActor(request), arrival);
     if (arrival.manual) await audit(request, 'STOP_EVENT_WITHOUT_GPS', 'Stop', id, { vehicleId: tour.vehicleId, tourId: tour.id, stopId: id, metadata: { event: 'UNLOADED' } });
+    learnStay([id]);
     await refreshAlertsForVehicle(tour.vehicleId);
     return enrichTourLive(tour);
   });
