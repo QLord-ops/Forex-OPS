@@ -20,7 +20,7 @@ const FRESH_SECONDS = 120;
 // Webfleet keeps pos_time while a truck stands still; the unit's last contact (msgtime) proves the position is current.
 const CONTACT_FRESH_SECONDS = 300;
 // Leaving the stop needs a clear margin past the zone, so GPS jitter at its edge is not a departure.
-const DEPARTURE_MARGIN_METERS = 150;
+export const DEPARTURE_MARGIN_METERS = 150;
 const DEPARTURE_FAST_KMH = 20;
 // After a real stay at the stop, leaving the town means the truck was loaded/unloaded: BELADEN/ENTLADEN is recorded by itself.
 export const AUTO_STOP_EVENT_MIN_STAY_SECONDS = 20 * 60;
@@ -30,7 +30,7 @@ export const AUTO_STOP_EVENT_DISTANCE_METERS = 10_000;
 export const ENTRY_MAX_SPEED_KMH = 15;
 export const ENTRY_MIN_SLOW_POINTS = 2;
 // Two stops this close are one place (ENTLADEN and BELADEN of Leergut at one plant): the truck does both before it leaves.
-const SAME_PLACE_METERS = 300;
+export const SAME_PLACE_METERS = 300;
 // GPS jumps out of the zone for a minute or two do not end a stay.
 const STAY_GAP_ROWS = 2;
 const STAY_GAP_SECONDS = 240;

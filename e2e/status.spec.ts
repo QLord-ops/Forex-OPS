@@ -14,7 +14,9 @@ const rows = [
   { ...base, id: 'r3', vehicleNumber: '124', statusGroup: 'SUED', rule: 'EMPTY', startKind: 'NONE', ankunftKind: 'NONE', bemerkungAuto: 'Fahrzeug ist leer',
     shown: { ort: 'Ingolstadt', start: '', ziel: '', ankunft: '', bemerkung: 'Fahrzeug ist leer', trailer: '' } },
   { ...base, id: 'r4', vehicleNumber: '777', statusGroup: null, rule: 'EN_ROUTE', startKind: 'DEFAULT', ankunftKind: 'ETA', bemerkungAuto: null, flags: ['GPS_STALE'],
-    shown: { ort: 'Kassel', start: '~07:00', ziel: 'Baunatal', ankunft: '~08:10', bemerkung: '', trailer: '' } }
+    shown: { ort: 'Kassel', start: '~07:00', ziel: 'Baunatal', ankunft: '~08:10', bemerkung: '', trailer: '' } },
+  { ...base, id: 'r5', vehicleNumber: '997', statusGroup: 'NORD', rule: 'EN_ROUTE', startKind: 'DEFAULT', ankunftKind: 'ETA', bemerkungAuto: null, flags: ['LEFT_WITHOUT_EVENT'],
+    shown: { ort: 'Baunatal', start: '~07:00', ziel: 'Kassel', ankunft: '~07:16', bemerkung: '', trailer: '' } }
 ]
 const report = { id: 'rep', line: 'SCHNELLECKE', date: today, status: 'READY', preliminary: false, generatedAt: `${today}T06:00:00.000Z`, generatedByRole: 'system' }
 
@@ -45,6 +47,10 @@ test('статус Schnellecke: блоки NORD/SÜD/без группы, оце
   await expect(truck720.getByText('~06:45')).toHaveAttribute('title', /успеть к Termin/)
   await expect(page.getByRole('row', { name: /9724/ })).toContainText('Fahrzeug konnte gestern nicht entladen werden')
   await expect(page.getByRole('row', { name: /777/ })).toContainText('GPS устарел')
+  // Left the plant before ENTLADEN/BELADEN was recorded: the row already leads to Kassel, the dispatcher sees what is missing.
+  const left = page.getByRole('row', { name: /997/ })
+  await expect(left).toContainText('Kassel')
+  await expect(left).toContainText('уехала с прошлой точки без BELADEN/ENTLADEN — отметьте')
   await page.screenshot({ path: 'test-results/status-page.png', fullPage: true })
 
   await page.getByRole('button', { name: 'Изменить Bemerkung LKW 124' }).click()

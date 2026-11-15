@@ -8,7 +8,7 @@ import { stopActivityOf } from './rest-at-stop.js';
 import { DAILY_REST_SECONDS, driverBudgetFromWebfleet, planTermin, TERMIN_BUFFER_MINUTES, type DriverBudget, type PlannerStop } from './termin-planner.js';
 import { buildPlannerStops, type DriveEstimate } from './termin-service.js';
 import { snapshotVehicleClock } from './tours.js';
-import { distanceMeters } from './webfleet.js';
+import { DEPARTURE_MARGIN_METERS, distanceMeters, SAME_PLACE_METERS, zoneRadiusOf } from './webfleet.js';
 import type { DriverHours, WebfleetDrivingTimes } from './webfleet-live.js';
 import { withZuladungNote } from './zuladung.js';
 import { parseProfile } from './customer-profile.js';
@@ -66,7 +66,8 @@ export const STATUS_TEXT_DE = {
 export type StatusRule = 'STUCK' | 'EMPTY' | 'AT_STOP' | 'EN_ROUTE';
 export type StartKind = 'TACHO' | 'TERMIN_LATEST' | 'AFTER_REST' | 'DEFAULT' | 'NONE';
 export type AnkunftKind = 'TERMIN' | 'ETA' | 'ARRIVED' | 'NONE';
-export type StatusFlag = 'NO_WEBFLEET' | 'GPS_STALE' | 'NO_GPS' | 'TACHO_MISSING' | 'ROUTE_ESTIMATE' | 'PRELIMINARY' | 'TERMIN_AT_RISK';
+/** `LEFT_WITHOUT_EVENT`: the truck left a stop by GPS before BELADEN/ENTLADEN was recorded; the row already shows the next stop. */
+export type StatusFlag = 'NO_WEBFLEET' | 'GPS_STALE' | 'NO_GPS' | 'TACHO_MISSING' | 'ROUTE_ESTIMATE' | 'PRELIMINARY' | 'TERMIN_AT_RISK' | 'LEFT_WITHOUT_EVENT';
 export type StartEstimate = { at: Date | null; kind: StartKind; terminFeasible?: boolean; arrivalFromEarliest?: Date | null };
 
 const BERLIN_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit' });
@@ -200,6 +201,29 @@ export type StatusRowDraft = {
 
 const stopCity = (stop: StopLite) => stop.city ?? cityOf(stop.address) ?? stop.address;
 
+type PlaceStop = { id: string; latitude: number; longitude: number; arrivalRadiusMeters?: number | null; arrivedAt: Date | null; completedAt: Date | null };
+
+/**
+ * The stops the truck has already left without BELADEN/ENTLADEN (owner, 15.11.2026): the morning list then shows where it
+ * is going, not where it was. Only from real evidence — the open question «уехала с точки» or fresh GPS past the stop's zone
+ * — and the whole place at once, so unloading and loading of Leergut at one plant are both left behind.
+ */
+export function leftPlace(input: { tours: Array<{ status: string; stops: PlaceStop[] }>; gps: { latitude: number; longitude: number; stale: boolean } | null; departedStopIds: string[] }): string[] {
+  const active = input.tours.find((tour) => tour.status === 'ACTIVE');
+  const stops = active?.stops ?? [];
+  const start = stops.findIndex((stop) => !stop.completedAt);
+  const current = stops[start];
+  if (!current?.arrivedAt) return [];
+  const away = (point: { latitude: number; longitude: number }) => distanceMeters(point.latitude, point.longitude, current.latitude, current.longitude);
+  let end = start + 1;
+  while (stops[end] && !stops[end].completedAt && away(stops[end]) <= SAME_PLACE_METERS) end += 1;
+  const place = stops.slice(start, end);
+  const next = stops[end] ?? input.tours.find((tour) => tour.status === 'QUEUED')?.stops.find((stop) => !stop.completedAt) ?? null;
+  const asked = place.some((stop) => input.departedStopIds.includes(stop.id));
+  const gone = Boolean(input.gps && !input.gps.stale && away(input.gps) > zoneRadiusOf({ arrivalRadiusMeters: current.arrivalRadiusMeters ?? null }, next ? away(next) : Number.POSITIVE_INFINITY) + DEPARTURE_MARGIN_METERS);
+  return asked || gone ? place.map((stop) => stop.id) : [];
+}
+
 /**
  * One truck's line in the status list. Rules in order: did not finish loading or unloading yesterday; empty without a next
  * tour; standing at a stop since today; otherwise on the way (or not started yet) to the next stop.
@@ -273,7 +297,7 @@ export function presentRow(row: {
 
 export type DailyStatusDeps = {
   getPosition(vehicleId: string, now: Date): Promise<CurrentPosition>;
-  latestTelemetry(vehicleId: string, now: Date): Promise<{ address: string | null; stale: boolean } | null>;
+  latestTelemetry(vehicleId: string, now: Date): Promise<{ address: string | null; stale: boolean; latitude?: number; longitude?: number } | null>;
   driverHours(vehicleId: string, now: Date): Promise<DriverHours>;
   coupledTrailerNo(vehicleId: string): Promise<string | null>;
   webfleetReady(now: Date): boolean;
@@ -417,18 +441,35 @@ export class DailyStatusService {
     ]);
     if (hours.status === 'NO_WEBFLEET') flags.add('NO_WEBFLEET');
     if (!hours.times) flags.add('TACHO_MISSING');
-    const tours = [...vehicle.tours].sort((a, b) => Number(a.status !== 'ACTIVE') - Number(b.status !== 'ACTIVE'));
+    const sorted = [...vehicle.tours].sort((a, b) => Number(a.status !== 'ACTIVE') - Number(b.status !== 'ACTIVE'));
+    const departed = await this.db.notification.findMany({ where: { vehicleId: vehicle.id, type: 'STOP_DEPARTED', acknowledgedAt: null }, select: { stopId: true } });
+    const gps = telemetry && typeof telemetry.latitude === 'number' && typeof telemetry.longitude === 'number'
+      ? { latitude: telemetry.latitude, longitude: telemetry.longitude, stale: telemetry.stale } : null;
+    const left = leftPlace({ tours: sorted, gps, departedStopIds: departed.map((item) => item.stopId).filter((id): id is string => Boolean(id)) });
+    if (left.length) flags.add('LEFT_WITHOUT_EVENT');
+    // The stops it has left count as done for this list only; nothing is recorded on the tour.
+    const tours = left.length ? sorted.map((tour) => ({ ...tour, stops: tour.stops.map((stop) => left.includes(stop.id) ? { ...stop, completedAt: stop.completedAt ?? now } : stop) })) : sorted;
     const active = tours.find((tour) => tour.status === 'ACTIVE');
     const currentStop = active?.stops.find((stop) => !stop.completedAt);
+    const leftStop = left.length ? sorted.flatMap((tour) => tour.stops).find((stop) => stop.id === left.at(-1)) : null;
+    // After leaving a stop the plan starts at the truck's GPS position, not where the tour service still sees it.
+    const startPoint = left.length && gps ? { latitude: gps.latitude, longitude: gps.longitude } : position.position;
     const activeLeg = active?.legs.find((leg) => ['ACTIVE', 'ARRIVED'].includes(leg.status) && leg.toStopId === currentStop?.id && !currentStop?.arrivedAt) ?? null;
     const snapshot = snapshotVehicleClock(vehicle, activeLeg, now);
     const offline: DriveEstimate = async (from, to, _label, _departure, approach) => {
       if (approach !== null) return approach;
       if (!from) return null;
+      // On the way from the stop it left: the stored drive of that leg, for the share of the way still ahead.
+      const onward = leftStop && from === startPoint ? active?.legs.find((leg) => leg.fromStopId === leftStop.id) : null;
+      if (onward && leftStop) {
+        const whole = distanceMeters(leftStop.latitude, leftStop.longitude, to.latitude, to.longitude);
+        const ahead = distanceMeters(from.latitude, from.longitude, to.latitude, to.longitude);
+        return whole > 0 ? onward.simulatedDurationSeconds * Math.min(1, ahead / whole) : onward.simulatedDurationSeconds;
+      }
       flags.add('ROUTE_ESTIMATE');
       return distanceMeters(from.latitude, from.longitude, to.latitude, to.longitude) * ROAD_FACTOR / (Math.min(vehicle.maxSpeedKmh, OFFLINE_SPEED_KMH) / 3.6);
     };
-    const { stops } = await buildPlannerStops({ tours, activeLeg, position, driveElapsedSeconds: snapshot.driveElapsedSeconds, startAt: now, estimate: offline });
+    const { stops } = await buildPlannerStops({ tours, activeLeg, position: { ...position, position: startPoint }, driveElapsedSeconds: snapshot.driveElapsedSeconds, startAt: now, estimate: offline });
     const planVehicle = { id: vehicle.id, vehicleNumber: vehicle.vehicleNumber, licensePlate: vehicle.licensePlate };
     const start = tours.length ? estimateStart({ now, dayKey, hours, stops, vehicle: planVehicle }) : { at: null, kind: 'NONE' as const };
     const nextEta = stops.length && !stops[0].arrivedAt ? this.etaToNext(stops, start, hours, now, planVehicle, snapshot.clockState, vehicle, tours) : null;
