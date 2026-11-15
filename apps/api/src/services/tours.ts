@@ -683,7 +683,8 @@ export class TourService {
         const message = options.auto.meta.nextStop
           ? `LKW ${stop.tour.vehicle.vehicleNumber} после стоянки в ${place} приехала на следующую точку ${options.auto.meta.nextStop} — вероятно ${state}. ${done} ${written} автоматически на ${berlinClock(now)} (выезд с точки по GPS Webfleet). Если это ошибка, отмените.`
           : `LKW ${stop.tour.vehicle.vehicleNumber} выехала из ${place} — вероятно ${state}. ${done} ${written} автоматически на ${berlinClock(now)} (выезд с точки по GPS Webfleet). Если это ошибка, отмените.`;
-        const payloadJson = JSON.stringify({ stopType: stop.type, at: now.toISOString(), source: "WEBFLEET_AUTO", ...options.auto.meta });
+        const payloadJson = JSON.stringify({ stopType: stop.type, at: now.toISOString(), source: "WEBFLEET_AUTO", ...options.auto.meta,
+          ...(recordedStops.length > 1 ? { stopTypes: recordedStops.map((item) => item.type) } : {}) });
         await tx.notification.upsert({ where: { dedupKey },
           create: { dedupKey, vehicleId: stop.tour.vehicleId, stopId: stop.id, type: "AUTO_STOP_EVENT", message, payloadJson },
           update: { stopId: stop.id, message, payloadJson, acknowledgedAt: null } });

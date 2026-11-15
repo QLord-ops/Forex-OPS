@@ -139,8 +139,9 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
   const resolve = useCallback(async (item: AlertNotification, action: 'ack' | 'revert' | 'revert-event') => {
     if (action === 'revert' && (!item.stopId || !window.confirm('Отменить автоматическое прибытие? Точка снова станет «в пути».'))) return
     if (action === 'revert-event') {
-      const label = autoEventOf(item.payloadJson)?.stopType === 'UNLOAD' ? 'ENTLADEN' : 'BELADEN'
-      if (!item.stopId || !window.confirm(`Отменить автоматический ${label}? Машина снова будет стоять на точке, в истории останутся обе записи.`)) return
+      const event = autoEventOf(item.payloadJson)
+      const label = (event?.stopTypes ?? [event?.stopType ?? 'LOAD']).map((type) => type === 'UNLOAD' ? 'ENTLADEN' : 'BELADEN').join(' и ')
+      if (!item.stopId || !window.confirm(`Отменить автоматический ${label}? Машина снова будет стоять на точке, в истории останутся все записи.`)) return
     }
     await run(item, async () => {
       if (action === 'revert') {
@@ -244,16 +245,18 @@ export function departureOf(payloadJson?: string | null): Departure | null {
   } catch { return null }
 }
 
-export type AutoStopEvent = { stopType: 'LOAD' | 'UNLOAD'; at: string; time: string; stayMinutes: number | null }
+/** `stopTypes`: unloading and loading at one place recorded together, in order; absent for a single stop. */
+export type AutoStopEvent = { stopType: 'LOAD' | 'UNLOAD'; at: string; time: string; stayMinutes: number | null; stopTypes?: Array<'LOAD' | 'UNLOAD'> }
 
 /** BELADEN/ENTLADEN the system recorded after the truck stood at the stop and left the town. */
 // eslint-disable-next-line react-refresh/only-export-components
 export function autoEventOf(payloadJson?: string | null): AutoStopEvent | null {
   try {
-    const payload = JSON.parse(payloadJson ?? '{}') as { stopType?: string; at?: string; stayMinutes?: number }
+    const payload = JSON.parse(payloadJson ?? '{}') as { stopType?: string; at?: string; stayMinutes?: number; stopTypes?: unknown }
     if (!payload.at || (payload.stopType !== 'LOAD' && payload.stopType !== 'UNLOAD')) return null
     const time = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit' }).format(new Date(payload.at))
-    return { stopType: payload.stopType, at: payload.at, time, stayMinutes: typeof payload.stayMinutes === 'number' ? payload.stayMinutes : null }
+    const stopTypes = Array.isArray(payload.stopTypes) ? payload.stopTypes.filter((type): type is 'LOAD' | 'UNLOAD' => type === 'LOAD' || type === 'UNLOAD') : []
+    return { stopType: payload.stopType, at: payload.at, time, stayMinutes: typeof payload.stayMinutes === 'number' ? payload.stayMinutes : null, ...(stopTypes.length > 1 ? { stopTypes } : {}) }
   } catch { return null }
 }
 

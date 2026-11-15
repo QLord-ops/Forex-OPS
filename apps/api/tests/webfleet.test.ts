@@ -619,6 +619,7 @@ describe('leaving the town after a real stay at the stop', () => {
       expect(found.map((item) => item.type)).toEqual(['AUTO_STOP_EVENT']);
       expect(found[0]).toMatchObject({ stopId: load.id, acknowledgedAt: null });
       expect(found[0].message).toContain('вероятно выгружена и загружена. ENTLADEN и BELADEN записаны автоматически');
+      expect(JSON.parse(found[0].payloadJson)).toMatchObject({ stopTypes: ['UNLOAD', 'LOAD'], chain: [unload.id, load.id] });
       expect(await db.auditLog.count({ where: { tourId: tour.id, action: { in: ['LOADED', 'UNLOADED'] }, actorRole: 'system' } })).toBe(2);
       const onward = await db.leg.findFirstOrThrow({ where: { tourId: tour.id, fromStopId: load.id } });
       expect(onward).toMatchObject({ status: 'ACTIVE', startedAt: at(40) });
