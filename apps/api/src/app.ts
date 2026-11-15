@@ -76,6 +76,8 @@ import { ImportLearningService } from './services/import-learning.js';
 import { registerImportRuleRoutes } from './routes/import-rules.js';
 import { registerAppointmentDocumentRoutes } from './routes/appointments.js';
 import type { CustomerEvidence, DocumentImportPreview, ImportCustomerContext, ReadStats } from './services/pdf-order-import.js';
+import { extractPdfText, hasTextLayer } from './services/pdf-text.js';
+import { checkAddressesAgainstText } from './services/document-text-check.js';
 import { storedAnswerOf } from './services/order-documents.js';
 import { KnownPlaces, resolveWithoutGeocoder } from './services/known-places.js';
 import { OwnAddressBook } from './services/own-addresses.js';
@@ -192,8 +194,15 @@ async function withDocument<T extends TourAggregate>(tour: T): Promise<T> {
 
 /** Every reading takes the same way: Termin slip match or address rules → customer → field confidence → timings. */
 async function finishRead<T extends DocumentImportPreview & { answerReused?: boolean }>(read: T, buffer: Buffer, customerContext: ImportCustomerContext, contextMs: number, startedAt: number) {
-  const checked = await withFieldConfidence(await withCustomer(await withAppointmentMatch(read, buffer), customerContext));
+  const checked = await withFieldConfidence(await withCustomer(await withAppointmentMatch(await withTextCheck(read, buffer), buffer), customerContext));
   return read.answerReused ? checked : withReadTimings(checked, contextMs, startedAt);
+}
+
+/** A PDF with a text layer must print every address the model read from it; an image or a scan cannot be checked. */
+async function withTextCheck<T extends DocumentImportPreview>(read: T, buffer: Buffer): Promise<T> {
+  if (read.detectedLayout !== "PDF" || read.documentKind === "APPOINTMENT" || !read.drafts.length) return read;
+  const text = await extractPdfText(buffer).catch(() => null);
+  return hasTextLayer(text) ? checkAddressesAgainstText(read, text) : read;
 }
 
 /** Adds what the route measured to the reading's own numbers, before the parse is stored with its document. */
