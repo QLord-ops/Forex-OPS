@@ -40,7 +40,7 @@ export function DecisionCard({ item, stop, onSelect, openLink = false, nested = 
     title = `${vehicle ? `LKW ${vehicle} уехала` : 'Машина уехала'} ${load ? 'с загрузки' : 'с выгрузки'} без ${load ? 'BELADEN' : 'ENTLADEN'}`
     detail = place ? `${place}, выезд ${departure.time} · GPS Webfleet` : item.message
     actions = [
-      { label: `${load ? 'BELADEN' : 'ENTLADEN'} ${departure.time}`, primary: true, run: () => void state.answerDeparture(item, 'done') },
+      { label: `${departure.chain ? departure.chain.map((stop) => stop.stopType === 'LOAD' ? 'BELADEN' : 'ENTLADEN').join(' + ') : load ? 'BELADEN' : 'ENTLADEN'} ${departure.time}`, primary: true, run: () => void state.answerDeparture(item, 'done') },
       { label: load ? 'Не загружена' : 'Не выгружена', run: () => void state.answerDeparture(item, 'keep') },
       { label: 'Ошибка прибытия', run: () => void state.answerDeparture(item, 'revert') }
     ]

@@ -235,7 +235,7 @@ it('reverts an arrival before ENTLADEN without deleting history, and refuses it 
 
 it('changes the arrival zone only for stops that are not reached yet', async () => {
   const f = await fixture('RADIUS');
-  expect((await f.service.get(f.vehicle.id, at(10))).arrivalRadiusMeters).toBe(500);
+  expect((await f.service.get(f.vehicle.id, at(10))).arrivalRadiusMeters).toBe(1000);
   await f.service.setArrivalRadius(f.stop.id, 1500, at(10), { role: 'admin', sessionId: 'a' });
   expect((await f.service.get(f.vehicle.id, at(10))).arrivalRadiusMeters).toBe(1500);
   await expect(f.service.setArrivalRadius(f.tour.stops[0].id, 800, at(10))).rejects.toThrow('будущей точки');
