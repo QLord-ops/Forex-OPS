@@ -445,3 +445,36 @@ test('нижняя панель показывает, из чего сложил
   await expect(panel.getByText('от GPS · по тахографу')).toBeVisible()
   expect(await textClashes(page, '.vehicle-panel'), 'нижняя панель').toEqual([])
 })
+
+test('правая кнопка по карте: координаты копируются кликом, адрес места и расстояния под рукой, Escape закрывает', async ({ page, context }) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'])
+  await dashboard(page, async (route, path) => {
+    if (path !== '/geocode/reverse') return false
+    await json(route, { address: 'Am Hafen 3, 28195 Bremen' })
+    return true
+  })
+  await page.goto('/?vehicleId=v1')
+  await expect(page.locator('.fleet-marker').first()).toBeAttached()
+  const canvas = page.locator('.maplibregl-canvas')
+  const box = (await canvas.boundingBox())!
+  // The selected truck's panel covers the lower half of the map.
+  await canvas.click({ button: 'right', position: { x: box.width * 0.55, y: box.height * 0.3 } })
+
+  const menu = page.getByRole('dialog', { name: 'Это место на карте' })
+  await expect(menu).toBeVisible()
+  const coordinates = menu.getByRole('button', { name: /^\d{2}\.\d{5}, \d{1,2}\.\d{5}$/ })
+  const text = (await coordinates.textContent())!.trim()
+  await coordinates.click()
+  await expect(menu.getByRole('status')).toHaveText('Координаты скопированы')
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(text)
+
+  await menu.getByRole('button', { name: 'Адрес этого места' }).click()
+  await expect(menu.getByRole('button', { name: 'Am Hafen 3, 28195 Bremen' })).toBeVisible()
+  await expect(menu).toContainText('До машины по прямой')
+  await expect(menu).toContainText('До следующей точки')
+  await expect(menu.getByRole('link', { name: 'Открыть в Google Maps' })).toHaveAttribute('href', `https://www.google.com/maps?q=${text.replace(', ', ',')}`)
+  expect(await textClashes(page, '.map-context-menu')).toEqual([])
+
+  await page.keyboard.press('Escape')
+  await expect(menu).toBeHidden()
+})

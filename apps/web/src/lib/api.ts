@@ -342,6 +342,7 @@ export const api = {
   /** "SZ" → Salzgitter, remembered for every later Auftrag. */
   learnCityCode: (code: string, city: string) => request<{ id: string }>('/address-rules/city-codes', { method: 'POST', body: JSON.stringify({ code, city }) }),
   geocode: (address: string) => request<GeocodeResult>(`/geocode?address=${encodeURIComponent(address)}`),
+  reverseGeocode: (latitude: number, longitude: number) => request<{ address: string | null }>(`/geocode/reverse?lat=${latitude.toFixed(5)}&lon=${longitude.toFixed(5)}`),
   resolveAddress: (payload: { address: string; city?: string | null; company?: string | null }) =>
     request<AddressResolution>('/geocode/resolve', { method: 'POST', body: JSON.stringify(payload) }),
   importSpeed: () => request<ImportSpeedSummary>('/imports/stats'),

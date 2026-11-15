@@ -9,6 +9,8 @@ export interface RoutingProvider {
   geocode(address: string): Promise<GeocodeResult>;
   calculateRoute(origin: Coordinate, destination: Coordinate, options?: RouteRequestOptions): Promise<RouteResult>;
   calculateMultiStopRoute(stops: Coordinate[], options?: RouteRequestOptions): Promise<RouteResult>;
+  /** The nearest postal address of a spot on the map; null when there is none. Not every provider has it. */
+  reverseGeocode?(latitude: number, longitude: number): Promise<string | null>;
 }
 
 export class RoutingService implements RoutingProvider {
@@ -16,6 +18,10 @@ export class RoutingService implements RoutingProvider {
 
   geocode(address: string): Promise<GeocodeResult> {
     return this.provider.geocode(address);
+  }
+
+  async reverseGeocode(latitude: number, longitude: number): Promise<string | null> {
+    return await this.provider.reverseGeocode?.(latitude, longitude) ?? null;
   }
 
   calculateRoute(origin: Coordinate, destination: Coordinate, options?: RouteRequestOptions): Promise<RouteResult> {
@@ -150,6 +156,33 @@ export class OsrmRoutingProvider implements RoutingProvider {
     });
     this.geocodeQueue = request.then(() => undefined, () => undefined);
     return request;
+  }
+
+  /** Asked in the same one-a-second queue as the address search: Nominatim allows no more. */
+  async reverseGeocode(latitude: number, longitude: number): Promise<string | null> {
+    const request = this.geocodeQueue.then(async () => {
+      const waitMs = this.nominatimMinIntervalMs - (Date.now() - this.lastGeocodeAt);
+      if (waitMs > 0) await delay(waitMs);
+      this.lastGeocodeAt = Date.now();
+      const url = new URL("reverse", this.nominatimBaseUrl);
+      url.searchParams.set("lat", latitude.toFixed(5));
+      url.searchParams.set("lon", longitude.toFixed(5));
+      url.searchParams.set("format", "jsonv2");
+      url.searchParams.set("zoom", "18");
+      url.searchParams.set("addressdetails", "1");
+      url.searchParams.set("accept-language", "de");
+      const data = (await this.fetchJsonWithTimeout(url)) as { display_name?: string; address?: Record<string, string | undefined> } | null;
+      const parts = data?.address;
+      const street = [parts?.road, parts?.house_number].filter(Boolean).join(" ");
+      const town = [parts?.postcode, parts?.city ?? parts?.town ?? parts?.village ?? parts?.municipality].filter(Boolean).join(" ");
+      return [street, town].filter(Boolean).join(", ") || data?.display_name?.slice(0, 300) || null;
+    });
+    this.geocodeQueue = request.then(() => undefined, () => undefined);
+    try {
+      return await request;
+    } catch {
+      throw new RoutingError("Сервис адресов временно недоступен.", 502);
+    }
   }
 
   private async fetchGeocode(address: string): Promise<GeocodeResult> {

@@ -64,6 +64,8 @@ export interface Stop {
   serviceMinMinutes?: number | null
   serviceMaxMinutes?: number | null
   arrivedAt?: string | null
+  /** The zone the dispatcher chose for this stop; null or absent means the default of 1 km. */
+  arrivalRadiusMeters?: number | null
   completedAt?: string | null
   createdAt?: string
   predictedEta?: string | null

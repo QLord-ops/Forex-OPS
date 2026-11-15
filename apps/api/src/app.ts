@@ -1176,6 +1176,12 @@ export async function buildApp(options: BuildAppOptions = {}) {
     return { address: result.label, ...result };
   });
 
+  // «Адрес этого места» in the map's right-click menu. Reads only; the geocoder's own text of an error never leaves the server.
+  app.get("/geocode/reverse", { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (request) => {
+    const { lat, lon } = z.object({ lat: z.coerce.number().min(-90).max(90), lon: z.coerce.number().min(-180).max(180) }).strict().parse(request.query);
+    return { address: await routingService.reverseGeocode(lat, lon) };
+  });
+
   app.post("/geocode/resolve", { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (request) => {
     const input = z.object({
       address: z.string().trim().min(1).max(2000),

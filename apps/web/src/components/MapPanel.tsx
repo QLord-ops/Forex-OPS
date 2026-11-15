@@ -2,14 +2,16 @@ import 'maplibre-gl/dist/maplibre-gl.css'
 import { GeoJSONSource, LngLatBounds, Map, Marker, Popup, setWorkerUrl, type StyleSpecification, type VectorTileSource } from 'maplibre-gl'
 import mapLibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
 import { Gauge, Layers, LocateFixed, Minus, Plus, TriangleAlert } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { boundsFor, geometryToCoordinates, stopCoordinates, toBrokenLine, toLineString, trafficFeatures } from '../lib/geometry'
 import { calculatedPositionLabel } from '../lib/format'
 import { useStableValue } from '../hooks/useStableValue'
 import { formatDelay, formatKm, INCIDENT_TITLES, trafficIncidents, type TrafficIncident } from '../lib/traffic-incidents'
 import { gestureFps, mapPixelRatio, readLiteChoice, rendererKind, rendererLabel, SLOW_GESTURES_FOR_LITE, slowStreak, type LiteChoice } from '../lib/map-quality'
-import { TRAFFIC_COLORS, TRAFFIC_MAX_TILE_ZOOM, TRAFFIC_REFRESH_MS, trafficFlowLayer, trafficTileUrl } from '../lib/traffic-flow'
+import { GERMANY_BOUNDS, inGermany, TRAFFIC_COLORS, TRAFFIC_MAX_TILE_ZOOM, TRAFFIC_REFRESH_MS, trafficFlowLayer, trafficTileUrl } from '../lib/traffic-flow'
+import { circlePolygon, stopZones } from '../lib/stop-zone'
+import { MapContextMenu, type MapMenuPlace } from './MapContextMenu'
 import type { MapRouteAlternative, MapRouteStop } from '../lib/route-preview'
 import { roadShieldLabel, roadShields, visibleShields } from '../lib/road-shields'
 import { THEME_EVENT, currentTheme, type Theme } from '../lib/theme'
@@ -42,6 +44,8 @@ const fallbackSatelliteStyle: StyleSpecification = {
   },
   layers: [{ id: 'satellite', type: 'raster', source: 'satellite', paint: { 'raster-fade-duration': 0 } }]
 }
+// Town names over the imagery: a photo alone does not say where the truck is.
+const fallbackSatelliteLabels = 'https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}'
 
 const CAMERA_STORAGE_KEY = 'ops-dashboard-map-camera'
 const LITE_STORAGE_KEY = 'ops-dashboard-map-lite'
@@ -67,7 +71,6 @@ export type FleetMapVehicle = {
   tone?: FleetTone
 }
 
-const FLEET_LABEL_MIN_ZOOM = 7
 
 export type MapPanelProps = {
   /** Today's GPS track of the truck in the open card. */
@@ -145,6 +148,8 @@ export function MapPanel({
   const lite = liteChoice === 'on' || (liteChoice === 'auto' && autoLite)
   const initialLiteRef = useRef(lite)
   const [diagnostics, setDiagnostics] = useState<MapDiagnostics | null>(null)
+  const [menu, setMenu] = useState<MapMenuPlace | null>(null)
+  const closeMenu = useCallback(() => setMenu(null), [])
   const gestureRef = useRef<{ frames: number[]; fps: number | null; slow: number }>({ frames: [], fps: null, slow: 0 })
   const [cameraRequest, setCameraRequest] = useState<'vehicle' | 'route' | null>(null)
   const initialModeRef = useRef(mode)
@@ -194,7 +199,12 @@ export function MapPanel({
     })
     // How smooth each pan and zoom really is on this computer: shown in the diagnostics, and two slow ones in a row switch
     // the light mode on.
-    mapRef.current.on('movestart', () => { gestureRef.current.frames = [] })
+    mapRef.current.on('movestart', () => { gestureRef.current.frames = []; setMenu(null) })
+    // Right click (long press on Android): the coordinates of that spot and what to do with them.
+    mapRef.current.on('contextmenu', (event) => {
+      event.originalEvent.preventDefault()
+      setMenu({ x: event.point.x, y: event.point.y, latitude: event.lngLat.lat, longitude: event.lngLat.lng })
+    })
     mapRef.current.on('render', () => { if (mapRef.current?.isMoving()) gestureRef.current.frames.push(performance.now()) })
     // Grey route variants: a wide invisible line makes them easy to hit with a finger.
     mapRef.current.on('click', 'preview-alt-hit', (event) => {
@@ -207,10 +217,6 @@ export function MapPanel({
       styleReadyRef.current = true
       setStyleVersion((value) => value + 1)
     })
-    // Fleet numbers only from regional zoom on; at country level they would cover each other.
-    const updateFleetLabels = () => containerRef.current?.classList.toggle('fleet-labels-hidden', (mapRef.current?.getZoom() ?? 0) < FLEET_LABEL_MIN_ZOOM)
-    mapRef.current.on('zoom', updateFleetLabels)
-    updateFleetLabels()
     // While zooming, traffic waits for the final zoom: otherwise the TomTom tiles of every zoom level passed are fetched and
     // read on the way, which made zooming stutter (owner, 12.11.2026).
     mapRef.current.on('zoomstart', () => setTrafficVisible(mapRef.current, false))
@@ -344,6 +350,21 @@ export function MapPanel({
       map.getLayer('preview-alt-casing') ? 'preview-alt-casing' : undefined)
   }, [travelledGeometry, routeBreaks, styleVersion])
 
+  // The stop is a zone, not a point: the circle the automatic arrival and departure are measured by. On the plain map only;
+  // over a satellite photo it would hide the plant itself.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !styleReadyRef.current) return
+    const data: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: mode === 'map' ? stopZones(stops).map((zone) => circlePolygon(zone.center, zone.radiusMeters)) : [] }
+    const source = map.getSource('stop-zones') as GeoJSONSource | undefined
+    if (source) { source.setData(data); return }
+    const color = theme === 'dark' ? '#8ab4f8' : ROUTE_BLUE
+    const under = map.getLayer('route-casing') ? 'route-casing' : undefined
+    map.addSource('stop-zones', { type: 'geojson', data })
+    map.addLayer({ id: 'stop-zones-fill', type: 'fill', source: 'stop-zones', paint: { 'fill-color': color, 'fill-opacity': theme === 'dark' ? 0.16 : 0.12 } }, under)
+    map.addLayer({ id: 'stop-zones-line', type: 'line', source: 'stop-zones', paint: { 'line-color': color, 'line-width': 1.5, 'line-opacity': 0.5 } }, under)
+  }, [stops, mode, theme, styleVersion])
+
   const positionRef = useRef(position)
   positionRef.current = position
   useEffect(() => {
@@ -411,9 +432,9 @@ export function MapPanel({
   // Jams on the route get a small icon; a click shows what the jam costs. The truck's own route counts from
   // where the truck is now, a preview from its start.
   const travelledIndex = useMemo(() => Math.max(0, geometryToCoordinates(travelledGeometry).length - 1), [travelledGeometry])
-  const incidents = useMemo(() => previewRoute?.length
+  const incidents = useMemo(() => (previewRoute?.length
     ? trafficIncidents(previewRoute, previewTraffic)
-    : trafficIncidents(fullRoute, routeTraffic, { startIndex: travelledIndex }),
+    : trafficIncidents(fullRoute, routeTraffic, { startIndex: travelledIndex })).filter((incident) => inGermany(incident.coordinate)),
   [fullRoute, routeTraffic, travelledIndex, previewRoute, previewTraffic])
   const incidentsCheckedAt = previewRoute?.length ? null : position?.trafficCheckedAt ?? null
   const incidentFromTruck = !previewRoute?.length
@@ -636,6 +657,9 @@ export function MapPanel({
     element.append(label)
   }, [position?.coordinate, position?.positionSource, vehicleNumber])
 
+  const nextStop = stops.find((stop) => !stop.completedAt)
+  const nextStopCoordinate: Coordinate | null = nextStop ? [nextStop.longitude, nextStop.latitude] : null
+
   return (
     <section className={[fill ? 'map-panel-fill' : 'map-panel-card work-surface relative min-w-0 overflow-hidden', labels ? '' : 'fleet-labels-off'].join(' ')}>
       <div ref={containerRef} style={{ height }} className={fill ? 'h-full w-full' : 'rounded-lg'} />
@@ -654,6 +678,8 @@ export function MapPanel({
         {sourceNote ? <button type="button" className="map-layer-button map-layer-icon" aria-pressed={lite} aria-expanded={Boolean(diagnostics)} aria-controls="map-diagnostics" onClick={toggleDiagnostics} aria-label="Скорость карты" title={lite ? 'Скорость карты: лёгкий режим включён' : 'Скорость карты'}><Gauge className="h-4 w-4" aria-hidden="true" /></button> : null}
       </div>
       {sourceNote ? <div className="map-provider-note">{tomTomMapKey() ? (traffic ? 'TomTom · пробки онлайн' : 'TomTom · без пробок') : 'OSM · без live-пробок'}{lite ? ' · лёгкий режим' : ''}</div> : null}
+      {menu ? <MapContextMenu place={menu} bounds={{ width: containerRef.current?.clientWidth ?? 0, height: containerRef.current?.clientHeight ?? 0 }}
+        truck={position?.coordinate ?? null} nextStop={nextStopCoordinate} onClose={closeMenu} /> : null}
       {sourceNote && diagnostics ? <MapDiagnosticsCard info={diagnostics} lite={lite} auto={liteChoice === 'auto' && autoLite} onLite={chooseLite} onClose={() => setDiagnostics(null)} /> : null}
       <TrafficLegend segments={previewRoute?.length ? previewTraffic : position?.trafficSegments} checkedAt={previewRoute?.length ? null : position?.trafficCheckedAt} />
     </section>
@@ -800,7 +826,9 @@ function styleFor(mode: MapMode, traffic: boolean, theme: Theme): StyleSpecifica
   const key = tomTomMapKey()
   const night = theme === 'dark' && mode !== 'satellite'
   if (!key) {
-    if (mode === 'satellite') return fallbackSatelliteStyle
+    if (mode === 'satellite') return { ...fallbackSatelliteStyle,
+      sources: { ...fallbackSatelliteStyle.sources, labels: { type: 'raster', tiles: [fallbackSatelliteLabels], tileSize: 256 } },
+      layers: [...fallbackSatelliteStyle.layers, { id: 'labels', type: 'raster', source: 'labels', paint: { 'raster-fade-duration': 0 } }] }
     return night ? { ...osmStyle, layers: [{ id: 'osm', type: 'raster', source: 'osm', paint: { ...OSM_NIGHT_PAINT, 'raster-fade-duration': 0 } }] } : osmStyle
   }
   const baseTile = mode === 'satellite'
@@ -811,12 +839,18 @@ function styleFor(mode: MapMode, traffic: boolean, theme: Theme): StyleSpecifica
   }
   // Tiles appear at once: fading each new tile in kept the map redrawing through a whole zoom.
   const layers: StyleSpecification['layers'] = [{ id: 'base', type: 'raster', source: 'base', paint: { 'raster-fade-duration': 0 } }]
+  if (mode === 'satellite') {
+    // TomTom's transparent overlay for imagery: town names, borders and main roads.
+    sources.labels = { type: 'raster', tiles: [`https://api.tomtom.com/map/1/tile/hybrid/main/{z}/{x}/{y}.png?key=${key}`], tileSize: 256 }
+    layers.push({ id: 'labels', type: 'raster', source: 'labels', paint: { 'raster-fade-duration': 0 } })
+  }
   if (traffic) {
     // Vector flow tiles: only the slow stretches are drawn, along the road and thick enough to see at country zoom (as in Webfleet).
     sources.traffic = {
       type: 'vector',
       tiles: [trafficTileUrl(key)],
-      maxzoom: TRAFFIC_MAX_TILE_ZOOM
+      maxzoom: TRAFFIC_MAX_TILE_ZOOM,
+      bounds: GERMANY_BOUNDS
     }
     layers.push(trafficFlowLayer(TRAFFIC_FLOW_OPACITY))
   }
@@ -868,7 +902,8 @@ const CLUSTER_MAX_ZOOM = 9
 
 /** Trucks that would overlap at this zoom become one grey circle with their count; a click zooms into them. */
 function clusterFleet(map: Map, markers: globalThis.Map<string, Marker>, clusterRef: { current: Marker[] }) {
-  clusterRef.current.forEach((marker) => marker.remove())
+  // A circle that still stands for the same trucks at the same spot is kept: rebuilding them all after every move cost frames.
+  const previous = new globalThis.Map(clusterRef.current.map((marker) => [marker.getElement().dataset.key ?? '', marker]))
   clusterRef.current = []
   const cells = new globalThis.Map<string, Marker[]>()
   const clustering = map.getZoom() < CLUSTER_MAX_ZOOM
@@ -891,8 +926,16 @@ function clusterFleet(map: Map, markers: globalThis.Map<string, Marker>, cluster
       lng += at.lng
       lat += at.lat
     }
+    const key = `${group.length}:${(lng / group.length).toFixed(5)}:${(lat / group.length).toFixed(5)}`
+    const kept = previous.get(key)
+    if (kept) {
+      previous.delete(key)
+      clusterRef.current.push(kept)
+      continue
+    }
     const element = document.createElement('button')
     element.type = 'button'
+    element.dataset.key = key
     element.className = 'fleet-cluster'
     element.textContent = String(group.length)
     element.setAttribute('aria-label', `${group.length} машин рядом. Приблизить`)
@@ -902,6 +945,7 @@ function clusterFleet(map: Map, markers: globalThis.Map<string, Marker>, cluster
     })
     clusterRef.current.push(new Marker({ element, anchor: 'center' }).setLngLat([lng / group.length, lat / group.length]).addTo(map))
   }
+  previous.forEach((marker) => marker.remove())
 }
 
 const FLEET_SOURCE_TEXT: Record<FleetMapVehicle['source'], string> = { WEBFLEET: 'GPS', MANUAL: 'указана вручную', CALCULATED: 'расчёт' }
