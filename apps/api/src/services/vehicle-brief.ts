@@ -3,7 +3,7 @@ import type { CurrentPosition, RiskColor } from '../domain.js';
 import { AssistantError } from './dispatcher-assistant.js';
 import type { EtaService } from './eta.js';
 import { dailyRestOf, type DailyRest } from './rest-at-stop.js';
-import { berlinLocal, formatSeconds } from './termin-planner.js';
+import { berlinLocal, driverBudgetFromWebfleet, formatSeconds } from './termin-planner.js';
 import { stopLabel, type DriverHoursReader } from './termin-service.js';
 import type { DriverHours } from './webfleet-live.js';
 import { withTerminGroups } from './termin-groups.js';
@@ -49,7 +49,8 @@ export class VehicleBriefService {
     if (!vehicle) throw new AssistantError('Машина не найдена.', 404);
     const [position, hours, address] = await Promise.all([this.getPosition(vehicle.id, now), this.driverHours(vehicle.id, now), this.latestAddress(vehicle.id, now).catch(() => null)]);
     const tours = vehicle.tours.map(tour => ({ ...tour, vehicle: { clockState: vehicle.clockState, manualStoppedAt: vehicle.manualStoppedAt, issues: vehicle.issues } }));
-    const schedule = this.eta.calculateVehicleSchedule(tours, now);
+    const budget = hours.times ? driverBudgetFromWebfleet(hours.times, { workState: hours.workState, since: hours.activitySince }, now) : null;
+    const schedule = this.eta.calculateVehicleSchedule(tours, now, budget ? { budget, startsAt: null } : null);
     const etaOf = (stopId: string) => {
       const row = schedule.find(item => item.stopId === stopId);
       return row ? { earliest: row.earliestArrival?.toISOString() ?? null, earliestLocal: row.earliestArrival ? berlinLocal(row.earliestArrival, now) : null,

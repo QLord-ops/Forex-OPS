@@ -93,8 +93,8 @@ it('retains accepted geometry and old traffic timestamp when a refresh falls bac
 
 it('does not poll vehicles during a calculated break or daily rest', async () => {
   const f = await fixture('REST');
-  for (const drivingSeconds of [14400, 32400]) {
-    const clock = createInitialClockState({ effectiveAt: now, drivingSeconds, continuousDrivingSeconds: drivingSeconds === 14400 ? 14400 : 3600, dutySeconds: drivingSeconds });
+  for (const drivingSeconds of [16200, 32400]) {
+    const clock = createInitialClockState({ effectiveAt: now, drivingSeconds, continuousDrivingSeconds: drivingSeconds === 16200 ? 16200 : 3600, dutySeconds: drivingSeconds });
     await db.vehicle.update({ where: { id: f.vehicle.id }, data: { clockState: JSON.stringify(clock) } });
     await db.leg.update({ where: { id: f.leg.id }, data: { drivePlan: JSON.stringify(makePersistedDrivePlan(clock, f.leg.simulatedDurationSeconds, now)) } });
     expect((await f.tours.getCurrentPosition(f.vehicle.id, new Date(now.getTime() + 60000))).status).toBe('WAITING');

@@ -3,6 +3,7 @@ import type { CurrentPosition } from "../domain.js";
 import { EtaService } from "./eta.js";
 import { hasTermin, isTerminFollower, terminFollowerIds, terminLeadIndex } from "./termin-groups.js";
 import { TourPlanConflictError } from "./tours.js";
+import type { DriverEtaInput } from "./termin-planner.js";
 
 export type AppointmentRisk = "ON_TIME" | "RISK" | "LATE" | "UNKNOWN";
 export type AppointmentAction = "LEAVE_BY" | "LEAVE_NOW" | "IN_TRANSIT" | "ARRIVED" | "UNKNOWN_POSITION";
@@ -52,7 +53,8 @@ export class AppointmentService {
   constructor(
     private readonly db: PrismaClient,
     private readonly eta = new EtaService(),
-    private readonly getPosition?: (vehicleId: string, now: Date) => Promise<CurrentPosition>
+    private readonly getPosition?: (vehicleId: string, now: Date) => Promise<CurrentPosition>,
+    private readonly driverOf?: (vehicleId: string, now: Date) => Promise<DriverEtaInput | null>
   ) {}
 
   async preview(requestedStopId: string, input: AppointmentInput, now = new Date(), scope: AppointmentScope = "PLACE"): Promise<AppointmentAnalysis> {
@@ -69,7 +71,8 @@ export class AppointmentService {
         ? { ...stop, appointmentAt: slot.appointmentAt, appointmentWindowStartAt: slot.windowStartAt, appointmentWindowEndAt: slot.windowEndAt }
         : stop)
     }));
-    const schedule = this.eta.calculateVehicleSchedule(tours, now);
+    // The new Termin is checked on the driver's tachograph when Webfleet has it, like the dashboard ETA.
+    const schedule = this.eta.calculateVehicleSchedule(tours, now, await this.driverOf?.(context.vehicle.id, now).catch(() => null) ?? null);
     const target = schedule.find((item) => item.stopId === stopId);
     if (!target) throw new TourPlanConflictError("Точка больше не входит в актуальный маршрут машины.");
 

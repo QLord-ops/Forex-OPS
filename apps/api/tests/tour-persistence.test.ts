@@ -27,7 +27,8 @@ afterAll(async () => {
 it("carries machine hours and dwell into the queued transfer, and resumes with one version increment", async () => {
   const start = new Date("2026-10-11T08:00:00Z");
   const at = (hours: number) => new Date(start.getTime() + hours * 3600_000);
-  const initial = createInitialClockState({ effectiveAt: start, drivingSeconds: 3 * 3600, continuousDrivingSeconds: 3 * 3600, dutySeconds: 4 * 3600 });
+  // 3 h 30 driven without a break: the 45 minutes come after one more hour, at 4 h 30.
+  const initial = createInitialClockState({ effectiveAt: start, drivingSeconds: 3.5 * 3600, continuousDrivingSeconds: 3.5 * 3600, dutySeconds: 4.5 * 3600 });
   const vehicle = await db.vehicle.create({ data: { vehicleNumber: "CLOCK-CARRY", clockState: JSON.stringify(initial) } });
   const provider = new MockRoutingProvider();
   provider.calculateRoute = async (from, to) => ({ provider: "test", geometry: [from, to], distanceMeters: 100_000, durationSeconds: 7200 });
@@ -45,15 +46,15 @@ it("carries machine hours and dwell into the queued transfer, and resumes with o
   await operations.confirmArrival(first.stops[1].id, at(2.75), at(2.75));
   await tours.recordUnloaded(first.stops[1].id, at(3.75));
   const checkpoint = parseClockState((await db.vehicle.findUniqueOrThrow({ where: { id: vehicle.id } })).clockState, at(3.75));
-  expect(checkpoint.currentCycle.drivingSeconds).toBe(5 * 3600);
-  expect(checkpoint.currentCycle.dutySeconds).toBe(7.75 * 3600);
+  expect(checkpoint.currentCycle.drivingSeconds).toBe(5.5 * 3600);
+  expect(checkpoint.currentCycle.dutySeconds).toBe(8.25 * 3600);
   const transfer = await db.leg.findFirstOrThrow({ where: { tourId: queued.id, status: "ACTIVE" } });
-  expect(readPersistedDrivePlan(transfer.drivePlan)?.clockPlan.initialState.currentCycle.drivingSeconds).toBe(5 * 3600);
+  expect(readPersistedDrivePlan(transfer.drivePlan)?.clockPlan.initialState.currentCycle.drivingSeconds).toBe(5.5 * 3600);
   const version = (await db.vehicle.findUniqueOrThrow({ where: { id: vehicle.id } })).operationVersion;
   await operations.manualStop(vehicle.id, version, at(4.25));
   const stopped = await operations.get(vehicle.id, at(5.25));
-  expect(stopped.clock.currentCycle.drivingSeconds).toBe(5.5 * 3600);
-  expect(stopped.clock.currentCycle.dutySeconds).toBe(9.25 * 3600);
+  expect(stopped.clock.currentCycle.drivingSeconds).toBe(6 * 3600);
+  expect(stopped.clock.currentCycle.dutySeconds).toBe(9.75 * 3600);
   const resumed = await operations.resume(vehicle.id, stopped.version, at(5.25));
   expect(resumed.version).toBe(stopped.version + 1);
   expect(resumed.manualStoppedAt).toBeNull();

@@ -12,13 +12,13 @@ describe("persisted machine schedule integration", () => {
   it("freezes the marker for a break and preserves clock through JSON restart", () => {
     const route = leg(6);
     const vehicle = { clockState: JSON.stringify(clock()) };
-    const first = snapshotVehicleClock(vehicle, route, at(4.1));
-    expect(first.progress).toBeCloseTo(4 / 6);
+    const first = snapshotVehicleClock(vehicle, route, at(4.6));
+    expect(first.progress).toBeCloseTo(4.5 / 6);
     expect(first.pauseKind).toBe("BREAK");
-    expect(snapshotVehicleClock(vehicle, route, at(4.6)).progress).toBe(first.progress);
+    expect(snapshotVehicleClock(vehicle, route, at(5.1)).progress).toBe(first.progress);
     expect(first.eta?.toISOString()).toBe(at(6.75).toISOString());
     // Persisted JSON plans are self-contained; rehydrated DB timestamps stay Dates.
-    expect(snapshotVehicleClock(vehicle, { ...route, drivePlan: JSON.stringify(JSON.parse(route.drivePlan)) }, at(4.1))).toEqual(first);
+    expect(snapshotVehicleClock(vehicle, { ...route, drivePlan: JSON.stringify(JSON.parse(route.drivePlan)) }, at(4.6))).toEqual(first);
   });
 
   it("a manual stop consumes duty but neither drive nor distance", () => {

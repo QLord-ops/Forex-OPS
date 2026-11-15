@@ -36,7 +36,7 @@ describe("vehicle clock planner", () => {
     ]);
   });
 
-  it("inserts 45 minutes after 4 hours of calculated driving", () => {
+  it("inserts 45 minutes after 4 h 30 of calculated driving, as EU 561/2006 and the tachograph engine do", () => {
     const state = createInitialClockState({
       effectiveAt: "2026-10-10T06:00:00.000Z",
       cycleId: "cycle-a"
@@ -46,12 +46,12 @@ describe("vehicle clock planner", () => {
 
     expect(result.endAt).toBe("2026-10-10T11:45:00.000Z");
     expect(result.segments.map((segment) => [segment.type, segment.durationSeconds])).toEqual([
-      ["DRIVE", 4 * hour],
+      ["DRIVE", 4.5 * hour],
       ["BREAK", 45 * minute],
-      ["DRIVE", hour]
+      ["DRIVE", 0.5 * hour]
     ]);
     expect(result.state.currentCycle.drivingSeconds).toBe(5 * hour);
-    expect(result.state.currentCycle.continuousDrivingSeconds).toBe(hour);
+    expect(result.state.currentCycle.continuousDrivingSeconds).toBe(0.5 * hour);
   });
 
   it("persists forecast plan snapshots and restores state in the middle of movement", () => {
@@ -71,7 +71,7 @@ describe("vehicle clock planner", () => {
     expect(evaluated.activeSegment?.type).toBe("DRIVE");
     expect(evaluated.state.currentCycle.drivingSeconds).toBe(3.5 * hour);
     expect(evaluated.state.currentCycle.dutySeconds).toBe(4.5 * hour);
-    expect(stateAt(result.plan, t("2026-10-10T09:45:00.000Z")).currentCycle.continuousDrivingSeconds).toBe(0);
+    expect(stateAt(result.plan, t("2026-10-10T10:15:00.000Z")).currentCycle.continuousDrivingSeconds).toBe(0);
   });
 
   it("adds daily rest at 9 hours without adding a separate 45 minute break first", () => {
@@ -264,10 +264,10 @@ describe("vehicle clock planner", () => {
   it("resumes a persisted mid-break state without restarting its 45 minutes", () => {
     const initial = createInitialClockState({ effectiveAt: "2026-10-10T06:00:00Z" });
     const original = forecastDrive(initial, 5 * hour, t("2026-10-10T06:00:00Z"));
-    const atBreak = evaluateClockPlan(JSON.parse(JSON.stringify(original.plan)), t("2026-10-10T10:20:00Z"));
+    const atBreak = evaluateClockPlan(JSON.parse(JSON.stringify(original.plan)), t("2026-10-10T10:50:00Z"));
     expect(atBreak.activeSegment?.type).toBe("BREAK");
-    expect(atBreak.drivenSeconds).toBe(4 * hour);
-    const resumed = forecastDrive(atBreak.state, hour, t("2026-10-10T10:20:00Z"));
+    expect(atBreak.drivenSeconds).toBe(4.5 * hour);
+    const resumed = forecastDrive(atBreak.state, 0.5 * hour, t("2026-10-10T10:50:00Z"));
     expect(resumed.endAt).toBe(original.endAt);
     expect(resumed.segments[0].durationSeconds).toBe(25 * minute);
   });

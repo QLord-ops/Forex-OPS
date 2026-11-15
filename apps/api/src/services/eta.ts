@@ -2,7 +2,7 @@ import type { Prisma } from "@prisma/client";
 import { compareQueuedItems, normalizeServiceWindow, type RiskColor } from "../domain.js";
 import { calculateLateMinutes, calculateRiskColor } from "./simulation.js";
 import { applyStopTime, forecastDrive, type ClockState } from "./vehicle-clock.js";
-import { breakdownTiming, parseClockState, readPersistedDrivePlan, snapshotVehicleClock, waitClockUntil, type VehicleIssueTiming } from "./tours.js";
+import { breakdownTiming, forecastClock, parseClockState, readPersistedDrivePlan, snapshotVehicleClock, waitClockUntil, type VehicleIssueTiming } from "./tours.js";
 import { forecastEta, WebfleetEngine, type DriveEngine, type DriverEtaInput } from "./termin-planner.js";
 
 type TourStatus = "DRAFT" | "QUEUED" | "ACTIVE" | "COMPLETED" | "CANCELLED";
@@ -115,9 +115,21 @@ export class EtaService {
           earlyClock = lateClock = forecast.state;
         } else if (leg?.startedAt && ["ACTIVE", "ARRIVED"].includes(leg.status)) {
           const stored = readPersistedDrivePlan(leg.drivePlan);
-          early = new Date(stored?.clockPlan.endAt ?? leg.startedAt.getTime() + leg.simulatedDurationSeconds * 1000);
-          late = early;
-          if (stored) earlyClock = lateClock = structuredClone(stored.clockPlan.finalState);
+          if (stored) {
+            early = late = new Date(stored.clockPlan.endAt);
+            earlyClock = lateClock = structuredClone(stored.clockPlan.finalState);
+          } else {
+            // A leg started without a planned drive: what is left of it is planned on the clock, breaks included.
+            const remaining = Math.max(0, leg.simulatedDurationSeconds - snapshotVehicleClock(vehicle ?? {}, leg, now).driveElapsedSeconds);
+            if (remaining > 0) {
+              const forecast = forecastDrive(forecastClock(earlyClock, now), remaining, now);
+              early = late = new Date(forecast.endAt);
+              earlyClock = lateClock = forecast.state;
+            } else {
+              // The timer says the drive is over: the arrival stays where it was due, not «now».
+              early = late = new Date(leg.startedAt.getTime() + leg.simulatedDurationSeconds * 1000);
+            }
+          }
         } else if (leg) {
           if (early && late) {
             const earliest = forecastDrive(earlyClock, leg.simulatedDurationSeconds, early);

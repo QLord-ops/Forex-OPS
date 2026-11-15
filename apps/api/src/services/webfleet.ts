@@ -40,6 +40,12 @@ const STAY_HISTORY_ROWS = 400;
 // A truck that left the zone but stays nearby (a parking spot for the night) still gets the question, just later.
 const DEPARTURE_QUESTION_DELAY_SECONDS = 30 * 60;
 const FALLBACK_SECONDS = 30 * 60;
+// A stop this long is the driver's break; the GPS history is read back at most this far for the driving since then.
+const BREAK_STAND_SECONDS = 45 * 60;
+const DRIVING_HISTORY_SECONDS = 12 * 3600;
+const DRIVING_HISTORY_ROWS = 900;
+// A gap in the GPS feed longer than this is not counted as driving.
+const MAX_DRIVING_GAP_SECONDS = 5 * 60;
 const SNAPSHOT_INTERVAL_MS = 60_000;
 const SYNC_LEASE_MS = 45_000;
 // A plant's truck gate can be kilometres from its postal address (VW Emden, VW-LKW-Tor). When Webfleet itself names
@@ -314,6 +320,33 @@ export class WebfleetTelemetryService {
       next = queued?.stops[0] ?? null;
     }
     return { chain, next, nextDistance: next ? distanceMeters(next.latitude, next.longitude, stop.latitude, stop.longitude) : Number.POSITIVE_INFINITY };
+  }
+
+  /**
+   * How long the truck has driven since its last stop of 45 minutes or more, from the Webfleet GPS history: the clock of a
+   * driver without tachograph data starts there instead of «now», so the 45-minute break is not put hours too late.
+   */
+  async drivingSinceBreak(vehicleId: string, now = new Date()): Promise<number | null> {
+    const rows = await this.db.vehicleTelemetry.findMany({
+      where: { vehicleId, provider: PROVIDER, recordedAt: { gte: new Date(now.getTime() - DRIVING_HISTORY_SECONDS * 1000), lte: now } },
+      orderBy: { recordedAt: 'desc' }, take: DRIVING_HISTORY_ROWS, select: { recordedAt: true, speedKmh: true, rawJson: true }
+    });
+    if (!rows.length) return null;
+    let driven = 0;
+    let runEnd: Date | null = null;
+    for (const [index, row] of rows.entries()) {
+      const payload = row.rawJson ? safeJson(row.rawJson) : null;
+      const standstill = isRecord(payload) && typeof payload.standstill === 'boolean' ? payload.standstill : null;
+      const newer = index ? rows[index - 1].recordedAt : now;
+      if (isStopped(standstill, row.speedKmh)) {
+        runEnd ??= newer;
+        if ((runEnd.getTime() - row.recordedAt.getTime()) / 1000 >= BREAK_STAND_SECONDS) return driven;
+        continue;
+      }
+      runEnd = null;
+      driven += Math.min(MAX_DRIVING_GAP_SECONDS, Math.max(0, (newer.getTime() - row.recordedAt.getTime()) / 1000));
+    }
+    return driven;
   }
 
   async latest(vehicleId: string, now = new Date()) {

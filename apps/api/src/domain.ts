@@ -136,7 +136,8 @@ export type CurrentPosition = {
 };
 
 /** Fresh Webfleet GPS handed to the position calculation. */
-export type GpsFix = { latitude: number; longitude: number; fresh: boolean };
+/** `drivenSinceBreakSeconds`: driving since the last stop of 45 min or more by the GPS history, when known. */
+export type GpsFix = { latitude: number; longitude: number; fresh: boolean; drivenSinceBreakSeconds?: number | null };
 
 /**
  * How an ETA was reached: whose hours were used (the Webfleet tachograph or the calculated vehicle clock), the pure

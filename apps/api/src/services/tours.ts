@@ -21,8 +21,8 @@ import type { RoutingProvider } from "./routing.js";
 import { OFF_ROUTE_METERS, projectOnLine, splitAtProjection } from "./route-projection.js";
 import { cleanTravelled } from "./travelled-path.js";
 import { mergeAddressRules, requiresTermin, type AddressRuleRecord } from "./address-rules.js";
-import { applyStopTime, createUnknownClockState, evaluateClockPlan, forecastDrive, type ClockState, type VehicleClockPlan } from "./vehicle-clock.js";
-import { forecastEta, WebfleetEngine, type DriverEtaInput } from "./termin-planner.js";
+import { applyStopTime, createUnknownClockState, evaluateClockPlan, forecastDrive, VEHICLE_CLOCK_LIMITS, type ClockState, type VehicleClockPlan } from "./vehicle-clock.js";
+import { ClockEngine, forecastEta, WebfleetEngine, type DriverEtaInput } from "./termin-planner.js";
 import { autoWindowStart } from "./stop-window.js";
 import {
   calculateDistanceTravelled,
@@ -459,10 +459,12 @@ export class TourService {
       : null;
     const gpsProgress = gpsRemainingMeters !== null && legMeters > 0 ? Math.max(0, Math.min(1, 1 - gpsRemainingMeters / legMeters)) : null;
     const gpsRemainingSeconds = gpsRemainingMeters !== null ? (legMeters > 0 ? activeLeg.simulatedDurationSeconds * gpsRemainingMeters / legMeters : 0) : null;
-    const gpsForecast = gpsRemainingSeconds !== null ? tachograph(gpsRemainingSeconds) : null;
-    const gpsEta = gpsRemainingSeconds !== null && !breakdown.blocked
-      ? gpsForecast?.endAt ?? new Date(forecastDrive(forecastClock(clock.clockState, now), gpsRemainingSeconds, now).endAt)
+    // Without the tachograph the calculated clock plans the drive, with the driving since the last real stop by GPS, and
+    // its plan is shown too: the page says the ETA holds a 45-minute break.
+    const gpsForecast = gpsRemainingSeconds !== null
+      ? tachograph(gpsRemainingSeconds) ?? (breakdown.blocked ? null : forecastEta(new ClockEngine(gpsClock(clock.clockState, now, gps?.drivenSinceBreakSeconds)), gpsRemainingSeconds, now, deadline))
       : null;
+    const gpsEta = gpsRemainingSeconds !== null && !breakdown.blocked ? gpsForecast?.endAt ?? null : null;
     const split = projection ? splitAtProjection(geometry, projection) : splitGeometryAtProgress(geometry, progress);
     const shownEta = projection ? gpsEta : eta;
     const etaPlan = shownEta ? (projection ? gpsForecast : timerForecast)?.plan ?? null : null;
@@ -1348,6 +1350,18 @@ export function forecastClock(clock: ClockState, now: Date): ClockState {
   return clock.kind === "UNKNOWN" ? createUnknownClockState(now) : clock;
 }
 
+/**
+ * The clock for a GPS forecast. An unknown clock starts now, but with the driving GPS saw since the truck's last stop of
+ * 45 minutes or more: a driver who has been on the road for four hours needs the break soon, not in 4 h 30.
+ */
+export function gpsClock(clock: ClockState, now: Date, drivenSinceBreakSeconds?: number | null): ClockState {
+  const state = forecastClock(clock, now);
+  if (clock.kind !== "UNKNOWN" || !drivenSinceBreakSeconds || drivenSinceBreakSeconds <= 0) return state;
+  const driven = Math.round(Math.min(drivenSinceBreakSeconds, VEHICLE_CLOCK_LIMITS.breakAfterDrivingSeconds));
+  return { ...state, currentCycle: { ...state.currentCycle, continuousDrivingSeconds: driven,
+    drivingSeconds: Math.max(state.currentCycle.drivingSeconds, driven), dutySeconds: Math.max(state.currentCycle.dutySeconds, driven) } };
+}
+
 export function readPersistedDrivePlan(raw: string | null | undefined): PersistedDrivePlan | null {
   try {
     const parsed = raw ? JSON.parse(raw) as PersistedDrivePlan : null;
@@ -1418,7 +1432,9 @@ export function snapshotVehicleClock(
     arrived,
     paused: clockProgress.paused,
     pauseKind: clockProgress.pauseKind,
-    eta: calculateEta(activeLeg.startedAt, readLegDrivePlan(activeLeg)?.totalElapsedSeconds ?? activeLeg.simulatedDurationSeconds)
+    // An older leg without a planned drive: what is left is planned on the clock, with its breaks, not as pure driving.
+    eta: arrived ? calculateEta(activeLeg.startedAt, readLegDrivePlan(activeLeg)?.totalElapsedSeconds ?? activeLeg.simulatedDurationSeconds)
+      : new Date(forecastDrive(forecastClock(existingClock, now), Math.max(0, activeLeg.simulatedDurationSeconds - clockProgress.driveElapsedSeconds), now).endAt)
   };
 }
 

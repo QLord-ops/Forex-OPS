@@ -3,7 +3,8 @@ const MINUTE_SECONDS = 60;
 const HOUR_SECONDS = 3600;
 
 export const VEHICLE_CLOCK_LIMITS = {
-  breakAfterDrivingSeconds: 4 * HOUR_SECONDS,
+  // EU 561/2006 and the tachograph engine (termin-planner.ts): the 45-minute break comes after 4 h 30 of driving.
+  breakAfterDrivingSeconds: 4.5 * HOUR_SECONDS,
   breakDurationSeconds: 45 * MINUTE_SECONDS,
   normalDailyDrivingSeconds: 9 * HOUR_SECONDS,
   extendedDailyDrivingSeconds: 10 * HOUR_SECONDS,
