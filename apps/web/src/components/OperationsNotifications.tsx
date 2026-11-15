@@ -37,11 +37,12 @@ export function DecisionCard({ item, stop, onSelect, openLink = false, nested = 
   if (departure) {
     const load = departure.stopType === 'LOAD'
     tone = 'late'; Icon = LogOut
-    title = `${vehicle ? `LKW ${vehicle} уехала` : 'Машина уехала'} ${load ? 'с загрузки' : 'с выгрузки'} без ${load ? 'BELADEN' : 'ENTLADEN'}`
+    const missing = departure.chain ? departure.chain.map((stop) => stop.stopType === 'LOAD' ? 'BELADEN' : 'ENTLADEN').join(' и ') : load ? 'BELADEN' : 'ENTLADEN'
+    title = `${vehicle ? `LKW ${vehicle} уехала` : 'Машина уехала'} ${load ? 'с загрузки' : 'с выгрузки'} без ${missing}`
     detail = place ? `${place}, выезд ${departure.time} · GPS Webfleet` : item.message
     actions = [
-      { label: `${load ? 'BELADEN' : 'ENTLADEN'} ${departure.time}`, primary: true, run: () => void state.answerDeparture(item, 'done') },
-      { label: load ? 'Не загружена' : 'Не выгружена', run: () => void state.answerDeparture(item, 'keep') },
+      { label: `${departure.chain ? departure.chain.map((stop) => stop.stopType === 'LOAD' ? 'BELADEN' : 'ENTLADEN').join(' + ') : load ? 'BELADEN' : 'ENTLADEN'} ${departure.time}`, primary: true, run: () => void state.answerDeparture(item, 'done') },
+      { label: departure.chain ? 'Ещё не готова' : load ? 'Не загружена' : 'Не выгружена', run: () => void state.answerDeparture(item, 'keep') },
       { label: 'Ошибка прибытия', run: () => void state.answerDeparture(item, 'revert') }
     ]
   } else if (item.type === 'AUTO_ARRIVAL') {
@@ -52,12 +53,12 @@ export function DecisionCard({ item, stop, onSelect, openLink = false, nested = 
     if (item.stopId) actions.push({ label: 'Отменить прибытие', run: () => void state.resolve(item, 'revert') })
   } else if (item.type === 'AUTO_STOP_EVENT') {
     const event = autoEventOf(item.payloadJson)
-    const load = (event?.stopType ?? stop?.type) === 'LOAD'
-    const done = load ? 'BELADEN' : 'ENTLADEN'
+    const types = event?.stopTypes ?? [(event?.stopType ?? stop?.type) === 'LOAD' ? 'LOAD' : 'UNLOAD']
+    const done = types.map((type) => type === 'LOAD' ? 'BELADEN' : 'ENTLADEN').join(' и ')
     tone = 'ok'; Icon = PackageCheck
-    title = `${vehicle ? `LKW ${vehicle}` : 'Машина'} выехала из города — вероятно ${load ? 'загружена' : 'выгружена'}`
+    title = `${vehicle ? `LKW ${vehicle}` : 'Машина'} выехала из города — вероятно ${types.map((type) => type === 'LOAD' ? 'загружена' : 'выгружена').join(' и ')}`
     detail = event
-      ? `${done} записан автоматически на ${event.time}${place ? `, ${place}` : ''}${event.stayMinutes ? ` · стояла ${formatDurationMinutes(event.stayMinutes)}` : ''} · GPS Webfleet`
+      ? `${done} ${types.length > 1 ? 'записаны' : 'записан'} автоматически на ${event.time}${place ? `, ${place}` : ''}${event.stayMinutes ? ` · стояла ${formatDurationMinutes(event.stayMinutes)}` : ''} · GPS Webfleet`
       : item.message
     actions = [{ label: 'Понятно', primary: true, run: () => void state.resolve(item, 'ack') }]
     if (item.stopId && !item.resolved) actions.push({ label: `Отменить ${done}`, run: () => void state.resolve(item, 'revert-event') })

@@ -20,7 +20,8 @@ function readHiddenNotifications(): string[] {
 }
 
 export type DepartureAnswer = 'done' | 'keep' | 'revert'
-export interface Departure { stopType: 'LOAD' | 'UNLOAD'; leftAt: string; time: string }
+/** `chain`: unloading and loading at one place, answered together; absent for a single stop. */
+export interface Departure { stopType: 'LOAD' | 'UNLOAD'; leftAt: string; time: string; chain?: Array<{ stopId: string; stopType: 'LOAD' | 'UNLOAD' }> }
 
 interface NotificationsState {
   items: AlertNotification[]
@@ -118,11 +119,17 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
   const answerDeparture = useCallback(async (item: AlertNotification, answer: DepartureAnswer) => {
     const departure = departureOf(item.payloadJson)
     if (!item.stopId || !departure) return
-    const label = departure.stopType === 'LOAD' ? 'BELADEN' : 'ENTLADEN'
+    const stops = departure.chain ?? [{ stopId: item.stopId, stopType: departure.stopType }]
+    const label = stops.map((stop) => stop.stopType === 'LOAD' ? 'BELADEN' : 'ENTLADEN').join(' и ')
     if (answer === 'done' && !window.confirm(`Записать ${label} на ${departure.time}? Это попадёт в историю тура.`)) return
     if (answer === 'revert' && !window.confirm('Прибытие было ошибкой? Точка снова станет «в пути».')) return
     await run(item, async () => {
-      if (answer === 'done') await operationsRequest(`/stops/${item.stopId}/${departure.stopType === 'LOAD' ? 'loaded' : 'unloaded'}`, 'POST', { timestamp: departure.leftAt })
+      if (answer === 'done') {
+        // The stops after the first never had an arrival of their own: the truck did not move between them.
+        for (const [index, stop] of stops.entries()) {
+          await operationsRequest(`/stops/${stop.stopId}/${stop.stopType === 'LOAD' ? 'loaded' : 'unloaded'}`, 'POST', { timestamp: departure.leftAt, ...(index ? { manual: true } : {}) })
+        }
+      }
       else if (answer === 'keep') await operationsRequest(`/stops/${item.stopId}/departure/keep`, 'POST', {})
       else await operationsRequest(`/stops/${item.stopId}/arrival/revert`, 'POST', { reason: 'Уехала с точки: прибытие было ошибкой' })
       await changed()
@@ -132,8 +139,9 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
   const resolve = useCallback(async (item: AlertNotification, action: 'ack' | 'revert' | 'revert-event') => {
     if (action === 'revert' && (!item.stopId || !window.confirm('Отменить автоматическое прибытие? Точка снова станет «в пути».'))) return
     if (action === 'revert-event') {
-      const label = autoEventOf(item.payloadJson)?.stopType === 'UNLOAD' ? 'ENTLADEN' : 'BELADEN'
-      if (!item.stopId || !window.confirm(`Отменить автоматический ${label}? Машина снова будет стоять на точке, в истории останутся обе записи.`)) return
+      const event = autoEventOf(item.payloadJson)
+      const label = (event?.stopTypes ?? [event?.stopType ?? 'LOAD']).map((type) => type === 'UNLOAD' ? 'ENTLADEN' : 'BELADEN').join(' и ')
+      if (!item.stopId || !window.confirm(`Отменить автоматический ${label}? Машина снова будет стоять на точке, в истории останутся все записи.`)) return
     }
     await run(item, async () => {
       if (action === 'revert') {
@@ -227,23 +235,28 @@ export function useNotifications() {
 // eslint-disable-next-line react-refresh/only-export-components
 export function departureOf(payloadJson?: string | null): Departure | null {
   try {
-    const payload = JSON.parse(payloadJson ?? '{}') as { stopType?: string; leftAt?: string }
+    const payload = JSON.parse(payloadJson ?? '{}') as { stopType?: string; leftAt?: string; chain?: unknown }
     if (!payload.leftAt || (payload.stopType !== 'LOAD' && payload.stopType !== 'UNLOAD')) return null
     const time = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit' }).format(new Date(payload.leftAt))
-    return { stopType: payload.stopType, leftAt: payload.leftAt, time }
+    const chain = Array.isArray(payload.chain)
+      ? payload.chain.filter((stop): stop is { stopId: string; stopType: 'LOAD' | 'UNLOAD' } => typeof stop?.stopId === 'string' && (stop.stopType === 'LOAD' || stop.stopType === 'UNLOAD'))
+      : []
+    return { stopType: payload.stopType, leftAt: payload.leftAt, time, ...(chain.length > 1 ? { chain } : {}) }
   } catch { return null }
 }
 
-export type AutoStopEvent = { stopType: 'LOAD' | 'UNLOAD'; at: string; time: string; stayMinutes: number | null }
+/** `stopTypes`: unloading and loading at one place recorded together, in order; absent for a single stop. */
+export type AutoStopEvent = { stopType: 'LOAD' | 'UNLOAD'; at: string; time: string; stayMinutes: number | null; stopTypes?: Array<'LOAD' | 'UNLOAD'> }
 
 /** BELADEN/ENTLADEN the system recorded after the truck stood at the stop and left the town. */
 // eslint-disable-next-line react-refresh/only-export-components
 export function autoEventOf(payloadJson?: string | null): AutoStopEvent | null {
   try {
-    const payload = JSON.parse(payloadJson ?? '{}') as { stopType?: string; at?: string; stayMinutes?: number }
+    const payload = JSON.parse(payloadJson ?? '{}') as { stopType?: string; at?: string; stayMinutes?: number; stopTypes?: unknown }
     if (!payload.at || (payload.stopType !== 'LOAD' && payload.stopType !== 'UNLOAD')) return null
     const time = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit' }).format(new Date(payload.at))
-    return { stopType: payload.stopType, at: payload.at, time, stayMinutes: typeof payload.stayMinutes === 'number' ? payload.stayMinutes : null }
+    const stopTypes = Array.isArray(payload.stopTypes) ? payload.stopTypes.filter((type): type is 'LOAD' | 'UNLOAD' => type === 'LOAD' || type === 'UNLOAD') : []
+    return { stopType: payload.stopType, at: payload.at, time, stayMinutes: typeof payload.stayMinutes === 'number' ? payload.stayMinutes : null, ...(stopTypes.length > 1 ? { stopTypes } : {}) }
   } catch { return null }
 }
 

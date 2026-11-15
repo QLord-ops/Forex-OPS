@@ -3,7 +3,13 @@ import { BUILT_IN_RULES, normalizePattern } from './address-rules.js';
 import { autoWindowStart } from './stop-window.js';
 
 const PROVIDER = 'WEBFLEET';
-export const DEFAULT_ARRIVAL_RADIUS_METERS = 500;
+// The stop is a zone, not a point (owner, 15.11.2026): 1 km around the address unless the dispatcher chose a radius.
+export const DEFAULT_ARRIVAL_RADIUS_METERS = 1_000;
+// Close to the address a truck creeping in a queue has arrived; farther out the zone takes in the roads around the plant,
+// so there only a standing truck counts.
+export const ENTRY_CORE_METERS = 500;
+// With the next stop in the same town the zone ends halfway to it, but never shrinks below this.
+const MIN_ZONE_METERS = 250;
 // The truck must stand inside the zone this long; Webfleet snapshots arrive once a minute.
 export const ARRIVAL_MIN_STANDSTILL_SECONDS = 180;
 // Long enough to find the zone entry of a truck that has stood at a stop for hours (e.g. while its previous tour was still open).
@@ -19,17 +25,11 @@ const DEPARTURE_FAST_KMH = 20;
 // After a real stay at the stop, leaving the town means the truck was loaded/unloaded: BELADEN/ENTLADEN is recorded by itself.
 export const AUTO_STOP_EVENT_MIN_STAY_SECONDS = 20 * 60;
 export const AUTO_STOP_EVENT_DISTANCE_METERS = 10_000;
-// A truck that stopped near the stop, not in its zone (waiting for a slot on the approach road), has arrived once it has
-// stood there 5 min (owner, 12.11.2026). Only for stops whose zone the dispatcher did not choose by hand.
-export const NEAR_ARRIVAL_RADIUS_METERS = 1_000;
-export const NEAR_ARRIVAL_MIN_STANDSTILL_SECONDS = 300;
-// Driving into the stop's own zone is the arrival once two GPS points in a row inside it are this slow (owner, 13.11.2026:
+// Driving into the core of the zone is the arrival once two GPS points in a row inside it are this slow (owner, 13.11.2026:
 // a truck creeping in the queue at a plant gate never stood 3 min in one go). A truck passing by is faster.
 export const ENTRY_MAX_SPEED_KMH = 15;
 export const ENTRY_MIN_SLOW_POINTS = 2;
-// The stay at a stop is measured in the wide ring only when the next stop is farther than this.
-const WIDE_STAY_NEXT_STOP_METERS = 2_000;
-// Two stops this close are one place: the truck never leaves, so nothing tells what was done.
+// Two stops this close are one place (ENTLADEN and BELADEN of Leergut at one plant): the truck does both before it leaves.
 const SAME_PLACE_METERS = 300;
 // GPS jumps out of the zone for a minute or two do not end a stay.
 const STAY_GAP_ROWS = 2;
@@ -146,8 +146,10 @@ export type AutoStopEventInput = {
   /** When the truck left the stop's zone: the time of BELADEN/ENTLADEN. */
   at: Date;
   now: Date;
+  /** The stops of the same place done in that one stay, in order, `stopId` first; absent for a single stop. */
+  chainStopIds?: string[];
   /** `nextStop`: the truck reached the next stop of the same town, which says this one is done. */
-  meta: { enteredAt: string; leftZoneAt: string; stayMinutes: number; distanceMeters: number; nextStop?: string };
+  meta: { enteredAt: string; leftZoneAt: string; stayMinutes: number; distanceMeters: number; nextStop?: string; chain?: string[] };
 };
 export type AutoStopEventHandler = (input: AutoStopEventInput) => Promise<unknown>;
 type ArrivalDecision = { suggested: boolean; confirmed: boolean };
@@ -216,14 +218,12 @@ export class WebfleetTelemetryService {
     const previousStop = previousStopOf(tour.stops, stop);
     // The truck stood at the stop by GPS but the arrival was never recorded (e.g. no poll at that moment):
     // record it now from the GPS history, with the zone entry time, so the departure question can follow.
-    const arrivedAt = stop.arrivedAt ?? await this.retroactiveArrival(vehicleId, tour.id, stop, previousStop, current, now);
+    const place = await this.placeOf(vehicleId, tour.stops, stop);
+    const arrivedAt = stop.arrivedAt ?? await this.retroactiveArrival(vehicleId, tour.id, stop, previousStop, zoneRadiusOf(stop, place.nextDistance), current, now);
     if (!arrivedAt) return false;
-    const next = await this.nextStopOf(vehicleId, tour.stops, stop);
+    const { chain, next, nextDistance } = place;
     const away = (point: { latitude: number; longitude: number }) => distanceMeters(point.latitude, point.longitude, stop.latitude, stop.longitude);
-    const nextDistance = next ? away(next) : Number.POSITIVE_INFINITY;
-    // A truck waiting for its slot on the approach road is still at the stop, unless the next stop is that close.
-    const stayRadius = stop.arrivalRadiusMeters ?? (nextDistance > WIDE_STAY_NEXT_STOP_METERS ? NEAR_ARRIVAL_RADIUS_METERS : DEFAULT_ARRIVAL_RADIUS_METERS);
-    const limit = stayRadius + DEPARTURE_MARGIN_METERS;
+    const limit = zoneRadiusOf(stop, nextDistance) + DEPARTURE_MARGIN_METERS;
     const outside = (point: { latitude: number; longitude: number }) => away(point) > limit;
     if (!outside(current)) return false;
 
@@ -251,8 +251,10 @@ export class WebfleetTelemetryService {
     if (onAutoStopEvent && inWindow && stay && stay.seconds >= AUTO_STOP_EVENT_MIN_STAY_SECONDS) {
       const record = async (nextStop?: string) => {
         try {
-          await onAutoStopEvent({ stopId: stop.id, at: leftAt, now, meta: { enteredAt: stay.enteredAt.toISOString(), leftZoneAt: leftAt.toISOString(),
-            stayMinutes: Math.round(stay.seconds / 60), distanceMeters: Math.round(away(current)), ...(nextStop ? { nextStop } : {}) } });
+          // Unloading and loading at one place are both done by the time the truck leaves it.
+          const chainStopIds = chain.length > 1 ? chain.map((item) => item.id) : undefined;
+          await onAutoStopEvent({ stopId: stop.id, at: leftAt, now, ...(chainStopIds ? { chainStopIds } : {}), meta: { enteredAt: stay.enteredAt.toISOString(), leftZoneAt: leftAt.toISOString(),
+            stayMinutes: Math.round(stay.seconds / 60), distanceMeters: Math.round(away(current)), ...(nextStop ? { nextStop } : {}), ...(chainStopIds ? { chain: chainStopIds } : {}) } });
           return true;
         } catch { return false; /* The tour changed meanwhile: the dispatcher decides. */ }
       };
@@ -263,7 +265,7 @@ export class WebfleetTelemetryService {
         } else if (waiting) return false;
       } else if (next && nextDistance > SAME_PLACE_METERS) {
         // The next stop is in the same town: reaching it says this one is done. Its zone stays clear of this stop's.
-        const nextRadius = Math.min(next.arrivalRadiusMeters ?? NEAR_ARRIVAL_RADIUS_METERS, nextDistance / 2);
+        const nextRadius = Math.min(next.arrivalRadiusMeters ?? DEFAULT_ARRIVAL_RADIUS_METERS, nextDistance / 2);
         const atNext = (point: { latitude: number; longitude: number }) => distanceMeters(point.latitude, point.longitude, next.latitude, next.longitude) <= nextRadius;
         if (atNext(current) && (isStopped(current.standstill, current.speedKmh) || (previous && atNext(previous)))) {
           if (await record(next.city || next.address)) return true;
@@ -273,15 +275,17 @@ export class WebfleetTelemetryService {
     const open = await this.db.notification.findFirst({ where: { stopId: stop.id, type: 'STOP_DEPARTED', acknowledgedAt: null } });
     if (open) return false;
 
-    const done = stop.type === 'LOAD' ? 'BELADEN' : 'ENTLADEN';
+    const done = chain.map((item) => item.type === 'LOAD' ? 'BELADEN' : 'ENTLADEN').join(' и ');
+    const asked = chain.map((item, index) => { const word = item.type === 'LOAD' ? 'Загружена' : 'Выгружена'; return index ? word.toLowerCase() : word; }).join(' и ');
     const time = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit' }).format(leftAt);
     const dedupKey = `departure:${stop.id}:${leftAt.toISOString()}`;
     await this.db.notification.upsert({
       where: { dedupKey },
       create: {
         dedupKey, vehicleId, stopId: stop.id, type: 'STOP_DEPARTED',
-        message: `LKW ${tour.vehicle.vehicleNumber} уехала ${stop.type === 'LOAD' ? 'с загрузки' : 'с выгрузки'} ${stop.city || stop.address} в ${time} без ${done}. ${stop.type === 'LOAD' ? 'Загружена' : 'Выгружена'}?`,
-        payloadJson: JSON.stringify({ stopId: stop.id, stopType: stop.type, leftAt: leftAt.toISOString(), source: 'WEBFLEET_GEOFENCE' })
+        message: `LKW ${tour.vehicle.vehicleNumber} уехала ${stop.type === 'LOAD' ? 'с загрузки' : 'с выгрузки'} ${stop.city || stop.address} в ${time} без ${done}. ${asked}?`,
+        payloadJson: JSON.stringify({ stopId: stop.id, stopType: stop.type, leftAt: leftAt.toISOString(), source: 'WEBFLEET_GEOFENCE',
+          ...(chain.length > 1 ? { chain: chain.map((item) => ({ stopId: item.id, stopType: item.type })) } : {}) })
       },
       update: {}
     });
@@ -295,13 +299,21 @@ export class WebfleetTelemetryService {
     return event?.timestamp ?? null;
   }
 
-  /** Where the truck goes after this stop: the next stop of the tour, else the first stop of the next tour. */
-  private async nextStopOf(vehicleId: string, stops: ZoneStop[], stop: ZoneStop): Promise<ZoneStop | null> {
-    const index = stops.findIndex((item) => item.id === stop.id);
-    if (stops[index + 1]) return stops[index + 1];
-    const queued = await this.db.tour.findFirst({ where: { vehicleId, status: 'QUEUED' }, orderBy: [{ queueIndex: 'asc' }, { createdAt: 'asc' }],
-      include: { stops: { orderBy: { sequence: 'asc' }, take: 1 } } });
-    return queued?.stops[0] ?? null;
+  /**
+   * The place of a stop: the stop with the following stops of the tour that lie at the same spot, and where the truck
+   * goes after them — the next stop of the tour, else the first stop of the next tour.
+   */
+  private async placeOf<T extends ZoneStop>(vehicleId: string, stops: T[], stop: T): Promise<{ chain: T[]; next: ZoneStop | null; nextDistance: number }> {
+    const chain = [stop];
+    let index = stops.findIndex((item) => item.id === stop.id) + 1;
+    while (stops[index] && distanceMeters(stops[index].latitude, stops[index].longitude, stop.latitude, stop.longitude) <= SAME_PLACE_METERS) chain.push(stops[index++]);
+    let next: ZoneStop | null = stops[index] ?? null;
+    if (!next) {
+      const queued = await this.db.tour.findFirst({ where: { vehicleId, status: 'QUEUED' }, orderBy: [{ queueIndex: 'asc' }, { createdAt: 'asc' }],
+        include: { stops: { orderBy: { sequence: 'asc' }, take: 1 } } });
+      next = queued?.stops[0] ?? null;
+    }
+    return { chain, next, nextDistance: next ? distanceMeters(next.latitude, next.longitude, stop.latitude, stop.longitude) : Number.POSITIVE_INFINITY };
   }
 
   async latest(vehicleId: string, now = new Date()) {
@@ -324,7 +336,7 @@ export class WebfleetTelemetryService {
   }
 
   /** GPS shows the truck stood at the stop for 3 min or more and has left it, but no arrival was recorded: record it from that stay. */
-  private async retroactiveArrival(vehicleId: string, tourId: string, stop: ZoneStop, previousStop: ZoneStop | null, current: WebfleetPosition, now: Date): Promise<Date | null> {
+  private async retroactiveArrival(vehicleId: string, tourId: string, stop: ZoneStop, previousStop: ZoneStop | null, radiusMeters: number, current: WebfleetPosition, now: Date): Promise<Date | null> {
     if (!this.onAutoArrival) return null;
     const leg = await this.db.leg.findFirst({ where: { tourId, toStopId: stop.id } });
     const usedUntil = await this.otherToursDoneAt(vehicleId, tourId);
@@ -333,13 +345,11 @@ export class WebfleetTelemetryService {
       where: { vehicleId, provider: PROVIDER, recordedAt: { gte: new Date(since), lte: current.recordedAt } },
       orderBy: { recordedAt: 'desc' }, take: ARRIVAL_HISTORY_ROWS
     });
-    const inZone = zoneStay(history, stop);
-    let stay = inZone && (inZone.longestStandstillSeconds >= ARRIVAL_MIN_STANDSTILL_SECONDS || inZone.longestSlowRun >= ENTRY_MIN_SLOW_POINTS) ? inZone : null;
-    let near = false;
-    if (!stay && stop.arrivalRadiusMeters === null) {
-      const ring = zoneStay(history, stop, NEAR_ARRIVAL_RADIUS_METERS, (row) => withinStop(row, previousStop));
-      if (ring && ring.longestStandstillSeconds >= NEAR_ARRIVAL_MIN_STANDSTILL_SECONDS) { stay = ring; near = true; }
-    }
+    const guard = otherPlace(previousStop, stop);
+    const core = Math.min(ENTRY_CORE_METERS, radiusMeters);
+    // Outside the core a point that still lies in the zone of the stop just finished belongs to that stop.
+    const inZone = zoneStay(history, stop, radiusMeters, (row) => distanceMeters(row.latitude, row.longitude, stop.latitude, stop.longitude) > core && withinStop(row, guard), core);
+    const stay = inZone && (inZone.longestStandstillSeconds >= ARRIVAL_MIN_STANDSTILL_SECONDS || inZone.longestSlowRun >= ENTRY_MIN_SLOW_POINTS) ? inZone : null;
     if (!stay) return null;
     // A stay that was over long before the stop's planned time was another trip to the same place.
     const windowStart = autoWindowStart(stop);
@@ -347,10 +357,8 @@ export class WebfleetTelemetryService {
     const reverted = await this.db.operationEvent.findFirst({ where: { stopId: stop.id, type: 'ARRIVAL_REVERTED' }, orderBy: { createdAt: 'desc' } });
     if (reverted && reverted.createdAt >= stay.enteredAt) return null;
     try {
-      if (near) await this.db.stop.update({ where: { id: stop.id }, data: { arrivalRadiusMeters: NEAR_ARRIVAL_RADIUS_METERS } });
       const result = await this.onAutoArrival({ stopId: stop.id, arrivedAt: stay.enteredAt, now,
-        meta: { enteredAt: stay.enteredAt.toISOString(), leftZoneAfter: stay.lastInsideAt.toISOString(), standstillSeconds: Math.round(stay.longestStandstillSeconds), retroactive: true,
-          ...(near ? { zone: 'NEAR', radiusMeters: NEAR_ARRIVAL_RADIUS_METERS } : {}) } });
+        meta: { enteredAt: stay.enteredAt.toISOString(), leftZoneAfter: stay.lastInsideAt.toISOString(), standstillSeconds: Math.round(stay.longestStandstillSeconds), retroactive: true, radiusMeters } });
       return isRecord(result) && result.applied === false ? null : stay.enteredAt;
     } catch { return null; }
   }
@@ -403,20 +411,21 @@ export class WebfleetTelemetryService {
     });
     const stop = tour?.stops.find((item) => !item.completedAt);
     if (!tour || !stop || stop.arrivedAt) return none;
-    const plannedRadius = stop.arrivalRadiusMeters ?? DEFAULT_ARRIVAL_RADIUS_METERS;
+    const plannedRadius = zoneRadiusOf(stop, (await this.placeOf(vehicleId, tour.stops, stop)).nextDistance);
+    const core = Math.min(ENTRY_CORE_METERS, plannedRadius);
     const distance = distanceMeters(current.latitude, current.longitude, stop.latitude, stop.longitude);
     // Webfleet names the truck's place as this company in this city (plant gate away from the postal address).
     const atNamedPlace = distance > plannedRadius && distance <= PLANT_GATE_MAX_METERS && webfleetPlaceMatchesStop(current.address, stop);
-    // Stopped near the stop but not in its zone. Not while the truck still stands at the stop it has just finished.
-    const previousStop = previousStopOf(tour.stops, stop);
-    // The ring takes in roads around the stop: only a standing truck counts there, never one driving by.
-    const near = stopped && !atNamedPlace && stop.arrivalRadiusMeters === null && distance > plannedRadius && distance <= NEAR_ARRIVAL_RADIUS_METERS && !withinStop(current, previousStop);
-    const radiusMeters = atNamedPlace ? Math.ceil(distance + GATE_MARGIN_METERS) : near ? NEAR_ARRIVAL_RADIUS_METERS : plannedRadius;
-    const minStandstillSeconds = near ? NEAR_ARRIVAL_MIN_STANDSTILL_SECONDS : ARRIVAL_MIN_STANDSTILL_SECONDS;
+    // The stop just finished, when it is another place: a truck still standing in its zone has not come here yet.
+    const guard = otherPlace(previousStopOf(tour.stops, stop), stop);
+    // Outside the core the zone takes in roads around the stop: only a standing truck counts there, never one driving by.
+    const outer = !atNamedPlace && distance > core;
+    const radiusMeters = atNamedPlace ? Math.ceil(distance + GATE_MARGIN_METERS) : plannedRadius;
     if (distance > radiusMeters) {
       if (stopped) await this.warnPreviousTourOpen(vehicleId, tour, stop, current, observedAt);
       return none;
     }
+    if (outer && (!stopped || withinStop(current, guard))) return none;
     // Standing at the place long before the stop's planned time is another trip (tomorrow's loading at today's plant).
     const windowStart = autoWindowStart(stop);
     if (windowStart && observedAt < windowStart) return none;
@@ -435,18 +444,21 @@ export class WebfleetTelemetryService {
     let slowRun = true;
     let leftZoneAt: Date | null = null;
     for (const row of history) {
-      if (distanceMeters(row.latitude, row.longitude, stop.latitude, stop.longitude) > radiusMeters || (near && withinStop(row, previousStop))) { leftZoneAt = row.recordedAt; break; }
+      const rowDistance = distanceMeters(row.latitude, row.longitude, stop.latitude, stop.longitude);
+      const inCore = atNamedPlace || rowDistance <= core;
+      if (rowDistance > radiusMeters || (!inCore && withinStop(row, guard))) { leftZoneAt = row.recordedAt; break; }
       enteredAt = row.recordedAt;
       const payload = row.rawJson ? safeJson(row.rawJson) : null;
       const standstill = isRecord(payload) && typeof payload.standstill === 'boolean' ? payload.standstill : null;
       if (stoppedRun && isStopped(standstill, row.speedKmh)) stoppedSince = row.recordedAt;
       else stoppedRun = false;
-      if (slowRun && isSlow(standstill, row.speedKmh)) { slowSince = row.recordedAt; slowPoints += 1; }
+      // Creeping counts only close to the address.
+      if (slowRun && inCore && isSlow(standstill, row.speedKmh)) { slowSince = row.recordedAt; slowPoints += 1; }
       else slowRun = false;
     }
     if (!enteredAt) return none;
-    const stood = Boolean(stoppedSince) && (observedAt.getTime() - stoppedSince!.getTime()) / 1000 >= minStandstillSeconds;
-    const droveIn = !near && slowPoints >= ENTRY_MIN_SLOW_POINTS;
+    const stood = Boolean(stoppedSince) && (observedAt.getTime() - stoppedSince!.getTime()) / 1000 >= ARRIVAL_MIN_STANDSTILL_SECONDS;
+    const droveIn = !outer && slowPoints >= ENTRY_MIN_SLOW_POINTS;
     if (!stood && !droveIn) return none;
 
     // After a dispatcher reverted an arrival here, wait until the truck has left the zone and come back.
@@ -454,16 +466,17 @@ export class WebfleetTelemetryService {
     if (reverted && (!leftZoneAt || leftZoneAt <= reverted.createdAt)) return none;
 
     const leg = tour.legs.find((item) => item.toStopId === stop.id);
-    // A wide zone (named gate, the 1 km ring) includes the approach road, so the arrival is when the truck stopped there.
-    const zoneEntry = atNamedPlace || near ? (stood ? stoppedSince! : slowSince!) : enteredAt;
+    // Away from the address (a named gate, the outer part of the zone) the truck passed the approach road first, so the
+    // arrival is when it stopped there.
+    const zoneEntry = atNamedPlace || outer ? (stood ? stoppedSince! : slowSince!) : enteredAt;
     const arrivedAt = leg?.startedAt && leg.startedAt > zoneEntry ? leg.startedAt : zoneEntry;
     const meta = { distanceMeters: Math.round(distance), radiusMeters, enteredAt: enteredAt.toISOString(), stoppedSince: stoppedSince?.toISOString() ?? null,
       ...(stood ? {} : { trigger: 'ENTRY', slowPoints }),
-      ...(atNamedPlace ? { zone: 'WEBFLEET_PLACE', place: current.address?.slice(0, 120) ?? null } : near ? { zone: 'NEAR' } : {}) };
+      ...(atNamedPlace ? { zone: 'WEBFLEET_PLACE', place: current.address?.slice(0, 120) ?? null } : outer ? { zone: 'OUTER' } : {}) };
 
     if (this.onAutoArrival) {
       // The widened zone stays on the stop, so leaving it is measured from the gate and not from the postal address.
-      if (atNamedPlace || near) await this.db.stop.update({ where: { id: stop.id }, data: { arrivalRadiusMeters: radiusMeters } });
+      if (atNamedPlace) await this.db.stop.update({ where: { id: stop.id }, data: { arrivalRadiusMeters: radiusMeters } });
       try {
         const result = await this.onAutoArrival({ stopId: stop.id, arrivedAt, now, meta });
         const applied = !isRecord(result) || result.applied !== false;
@@ -493,13 +506,21 @@ function previousStopOf<T extends ZoneStop>(stops: T[], stop: ZoneStop): T | nul
   const index = stops.findIndex((item) => item.id === stop.id);
   return index > 0 ? stops[index - 1] : null;
 }
+/** The zone of a stop: the dispatcher's own radius, else 1 km, ending halfway to the next stop when that one is close. */
+export function zoneRadiusOf(stop: { arrivalRadiusMeters: number | null }, nextDistance = Number.POSITIVE_INFINITY) {
+  return stop.arrivalRadiusMeters ?? Math.max(MIN_ZONE_METERS, Math.min(DEFAULT_ARRIVAL_RADIUS_METERS, nextDistance / 2));
+}
+/** The previous stop when it is another place; a stop at the same spot is no reason to wait. */
+function otherPlace(previous: ZoneStop | null, stop: ZoneStop) {
+  return previous && distanceMeters(previous.latitude, previous.longitude, stop.latitude, stop.longitude) > SAME_PLACE_METERS ? previous : null;
+}
 /** Inside a stop's zone with the departure margin. */
 function withinStop(point: { latitude: number; longitude: number }, stop: ZoneStop | null) {
   return Boolean(stop && distanceMeters(point.latitude, point.longitude, stop.latitude, stop.longitude) <= (stop.arrivalRadiusMeters ?? DEFAULT_ARRIVAL_RADIUS_METERS) + DEPARTURE_MARGIN_METERS);
 }
 
 /** Newest contiguous stay inside the zone in a newest-first history: when it began and the longest standstill in it. */
-export function zoneStay(history: TelemetryRow[], stop: ZoneStop, radius = stop.arrivalRadiusMeters ?? DEFAULT_ARRIVAL_RADIUS_METERS, excluded?: (row: TelemetryRow) => boolean) {
+export function zoneStay(history: TelemetryRow[], stop: ZoneStop, radius = stop.arrivalRadiusMeters ?? DEFAULT_ARRIVAL_RADIUS_METERS, excluded?: (row: TelemetryRow) => boolean, core = Math.min(ENTRY_CORE_METERS, radius)) {
   const inside = (row: TelemetryRow) => distanceMeters(row.latitude, row.longitude, stop.latitude, stop.longitude) <= radius && !excluded?.(row);
   const start = history.findIndex(inside);
   if (start === -1) return null;
@@ -517,7 +538,7 @@ export function zoneStay(history: TelemetryRow[], stop: ZoneStop, radius = stop.
       if (!runEnd) runEnd = row.recordedAt;
       longestStandstillSeconds = Math.max(longestStandstillSeconds, (runEnd.getTime() - row.recordedAt.getTime()) / 1000);
     } else runEnd = null;
-    slowRun = isSlow(standstill, row.speedKmh) ? slowRun + 1 : 0;
+    slowRun = isSlow(standstill, row.speedKmh) && distanceMeters(row.latitude, row.longitude, stop.latitude, stop.longitude) <= core ? slowRun + 1 : 0;
     longestSlowRun = Math.max(longestSlowRun, slowRun);
   }
   return { enteredAt, lastInsideAt: history[start].recordedAt, longestStandstillSeconds, longestSlowRun };

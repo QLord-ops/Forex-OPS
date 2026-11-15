@@ -333,8 +333,22 @@ export class TourService {
    * stop's zone; the dispatcher gets a note with «Отменить».
    */
   async recordAutoStopEvent(input: AutoStopEventInput, actor?: AuditActor): Promise<TourAggregate> {
-    const stop = await this.db.stop.findUniqueOrThrow({ where: { id: input.stopId } });
-    return this.recordStopEvent(input.stopId, stop.type === "LOAD" ? "LOADED" : "UNLOADED", input.at, undefined, actor, { auto: { detectedAt: input.now, meta: input.meta } });
+    // Unloading and loading at one place: every stop of the place is recorded at the moment the truck left it. The
+    // following ones had no arrival of their own, the truck never moved between them.
+    const stopIds = input.chainStopIds?.length ? input.chainStopIds : [input.stopId];
+    let tour: TourAggregate | null = null;
+    for (const [index, stopId] of stopIds.entries()) {
+      const stop = await this.db.stop.findUniqueOrThrow({ where: { id: stopId } });
+      try {
+        tour = await this.recordStopEvent(stopId, stop.type === "LOAD" ? "LOADED" : "UNLOADED", input.at, undefined, actor,
+          { arriveWithEvent: index > 0, auto: { detectedAt: input.now, meta: input.meta } });
+      } catch (error) {
+        // The first stop decides; a later one that cannot be recorded is left to the dispatcher.
+        if (!tour) throw error;
+        break;
+      }
+    }
+    return tour!;
   }
 
   /**
@@ -343,47 +357,59 @@ export class TourService {
    */
   async revertAutoStopEvent(stopId: string, now = new Date(), actor?: AuditActor, reason?: string) {
     await this.db.$transaction(async (tx) => {
-      const auto = await tx.operationEvent.findFirst({ where: { stopId, type: "STOP_EVENT_AUTO" }, orderBy: { createdAt: "desc" } });
-      if (!auto) throw new TourPlanConflictError("Эту отметку поставил диспетчер, здесь её отменить нельзя.");
-      const record = JSON.parse(auto.payloadJson) as AutoStopEventRecord;
-      const at = new Date(record.at);
-      const stop = await tx.stop.findUniqueOrThrow({ where: { id: stopId }, include: { tour: true } });
-      if (!stop.completedAt || stop.completedAt.getTime() !== at.getTime()) throw new TourPlanConflictError("Автоотметка уже отменена или точка изменилась.");
-      const vehicleId = stop.tour.vehicleId;
-      // Only this tour and the one it started matter: other tours' events can be later when the automatic one was dated
-      // back to a stay in the past.
-      const tourIds = [stop.tourId, ...(record.activated ? [record.activated.tourId] : [])];
-      const later = await tx.event.count({ where: { vehicleId, tourId: { in: tourIds }, id: { not: record.eventId }, timestamp: { gte: at } } });
-      const arrivedSince = await tx.stop.count({ where: { id: { not: stopId }, arrivedAt: { gte: at }, tourId: { in: tourIds } } });
-      if (later || arrivedSince) throw new TourPlanConflictError("После автоотметки машина уже прибыла на следующую точку. Исправьте тур вручную.");
-      const expected = record.activated ? "COMPLETED" : "ACTIVE";
-      if (stop.tour.status !== expected) throw new TourPlanConflictError("Тур изменился после автоотметки. Исправьте его вручную.");
-      if (record.activated) {
-        const activated = await tx.tour.findUnique({ where: { id: record.activated.tourId } });
-        if (activated?.status !== "ACTIVE") throw new TourPlanConflictError("Следующий тур изменился после автоотметки. Исправьте его вручную.");
-      }
-
-      const reopened = await tx.stop.updateMany({ where: { id: stopId, completedAt: at }, data: { completedAt: null } });
-      if (!reopened.count) throw new TourPlanConflictError("Точка изменилась. Обновите страницу.");
-      for (const leg of [...record.before.legs, ...(record.activated?.transferLeg ? [record.activated.transferLeg] : [])]) {
-        await tx.leg.update({ where: { id: leg.id }, data: { status: leg.status, startedAt: leg.startedAt ? new Date(leg.startedAt) : null,
-          finishedAt: leg.finishedAt ? new Date(leg.finishedAt) : null, drivePlan: leg.drivePlan } });
-      }
-      const arrivalDropped = await dropForeignAutoArrival(tx, stop, at, now, actor);
-      if (record.activated) await tx.tour.update({ where: { id: record.activated.tourId }, data: { status: "QUEUED", planVersion: { increment: 1 } } });
-      await tx.tour.update({ where: { id: stop.tourId }, data: { status: record.before.tour.status, planVersion: { increment: 1 },
-        completedAt: record.before.tour.completedAt ? new Date(record.before.tour.completedAt) : null,
-        actualStartAt: record.before.tour.actualStartAt ? new Date(record.before.tour.actualStartAt) : null } });
-      await tx.vehicle.update({ where: { id: vehicleId }, data: { clockState: record.before.clockState, currentTrailerPlate: record.before.trailerPlate, operationVersion: { increment: 1 } } });
-      const note = reason?.trim() || "Автоматическая отметка отменена диспетчером";
-      await tx.event.create({ data: { vehicleId, tourId: stop.tourId, stopId, type: `${record.eventType}_REVERTED`, timestamp: now, note } });
-      await tx.notification.updateMany({ where: { stopId, type: "AUTO_STOP_EVENT", acknowledgedAt: null }, data: { acknowledgedAt: now } });
-      await tx.operationEvent.create({ data: { vehicleId, tourId: stop.tourId, stopId, type: "STOP_EVENT_REVERTED", reason: note,
-        payloadJson: JSON.stringify({ autoEventId: auto.id, eventType: record.eventType, at: record.at }), createdAt: now } });
-      await writeAuditLog(tx, actor, { action: "STOP_EVENT_REVERTED", entityType: "Stop", entityId: stopId, vehicleId, tourId: stop.tourId, stopId,
-        metadata: { event: record.eventType, at: record.at, reason: reason?.trim() || null, arrivalDropped }, createdAt: now });
+      const asked = await tx.operationEvent.findFirst({ where: { stopId, type: "STOP_EVENT_AUTO" }, orderBy: { createdAt: "desc" } });
+      if (!asked) throw new TourPlanConflictError("Эту отметку поставил диспетчер, здесь её отменить нельзя.");
+      // Stops of one place were recorded together and are undone together, the last one first.
+      const chain = (JSON.parse(asked.payloadJson) as AutoStopEventRecord).meta.chain ?? [stopId];
+      const done = await tx.stop.findMany({ where: { id: { in: chain }, completedAt: { not: null } }, orderBy: { sequence: "desc" }, select: { id: true } });
+      if (!done.some((item) => item.id === stopId)) throw new TourPlanConflictError("Автоотметка уже отменена или точка изменилась.");
+      for (const item of done) await this.revertAutoStopEventOf(tx, item.id, chain, now, actor, reason);
     });
     return { ok: true };
+  }
+
+  private async revertAutoStopEventOf(tx: Prisma.TransactionClient, stopId: string, chain: string[], now: Date, actor?: AuditActor, reason?: string) {
+    const auto = await tx.operationEvent.findFirst({ where: { stopId, type: "STOP_EVENT_AUTO" }, orderBy: { createdAt: "desc" } });
+    if (!auto) throw new TourPlanConflictError("Эту отметку поставил диспетчер, здесь её отменить нельзя.");
+    const record = JSON.parse(auto.payloadJson) as AutoStopEventRecord;
+    const at = new Date(record.at);
+    const stop = await tx.stop.findUniqueOrThrow({ where: { id: stopId }, include: { tour: true } });
+    if (!stop.completedAt || stop.completedAt.getTime() !== at.getTime()) throw new TourPlanConflictError("Автоотметка уже отменена или точка изменилась.");
+    const vehicleId = stop.tour.vehicleId;
+    // Only this tour and the one it started matter: other tours' events can be later when the automatic one was dated
+    // back to a stay in the past. The other stops of the same place carry the same moment and are undone with this one.
+    const tourIds = [stop.tourId, ...(record.activated ? [record.activated.tourId] : [])];
+    const later = await tx.event.count({ where: { vehicleId, tourId: { in: tourIds }, id: { not: record.eventId }, timestamp: { gte: at },
+      NOT: { stopId: { in: chain } } } });
+    const arrivedSince = await tx.stop.count({ where: { id: { notIn: [stopId, ...chain] }, arrivedAt: { gte: at }, tourId: { in: tourIds } } });
+    if (later || arrivedSince) throw new TourPlanConflictError("После автоотметки машина уже прибыла на следующую точку. Исправьте тур вручную.");
+    const expected = record.activated ? "COMPLETED" : "ACTIVE";
+    if (stop.tour.status !== expected) throw new TourPlanConflictError("Тур изменился после автоотметки. Исправьте его вручную.");
+    if (record.activated) {
+      const activated = await tx.tour.findUnique({ where: { id: record.activated.tourId } });
+      if (activated?.status !== "ACTIVE") throw new TourPlanConflictError("Следующий тур изменился после автоотметки. Исправьте его вручную.");
+    }
+
+    // An arrival that only came with this event goes with it.
+    const reopened = await tx.stop.updateMany({ where: { id: stopId, completedAt: at }, data: { completedAt: null, ...(record.before.arrivedAt === null ? { arrivedAt: null } : {}) } });
+    if (!reopened.count) throw new TourPlanConflictError("Точка изменилась. Обновите страницу.");
+    for (const leg of [...record.before.legs, ...(record.activated?.transferLeg ? [record.activated.transferLeg] : [])]) {
+      await tx.leg.update({ where: { id: leg.id }, data: { status: leg.status, startedAt: leg.startedAt ? new Date(leg.startedAt) : null,
+        finishedAt: leg.finishedAt ? new Date(leg.finishedAt) : null, drivePlan: leg.drivePlan } });
+    }
+    const arrivalDropped = await dropForeignAutoArrival(tx, stop, at, now, actor);
+    if (record.activated) await tx.tour.update({ where: { id: record.activated.tourId }, data: { status: "QUEUED", planVersion: { increment: 1 } } });
+    await tx.tour.update({ where: { id: stop.tourId }, data: { status: record.before.tour.status, planVersion: { increment: 1 },
+      completedAt: record.before.tour.completedAt ? new Date(record.before.tour.completedAt) : null,
+      actualStartAt: record.before.tour.actualStartAt ? new Date(record.before.tour.actualStartAt) : null } });
+    await tx.vehicle.update({ where: { id: vehicleId }, data: { clockState: record.before.clockState, currentTrailerPlate: record.before.trailerPlate, operationVersion: { increment: 1 } } });
+    const note = reason?.trim() || "Автоматическая отметка отменена диспетчером";
+    await tx.event.create({ data: { vehicleId, tourId: stop.tourId, stopId, type: `${record.eventType}_REVERTED`, timestamp: now, note } });
+    await tx.notification.updateMany({ where: { stopId, type: "AUTO_STOP_EVENT", acknowledgedAt: null }, data: { acknowledgedAt: now } });
+    await tx.operationEvent.create({ data: { vehicleId, tourId: stop.tourId, stopId, type: "STOP_EVENT_REVERTED", reason: note,
+      payloadJson: JSON.stringify({ autoEventId: auto.id, eventType: record.eventType, at: record.at }), createdAt: now } });
+    await writeAuditLog(tx, actor, { action: "STOP_EVENT_REVERTED", entityType: "Stop", entityId: stopId, vehicleId, tourId: stop.tourId, stopId,
+      metadata: { event: record.eventType, at: record.at, reason: reason?.trim() || null, arrivalDropped }, createdAt: now });
   }
 
   async getCurrentPosition(vehicleId: string, now = new Date(), gps?: GpsFix | null, driver?: DriverEtaInput | null): Promise<CurrentPosition> {
@@ -576,7 +602,8 @@ export class TourService {
       const before: AutoStopEventRecord["before"] | null = options.auto ? {
         clockState: stop.tour.vehicle.clockState, trailerPlate: stop.tour.vehicle.currentTrailerPlate,
         tour: { status: stop.tour.status, completedAt: stop.tour.completedAt?.toISOString() ?? null, actualStartAt: stop.tour.actualStartAt?.toISOString() ?? null },
-        legs: stop.tour.legs.filter((leg) => leg.toStopId === stop.id || leg.fromStopId === stop.id).map(legState)
+        legs: stop.tour.legs.filter((leg) => leg.toStopId === stop.id || leg.fromStopId === stop.id).map(legState),
+        arrivedAt: stop.arrivedAt?.toISOString() ?? null
       } : null;
       if (arriveNow) {
         const arrived = await tx.stop.updateMany({ where: { id: stop.id, arrivedAt: null }, data: { arrivedAt: now } });
@@ -645,15 +672,22 @@ export class TourService {
           activated: activated ? { tourId: activated.tour.id, transferLeg: activated.transferLeg } : null, meta: options.auto.meta };
         await tx.operationEvent.create({ data: { vehicleId: stop.tour.vehicleId, tourId: stop.tourId, stopId: stop.id, type: "STOP_EVENT_AUTO",
           reason: options.auto.meta.nextStop ? "Приехала на следующую точку после стоянки на этой" : "Выехала из города после стоянки на точке", payloadJson: JSON.stringify(record), createdAt: options.auto.detectedAt } });
-        const done = eventType === "LOADED" ? "BELADEN" : "ENTLADEN";
+        // One note for all the stops of a place recorded so far; «Отменить» on it undoes them together.
+        const chain = options.auto.meta.chain ?? [stop.id];
+        const recordedStops = stop.tour.stops.filter((item) => chain.includes(item.id) && item.sequence <= stop.sequence);
+        const done = recordedStops.map((item) => item.type === "LOAD" ? "BELADEN" : "ENTLADEN").join(" и ");
+        const state = recordedStops.map((item) => item.type === "LOAD" ? "загружена" : "выгружена").join(" и ");
+        const written = recordedStops.length > 1 ? "записаны" : "записан";
         const place = stop.city || stop.address;
-        await tx.notification.create({ data: {
-          dedupKey: `auto-stop-event:${stop.id}:${recorded.id}`, vehicleId: stop.tour.vehicleId, stopId: stop.id, type: "AUTO_STOP_EVENT",
-          message: options.auto.meta.nextStop
-            ? `LKW ${stop.tour.vehicle.vehicleNumber} после стоянки в ${place} приехала на следующую точку ${options.auto.meta.nextStop} — вероятно ${eventType === "LOADED" ? "загружена" : "выгружена"}. ${done} записан автоматически на ${berlinClock(now)} (выезд с точки по GPS Webfleet). Если это ошибка, отмените.`
-            : `LKW ${stop.tour.vehicle.vehicleNumber} выехала из ${place} — вероятно ${eventType === "LOADED" ? "загружена" : "выгружена"}. ${done} записан автоматически на ${berlinClock(now)} (выезд с точки по GPS Webfleet). Если это ошибка, отмените.`,
-          payloadJson: JSON.stringify({ stopType: stop.type, at: now.toISOString(), source: "WEBFLEET_AUTO", ...options.auto.meta })
-        } });
+        const dedupKey = `auto-stop-event:${chain[0]}:${now.toISOString()}`;
+        const message = options.auto.meta.nextStop
+          ? `LKW ${stop.tour.vehicle.vehicleNumber} после стоянки в ${place} приехала на следующую точку ${options.auto.meta.nextStop} — вероятно ${state}. ${done} ${written} автоматически на ${berlinClock(now)} (выезд с точки по GPS Webfleet). Если это ошибка, отмените.`
+          : `LKW ${stop.tour.vehicle.vehicleNumber} выехала из ${place} — вероятно ${state}. ${done} ${written} автоматически на ${berlinClock(now)} (выезд с точки по GPS Webfleet). Если это ошибка, отмените.`;
+        const payloadJson = JSON.stringify({ stopType: stop.type, at: now.toISOString(), source: "WEBFLEET_AUTO", ...options.auto.meta,
+          ...(recordedStops.length > 1 ? { stopTypes: recordedStops.map((item) => item.type) } : {}) });
+        await tx.notification.upsert({ where: { dedupKey },
+          create: { dedupKey, vehicleId: stop.tour.vehicleId, stopId: stop.id, type: "AUTO_STOP_EVENT", message, payloadJson },
+          update: { stopId: stop.id, message, payloadJson, acknowledgedAt: null } });
       }
 
       return tx.tour.findUniqueOrThrow({ where: { id: stop.tourId }, include: tourInclude });
@@ -668,7 +702,8 @@ type AutoStopEventRecord = {
   eventId: string;
   eventType: "LOADED" | "UNLOADED";
   at: string;
-  before: { clockState: string | null; trailerPlate: string | null; tour: { status: string; completedAt: string | null; actualStartAt: string | null }; legs: LegState[] };
+  /** `arrivedAt`: null when the stop had no arrival before the event (absent in records written before 15.11.2026). */
+  before: { clockState: string | null; trailerPlate: string | null; tour: { status: string; completedAt: string | null; actualStartAt: string | null }; legs: LegState[]; arrivedAt?: string | null };
   activated: { tourId: string; transferLeg: LegState | null } | null;
   meta: AutoStopEventInput["meta"];
 };
