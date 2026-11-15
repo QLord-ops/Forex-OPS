@@ -125,10 +125,10 @@ describe('positions, schedules and the tachograph', () => {
     expect(Date.parse(timer.eta!)).toBeGreaterThan(Date.parse('2026-11-10T06:45:00Z'));
     expect(timer.etaPlan?.rest).toMatchObject({ seconds: 11 * H });
 
-    // Without the tachograph nothing changes: the ETA is the drive from the clock, as before.
+    // Without the tachograph the calculated clock plans the drive, and its plan is shown too, marked preliminary.
     const plain = await service.getCurrentPosition(vehicle.id, now, { latitude: 52.26, longitude: 8.62, fresh: true });
     expect(Date.parse(plain.eta!)).toBeLessThan(Date.parse('2026-11-09T21:00:00Z'));
-    expect(plain.etaPlan).toBeNull();
+    expect(plain.etaPlan).toMatchObject({ hours: 'CLOCK', preliminary: true });
   });
 
   it('an early Termin makes the position ETA take the 9 h rest and report the delay honestly', async () => {

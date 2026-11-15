@@ -440,3 +440,32 @@ function simulate(input: PlanTerminInput, engine: DriveEngine) {
   function note(result: IdleResult) { if (result.note) engine.notes.add(result.note); }
   return { stops, pieces, engineNotes: [...early.notes, ...late.notes], engineWarnings: [...early.warnings, ...late.warnings] };
 }
+
+/**
+ * Several legs one after another with the stay at every stop between them, on one driver's hours: breaks and the daily
+ * rest fall where the law puts them, and an hour of unloading counts as the break.
+ */
+export function forecastRoute(engine: DriveEngine, legSeconds: number[], staySeconds: number[], from: Date, startsAt: Date | null = null): { endAt: Date; arrivals: Date[]; plan: DriveEtaPlan } {
+  const start = startsAt && startsAt > from ? startsAt : from;
+  let at = start;
+  const pieces: Piece[] = [];
+  const arrivals: Date[] = [];
+  for (const [index, seconds] of legSeconds.entries()) {
+    const leg = engine.drive(Math.max(0, seconds), at);
+    pieces.push(...leg.pieces);
+    at = leg.endAt;
+    arrivals.push(at);
+    const stay = index < legSeconds.length - 1 ? Math.max(0, staySeconds[index] ?? 0) : 0;
+    if (stay > 0) {
+      engine.idle(stay, at);
+      at = new Date(at.getTime() + stay * 1000);
+    }
+  }
+  const rest = pieces.find(piece => piece.type === 'DAILY_REST') ?? null;
+  return { endAt: arrivals.at(-1) ?? start, arrivals, plan: {
+    hours: engine.source, preliminary: engine.preliminary, driveSeconds: Math.round(legSeconds.reduce((sum, seconds) => sum + Math.max(0, seconds), 0)),
+    breakSeconds: Math.round(pieces.filter(piece => piece.type === 'BREAK').reduce((sum, piece) => sum + piece.durationSeconds, 0)),
+    rest: rest ? { startAt: rest.startAt.toISOString(), endAt: rest.endAt.toISOString(), seconds: Math.round(rest.durationSeconds), reduced: rest.durationSeconds < DAILY_REST_SECONDS } : null,
+    startsAt: start > from ? start.toISOString() : null
+  } };
+}

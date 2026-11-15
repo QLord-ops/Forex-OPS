@@ -4,9 +4,9 @@ import type { Coordinate, CurrentPosition, RouteResult } from '../domain.js';
 import { RoutingError, type RoutingProvider } from './routing.js';
 import type { TrafficRouteResult, TrafficSection, TruckRouteProfile } from './traffic-routing.js';
 import { snapshotVehicleClock } from './tours.js';
-import { applyStopTime, forecastDrive, type ClockState, type VehicleClockSegment } from './vehicle-clock.js';
+import { applyStopTime, createInitialClockState, forecastDrive, type ClockState, type VehicleClockSegment } from './vehicle-clock.js';
 import { calculateSimulatedDuration } from './simulation.js';
-import { forecastEta, WebfleetEngine, type DriveEngine, type DriverEtaInput } from './termin-planner.js';
+import { ClockEngine, forecastEta, WebfleetEngine, type DriveEngine, type DriverEtaInput } from './termin-planner.js';
 
 const date = z.string().datetime({ offset: true });
 export const routeScenarioInputSchema = z.object({
@@ -234,7 +234,11 @@ export class RouteScenarioService {
     const geometry: Coordinate[] = [];
     const trafficSegments: ScenarioTrafficSegment[] = [];
     const stops: ScenarioStopResult[] = [];
-    const warnings = new Set(['Свободный маршрут: часы, паузы и ограничения конкретной машины не учитываются.']);
+    const warnings = new Set(['Свободный маршрут: часы конкретной машины не учитываются. Паузы 45 мин и суточный отдых посчитаны как у водителя, который начинает смену.']);
+    // A driver starting a fresh day: the 45-minute break after 4 h 30 and the daily rest still apply on a long route.
+    const earlyEngine = new ClockEngine(createInitialClockState({ effectiveAt: early }));
+    const lateEngine = new ClockEngine(createInitialClockState({ effectiveAt: late }));
+    let rests = false;
     const sources = new Set<string>();
     let distanceMeters = 0;
     const legs: ScenarioLeg[] = [];
@@ -255,8 +259,11 @@ export class RouteScenarioService {
         seconds = route.durationSeconds;
         legs.push({ from: index ? input.stops[index - 1].address : input.originAddress!, to: stop.address, options: routeOptions(index, route, option => option.durationSeconds) });
       }
-      const arrivalEarly = new Date(early.getTime() + seconds * 1000);
-      const arrivalLate = new Date(late.getTime() + seconds * 1000);
+      const driveEarly = earlyEngine.drive(seconds, early);
+      const driveLate = lateEngine.drive(seconds, late);
+      rests ||= [...driveEarly.pieces, ...driveLate.pieces].some(piece => piece.type === 'DAILY_REST');
+      const arrivalEarly = driveEarly.endAt;
+      const arrivalLate = driveLate.endAt;
       const serviceAt = stop.appointmentAt ?? stop.appointmentWindowStartAt;
       const serviceEarly = new Date(Math.max(arrivalEarly.getTime(), serviceAt ? Date.parse(serviceAt) : 0));
       const serviceLate = new Date(Math.max(arrivalLate.getTime(), serviceAt ? Date.parse(serviceAt) : 0));
@@ -264,6 +271,8 @@ export class RouteScenarioService {
       const serviceMaxMinutes = stop.serviceMaxMinutes ?? (stop.type === 'VISIT' ? 0 : 120);
       early = new Date(serviceEarly.getTime() + serviceMinMinutes * 60000);
       late = new Date(serviceLate.getTime() + serviceMaxMinutes * 60000);
+      earlyEngine.idle((early.getTime() - arrivalEarly.getTime()) / 1000, arrivalEarly);
+      lateEngine.idle((late.getTime() - arrivalLate.getTime()) / 1000, arrivalLate);
       stops.push({ address: stop.address, type: stop.type, coords,
         earliestArrival: arrivalEarly.toISOString(), latestArrival: arrivalLate.toISOString(),
         earliestServiceStart: serviceEarly.toISOString(), latestServiceStart: serviceLate.toISOString(),
@@ -276,7 +285,7 @@ export class RouteScenarioService {
       generatedAt: now.toISOString(), startRange, completion: { earliest: early.toISOString(), latest: late.toISOString() },
       dayEndsAt: berlinDayEnd(now).toISOString(), finishToday: 'UNKNOWN' as Risk, preliminary: true,
       stops, legs, geometry: geometry.map(point => [point.longitude, point.latitude] as [number, number]), trafficSegments, distanceMeters,
-      warnings: [...warnings], routingProviders: [...sources], requiresDailyRest: false, downstreamQueueImpact: [] };
+      warnings: [...warnings], routingProviders: [...sources], requiresDailyRest: rests, downstreamQueueImpact: [] };
   }
 }
 

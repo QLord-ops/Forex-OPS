@@ -488,15 +488,15 @@ export class DailyStatusService {
     clock: ReturnType<typeof snapshotVehicleClock>['clockState'], row: { clockState: string | null; manualStoppedAt: Date | null; issues: Array<{ kind: string; resolvedAt: Date | null; expectedResolvedAt: Date | null }> },
     tours: Array<Parameters<EtaService['calculateVehicleSchedule']>[0][number]>): Date | null {
     let plan;
+    const budget = start.kind === 'TACHO' && hours.times ? driverBudgetFromWebfleet(hours.times, { workState: hours.workState, since: hours.activitySince }, now) : null;
     if (start.kind === 'TACHO') {
-      const budget = hours.times ? driverBudgetFromWebfleet(hours.times, { workState: hours.workState, since: hours.activitySince }, now) : null;
       plan = planTermin({ now, startAt: now, stops, targetIndex: 0, driver: budget, clock: budget ? null : clock, vehicle, start: PLAN_START });
     } else if (start.at) {
       plan = planTermin({ now, startAt: start.at, stops, targetIndex: 0, driver: freshDayBudget(start.at, hours.times), clock: null, vehicle, start: PLAN_START });
     }
     const at = plan?.stops[0]?.earliestArrival;
     if (at) return new Date(at);
-    const schedule = this.deps.eta.calculateVehicleSchedule(tours.map((tour) => ({ ...tour, vehicle: row })), now);
+    const schedule = this.deps.eta.calculateVehicleSchedule(tours.map((tour) => ({ ...tour, vehicle: row })), now, budget ? { budget, startsAt: null } : null);
     return schedule.find((item) => item.stopId === stops[0]?.stopId)?.predictedEta ?? null;
   }
 

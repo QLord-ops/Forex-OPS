@@ -41,7 +41,7 @@ import { withTerminGroups } from './services/termin-groups.js';
 import { VehicleBriefService } from './services/vehicle-brief.js';
 import { calculateRiskColor, calculateSimulatedDuration } from './services/simulation.js';
 import { forecastDrive } from './services/vehicle-clock.js';
-import { forecastEta, WebfleetEngine } from './services/termin-planner.js';
+import { ClockEngine, forecastRoute, WebfleetEngine } from './services/termin-planner.js';
 import { forecastClock, parseClockState } from './services/tours.js';
 import { registerDispatcherAuth, requireDispatcherRoles, type DispatcherAuthOptions } from './services/dispatcher-auth.js';
 import { RouteScenarioService, routeScenarioInputSchema } from './services/route-scenario.js';
@@ -271,13 +271,26 @@ const webfleetTelemetry = new WebfleetTelemetryService(prisma, autoArrival, auto
 const driverBudget = (id: string, now: Date) => readDriverBudget(prisma, webfleetLive, id, now).catch(() => null);
 const currentPosition = async (id: string, now = new Date()) => {
   const [telemetry, driver] = await Promise.all([webfleetTelemetry.latest(id, now), driverBudget(id, now)]);
-  return withWebfleetPosition(await tourService.getCurrentPosition(id, now, gpsFixOf(telemetry), driver), telemetry);
+  return withWebfleetPosition(await tourService.getCurrentPosition(id, now, await gpsFixWithDriving(id, telemetry, driver, now), driver), telemetry);
 };
+/** The GPS fix, with the driving since the last real stop when no tachograph tells the driver's hours. */
+async function gpsFixWithDriving(id: string, telemetry: Awaited<ReturnType<WebfleetTelemetryService['latest']>>, driver: unknown, now: Date): Promise<GpsFix | null> {
+  const fix = gpsFixOf(telemetry);
+  if (!fix?.fresh || driver) return fix;
+  return { ...fix, drivenSinceBreakSeconds: await webfleetTelemetry.drivingSinceBreak(id, now).catch(() => null) };
+}
+/** The next stops of one truck on its own hours: the tachograph when Webfleet has it, else the truck's calculated clock. */
+async function scheduleOf(vehicle: { id: string; clockState: string | null; manualStoppedAt: Date | null; issues?: Array<{ kind: string; resolvedAt: Date | null; expectedResolvedAt: Date | null }>;
+  tours: Parameters<EtaService['calculateVehicleSchedule']>[0] }, now = new Date()) {
+  const driver = await driverBudget(vehicle.id, now);
+  const own = { clockState: vehicle.clockState, manualStoppedAt: vehicle.manualStoppedAt, issues: vehicle.issues ?? [] };
+  return etaService.calculateVehicleSchedule(vehicle.tours.map((tour) => ({ ...tour, vehicle: own })), now, driver);
+}
 async function enrichTourLive(tour: TourAggregate) {
   const now = new Date();
   return enrichTour(tour, now, await driverBudget(tour.vehicleId, now));
 }
-const appointmentService = new AppointmentService(prisma, etaService, currentPosition);
+const appointmentService = new AppointmentService(prisma, etaService, currentPosition, driverBudget);
 const replanningService = new ReplanningService(prisma, routingService, currentPosition);
 const stopCoordinates = new StopCoordinatesService(prisma, routingService, () => addressRules.all(), replanningService);
 const trafficService = new TrafficOperationsService(prisma, tourService, notificationService, new TrafficRoutingService(trafficProvider, trafficQuota), currentPosition);
@@ -1241,7 +1254,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
       stops: z.array(z.object({
         address: z.string().trim().min(1),
         latitude: z.number().min(-90).max(90).optional(),
-        longitude: z.number().min(-180).max(180).optional()
+        longitude: z.number().min(-180).max(180).optional(),
+        serviceMinMinutes: z.number().int().min(0).max(10080).optional()
       })).min(2).max(20)
     }).parse(request.body);
     const vehicle = input.vehicleId ? await prisma.vehicle.findUniqueOrThrow({ where: { id: input.vehicleId } }) : null;
@@ -1264,9 +1278,14 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const now = new Date();
     // On the driver's tachograph when Webfleet has it; otherwise the calculated clock, preliminary.
     const driver = vehicle ? await driverBudget(vehicle.id, now) : null;
+    // Each leg is driven in its share of the route, and the truck stays at every stop on the way (an hour unless given):
+    // breaks, the daily rest and the time at the stops all go into the arrival at the last one.
+    const crow = points.slice(1).map((point, index) => distanceMeters(points[index].latitude, points[index].longitude, point.latitude, point.longitude));
+    const crowTotal = crow.reduce((sum, meters) => sum + meters, 0);
+    const legSeconds = crow.map((meters) => crowTotal > 0 ? durationSeconds * meters / crowTotal : durationSeconds / crow.length);
+    const stays = (origin ? input.stops : input.stops.slice(1)).map((stop) => (stop.serviceMinMinutes ?? 60) * 60);
     const forecast = origin && vehicle
-      ? driver ? forecastEta(new WebfleetEngine(driver.budget), durationSeconds, now, null, driver.startsAt)
-        : { ...forecastDrive(forecastClock(parseClockState(vehicle.clockState, now), now), durationSeconds, now), plan: null }
+      ? forecastRoute(driver ? new WebfleetEngine(driver.budget) : new ClockEngine(forecastClock(parseClockState(vehicle.clockState, now), now)), legSeconds, stays, now, driver?.startsAt ?? null)
       : null;
     return {
       distanceMeters: route.distanceMeters,
@@ -1401,6 +1420,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const vehicle = await prisma.vehicle.findUniqueOrThrow({
       where: { id },
       include: {
+        issues: { where: { resolvedAt: null } },
         tours: {
           where: { status: { in: ["ACTIVE", "QUEUED", "COMPLETED"] } },
           include: { stops: { orderBy: { sequence: "asc" } }, legs: { orderBy: { createdAt: "asc" } } },
@@ -1408,7 +1428,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
         }
       }
     });
-    const schedule = etaService.calculateVehicleSchedule(vehicle.tours);
+    const schedule = await scheduleOf(vehicle);
     const tours = vehicle.tours.map((tour) => ({ ...tour, stops: withTerminGroups(tour.stops) }));
     const items = tours.flatMap((tour) => buildTimelineItems(tour));
     return {
@@ -1514,7 +1534,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
         prisma.operationEvent.findFirst({ where: { vehicleId: vehicle.id }, orderBy: { createdAt: "desc" } }),
         driverBudget(vehicle.id, generatedAt)
       ]);
-      const calculatedPosition = await tourService.getCurrentPosition(vehicle.id, generatedAt, gpsFixOf(latestTelemetry), driver);
+      const calculatedPosition = await tourService.getCurrentPosition(vehicle.id, generatedAt, await gpsFixWithDriving(vehicle.id, latestTelemetry, driver, generatedAt), driver);
       const position = withWebfleetPosition(calculatedPosition, latestTelemetry);
       const currentStop = activeTour?.stops.find((stop) => !stop.completedAt) ?? null;
       const scheduledStop = currentStop ? etaService.calculateVehicleSchedule(vehicle.tours, generatedAt, driver).find((stop) => stop.stopId === currentStop.id) : null;
@@ -1665,6 +1685,7 @@ export default vercelApp?.server;
 async function refreshAllAlerts() {
   const vehicles = await prisma.vehicle.findMany({
     include: {
+      issues: { where: { resolvedAt: null } },
       tours: {
         where: { status: { in: ["ACTIVE", "QUEUED"] } },
         include: { stops: { orderBy: { sequence: "asc" } }, legs: { orderBy: { createdAt: "asc" } } },
@@ -1674,8 +1695,7 @@ async function refreshAllAlerts() {
   });
 
   for (const vehicle of vehicles) {
-    const schedule = etaService.calculateVehicleSchedule(vehicle.tours);
-    await alertService.refreshVehicleAlerts(vehicle.id, schedule);
+    await alertService.refreshVehicleAlerts(vehicle.id, await scheduleOf(vehicle));
   }
 }
 
@@ -1683,6 +1703,7 @@ async function refreshAlertsForVehicle(vehicleId: string) {
   const vehicle = await prisma.vehicle.findUniqueOrThrow({
     where: { id: vehicleId },
     include: {
+      issues: { where: { resolvedAt: null } },
       tours: {
         where: { status: { in: ["ACTIVE", "QUEUED"] } },
         include: { stops: { orderBy: { sequence: "asc" } }, legs: { orderBy: { createdAt: "asc" } } },
@@ -1690,7 +1711,7 @@ async function refreshAlertsForVehicle(vehicleId: string) {
       }
     }
   });
-  await alertService.refreshVehicleAlerts(vehicle.id, etaService.calculateVehicleSchedule(vehicle.tours));
+  await alertService.refreshVehicleAlerts(vehicle.id, await scheduleOf(vehicle));
 }
 
 function isPrismaRecordNotFound(error: unknown): boolean {
