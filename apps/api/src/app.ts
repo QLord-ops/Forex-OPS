@@ -303,7 +303,7 @@ const terminService = new TerminService(prisma, routingService, currentPosition,
 const briefService = new VehicleBriefService(prisma, etaService, currentPosition, driverHours, async (id, now) => (await webfleetTelemetry.latest(id, now))?.address ?? null);
 const dailyStatus = new DailyStatusService(prisma, {
   getPosition: currentPosition,
-  latestTelemetry: async (id, now) => { const telemetry = await webfleetTelemetry.latest(id, now); return telemetry ? { address: telemetry.address, stale: telemetry.stale } : null; },
+  latestTelemetry: async (id, now) => { const telemetry = await webfleetTelemetry.latest(id, now); return telemetry ? { address: telemetry.address, stale: telemetry.stale, latitude: telemetry.latitude, longitude: telemetry.longitude } : null; },
   // The card is often out at 07:00: the last driver's figures still tell when the next shift may start (memory only).
   driverHours: (id, now) => readDriverHours(prisma, webfleetLive, id, now, { recent: true }),
   coupledTrailerNo: async (id) => { const coupling = webfleetLive.coupling(await vehicleObjectUid(prisma, id)); return coupling ? webfleetLive.objectNo(coupling.assetUid) : null; },

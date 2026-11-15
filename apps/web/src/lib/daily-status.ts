@@ -2,7 +2,7 @@ import { authHeaders, notifySessionExpired } from './auth'
 import { ApiError, readErrorMessage } from './api'
 import type { StatusGroup, VehicleLine } from '../types/domain'
 
-export type StatusFlag = 'NO_WEBFLEET' | 'GPS_STALE' | 'NO_GPS' | 'TACHO_MISSING' | 'ROUTE_ESTIMATE' | 'PRELIMINARY' | 'TERMIN_AT_RISK'
+export type StatusFlag = 'NO_WEBFLEET' | 'GPS_STALE' | 'NO_GPS' | 'TACHO_MISSING' | 'ROUTE_ESTIMATE' | 'PRELIMINARY' | 'TERMIN_AT_RISK' | 'LEFT_WITHOUT_EVENT'
 export interface DailyStatusRow {
   id: string; vehicleId: string | null; vehicleNumber: string; statusGroup: StatusGroup | string | null; rule: 'STUCK' | 'EMPTY' | 'AT_STOP' | 'EN_ROUTE'
   startKind: 'TACHO' | 'TERMIN_LATEST' | 'AFTER_REST' | 'DEFAULT' | 'NONE'; ankunftKind: 'TERMIN' | 'ETA' | 'ARRIVED' | 'NONE'
@@ -129,7 +129,8 @@ export const ankunftHint = (row: Pick<DailyStatusRow, 'ankunftKind'>) => ANKUNFT
 
 const FLAG_TEXT: Record<StatusFlag, string | null> = {
   NO_WEBFLEET: 'нет Webfleet', GPS_STALE: 'GPS устарел', NO_GPS: 'нет GPS', TACHO_MISSING: null, ROUTE_ESTIMATE: 'путь оценён по прямой',
-  PRELIMINARY: 'предварительно', TERMIN_AT_RISK: 'Termin под угрозой'
+  PRELIMINARY: 'предварительно', TERMIN_AT_RISK: 'Termin под угрозой',
+  LEFT_WITHOUT_EVENT: 'уехала с прошлой точки без BELADEN/ENTLADEN — отметьте'
 }
 /** Short notes next to a row: always text, never only a colour. */
 export function flagNotes(row: Pick<DailyStatusRow, 'flags'>) {
