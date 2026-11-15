@@ -6,6 +6,16 @@ export const TRAFFIC_REFRESH_MS = 5 * 60_000
 /** Closer in, the zoom-12 tiles are scaled up: far fewer tiles to fetch and read while zooming. */
 export const TRAFFIC_MAX_TILE_ZOOM = 12
 
+/**
+ * Traffic is shown for Germany only (owner, 15.11.2026): tiles outside this box are never fetched. A box, not the border,
+ * so strips of the neighbours along it are inside too.
+ */
+export const GERMANY_BOUNDS: [number, number, number, number] = [5.87, 47.27, 15.04, 55.06]
+
+export function inGermany(coordinate: readonly [number, number]): boolean {
+  return coordinate[0] >= GERMANY_BOUNDS[0] && coordinate[0] <= GERMANY_BOUNDS[2] && coordinate[1] >= GERMANY_BOUNDS[1] && coordinate[1] <= GERMANY_BOUNDS[3]
+}
+
 /** The refresh slot in the address: the browser fetches new tiles once per slot and reuses them inside it. */
 export function trafficTileUrl(key: string, now = Date.now()) {
   return `https://api.tomtom.com/traffic/map/4/tile/flow/relative-delay/{z}/{x}/{y}.pbf?key=${encodeURIComponent(key)}&t=${Math.floor(now / TRAFFIC_REFRESH_MS)}`

@@ -239,6 +239,10 @@ export class TomTomRoutingProvider implements RoutingProvider {
     return this.fallback.geocode(address);
   }
 
+  async reverseGeocode(latitude: number, longitude: number) {
+    return await this.fallback.reverseGeocode?.(latitude, longitude) ?? null;
+  }
+
   async calculateRoute(
     origin: Coordinate,
     destination: Coordinate,

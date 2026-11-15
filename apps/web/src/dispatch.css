@@ -256,6 +256,19 @@ button.decision-card-title:focus-visible { outline: 2px solid var(--focus); outl
 .map-diagnostics label input { margin-top: 3px; }
 .map-diagnostics small { color: rgb(var(--tx-64748b)); }
 .map-diagnostics-warning { margin: 0; border-left: 3px solid rgb(var(--ln-dc2626)); padding-left: 8px; color: rgb(var(--tx-dc2626)); }
+.map-context-menu { position: absolute; z-index: 13; display: grid; gap: 2px; border: 1px solid rgb(var(--ln-e3e8ef)); border-radius: 10px; background: rgb(var(--bg-ffffff)); padding: 6px; color: rgb(var(--tx-0f172a)); font-size: .8125rem; line-height: 1.35; box-shadow: 0 8px 24px rgb(var(--shadow-rgb) / 0.2); }
+.map-context-coordinates, .map-context-item { display: flex; min-height: 32px; width: 100%; align-items: center; gap: 8px; border-radius: 7px; padding: 6px 8px; text-align: left; color: inherit; cursor: pointer; }
+.map-context-coordinates { justify-content: space-between; font-weight: 600; font-variant-numeric: tabular-nums; }
+.map-context-item span { min-width: 0; overflow-wrap: anywhere; }
+.map-context-item svg, .map-context-coordinates svg { flex: none; color: rgb(var(--tx-64748b)); }
+.map-context-coordinates:hover, .map-context-item:hover { background: rgb(var(--bg-f1f5f9)); }
+.map-context-coordinates:focus-visible, .map-context-item:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.map-context-item:disabled { color: rgb(var(--tx-64748b)); cursor: progress; }
+.map-context-distances { display: grid; gap: 2px; margin: 2px 0; border-top: 1px solid rgb(var(--ln-e3e8ef)); border-bottom: 1px solid rgb(var(--ln-e3e8ef)); padding: 6px 8px; }
+.map-context-distances div { display: flex; justify-content: space-between; gap: 12px; }
+.map-context-distances dt { color: rgb(var(--tx-64748b)); }
+.map-context-distances dd { margin: 0; font-variant-numeric: tabular-nums; }
+.map-context-status { min-height: 1.35em; margin: 0; padding: 0 8px 2px; color: rgb(var(--tx-475569)); font-size: .75rem; }
 .map-panel-card .map-traffic-legend { top: auto; bottom: 12px; left: 12px; max-width: calc(100% - 24px); }
 .map-error, .dashboard-sync-warning { position: absolute; z-index: 8; top: 76px; left: 50%; border-radius: 10px; padding: 8px 12px; font-size: .8125rem; font-weight: 500; box-shadow: 0 8px 24px rgb(var(--shadow-rgb) / 0.16); transform: translateX(-50%); }
 .map-error { border: 1px solid rgb(var(--ln-fecaca)); background: rgb(var(--bg-fff1f2)); color: rgb(var(--tx-9f1239)); }
