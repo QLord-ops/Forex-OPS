@@ -117,12 +117,12 @@ describe('a driver without tachograph data who has already been driving', () => 
   it('reads the driving since the last stop of 45 minutes from the GPS history', async () => {
     const vehicle = await db.vehicle.create({ data: { vehicleNumber: 'E5' } });
     const telemetry = new WebfleetTelemetryService(db as unknown as PostgresPrismaClient);
-    const row = (minutesBefore: number, standstill: boolean) => db.vehicleTelemetry.create({ data: { vehicleId: vehicle.id, provider: 'WEBFLEET', externalId: `wf-E5-${minutesBefore}`,
+    const row = (minutesBefore: number, standstill: boolean) => ({ vehicleId: vehicle.id, provider: 'WEBFLEET', externalId: `wf-E5-${minutesBefore}`,
       latitude: 51.5, longitude: 9.9, speedKmh: standstill ? 0 : 80, recordedAt: new Date(now.getTime() - minutesBefore * 60_000), receivedAt: now,
-      rawJson: JSON.stringify({ standstill }) } });
+      rawJson: JSON.stringify({ standstill }) });
     // Stood an hour (night parking), then drove the last 4 hours with a 20-minute stop in between.
-    for (let minute = 300; minute >= 241; minute -= 1) await row(minute, true);
-    for (let minute = 240; minute >= 1; minute -= 1) await row(minute, minute >= 100 && minute < 120);
+    const minutes = Array.from({ length: 300 }, (_, index) => 300 - index);
+    await db.vehicleTelemetry.createMany({ data: minutes.map((minute) => row(minute, minute >= 241 || (minute >= 100 && minute < 120))) });
     const driven = await telemetry.drivingSinceBreak(vehicle.id, now);
     expect(driven).toBeGreaterThan(3.5 * H);
     expect(driven).toBeLessThan(4 * H);

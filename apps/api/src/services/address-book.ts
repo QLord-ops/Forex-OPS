@@ -1,5 +1,6 @@
 import type { PrismaClient } from '@prisma/client';
 import { normalizePattern } from './address-rules.js';
+import { streetKey } from './known-places.js';
 import { writeAuditLog, type AuditActor } from './audit-log.js';
 import { readWebfleetConfig, webfleetRequest, WebfleetError, type WebfleetConfig, type WebfleetErrorCategory, type WebfleetReadAction } from './webfleet.js';
 
@@ -174,15 +175,18 @@ export async function searchAddresses(db: Pick<PrismaClient, 'knownAddress' | 'a
   const words = normalizePattern(query).split(' ').filter((word) => word.length >= 2).slice(0, 5);
   if (!words.length) return [];
   const [known, rules] = await Promise.all([
-    db.knownAddress.findMany({ where: { active: true, AND: words.map((word) => ({ searchText: { contains: word } })) }, take: 200 }),
+    db.knownAddress.findMany({ where: { active: true, source: { not: 'GPS_STAY' }, AND: words.map((word) => ({ searchText: { contains: word } })) }, take: 200 }),
     db.addressRule.findMany({ where: { kind: 'SITE', latitude: { not: null }, longitude: { not: null }, AND: words.map((word) => ({ pattern: { contains: word } })) }, take: 50 })
   ]);
+  // A suggested door carries the point where trucks really stood there, once two stays agreed on it.
+  const stays = known.length ? await db.knownAddress.findMany({ where: { source: 'GPS_STAY', active: true, postalCode: { in: [...new Set(known.map((row) => row.postalCode).filter((code): code is string => Boolean(code)))] } } }) : [];
+  const stayOf = (row: { street: string | null; postalCode: string | null }) => stays.find((stay) => stay.postalCode === row.postalCode && stay.street && row.street && streetKey(stay.street) && streetKey(stay.street) === streetKey(row.street));
   const first = words.join(' ');
   const rank = (name: string) => normalizePattern(name).startsWith(first) ? 0 : normalizePattern(name).split(' ').some((part) => part.startsWith(words[0])) ? 1 : 2;
   const fromWebfleet: AddressSuggestion[] = known
     .sort((a, b) => rank(a.name) - rank(b.name) || b.useCount - a.useCount || a.name.localeCompare(b.name, 'de'))
     .map((row) => ({ id: row.id, source: row.source === 'WEBFLEET' ? 'WEBFLEET' as const : 'OPS' as const, label: [row.name, row.name2].filter(Boolean).join(' · '), line2: [row.street, [row.postalCode, row.city].filter(Boolean).join(' ')].filter(Boolean).join(', '),
-      company: row.name, street: row.street, postalCode: row.postalCode, city: row.city, latitude: row.latitude, longitude: row.longitude, radiusMeters: row.radiusMeters }));
+      company: row.name, street: row.street, postalCode: row.postalCode, city: row.city, latitude: stayOf(row)?.latitude ?? row.latitude, longitude: stayOf(row)?.longitude ?? row.longitude, radiusMeters: row.radiusMeters }));
   const fromRules: AddressSuggestion[] = rules
     .filter((rule) => rule.latitude !== null && rule.longitude !== null)
     .map((rule) => ({ id: `rule:${rule.id}`, source: 'RULE', label: rule.company ?? rule.pattern, line2: [rule.street, [rule.postalCode, rule.city].filter(Boolean).join(' ')].filter(Boolean).join(', '),
