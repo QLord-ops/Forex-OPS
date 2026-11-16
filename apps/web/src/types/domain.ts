@@ -606,6 +606,7 @@ export interface ReadStats {
   settingsRejected: boolean
   contextMs?: number
   totalMs?: number
+  queueMs?: number
 }
 
 /** Reading speed over the last stored documents (admin, Settings). */
@@ -616,6 +617,8 @@ export interface ImportSpeedSummary {
   medianMs: number | null
   p90Ms: number | null
   modelMedianMs: number | null
+  queueMedianMs?: number | null
+  queueP90Ms?: number | null
   withinTarget: number
   cachedShare: number | null
   inputTokensMedian: number | null
@@ -626,6 +629,20 @@ export interface ImportSpeedSummary {
   lastReadAt: string | null
   last: { model: string; effort: string; serviceTier: string | null } | null
   configured: { effort: string; serviceTier: string | null }
+  /** Since the server started: refused and failed readings, and how the address lookups went. */
+  health?: ImportHealthSummary | null
+}
+
+export interface ImportHealthSummary {
+  since: string
+  readingsFailed: number
+  queueFull: number
+  limitReached: number
+  addressLookups: number
+  addressFailed: number
+  addressBusy: number
+  addressMedianMs: number | null
+  addressP90Ms: number | null
 }
 
 export interface OrderImportPreview {

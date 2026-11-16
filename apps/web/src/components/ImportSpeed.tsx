@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 
 import { api } from '../lib/api'
-import { speedCard } from '../lib/import-stats'
+import { healthRows, speedCard } from '../lib/import-stats'
 import type { ImportSpeedSummary } from '../types/domain'
 
 /** Admin card: how fast the last Auftrag were read against the 10 s promise, and what the server is set to. */
@@ -28,6 +28,10 @@ export function ImportSpeed() {
       <p className="speed-verdict" role="status">{card.verdict}</p>
       <dl className="speed-rows">{card.rows.map((row) => <div key={row.label} className="contents"><dt>{row.label}</dt><dd>{row.value}</dd></div>)}</dl>
       {card.warning ? <p className="quick-order-error" role="alert">{card.warning}</p> : null}
+    </> : null}
+    {summary?.health ? <>
+      <h4 className="settings-subtitle">Отказы и поиск адресов с запуска сервера</h4>
+      <dl className="speed-rows">{healthRows(summary.health).map((row) => <div key={row.label} className="contents"><dt>{row.label}</dt><dd>{row.value}</dd></div>)}</dl>
     </> : null}
     {summary && !card ? <p className="page-subtitle" role="status">Замеров пока нет — появятся после первого PDF или фото, прочитанного после обновления.</p> : null}
     {error ? <p className="quick-order-error" role="alert">{error}</p> : null}

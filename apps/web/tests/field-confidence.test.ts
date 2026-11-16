@@ -21,6 +21,11 @@ describe('field confidence in the check', () => {
     expect(withGeocode(score(0.95, 'OK'), 'CITY')).toMatchObject({ score: 0.5, level: 'DOUBT', reasons: ['CITY_ONLY_GEOCODE'] })
     expect(withGeocode(score(0.95, 'OK'), 'EXACT')).toMatchObject({ level: 'OK' })
     expect(withGeocode(undefined, 'CITY')).toBeUndefined()
+    // The Auftrag printed the house: the street alone is a hint, a postcode area for it is in doubt (16.11).
+    expect(withGeocode(score(0.95, 'OK'), 'STREET')).toMatchObject({ score: 0.7, level: 'CHECK', reasons: ['HOUSE_NOT_FOUND'] })
+    expect(withGeocode(score(0.95, 'OK'), 'POSTCODE_CITY')).toMatchObject({ score: 0.5, level: 'DOUBT', reasons: ['CITY_ONLY_GEOCODE'] })
+    // No house number printed: the server already holds the score at 0.5 and nothing more is added.
+    expect(withGeocode({ ...score(0.5, 'DOUBT'), reasons: ['ADDRESS_NO_HOUSE_NUMBER'] }, 'STREET')?.reasons).toEqual(['ADDRESS_NO_HOUSE_NUMBER'])
   })
 
   it('never lets a doubtful truck reading block the confirmation; the Auftrag number does', () => {

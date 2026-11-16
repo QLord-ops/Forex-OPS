@@ -106,6 +106,20 @@ it('persists quota and rejects attempts beyond configured limit', async () => {
   await expect(f.service.consumeUsage('specific-session', new Date(now.getTime() + 60000))).resolves.toBeUndefined();
 });
 
+it('counts the day per dispatcher: one who used up the day does not stop the others (owner, 16.11)', async () => {
+  const f = await fixture('ASSISTANT-DAY-LIMIT');
+  const previous = process.env.ASSISTANT_DAILY_LIMIT;
+  process.env.ASSISTANT_DAILY_LIMIT = '3';
+  try {
+    const day = new Date(now.getTime() + 3 * 86_400_000);
+    for (let i = 0; i < 3; i++) await f.service.consumeUsage('dispatcher-a', new Date(day.getTime() + i * 60_000));
+    await expect(f.service.consumeUsage('dispatcher-a', new Date(day.getTime() + 5 * 60_000))).rejects.toThrow('Лимит');
+    await expect(f.service.consumeUsage('dispatcher-b', new Date(day.getTime() + 5 * 60_000))).resolves.toBeUndefined();
+  } finally {
+    if (previous === undefined) delete process.env.ASSISTANT_DAILY_LIMIT; else process.env.ASSISTANT_DAILY_LIMIT = previous;
+  }
+});
+
 it('free route origin overrides selected vehicle and also works without a vehicle', async () => {
   const scenario = vi.fn(async () => ({ geometry: [[13, 52], [10, 53]] }));
   const f = await fixture('ASSISTANT-FREE', { scenario });

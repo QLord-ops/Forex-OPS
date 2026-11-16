@@ -17,7 +17,7 @@ function openPlz(localities: Record<string, string[]>, streets: Record<string, s
 
 describe("address parts", () => {
   it("takes the street with a house number, the postcode and the town", () => {
-    expect(addressParts("Industriestraße 5, D-38239 Salzgitter")).toEqual({ street: "Industriestraße", postalCode: "38239", city: "Salzgitter" });
+    expect(addressParts("Industriestraße 5, D-38239 Salzgitter")).toEqual({ street: "Industriestraße", houseNumber: "5", postalCode: "38239", city: "Salzgitter" });
     expect(addressParts("Werk 2, 38239", "Salzgitter").city).toBe("Salzgitter");
     expect(addressParts("BLG", "28197 Bremen")).toEqual({ street: undefined, postalCode: "28197", city: "Bremen" });
   });

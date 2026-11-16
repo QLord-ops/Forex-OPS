@@ -80,10 +80,10 @@ describe("address resolution fallback", () => {
     });
   });
 
-  it("does not hide a provider outage behind an approximate city result", async () => {
+  it("does not hide a provider outage behind an approximate city result: it says the services are busy", async () => {
     const routing = { geocode: vi.fn().mockRejectedValue(new RoutingError("Сервис недоступен.", 502)) } as unknown as RoutingProvider;
     await expect(resolveAddressWithFallback(routing, { address: "Teststraße 1, 10115 Berlin", city: "Berlin" }))
-      .rejects.toMatchObject({ statusCode: 502 });
+      .rejects.toMatchObject({ statusCode: 503 });
     expect(routing.geocode).toHaveBeenCalledTimes(1);
   });
 

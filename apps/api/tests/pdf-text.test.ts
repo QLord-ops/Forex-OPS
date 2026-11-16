@@ -3,6 +3,13 @@ import { extractPdfText, hasTextLayer, pagesAsText } from "../src/services/pdf-t
 import { auftragPdf, buildTextPdf } from "./pdf-fixture.js";
 
 describe("the text layer of a PDF Auftrag", () => {
+  it("is taken out once per file: the reading and the address check after it share it", async () => {
+    const pdf = auftragPdf();
+    const first = extractPdfText(pdf);
+    expect(extractPdfText(pdf)).toBe(first);
+    expect(await first).not.toBeNull();
+  });
+
   it("reads the pages as rows, keeps table columns apart and numbers the pages", async () => {
     const text = await extractPdfText(auftragPdf());
     expect(text).not.toBeNull();

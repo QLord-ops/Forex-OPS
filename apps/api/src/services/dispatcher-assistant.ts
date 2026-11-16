@@ -77,11 +77,13 @@ export class DispatcherAssistantService {
   async consumeUsage(session: string, now = new Date()) {
     const positive = (value: string | undefined, fallback: number) => value && /^\d+$/.test(value) && Number(value) > 0 ? Number(value) : fallback;
     const minute = Math.floor(now.getTime() / 60000);
+    const who = createHash('sha256').update(session).digest('hex').slice(0, 24);
     const day = now.toLocaleDateString('en-CA', { timeZone: 'Europe/Berlin' });
     const month = day.slice(0, 7);
     const keys = [
-      { id: `minute:${createHash('sha256').update(session).digest('hex').slice(0, 24)}:${minute}`, limit: positive(process.env.ASSISTANT_MINUTE_LIMIT, 10), ttl: 120000 },
-      { id: `day:${day}`, limit: positive(process.env.ASSISTANT_DAILY_LIMIT, 200), ttl: 172800000 },
+      { id: `minute:${who}:${minute}`, limit: positive(process.env.ASSISTANT_MINUTE_LIMIT, 10), ttl: 120000 },
+      // Per dispatcher (owner, 16.11): one shared day of 200 ran out for five by the afternoon and stopped every Auftrag.
+      { id: `day:${who}:${day}`, limit: positive(process.env.ASSISTANT_DAILY_LIMIT, 200), ttl: 172800000 },
       { id: `openai:month:${month}`, limit: positive(process.env.OPENAI_MONTHLY_LIMIT, 5_000), ttl: 40 * 24 * 60 * 60_000 }
     ];
     await this.db.$transaction(async tx => {

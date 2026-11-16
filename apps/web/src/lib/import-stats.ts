@@ -1,4 +1,4 @@
-import type { ImportSpeedSummary, ReadStats } from '../types/domain'
+import type { ImportHealthSummary, ImportSpeedSummary, ReadStats } from '../types/domain'
 
 const NBSP = '\u00a0'
 
@@ -29,6 +29,7 @@ export function readStatsLine(stats: ReadStats): string {
     stats.outputTokens === null ? null : `выход ${tokensText(stats.outputTokens)}`
   ].filter(Boolean).join(', ')
   return [
+    stats.queueMs ? `очередь ${secondsText(stats.queueMs)}` : null,
     `ИИ ${secondsText(stats.modelMs)}`,
     stats.readMode === 'text' ? `текст ${secondsText(stats.extractMs)}` : stats.readMode === 'image' ? 'фото' : 'PDF как файл',
     `проверка ${secondsText(checks)}`,
@@ -51,6 +52,7 @@ export function speedCard(summary: ImportSpeedSummary): { verdict: string; onTar
     { label: `Уложились в ${target}`, value: `${summary.withinTarget} из ${summary.count} (${share}${NBSP}%)` }
   ]
   if (summary.modelMedianMs !== null) rows.push({ label: 'Ответ ИИ (медиана)', value: secondsText(summary.modelMedianMs) })
+  if (summary.queueMedianMs != null && summary.queueP90Ms != null) rows.push({ label: 'Ожидание в очереди', value: `медиана ${secondsText(summary.queueMedianMs)}, 90${NBSP}% — до ${secondsText(summary.queueP90Ms)}` })
   if (summary.inputTokensMedian !== null && summary.outputTokensMedian !== null) {
     rows.push({ label: 'Токены на Auftrag (медиана)', value: `вход ${tokensText(summary.inputTokensMedian)}, выход ${tokensText(summary.outputTokensMedian)}` })
   }
@@ -67,4 +69,19 @@ export function speedCard(summary: ImportSpeedSummary): { verdict: string; onTar
     rows,
     warning: summary.settingsRejected ? `OpenAI отклонил настройки скорости в ${summary.settingsRejected} из ${summary.count} разборов — они прошли с обычными настройками.` : null
   }
+}
+
+/** What went wrong since the server started (owner, 16.11: «не всегда проходят»): refusals, failures, the address lookups. */
+export function healthRows(health: ImportHealthSummary): SpeedRow[] {
+  const since = new Date(health.since).toLocaleString('de-DE', { timeZone: 'Europe/Berlin', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+  const rows: SpeedRow[] = [
+    { label: 'Не прочитано', value: `${health.readingsFailed} с ${since}` },
+    { label: 'Отказ: очередь полна', value: String(health.queueFull) },
+    { label: 'Отказ: лимит ИИ', value: String(health.limitReached) }
+  ]
+  if (health.addressLookups) {
+    rows.push({ label: 'Поиск адреса', value: `${health.addressLookups} раз${health.addressMedianMs !== null && health.addressP90Ms !== null ? `, медиана ${secondsText(health.addressMedianMs)}, 90${NBSP}% — до ${secondsText(health.addressP90Ms)}` : ''}` })
+    rows.push({ label: 'Адрес не найден / сервисы перегружены', value: `${health.addressFailed} / ${health.addressBusy}` })
+  }
+  return rows
 }

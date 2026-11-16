@@ -21,7 +21,8 @@ const readStatsSchema = z.object({
   reasoningTokens: tokens,
   settingsRejected: z.boolean(),
   contextMs: ms.optional(),
-  totalMs: ms.optional()
+  totalMs: ms.optional(),
+  queueMs: ms.optional()
 });
 
 export type ImportSpeedSummary = {
@@ -32,6 +33,9 @@ export type ImportSpeedSummary = {
   medianMs: number | null;
   p90Ms: number | null;
   modelMedianMs: number | null;
+  /** How long readings waited for a free place before the model was asked (only readings that measured it). */
+  queueMedianMs: number | null;
+  queueP90Ms: number | null;
   withinTarget: number;
   /** Share of the input tokens OpenAI took from its prompt cache, 0..1. */
   cachedShare: number | null;
@@ -81,6 +85,8 @@ export function summarizeReadStats(rows: Array<{ previewJson: string; createdAt:
     medianMs: percentile(totals, 0.5),
     p90Ms: percentile(totals, 0.9),
     modelMedianMs: percentile(read.map(({ stats }) => stats.modelMs), 0.5),
+    queueMedianMs: percentile(known((stats) => stats.queueMs ?? null), 0.5),
+    queueP90Ms: percentile(known((stats) => stats.queueMs ?? null), 0.9),
     withinTarget: totals.filter((value) => value <= READ_TARGET_MS).length,
     cachedShare: cacheBase > 0 ? cached / cacheBase : null,
     inputTokensMedian: percentile(known((stats) => stats.inputTokens), 0.5),
@@ -100,4 +106,51 @@ export function summarizeReadStats(rows: Array<{ previewJson: string; createdAt:
 
 export async function importSpeed(documents: { recentPreviews(take: number): Promise<Array<{ previewJson: string; createdAt: Date }>> }): Promise<ImportSpeedSummary> {
   return summarizeReadStats(await documents.recentPreviews(RECENT_DOCUMENTS));
+}
+
+export type ImportHealthSummary = {
+  since: string;
+  readingsFailed: number;
+  queueFull: number;
+  limitReached: number;
+  addressLookups: number;
+  addressFailed: number;
+  addressBusy: number;
+  addressMedianMs: number | null;
+  addressP90Ms: number | null;
+};
+
+/**
+ * What went wrong since the server started, kept in memory only: refused or failed readings never reach the documents
+ * the speed card counts, and the address lookups run apart from the reading (owner, 16.11: «не всегда проходят»).
+ */
+export class ImportHealth {
+  private readonly since: Date;
+  private readingsFailed = 0;
+  private queueFull = 0;
+  private limitReached = 0;
+  private addressFailed = 0;
+  private addressBusy = 0;
+  private addressLookups = 0;
+  private readonly addressMs: number[] = [];
+
+  constructor(now = new Date()) { this.since = now; }
+
+  readingFailed() { this.readingsFailed += 1; }
+  readingRefused(reason: "queue" | "limit") { if (reason === "queue") this.queueFull += 1; else this.limitReached += 1; }
+  addressLookup(ms: number, outcome: "found" | "not-found" | "busy") {
+    this.addressLookups += 1;
+    if (outcome === "not-found") this.addressFailed += 1;
+    if (outcome === "busy") this.addressBusy += 1;
+    this.addressMs.push(ms);
+    if (this.addressMs.length > 500) this.addressMs.shift();
+  }
+
+  summary(): ImportHealthSummary {
+    return {
+      since: this.since.toISOString(), readingsFailed: this.readingsFailed, queueFull: this.queueFull, limitReached: this.limitReached,
+      addressLookups: this.addressLookups, addressFailed: this.addressFailed, addressBusy: this.addressBusy,
+      addressMedianMs: percentile(this.addressMs, 0.5), addressP90Ms: percentile(this.addressMs, 0.9)
+    };
+  }
 }

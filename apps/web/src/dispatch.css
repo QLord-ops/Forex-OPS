@@ -424,6 +424,7 @@ button.decision-card-title:focus-visible { outline: 2px solid var(--focus); outl
 .speed-rows { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 16px; font-size: .875rem; font-variant-numeric: tabular-nums; }
 .speed-rows dt { color: rgb(var(--tx-475569)); }
 .speed-rows dd { color: rgb(var(--tx-0f172a)); text-align: right; overflow-wrap: anywhere; }
+.settings-subtitle { margin: 4px 0 0; color: rgb(var(--tx-0f172a)); font-size: .875rem; font-weight: 600; }
 @media (max-width: 560px) {
   .speed-rows { grid-template-columns: minmax(0, 1fr); gap: 0; }
   .speed-rows dd { margin-bottom: 8px; text-align: left; }

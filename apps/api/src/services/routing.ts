@@ -104,6 +104,9 @@ export class OsrmRoutingProvider implements RoutingProvider {
   private readonly geocodeCacheLimit = 1_000;
   private geocodeQueue: Promise<void> = Promise.resolve();
   private lastGeocodeAt = 0;
+  /** After a 429, a server error or a timeout the free geocoder rests; meanwhile other sources answer at once. */
+  private pausedUntil = 0;
+  private readonly pauseMs: number;
 
   constructor(
     private readonly fallback: RoutingProvider = new MockRoutingProvider(),
@@ -114,8 +117,10 @@ export class OsrmRoutingProvider implements RoutingProvider {
       userAgent?: string;
       nominatimBaseUrl?: string;
       osrmBaseUrl?: string;
+      pauseMs?: number;
     } = {}
   ) {
+    this.pauseMs = options.pauseMs ?? 120_000;
     this.allowMock = options.allowMock ?? process.env.ROUTING_ALLOW_MOCK === "true";
     this.nominatimMinIntervalMs = options.nominatimMinIntervalMs ?? 1_000;
     this.userAgent = options.userAgent ?? process.env.NOMINATIM_USER_AGENT ?? "ops-disponent-local/1.0";
@@ -147,8 +152,15 @@ export class OsrmRoutingProvider implements RoutingProvider {
     return request;
   }
 
+  /** True while the free geocoder rests after it refused or failed. */
+  geocoderPaused(now = Date.now()): boolean {
+    return now < this.pausedUntil;
+  }
+
   private enqueueGeocode(address: string): Promise<GeocodeResult> {
+    if (this.geocoderPaused()) return Promise.reject(new RoutingError("Сервис адресов перегружен, ищем в других источниках.", 503));
     const request = this.geocodeQueue.then(async () => {
+      if (this.geocoderPaused()) throw new RoutingError("Сервис адресов перегружен, ищем в других источниках.", 503);
       const waitMs = this.nominatimMinIntervalMs - (Date.now() - this.lastGeocodeAt);
       if (waitMs > 0) await delay(waitMs);
       this.lastGeocodeAt = Date.now();
@@ -199,6 +211,9 @@ export class OsrmRoutingProvider implements RoutingProvider {
         lon: string;
         display_name: string;
         address?: {
+          road?: string;
+          pedestrian?: string;
+          house_number?: string;
           city?: string;
           town?: string;
           village?: string;
@@ -219,10 +234,15 @@ export class OsrmRoutingProvider implements RoutingProvider {
         longitude: Number(first.lon),
         provider: "nominatim",
         city: first.address?.city ?? first.address?.town ?? first.address?.village ?? first.address?.municipality,
-        postalCode: first.address?.postcode?.match(/\b\d{5}\b/)?.[0] ?? null
+        postalCode: first.address?.postcode?.match(/\b\d{5}\b/)?.[0] ?? null,
+        street: first.address?.road ?? first.address?.pedestrian ?? null,
+        houseNumber: first.address?.house_number ?? null
       };
     } catch (error) {
       if (this.allowMock) return this.fallback.geocode(address);
+      if (error instanceof RoutingError && error.statusCode === 404) throw error;
+      // Refused (429), broken or too slow: the next minutes go to the other sources instead of the queue.
+      this.pausedUntil = Date.now() + this.pauseMs;
       if (error instanceof RoutingError) throw error;
       throw new RoutingError("Сервис адресов временно недоступен.", 502);
     }

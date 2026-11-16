@@ -11,7 +11,11 @@ export interface PlaceSearch {
   findCompany(company: string, near: { latitude: number; longitude: number }): Promise<(GeocodeResult & { postalCode?: string }) | null>;
   /** The same address asked of a second, independent source; null when it has no street-level answer or is off. */
   findAddress?(query: string): Promise<(GeocodeResult & { postalCode?: string; exact?: boolean }) | null>;
+  /** The address asked field by field (street, house number, postcode, town): no guessing which word is the town. */
+  findStructured?(parts: StructuredAddress): Promise<(GeocodeResult & { postalCode?: string; exact?: boolean }) | null>;
 }
+
+export type StructuredAddress = { street: string; houseNumber?: string | null; postalCode?: string | null; city?: string | null };
 
 type Fetch = typeof fetch;
 const TIMEOUT_MS = 5_000;
@@ -108,16 +112,34 @@ export class TomTomPlaceSearch implements PlaceSearch {
     return request;
   }
 
+  async findStructured(parts: StructuredAddress) {
+    if (!parts.street.trim() || !this.enabled || !this.apiKey) return null;
+    const fields = { streetName: parts.street.trim(), streetNumber: parts.houseNumber?.trim() ?? "", postalCode: parts.postalCode?.trim() ?? "", municipality: parts.city?.trim() ?? "" };
+    const key = `structured|${normalize(Object.values(fields).join(" "))}`;
+    let request = this.cache.get(key);
+    if (!request) {
+      if (!this.spend()) return null;
+      request = this.structured(fields).catch(() => null);
+      if (this.cache.size > 1_000) this.cache.delete(this.cache.keys().next().value as string);
+      this.cache.set(key, request);
+    }
+    return request;
+  }
+
+  private async structured(fields: Record<string, string>) {
+    const base = this.config.baseUrl ?? process.env.TOMTOM_ROUTING_BASE_URL ?? "https://api.tomtom.com/";
+    const url = new URL("search/2/structuredGeocode.json", base.endsWith("/") ? base : `${base}/`);
+    for (const [k, v] of Object.entries({ key: this.apiKey!, countryCode: "DE", language: "de-DE", limit: "1", ...fields })) if (v) url.searchParams.set(k, v);
+    const data = await fetchJson<{ results?: TomTomResult[] }>(this.fetchImpl, url);
+    return streetLevelHit(data.results?.[0], fields.streetName, "tomtom-structured");
+  }
+
   private async geocode(query: string) {
     const base = this.config.baseUrl ?? process.env.TOMTOM_ROUTING_BASE_URL ?? "https://api.tomtom.com/";
     const url = new URL(`search/2/geocode/${encodeURIComponent(query)}.json`, base.endsWith("/") ? base : `${base}/`);
     for (const [k, v] of Object.entries({ key: this.apiKey!, countrySet: "DE", language: "de-DE", limit: "1" })) url.searchParams.set(k, v);
     const data = await fetchJson<{ results?: TomTomResult[] }>(this.fetchImpl, url);
-    const hit = data.results?.[0];
-    // A town or a postcode area is no second opinion on a street address.
-    if (!hit?.position || !hit.type || !STREET_LEVEL.has(hit.type)) return null;
-    return { label: hit.address?.freeformAddress ?? query, latitude: hit.position.lat, longitude: hit.position.lon, provider: "tomtom-geocode",
-      city: hit.address?.municipality, postalCode: hit.address?.postalCode, exact: hit.type === "Point Address" || hit.type === "Address Range" };
+    return streetLevelHit(data.results?.[0], query, "tomtom-geocode");
   }
 
   private spend(): boolean {
@@ -150,7 +172,15 @@ export class TomTomPlaceSearch implements PlaceSearch {
 
 const STREET_LEVEL = new Set(["Point Address", "Address Range", "Street", "Cross Street"]);
 type TomTomResult = { type?: string; poi?: { name?: string }; position?: { lat: number; lon: number };
-  address?: { freeformAddress?: string; municipality?: string; postalCode?: string } };
+  address?: { freeformAddress?: string; municipality?: string; postalCode?: string; streetName?: string; streetNumber?: string } };
+
+/** A town or a postcode area is no answer to a street address. «Point Address» is the house itself, a range is interpolated. */
+function streetLevelHit(hit: TomTomResult | undefined, fallbackLabel: string, provider: string) {
+  if (!hit?.position || !hit.type || !STREET_LEVEL.has(hit.type)) return null;
+  return { label: hit.address?.freeformAddress ?? fallbackLabel, latitude: hit.position.lat, longitude: hit.position.lon, provider,
+    city: hit.address?.municipality, postalCode: hit.address?.postalCode, street: hit.address?.streetName ?? null,
+    houseNumber: hit.address?.streetNumber ?? null, exact: hit.type === "Point Address" || hit.type === "Address Range" };
+}
 
 async function fetchJson<T>(fetchImpl: Fetch, url: URL): Promise<T> {
   const controller = new AbortController();
@@ -165,17 +195,23 @@ async function fetchJson<T>(fetchImpl: Fetch, url: URL): Promise<T> {
 }
 
 /** Street, postcode and city from a printed address: "Industriestr. 5, D-38239 Salzgitter". */
-export function addressParts(address: string, city?: string | null): { street?: string; postalCode?: string; city?: string } {
+export function addressParts(address: string, city?: string | null): { street?: string; houseNumber?: string; postalCode?: string; city?: string } {
   const text = address.replace(/\bD\s*[-–]?\s*(?=\d{5}\b)/gi, "").replace(/\s+/g, " ").trim();
   const postalCode = text.match(/\b\d{5}\b/)?.[0] ?? (city ?? "").match(/\b\d{5}\b/)?.[0];
   const cityName = (city ?? "").replace(/\bD\s*[-–]?\s*/gi, "").replace(/\b\d{5}\b/, "").replace(/[,.\s]+$/, "").trim()
     || (postalCode && text.includes(postalCode) ? text.slice(text.indexOf(postalCode) + 5).replace(/^[,\s]+/, "").split(",")[0]!.trim() : "");
   const head = (postalCode && text.includes(postalCode) ? text.slice(0, text.indexOf(postalCode)) : text).split(",").map((s) => s.trim()).filter(Boolean);
-  // The street is the part with a house number; a line without one ("Werk 2", a company) is not checked.
-  const street = head.find((part) => /\p{L}{3,}.*\s\d+\s*[a-zA-Z]?(\s*[-/]\s*\d+[a-zA-Z]?)?$/u.test(part))
-    ?.replace(/\s+\d+\s*[a-zA-Z]?(\s*[-/]\s*\d+[a-zA-Z]?)?$/u, "").trim();
-  return { street: street || undefined, postalCode, city: cityName && !/\d/.test(cityName) ? cityName : undefined };
+  // The street is the part with a house number; a line without one ("Werk 2", a company) is not checked. Of «Halle 3,
+  // Eichenstraße 2b» the street is the one named like a street, else the last one before the postcode.
+  const numbered = head.flatMap((part) => {
+    const match = /^(\p{L}.*?\p{L}.*?)\.?\s+(\d+\s*[a-zA-Z]?(?:\s*[-/]\s*\d+[a-zA-Z]?)?)$/u.exec(part);
+    return match && /\p{L}{3,}/u.test(match[1]) ? [{ street: match[1].trim(), houseNumber: match[2].replace(/\s+/g, "") }] : [];
+  });
+  const chosen = numbered.find((item) => STREET_WORD.test(item.street)) ?? numbered.at(-1);
+  return { street: chosen?.street || undefined, ...(chosen ? { houseNumber: chosen.houseNumber } : {}), postalCode, city: cityName && !/\d/.test(cityName) ? cityName : undefined };
 }
+
+const STREET_WORD = /(stra(ß|ss)e|str\.?|weg|allee|platz|ring|damm|gasse|ufer|chaussee|steig|pfad|markt|wall|graben|kamp|hof|park|berg|feld)$|^(am|an der|an den|auf der|auf dem|im|in der|zum|zur|unter den)\s/iu;
 
 function streetStem(street: string): string {
   return street.replace(/(straße|strasse|str\.?)(?=\s|$)/giu, "").replace(/[^\p{L}\s-]/gu, "").replace(/\s+/g, " ").trim();
