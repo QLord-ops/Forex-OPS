@@ -30,7 +30,8 @@ const REASON_LABEL: Record<string, string> = {
   NOT_IN_DOCUMENT: 'адреса нет в тексте Auftrag',
   SOURCES_DIFFER: 'два сервиса адресов ставят точку в разных местах',
   REGISTER_MISMATCH: 'индекс, город или улица не сходятся со справочником',
-  CITY_ONLY_GEOCODE: 'на карте найден только город'
+  CITY_ONLY_GEOCODE: 'на карте найдены только индекс или город, улица — нет',
+  HOUSE_NOT_FOUND: 'улица найдена, номер дома — нет: точка на улице'
 }
 
 export const LEVEL_TEXT: Record<'CHECK' | 'DOUBT', string> = { CHECK: 'проверьте', DOUBT: 'под сомнением' }
@@ -57,8 +58,11 @@ export function addressAlertOf(resolution: { check?: { status: string } | null; 
 export function withGeocode(score: FieldScore | undefined, precision: string | null | undefined, alert: AddressAlert | null = null): FieldScore | undefined {
   if (!score) return score
   if (alert) return { ...score, score: Math.min(score.score, 0.4), level: 'DOUBT', reasons: [...score.reasons, alert] }
-  if (!precision || ['EXACT', 'STREET', 'POSTCODE_CITY'].includes(precision) || score.score <= 0.5) return score
-  return { ...score, score: 0.5, level: levelOf(0.5), reasons: [...score.reasons, 'CITY_ONLY_GEOCODE'] }
+  // A printed house number keeps the score above 0.5 (the server caps an address without one there), so these say
+  // «the Auftrag named the house, the map did not find it».
+  if (precision === 'STREET' && score.score > 0.7) return { ...score, score: 0.7, level: levelOf(0.7), reasons: [...score.reasons, 'HOUSE_NOT_FOUND'] }
+  if ((precision === 'CITY' || precision === 'POSTCODE_CITY') && score.score > 0.5) return { ...score, score: 0.5, level: levelOf(0.5), reasons: [...score.reasons, 'CITY_ONLY_GEOCODE'] }
+  return score
 }
 
 export const fieldKey = (draftStopIndex: number | string, field: string) => `${draftStopIndex}:${field}`

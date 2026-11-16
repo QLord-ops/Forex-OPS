@@ -14,7 +14,16 @@ type TextItem = { str: string; transform: number[]; width: number; hasEOL?: bool
  * baseline become one line, a wide gap between items becomes a column break. Null for a scan or a broken file;
  * the caller then sends the pages as images, as before.
  */
-export async function extractPdfText(buffer: Buffer): Promise<PdfText | null> {
+export function extractPdfText(buffer: Buffer): Promise<PdfText | null> {
+  // The reading and the address check after it ask for the text of the same file: it is taken out once.
+  let text = extracted.get(buffer);
+  if (!text) { text = extract(buffer); extracted.set(buffer, text); }
+  return text;
+}
+
+const extracted = new WeakMap<Buffer, Promise<PdfText | null>>();
+
+async function extract(buffer: Buffer): Promise<PdfText | null> {
   try {
     const task = getDocument({ data: new Uint8Array(buffer), disableFontFace: true, useSystemFonts: false, verbosity: 0 });
     const pdf = await task.promise;

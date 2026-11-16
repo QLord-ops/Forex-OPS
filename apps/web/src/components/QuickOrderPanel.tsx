@@ -433,7 +433,7 @@ async function createImportFingerprint(input: { fileName: string; orderNumber: s
   })
 }
 function resolutionLabel(resolution: AddressResolution) {
-  if (resolution.second?.status === 'DIFFER') return `Сервисы адресов расходятся на ${resolution.second.meters < 1000 ? `${Math.round(resolution.second.meters / 10) * 10} м` : `${(resolution.second.meters / 1000).toFixed(1).replace('.', ',')} км`}: на карте ${resolution.resolvedAddress}, TomTom — ${resolution.second.label}. Проверьте точку.`
+  if (resolution.second?.status === 'DIFFER') return `Сервисы адресов расходятся на ${resolution.second.meters < 1000 ? `${Math.round(resolution.second.meters / 10) * 10} м` : `${(resolution.second.meters / 1000).toFixed(1).replace('.', ',')} км`}: на карте ${resolution.resolvedAddress}, ${(resolution.provider ?? '').startsWith('tomtom') ? 'OpenStreetMap' : 'TomTom'} — ${resolution.second.label}. Проверьте точку.`
   if (resolution.check && resolution.check.status !== 'OK' && resolution.check.message) return resolution.check.message
   if (resolution.researchUsed) return `ИИ нашёл вероятный полный адрес: ${resolution.resolvedAddress}. Проверьте перед подтверждением.`
   if (resolution.provider === 'tomtom-search') return `Фирма найдена в справочнике TomTom: ${resolution.resolvedAddress}`

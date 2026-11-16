@@ -48,6 +48,8 @@ export interface ReadStats {
   settingsRejected: boolean;
   /** Added by the route: the work before the model (customer, limits) and the whole reading as the server saw it. */
   contextMs?: number;
+  /** Waited for a free place among the readings running at the same time. */
+  queueMs?: number;
   totalMs?: number;
 }
 const MAX_OPENAI_OUTPUT_CHARS = 100_000;

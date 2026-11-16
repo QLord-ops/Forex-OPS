@@ -14,6 +14,8 @@ export type GeocodePrecision = (typeof geocodePrecisions)[number];
  * "Lager, Ludwigsfelde" once came back as a Lagerstraße in Hamburg and sent the route 250 km north.
  */
 export const MAX_DISTANCE_FROM_CITY_KM = 40;
+/** A street found under another postcode than the printed one must lie this close to the printed postcode's area. */
+export const SAME_POSTCODE_AREA_KM = 10;
 
 export type AddressResolution = GeocodeResult & {
   sourceAddress: string;
@@ -29,6 +31,13 @@ export type AddressResolution = GeocodeResult & {
 
 /** Two geocoders within this distance mean the same place. */
 export const SECOND_SOURCE_AGREE_METERS = 500;
+/** The second opinion may not keep the dispatcher waiting: past this the answer goes without it. */
+const SECOND_OPINION_WAIT_MS = 2_500;
+
+function withinMs<T>(promise: Promise<T>, ms: number): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([promise, new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), ms); })]).finally(() => clearTimeout(timer));
+}
 export type SecondOpinion =
   | { status: "AGREE"; meters: number }
   | { status: "DIFFER"; meters: number; latitude: number; longitude: number; label: string };
@@ -52,7 +61,7 @@ export async function resolveAddressWithFallback(
     ? sources.checker.check({ address: input.address, city: expandCity(input.city ?? null, rules.length ? rules : undefined) }).catch(() => null)
     : Promise.resolve(undefined);
   const found = await resolveCore(routing, input, researcher, rules, places, sources.places);
-  const second = await secondOpinion(found, input, rules, sources.places);
+  const second = await secondOpinion(found, input, rules, sources.places, routing);
   const result = second ? { ...found, second } : found;
   const check = await checking;
   return check === undefined ? result : { ...result, check };
@@ -62,10 +71,22 @@ export async function resolveAddressWithFallback(
  * A street address the free geocoder found is asked of TomTom too. Places the fleet already knows (a learned rule, the
  * address book, a gate where trucks stood) need no second opinion, and a town-level answer has nothing to compare.
  */
-async function secondOpinion(found: AddressResolution, input: { address: string; city?: string | null; company?: string | null }, rules: AddressRuleRecord[], search?: PlaceSearch): Promise<SecondOpinion | undefined> {
-  if (!search?.findAddress || !(found.provider ?? "").includes("nominatim") || (found.precision !== "EXACT" && found.precision !== "STREET")) return undefined;
-  const query = buildAddressCandidates(input.address.trim(), expandCity(input.city ?? null, rules.length ? rules : undefined), input.company)[0]?.query;
-  const other = query ? await search.findAddress(query).catch(() => null) : null;
+async function secondOpinion(found: AddressResolution, input: { address: string; city?: string | null; company?: string | null }, rules: AddressRuleRecord[], search?: PlaceSearch, routing?: RoutingProvider): Promise<SecondOpinion | undefined> {
+  if (found.precision !== "EXACT" && found.precision !== "STREET") return undefined;
+  const city = expandCity(input.city ?? null, rules.length ? rules : undefined);
+  const query = buildAddressCandidates(input.address.trim(), city, input.company)[0]?.query;
+  if (!query) return undefined;
+  const provider = found.provider ?? "";
+  let other: GeocodeResult | null = null;
+  if (provider.includes("nominatim")) {
+    other = search?.findAddress ? await search.findAddress(query).catch(() => null) : null;
+  } else if (provider.startsWith("tomtom") && found.precision === "EXACT" && routing) {
+    // The free geocoder checks TomTom's house, but only when it found that very house: its street without a number
+    // lies in the middle of the street and would cry «другое место» on every long street. A busy queue is no opinion.
+    const answer = await withinMs(routing.geocode(query), SECOND_OPINION_WAIT_MS).catch(() => null);
+    const verdict = answer ? matchOf(printedParts(input.address, city), answer) : null;
+    other = answer && verdict?.house === "same" && verdict.street !== "other" ? answer : null;
+  }
   if (!other) return undefined;
   const meters = Math.round(distanceKm(found, other) * 1000);
   return meters <= SECOND_SOURCE_AGREE_METERS ? { status: "AGREE", meters }
@@ -137,45 +158,85 @@ async function resolveCore(
   }
 
   const candidates = buildAddressCandidates(sourceAddress, city, input.company);
+  const printed = printedParts(sourceAddress, city);
   let lastNotFound: unknown;
   let approximateResult: AddressResolution | undefined;
+  // The right street without the house yet: kept, and given only when no source finds the house itself.
+  let streetOnly: AddressResolution | undefined;
+  let geocoderDown = false;
+
+  /**
+   * A street-level answer counts only when it is the printed street, at the printed postcode, near the stop's town: a
+   * geocoder that does not know a street answers with a similar one («Lagerstraße» for «Lager»), and that is no match.
+   */
+  const accept = async (hit: GeocodeResult, source: string, asked: GeocodePrecision = "EXACT"): Promise<AddressResolution | null> => {
+    const verdict = matchOf(printed, hit);
+    if (verdict.street === "other") { attempts.push(`${source}: ${hit.label}: другая улица, отброшено`); return null; }
+    // Another postcode of the same town is a neighbouring district at most (Petershagen 32469/32457): the same street
+    // name in another part of the town lies farther from the printed postcode than that.
+    if (verdict.postcode === "other") {
+      const area = await anchored();
+      if (area && distanceKm(area, hit) > SAME_POSTCODE_AREA_KM) { attempts.push(`${source}: ${hit.label}: индекс ${hit.postalCode}, а не ${printed.postalCode}, отброшено`); return null; }
+    }
+    const km = await farFromCity(hit, hit.city, hit.postalCode);
+    if (km !== null) { attempts.push(`${source}: ${hit.label}: ${Math.round(km)} км от ${anchor!.query}, отброшено`); return null; }
+    attempts.push(`${source}: ${hit.label}`);
+    // EXACT is the printed house itself; a street without the printed number (or none printed) is STREET. A source that
+    // names neither street nor house cannot be judged and keeps the precision of the query.
+    const judged = Boolean(hit.street || hit.houseNumber);
+    const precision: GeocodePrecision = !judged ? asked : verdict.house === "same" && verdict.street !== "unknown" ? "EXACT" : "STREET";
+    return { ...hit, sourceAddress, resolvedAddress: hit.label, precision, attempts };
+  };
+  const take = (found: AddressResolution | null): AddressResolution | null => {
+    if (!found) return null;
+    if (found.precision === "EXACT") return found;
+    streetOnly ??= found;
+    return null;
+  };
+
+  // TomTom first, field by field (owner, 16.11.2026): it knows German house numbers best and has no one-a-second queue.
+  if (companySearch?.findStructured && printed.street) {
+    const hit = await companySearch.findStructured({ street: printed.street, houseNumber: printed.houseNumber, postalCode: printed.postalCode, city: printed.city }).catch(() => null);
+    const exact = take(hit ? await accept(hit, "TomTom") : null);
+    if (exact) return exact;
+  }
+
   // The free geocoder lacks many streets of small places ("Zachower Str. 4, Ketzin OT Tremmen"): before settling for the
-  // town, the street is asked of TomTom once.
+  // town, the street is asked of TomTom once more as free text.
   let tomTomAsked = false;
   const fromTomTom = async (): Promise<AddressResolution | null> => {
     if (tomTomAsked || !companySearch?.findAddress || !addressParts(sourceAddress, city).street) return null;
     tomTomAsked = true;
     const query = candidates.find((item) => item.precision === "EXACT")?.query;
     const hit = query ? await companySearch.findAddress(query).catch(() => null) : null;
-    if (!hit) return null;
-    const km = await farFromCity(hit, hit.city, (hit as { postalCode?: string | null }).postalCode);
-    if (km !== null) { attempts.push(`TomTom: ${hit.label}: ${Math.round(km)} км от ${anchor!.query}, отброшено`); return null; }
-    attempts.push(`TomTom: ${hit.label}`);
-    return { ...hit, sourceAddress, resolvedAddress: hit.label, precision: (hit as { exact?: boolean }).exact ? "EXACT" : "STREET", attempts };
+    return take(hit ? await accept(hit, "TomTom") : null);
   };
 
   for (const candidate of candidates) {
     if (!STREET_LEVEL.includes(candidate.precision)) {
       const street = await fromTomTom();
       if (street) return street;
+      // The right street beats the town centre.
+      if (streetOnly) return streetOnly;
     }
     attempts.push(candidate.query);
     try {
       const result = await routing.geocode(candidate.query);
+      if (STREET_LEVEL.includes(candidate.precision)) {
+        const found = await accept(result, "карта", candidate.precision);
+        if (!found) { lastNotFound = { statusCode: 404 }; continue; }
+        const exact = take(found);
+        if (exact) return exact;
+        continue;
+      }
       const km = await farFromCity(result, result.city, result.postalCode);
       if (km !== null) {
         attempts.push(`${result.label}: ${Math.round(km)} км от ${anchor!.query}, отброшено`);
         lastNotFound = { statusCode: 404 };
         continue;
       }
-      const resolved = {
-        ...result,
-        sourceAddress,
-        resolvedAddress: result.label,
-        precision: candidate.precision,
-        attempts
-      };
-      if (candidate.precision === "EXACT" || candidate.precision === "STREET" || !researcher) return resolved;
+      const resolved = { ...result, sourceAddress, resolvedAddress: result.label, precision: candidate.precision, attempts };
+      if (!researcher) return resolved;
       approximateResult = resolved;
       break;
     } catch (error) {
@@ -183,11 +244,21 @@ async function resolveCore(
         lastNotFound = error;
         continue;
       }
+      // Refused or too slow: a busy free geocoder must not cost the stop its address while other sources answer.
+      if (isUnavailable(error)) {
+        geocoderDown = true;
+        attempts.push("бесплатный геокодер перегружен");
+        break;
+      }
       throw error;
     }
   }
 
-  if (researcher && isNotFound(lastNotFound)) {
+  const street = await fromTomTom();
+  if (street) return street;
+  if (streetOnly) return streetOnly;
+
+  if (researcher && !geocoderDown && isNotFound(lastNotFound)) {
     const researchCandidates = await researcher.research(input);
     for (const candidate of researchCandidates) {
       if (attempts.some((attempt) => normalizeForCompare(attempt) === normalizeForCompare(candidate.address))) continue;
@@ -208,14 +279,14 @@ async function resolveCore(
         };
       } catch (error) {
         if (isNotFound(error)) continue;
+        if (isUnavailable(error)) break;
         throw error;
       }
     }
   }
 
   if (approximateResult) return approximateResult;
-  const street = await fromTomTom();
-  if (street) return street;
+  if (geocoderDown) throw new RoutingError("Сервисы адресов сейчас перегружены — повторите через минуту.", 503);
   throw new RoutingError(`Адрес не найден. Проверены: ${attempts.join(" → ")}.`, 404);
 }
 
@@ -380,4 +451,62 @@ function normalizeForCompare(value: string): string {
 function isNotFound(error: unknown): error is { statusCode: number } {
   return typeof error === "object" && error !== null && "statusCode" in error
     && (error as { statusCode?: unknown }).statusCode === 404;
+}
+
+function isUnavailable(error: unknown): boolean {
+  const status = typeof error === "object" && error !== null ? (error as { statusCode?: unknown }).statusCode : undefined;
+  return status === 429 || status === 502 || status === 503 || status === 504;
+}
+
+export type PrintedParts = { street?: string; houseNumber?: string; postalCode?: string; city?: string };
+
+/** Street, house number, postcode and town as the Auftrag prints them: what a found place has to match. */
+export function printedParts(address: string, city?: string | null): PrintedParts {
+  return addressParts(address, city);
+}
+
+export type MatchVerdict = {
+  street: "same" | "other" | "unknown";
+  house: "same" | "other" | "missing" | "unknown";
+  postcode: "same" | "other" | "unknown";
+};
+
+/** What a found place says against the printed address. «unknown» = one of the two has no such part to compare. */
+export function matchOf(printed: PrintedParts, found: { street?: string | null; houseNumber?: string | null; postalCode?: string | null }): MatchVerdict {
+  const street = !printed.street || !found.street ? "unknown" : sameStreet(printed.street, found.street) ? "same" : "other";
+  const house = !printed.houseNumber ? "unknown" : !found.houseNumber ? "missing" : sameHouse(printed.houseNumber, found.houseNumber) ? "same" : "other";
+  const postcode = !printed.postalCode || !found.postalCode ? "unknown" : printed.postalCode === found.postalCode ? "same" : "other";
+  return { street, house, postcode };
+}
+
+/** «Zachower Str.» = «Zachower Straße»; a letter or two of a typo is forgiven in a long name, not in a short one. */
+export function sameStreet(left: string, right: string): boolean {
+  const key = (value: string) => value.toLocaleLowerCase("de-DE").replace(/ß/g, "ss").replace(/ä/g, "ae").replace(/ö/g, "oe").replace(/ü/g, "ue")
+    .replace(/(^|[\s-])dr\.?(?=[\s-])/g, "$1doktor").replace(/(^|[\s-])st\.?(?=[\s-])/g, "$1sankt")
+    .replace(/(strasse|str\.?)(?=[^\p{L}]|$)/gu, "str").replace(/[^\p{L}\p{N}]+/gu, "");
+  const a = key(left), b = key(right);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const shorter = Math.min(a.length, b.length);
+  // «Lehmanger» is «Am Lehmanger».
+  if (shorter >= 8 && (a.endsWith(b) || b.endsWith(a))) return true;
+  return editDistance(a, b) <= (shorter >= 12 ? 2 : shorter >= 7 ? 1 : 0);
+}
+
+/** «22-28» holds 22; «2b» is the house 2. */
+function sameHouse(printed: string, found: string): boolean {
+  const numbers = (value: string) => (value.match(/\d+/g) ?? []).map(Number);
+  const wanted = numbers(printed), got = numbers(found)[0];
+  if (got === undefined || !wanted.length) return false;
+  return wanted.length > 1 && /[-–]/.test(printed) ? got >= wanted[0] && got <= wanted[1] : wanted.includes(got);
+}
+
+function editDistance(a: string, b: string): number {
+  let previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= a.length; i += 1) {
+    const current = [i];
+    for (let j = 1; j <= b.length; j += 1) current.push(Math.min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)));
+    previous = current;
+  }
+  return previous[b.length];
 }

@@ -15,6 +15,9 @@ export type RouteResult = {
 export type GeocodeResult = Coordinate & {
   city?: string | null;
   postalCode?: string | null;
+  /** The street and house number the service actually matched, to compare with what the Auftrag printed. */
+  street?: string | null;
+  houseNumber?: string | null;
   label: string;
   provider: string;
 };

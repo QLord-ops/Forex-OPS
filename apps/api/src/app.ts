@@ -63,6 +63,7 @@ import { OrderDocumentService } from './services/order-documents.js';
 import { ImportJobError, ImportJobs, ImportSlots, type ImportJobHandle } from './services/import-jobs.js';
 import { TelemetryRetention, TELEMETRY_SYSTEM_ACTOR } from './services/telemetry-retention.js';
 import { registerOrderDocumentRoutes, registerOrderReparseRoute } from './routes/order-documents.js';
+import { ImportHealth } from './services/import-stats.js';
 import { CustomerService, isMine } from './services/customers.js';
 import { PushService } from './services/push.js';
 import { registerPushRoutes } from './routes/push.js';
@@ -112,6 +113,8 @@ const addressRules = new AddressRuleService(prisma);
 const operationsService = new OperationsService(prisma, tourService);
 const pendingAppointments = new PendingAppointmentService(prisma);
 const orderDocuments = new OrderDocumentService(prisma);
+/** Refused and failed readings and the address lookups since the server started, for the admin's speed card. */
+const importHealth = new ImportHealth();
 const knownPlaces = new KnownPlaces(prisma);
 const ownAddresses = new OwnAddressBook(prisma, () => knownPlaces.reset());
 // Where the truck really stood is learned after every BELADEN/ENTLADEN; it never delays or blocks the event itself.
@@ -208,6 +211,11 @@ async function withTextCheck<T extends DocumentImportPreview>(read: T, buffer: B
   if (read.detectedLayout !== "PDF" || read.documentKind === "APPOINTMENT" || !read.drafts.length) return read;
   const text = await extractPdfText(buffer).catch(() => null);
   return hasTextLayer(text) ? checkAddressesAgainstText(read, text) : read;
+}
+
+/** The wait for a free place goes with the reading's numbers; a reading taken from the store has none. */
+function withQueueTime<T extends { readStats?: ReadStats }>(preview: T, queueMs: number): T {
+  return preview.readStats ? { ...preview, readStats: { ...preview.readStats, queueMs } } : preview;
 }
 
 /** Adds what the route measured to the reading's own numbers, before the parse is stored with its document. */
@@ -472,7 +480,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   registerVehicleStatusSettingsRoutes(app, prisma);
   registerDailyStatusRoutes(app, dailyStatus);
   registerAddressBookRoutes(app, prisma, addressBook, ownAddresses);
-  registerOrderDocumentRoutes(app, orderDocuments);
+  registerOrderDocumentRoutes(app, orderDocuments, importHealth);
   registerImportRuleRoutes(app, importLearning);
   registerCustomerRoutes(app, customerService);
   registerCoverRoutes(app, prisma);
@@ -480,7 +488,9 @@ export async function buildApp(options: BuildAppOptions = {}) {
   await registerRouteScenarioRoutes(app, { service: scenarioService });
 
   // AI readings (PDF, screenshots, re-reading) share two places; Excel is read locally and has its own.
-  const importSlots = new ImportSlots();
+  // Four readings at a time (owner, 16.11): five dispatchers no longer wait for each other's Auftrag; the model, not
+  // this one-CPU server, takes the time.
+  const importSlots = new ImportSlots(4, 12);
   const excelSlots = new ImportSlots();
   // Reading an Auftrag may take minutes: the upload answers 202 with a job after this wait and the page asks for the result.
   // A serverless host cannot work on after the answer, so there the upload waits almost as long as its proxy allows.
@@ -982,7 +992,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
       return reply.status(400).send({ error: "PDF-заказ необходимо отправить как multipart/form-data в поле 'file'." });
     }
     const slot = importSlots.enter();
-    if (!slot) return reply.status(429).send({ error: "Сейчас читается много Auftrag. Повторите через минуту." });
+    if (!slot) { importHealth.readingRefused("queue"); return reply.status(429).send({ error: "Сейчас читается много Auftrag. Повторите через минуту." }); }
     let handedOff = false;
     try {
       const file = await request.file({ limits: { fileSize: 20 * 1024 * 1024 } });
@@ -1008,21 +1018,24 @@ export async function buildApp(options: BuildAppOptions = {}) {
       const [customerContext, before] = await Promise.all([importCustomerContext(request), orderDocuments.modelAnswerOf(buffer).catch(() => null)]);
       const reused = await readingFromStore(before, "PDF", customerContext, () => learnedRules(customerContext.selected?.id ?? null));
       // A reading taken from the store asks no model, so it does not count against the AI quota.
-      if (!reused && !options.auth?.disabled) await assistantService.consumeUsage(assistantSessionKey(request));
+      if (!reused && !options.auth?.disabled) await assistantService.consumeUsage(assistantSessionKey(request)).catch((error: unknown) => { importHealth.readingRefused("limit"); throw error; });
       const contextMs = Date.now() - contextStarted;
       handedOff = true;
       const job = importJobs.start(importOwner(request), async () => {
-        // Two readings at a time; this one waits for its turn while the page shows that the Auftrag is being read.
+        // Four readings at a time; this one waits for its turn while the page shows that the Auftrag is being read.
+        const queued = Date.now();
         await slot.ready;
+        const queueMs = Date.now() - queued;
         try {
           const started = Date.now();
           const read = reused ?? await pdfImport(buffer, filename, customerContext);
           const aiMs = Date.now() - started;
-          const checked = await finishRead(read, buffer, customerContext, contextMs, started);
+          const checked = withQueueTime(await finishRead(read, buffer, customerContext, contextMs, started), queueMs);
           request.log.info({ readMode: read.readMode ?? null, ...checked.readStats, aiMs, pdfBytes: buffer.length, answerReused: Boolean(reused) }, 'PDF-заказ распознан');
           return { ...await withStoredDocument(checked, { buffer, filename, mimeType: "application/pdf" }, request), readMs: Date.now() - started };
         } catch (error) {
           if (error instanceof Error && error.message.includes("OPENAI_API_KEY")) throw new ImportJobError("OpenAI ещё не настроен для импорта PDF.", 503);
+          importHealth.readingFailed();
           request.log.error({ err: error }, "Не удалось распознать PDF-заказ");
           throw new ImportJobError("Не удалось прочитать PDF-заказ. Проверьте файл и повторите попытку.", 502);
         }
@@ -1038,7 +1051,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
       return reply.status(400).send({ error: "Скриншот необходимо отправить как multipart/form-data в поле 'file'." });
     }
     const slot = importSlots.enter();
-    if (!slot) return reply.status(429).send({ error: "Сейчас читается много Auftrag. Повторите через минуту." });
+    if (!slot) { importHealth.readingRefused("queue"); return reply.status(429).send({ error: "Сейчас читается много Auftrag. Повторите через минуту." }); }
     let handedOff = false;
     try {
       const file = await request.file({ limits: { fileSize: 10 * 1024 * 1024 } });
@@ -1064,22 +1077,25 @@ export async function buildApp(options: BuildAppOptions = {}) {
       const contextStarted = Date.now();
       const [customerContext, before] = await Promise.all([importCustomerContext(request), orderDocuments.modelAnswerOf(buffer).catch(() => null)]);
       const reused = await readingFromStore(before, "IMAGE", customerContext, () => learnedRules(customerContext.selected?.id ?? null));
-      if (!reused && !options.auth?.disabled) await assistantService.consumeUsage(assistantSessionKey(request));
+      if (!reused && !options.auth?.disabled) await assistantService.consumeUsage(assistantSessionKey(request)).catch((error: unknown) => { importHealth.readingRefused("limit"); throw error; });
       const contextMs = Date.now() - contextStarted;
       handedOff = true;
       const mimeType = file.mimetype;
       const job = importJobs.start(importOwner(request), async () => {
-        // Two readings at a time; this one waits for its turn while the page shows that the Auftrag is being read.
+        // Four readings at a time; this one waits for its turn while the page shows that the Auftrag is being read.
+        const queued = Date.now();
         await slot.ready;
+        const queueMs = Date.now() - queued;
         try {
           const started = Date.now();
           const read = reused ?? await imageImport(buffer, filename, mimeType, customerContext);
           const aiMs = Date.now() - started;
-          const checked = await finishRead(read, buffer, customerContext, contextMs, started);
+          const checked = withQueueTime(await finishRead(read, buffer, customerContext, contextMs, started), queueMs);
           request.log.info({ ...checked.readStats, aiMs, imageBytes: buffer.length, answerReused: Boolean(reused) }, 'Скриншот заказа распознан');
           return { ...await withStoredDocument(checked, { buffer, filename, mimeType }, request), readMs: Date.now() - started };
         } catch (error) {
           if (error instanceof Error && error.message.includes("OPENAI_API_KEY")) throw new ImportJobError("OpenAI ещё не настроен для импорта скриншотов.", 503);
+          importHealth.readingFailed();
           request.log.error({ err: error }, "Не удалось распознать скриншот заказа");
           throw new ImportJobError("Не удалось прочитать скриншот. Проверьте файл и повторите попытку.", 502);
         }
@@ -1215,8 +1231,16 @@ export async function buildApp(options: BuildAppOptions = {}) {
       city: z.string().trim().max(300).nullable().optional(),
       company: z.string().trim().max(300).nullable().optional()
     }).parse(request.body);
-    const result = await resolveAddressWithFallback(routingService, input, addressResearcher, await addressRules.all(), await knownPlaces.all().catch(() => []), addressSources);
-    return { address: result.resolvedAddress, ...result };
+    const started = Date.now();
+    try {
+      const result = await resolveAddressWithFallback(routingService, input, addressResearcher, await addressRules.all(), await knownPlaces.all().catch(() => []), addressSources);
+      importHealth.addressLookup(Date.now() - started, "found");
+      return { address: result.resolvedAddress, ...result };
+    } catch (error) {
+      const status = (error as { statusCode?: unknown }).statusCode;
+      importHealth.addressLookup(Date.now() - started, status === 503 || status === 502 ? "busy" : "not-found");
+      throw error;
+    }
   });
 
   app.get("/tours", async (request) => {
