@@ -2,43 +2,40 @@ import type { Stop, Tour } from '../types/domain'
 import { sharedTerminOf } from './tours'
 
 /**
- * The Auftrag as the driver gets it, pasted into WhatsApp (*bold* is WhatsApp's). Owner, 16.11.2026: as plain as it can be —
- * a sign on every line, the full address in parts (firm, street with number, postcode with town), no links, and a time only
- * when there is a Termin: without one the driver gets the day alone. Never a phone, the driver's name or the system's own
- * notes. A future WhatsApp bot sends the same text.
+ * The Auftrag as the driver gets it in WhatsApp, laid out like the owner's own messages (16.11.2026): few signs, «Загрузка Nr. 1»,
+ * the full address in lines (firm, street with number, postcode with town), the date, and a time only with a Termin. No links.
+ * Never a phone, the driver's name or the system's own notes. A future WhatsApp bot sends the same text.
  */
-export function driverMessage(tour: Pick<Tour, 'orderNumber' | 'trailerPlate' | 'tourRemarks' | 'stops' | 'vehicle'>, vehicle?: { vehicleNumber?: string | null; licensePlate?: string | null } | null): string {
+export function driverMessage(tour: Pick<Tour, 'orderNumber' | 'tourRemarks' | 'stops'>): string {
   const stops = [...(tour.stops ?? [])].sort((a, b) => a.sequence - b.sequence)
   const open = stops.filter((stop) => !stop.completedAt)
-  const truck = vehicle ?? tour.vehicle ?? null
-  const plate = truck?.licensePlate || truck?.vehicleNumber
-  const head = [`🚛 *Auftrag ${tour.orderNumber}*`]
-  if (plate) head.push(`LKW: ${plate}`)
-  if (tour.trailerPlate) head.push(`Прицеп: ${tour.trailerPlate}`)
-  const blocks = (open.length ? open : stops).map((stop) => stopBlock(stops, stop))
-  const remarks = tour.tourRemarks?.trim() ? [`📝 *Важно:* ${tour.tourRemarks.trim()}`] : []
-  return [head.join('\n'), ...blocks, ...remarks].join('\n\n')
+  const shown = open.length ? open : stops
+  const blocks = [`📄 Auftrag: ${tour.orderNumber}`, ...shown.map((stop) => stopBlock(stops, stop))]
+  const references = [...new Set(shown.flatMap((stop) => stop.referenceNumbers ?? parseReferences(stop.referenceNumbersJson) ?? []).map((value) => value.trim()).filter(Boolean))]
+  if (references.length) blocks.push(`📄 Referenz: ${references.join(', ')}`)
+  if (tour.tourRemarks?.trim()) blocks.push(`Примечание: ${tour.tourRemarks.trim()}`)
+  return blocks.join('\n\n')
 }
 
-const KEYCAPS = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟']
+/** «Загрузка Nr. 2»: counted per kind over the whole tour, so the numbers stay put while stops get done. */
+function stopTitle(stops: Stop[], stop: Stop) {
+  const number = stops.filter((item) => item.type === stop.type && item.sequence <= stop.sequence).length
+  return `${stop.type === 'LOAD' ? 'Загрузка' : 'Выгрузка'} Nr. ${number}`
+}
 
 function stopBlock(stops: Stop[], stop: Stop): string {
-  const number = KEYCAPS[stop.sequence - 1] ?? `${stop.sequence}.`
-  const lines = [`${number} ${stop.type === 'LOAD' ? '🟢 *ЗАГРУЗКА*' : '🔴 *ВЫГРУЗКА*'}`]
-  if (stop.company?.trim()) lines.push(`🏭 ${stop.company.trim()}`)
+  const lines = [`${stop.type === 'LOAD' ? '📦' : '📍'} ${stopTitle(stops, stop)}${stop.company?.trim() ? `: ${stop.company.trim()}` : ''}`]
   const place = addressParts(stop)
   // A point found only as a town would send the driver to the town centre.
   if (stop.geocodePrecision === 'CITY' || stop.geocodePrecision === 'POSTCODE_CITY' || !place.street) {
-    lines.push(`🏙️ ${place.town}`, '❗ Точный адрес уточни у диспетчера')
+    lines.push(place.town, 'Точный адрес уточни у диспетчера')
   } else {
-    lines.push(`📍 ${place.street}`)
-    if (place.town) lines.push(`🏙️ ${place.town}`)
+    lines.push(place.street)
+    if (place.town) lines.push(place.town)
   }
-  lines.push(timeLine(stops, stop))
-  const references = stop.referenceNumbers ?? parseReferences(stop.referenceNumbersJson)
-  if (references?.length) lines.push(`🔖 Ref: ${references.join(', ')}`)
-  if (stop.loadingMeters) lines.push(`📏 ${String(stop.loadingMeters).replace('.', ',')} LDM`)
-  if (stop.instructions?.trim()) lines.push(`💬 ${stop.instructions.trim()}`)
+  const time = timeLine(stops, stop)
+  if (time) lines.push(time)
+  if (stop.instructions?.trim()) lines.push(stop.instructions.trim())
   return lines.join('\n')
 }
 
@@ -56,18 +53,18 @@ export function addressParts(stop: Pick<Stop, 'address' | 'city'>): { street: st
 
 function timeLine(stops: Stop[], stop: Stop): string {
   const shared = sharedTerminOf(stops, stop)
-  if (shared) return `⏰ Termin тот же, что у точки ${shared.lead.sequence}`
-  if (stop.appointmentAt) return `⏰ Termin: ${day(stop.appointmentAt)} в ${clock(stop.appointmentAt)}`
+  if (shared) return `Termin как у ${stopTitle(stops, shared.lead).replace(/^Загрузка/, 'загрузки').replace(/^Выгрузка/, 'выгрузки')}`
+  if (stop.appointmentAt) return `${day(stop.appointmentAt)} ${clock(stop.appointmentAt)}`
   if (stop.appointmentWindowStartAt && stop.appointmentWindowEndAt) {
-    return `⏰ Termin: ${day(stop.appointmentWindowStartAt)} с ${clock(stop.appointmentWindowStartAt)} до ${clock(stop.appointmentWindowEndAt)}`
+    return `${day(stop.appointmentWindowStartAt)} ${clock(stop.appointmentWindowStartAt)}–${clock(stop.appointmentWindowEndAt)}`
   }
   // Without a Termin the planned hour is ours, not the plant's: the driver gets the day only.
-  return stop.plannedAt ? `📅 ${day(stop.plannedAt)} (без Termin)` : '📅 без Termin'
+  return stop.plannedAt ? day(stop.plannedAt) : ''
 }
 
-const DAY = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', day: '2-digit', month: '2-digit' })
+const DAY = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', day: '2-digit', month: '2-digit', year: 'numeric' })
 const CLOCK = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
-const day = (value: string) => DAY.format(new Date(value)).replace(/\.$/, '')
+const day = (value: string) => DAY.format(new Date(value))
 const clock = (value: string) => CLOCK.format(new Date(value))
 
 function escapeRegExp(value: string) {
