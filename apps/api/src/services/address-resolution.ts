@@ -139,8 +139,26 @@ async function resolveCore(
   const candidates = buildAddressCandidates(sourceAddress, city, input.company);
   let lastNotFound: unknown;
   let approximateResult: AddressResolution | undefined;
+  // The free geocoder lacks many streets of small places ("Zachower Str. 4, Ketzin OT Tremmen"): before settling for the
+  // town, the street is asked of TomTom once.
+  let tomTomAsked = false;
+  const fromTomTom = async (): Promise<AddressResolution | null> => {
+    if (tomTomAsked || !companySearch?.findAddress || !addressParts(sourceAddress, city).street) return null;
+    tomTomAsked = true;
+    const query = candidates.find((item) => item.precision === "EXACT")?.query;
+    const hit = query ? await companySearch.findAddress(query).catch(() => null) : null;
+    if (!hit) return null;
+    const km = await farFromCity(hit, hit.city, (hit as { postalCode?: string | null }).postalCode);
+    if (km !== null) { attempts.push(`TomTom: ${hit.label}: ${Math.round(km)} км от ${anchor!.query}, отброшено`); return null; }
+    attempts.push(`TomTom: ${hit.label}`);
+    return { ...hit, sourceAddress, resolvedAddress: hit.label, precision: (hit as { exact?: boolean }).exact ? "EXACT" : "STREET", attempts };
+  };
 
   for (const candidate of candidates) {
+    if (!STREET_LEVEL.includes(candidate.precision)) {
+      const street = await fromTomTom();
+      if (street) return street;
+    }
     attempts.push(candidate.query);
     try {
       const result = await routing.geocode(candidate.query);
@@ -196,6 +214,8 @@ async function resolveCore(
   }
 
   if (approximateResult) return approximateResult;
+  const street = await fromTomTom();
+  if (street) return street;
   throw new RoutingError(`Адрес не найден. Проверены: ${attempts.join(" → ")}.`, 404);
 }
 
@@ -203,7 +223,9 @@ async function resolveCore(
 export function cityAnchor(address: string, city?: string | null): { query: string; city: string; postalCode?: string } | null {
   const normalizedAddress = normalizeGermanAddress(address);
   const postalCode = normalizedAddress.match(/\b\d{5}\b/)?.[0] ?? (city ?? "").match(/\b\d{5}\b/)?.[0];
-  const effectiveCity = normalizeCity(city) || extractCityFromAddress(normalizedAddress, postalCode);
+  const named = normalizeCity(city) || extractCityFromAddress(normalizedAddress, postalCode);
+  // "Ketzin OT Tremmen" is found as its Ortsteil.
+  const effectiveCity = ortsteilOf(named)?.district ?? named;
   if (!effectiveCity || /\d/.test(effectiveCity)) return null;
   return { query: postalCode ? `${postalCode} ${effectiveCity}` : effectiveCity, city: effectiveCity, ...(postalCode ? { postalCode } : {}) };
 }
@@ -228,7 +250,28 @@ export function distanceKm(a: { latitude: number; longitude: number }, b: { lati
   return 2 * 6371 * Math.asin(Math.sqrt(h));
 }
 
+/** "Ketzin OT Tremmen": the town and its Ortsteil. The free geocoder knows the Ortsteil or the town, rarely the two together. */
+export function ortsteilOf(value?: string | null): { full: string; town: string; district: string } | null {
+  const match = /([A-Za-zÄÖÜäöüß][A-Za-zÄÖÜäöüß./ -]*?)\s+(?:OT|Ortsteil)\.?\s+([A-Za-zÄÖÜäöüß][A-Za-zÄÖÜäöüß./ -]*)/u.exec(value ?? "");
+  return match ? { full: match[0].trim(), town: match[1].trim(), district: match[2].trim() } : null;
+}
+
+const STREET_LEVEL: GeocodePrecision[] = ["EXACT", "STREET"];
+
+/** Queries from the most exact to the coarsest. With an Ortsteil the street is asked in the Ortsteil and in the town too. */
 export function buildAddressCandidates(address: string, city?: string | null, company?: string | null): Array<{ query: string; precision: GeocodePrecision }> {
+  const ot = ortsteilOf(city) ?? ortsteilOf(address);
+  if (!ot) return baseCandidates(address, city, company);
+  const swap = (value: string | null | undefined, to: string) => (value ?? "").split(ot.full).join(to) || null;
+  const lists = [baseCandidates(address, city, company), ...[ot.district, ot.town].map((to) => baseCandidates(swap(address, to) ?? address, swap(city, to), company))];
+  return dedupeCandidates([
+    ...lists.flatMap((list) => list.filter((item) => STREET_LEVEL.includes(item.precision))),
+    ...lists.slice(1).flatMap((list) => list.filter((item) => !STREET_LEVEL.includes(item.precision))),
+    ...lists[0].filter((item) => !STREET_LEVEL.includes(item.precision))
+  ]);
+}
+
+function baseCandidates(address: string, city?: string | null, company?: string | null): Array<{ query: string; precision: GeocodePrecision }> {
   const normalizedAddress = normalizeGermanAddress(address);
   const normalizedCity = normalizeCity(city);
   const exact = appendCity(normalizedAddress, normalizedCity);

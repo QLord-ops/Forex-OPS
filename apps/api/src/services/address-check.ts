@@ -10,7 +10,7 @@ export interface AddressChecker {
 export interface PlaceSearch {
   findCompany(company: string, near: { latitude: number; longitude: number }): Promise<(GeocodeResult & { postalCode?: string }) | null>;
   /** The same address asked of a second, independent source; null when it has no street-level answer or is off. */
-  findAddress?(query: string): Promise<GeocodeResult | null>;
+  findAddress?(query: string): Promise<(GeocodeResult & { postalCode?: string; exact?: boolean }) | null>;
 }
 
 type Fetch = typeof fetch;
@@ -117,7 +117,7 @@ export class TomTomPlaceSearch implements PlaceSearch {
     // A town or a postcode area is no second opinion on a street address.
     if (!hit?.position || !hit.type || !STREET_LEVEL.has(hit.type)) return null;
     return { label: hit.address?.freeformAddress ?? query, latitude: hit.position.lat, longitude: hit.position.lon, provider: "tomtom-geocode",
-      city: hit.address?.municipality, postalCode: hit.address?.postalCode };
+      city: hit.address?.municipality, postalCode: hit.address?.postalCode, exact: hit.type === "Point Address" || hit.type === "Address Range" };
   }
 
   private spend(): boolean {
