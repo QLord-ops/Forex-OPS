@@ -840,8 +840,9 @@ function styleFor(mode: MapMode, traffic: boolean, theme: Theme): StyleSpecifica
   // Tiles appear at once: fading each new tile in kept the map redrawing through a whole zoom.
   const layers: StyleSpecification['layers'] = [{ id: 'base', type: 'raster', source: 'base', paint: { 'raster-fade-duration': 0 } }]
   if (mode === 'satellite') {
-    // TomTom's transparent overlay for imagery: town names, borders and main roads.
-    sources.labels = { type: 'raster', tiles: [`https://api.tomtom.com/map/1/tile/hybrid/main/{z}/{x}/{y}.png?key=${key}`], tileSize: 256 }
+    // Only the names over the imagery: the «hybrid» overlay also drew every road in bright white, which drowned the photo
+    // and the route (owner, 16.11.2026).
+    sources.labels = { type: 'raster', tiles: [`https://api.tomtom.com/map/1/tile/labels/main/{z}/{x}/{y}.png?key=${key}`], tileSize: 256 }
     layers.push({ id: 'labels', type: 'raster', source: 'labels', paint: { 'raster-fade-duration': 0 } })
   }
   if (traffic) {
