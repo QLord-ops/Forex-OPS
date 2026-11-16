@@ -82,6 +82,7 @@ import { storedAnswerOf } from './services/order-documents.js';
 import { KnownPlaces, resolveWithoutGeocoder } from './services/known-places.js';
 import { OwnAddressBook } from './services/own-addresses.js';
 import { StayPlaces } from './services/stay-places.js';
+import { lessonsFromEdits } from './services/edit-learning.js';
 import { readingFromStore } from './services/import-reuse.js';
 
 function auditActor(request: FastifyRequest): AuditActor | undefined {
@@ -1319,10 +1320,15 @@ export async function buildApp(options: BuildAppOptions = {}) {
   app.patch("/tours/:id", async (request) => {
     const { id } = z.object({ id: z.string() }).parse(request.params);
     const body = patchTourSchema.parse(request.body);
+    const before = "status" in body ? [] : await prisma.stop.findMany({ where: { tourId: id, completedAt: null }, select: { id: true, company: true, address: true, city: true, latitude: true, longitude: true } });
     const tour = "status" in body
       ? await tourService.cancelTour(id, body.version, new Date(), auditActor(request))
       : await tourService.updateFutureTour(id, body, auditActor(request));
-    if (!("status" in body)) await rememberAddresses(tour.id, request);
+    if (!("status" in body)) {
+      await rememberAddresses(tour.id, request);
+      // A place the dispatcher corrected in a saved tour is learned for the next Auftrag; it never blocks the save.
+      for (const lesson of lessonsFromEdits(before, body.stops)) await addressRules.learn(lesson, auditActor(request)).catch(() => undefined);
+    }
     await refreshAlertsForVehicle(tour.vehicleId);
     return enrichTourLive(tour);
   });
