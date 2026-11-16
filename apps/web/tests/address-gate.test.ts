@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { addressAlertOf, openAddressChecks, openCounts, stopViews, type FieldScore } from '../src/lib/field-confidence'
+import { addressAlertOf, openCounts, stopViews, type FieldScore } from '../src/lib/field-confidence'
 
 const score = (value: number): FieldScore => ({ score: value, level: value >= 0.85 ? 'OK' : value >= 0.6 ? 'CHECK' : 'DOUBT', reasons: [], evidence: null })
 const values = { type: 'UNLOAD', company: 'MAN', address: 'Industriestraße Nord 12, 38239 Salzgitter', city: 'Salzgitter', time: '', loadingMeters: '', references: '' }
@@ -25,12 +25,9 @@ describe('addresses the services disagree about', () => {
   })
 })
 
-describe('a tour is not saved with an address nobody looked at (owner, 15.11)', () => {
-  it('counts yellow addresses until each is confirmed or corrected; other yellow fields do not block', () => {
-    const yellow = stopViews([stop(0.7), { ...stop(0.95), draftStopIndex: 1, fieldConfidence: { address: score(0.95), company: score(0.7) } }], new Set())
-    expect(openAddressChecks(yellow.flat())).toBe(1)
-    expect(openCounts(yellow.flat())).toEqual({ doubt: 0, check: 2 })
-    expect(openAddressChecks(stopViews([stop(0.7)], new Set(['0:address'])).flat())).toBe(0)
-    expect(openAddressChecks(stopViews([stop(0.95)], new Set()).flat())).toBe(0)
+describe('yellow fields never block confirming an Auftrag (owner, 16.11)', () => {
+  it('only doubts count against confirming; a yellow address is a check, not a stop', () => {
+    const views = stopViews([stop(0.7), { ...stop(0.95), draftStopIndex: 1, fieldConfidence: { address: score(0.95), company: score(0.7) } }], new Set())
+    expect(openCounts(views.flat())).toEqual({ doubt: 0, check: 2 })
   })
 })
