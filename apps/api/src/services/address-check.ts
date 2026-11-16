@@ -9,6 +9,8 @@ export interface AddressChecker {
 
 export interface PlaceSearch {
   findCompany(company: string, near: { latitude: number; longitude: number }): Promise<(GeocodeResult & { postalCode?: string }) | null>;
+  /** The same address asked of a second, independent source; null when it has no street-level answer or is off. */
+  findAddress?(query: string): Promise<GeocodeResult | null>;
 }
 
 type Fetch = typeof fetch;
@@ -92,6 +94,32 @@ export class TomTomPlaceSearch implements PlaceSearch {
     return request;
   }
 
+  async findAddress(query: string) {
+    const text = query.trim();
+    if (!text || !this.enabled || !this.apiKey) return null;
+    const key = `address|${normalize(text)}`;
+    let request = this.cache.get(key);
+    if (!request) {
+      if (!this.spend()) return null;
+      request = this.geocode(text).catch(() => null);
+      if (this.cache.size > 1_000) this.cache.delete(this.cache.keys().next().value as string);
+      this.cache.set(key, request);
+    }
+    return request;
+  }
+
+  private async geocode(query: string) {
+    const base = this.config.baseUrl ?? process.env.TOMTOM_ROUTING_BASE_URL ?? "https://api.tomtom.com/";
+    const url = new URL(`search/2/geocode/${encodeURIComponent(query)}.json`, base.endsWith("/") ? base : `${base}/`);
+    for (const [k, v] of Object.entries({ key: this.apiKey!, countrySet: "DE", language: "de-DE", limit: "1" })) url.searchParams.set(k, v);
+    const data = await fetchJson<{ results?: TomTomResult[] }>(this.fetchImpl, url);
+    const hit = data.results?.[0];
+    // A town or a postcode area is no second opinion on a street address.
+    if (!hit?.position || !hit.type || !STREET_LEVEL.has(hit.type)) return null;
+    return { label: hit.address?.freeformAddress ?? query, latitude: hit.position.lat, longitude: hit.position.lon, provider: "tomtom-geocode",
+      city: hit.address?.municipality, postalCode: hit.address?.postalCode };
+  }
+
   private spend(): boolean {
     const today = new Date().toISOString().slice(0, 10);
     if (today !== this.day) { this.day = today; this.used = 0; }
@@ -120,7 +148,8 @@ export class TomTomPlaceSearch implements PlaceSearch {
   }
 }
 
-type TomTomResult = { poi?: { name?: string }; position?: { lat: number; lon: number };
+const STREET_LEVEL = new Set(["Point Address", "Address Range", "Street", "Cross Street"]);
+type TomTomResult = { type?: string; poi?: { name?: string }; position?: { lat: number; lon: number };
   address?: { freeformAddress?: string; municipality?: string; postalCode?: string } };
 
 async function fetchJson<T>(fetchImpl: Fetch, url: URL): Promise<T> {

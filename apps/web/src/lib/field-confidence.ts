@@ -28,6 +28,8 @@ const REASON_LABEL: Record<string, string> = {
   WARNING: 'есть предупреждение',
   OFTEN_CORRECTED: 'у этого заказчика поле часто правят',
   NOT_IN_DOCUMENT: 'адреса нет в тексте Auftrag',
+  SOURCES_DIFFER: 'два сервиса адресов ставят точку в разных местах',
+  REGISTER_MISMATCH: 'индекс, город или улица не сходятся со справочником',
   CITY_ONLY_GEOCODE: 'на карте найден только город'
 }
 
@@ -40,9 +42,22 @@ export function reasonText(score: FieldScore): string {
 
 const levelOf = (score: number): FieldLevel => (score >= 0.85 ? 'OK' : score >= 0.6 ? 'CHECK' : 'DOUBT')
 
-/** The map found only the city for this address: whatever the document said, the street is not confirmed. */
-export function withGeocode(score: FieldScore | undefined, precision: string | null | undefined): FieldScore | undefined {
-  if (!score || !precision || ['EXACT', 'STREET', 'POSTCODE_CITY'].includes(precision) || score.score <= 0.5) return score
+export type AddressAlert = 'SOURCES_DIFFER' | 'REGISTER_MISMATCH'
+/** What the address services said against the point on the map: the official register disagrees, or two geocoders do. */
+export function addressAlertOf(resolution: { check?: { status: string } | null; second?: { status: string } } | null | undefined): AddressAlert | null {
+  if (resolution?.second?.status === 'DIFFER') return 'SOURCES_DIFFER'
+  if (resolution?.check && resolution.check.status !== 'OK') return 'REGISTER_MISMATCH'
+  return null
+}
+
+/**
+ * The map found only the city for this address: whatever the document said, the street is not confirmed. And an address
+ * the services disagree about is in doubt however sure the reading was.
+ */
+export function withGeocode(score: FieldScore | undefined, precision: string | null | undefined, alert: AddressAlert | null = null): FieldScore | undefined {
+  if (!score) return score
+  if (alert) return { ...score, score: Math.min(score.score, 0.4), level: 'DOUBT', reasons: [...score.reasons, alert] }
+  if (!precision || ['EXACT', 'STREET', 'POSTCODE_CITY'].includes(precision) || score.score <= 0.5) return score
   return { ...score, score: 0.5, level: levelOf(0.5), reasons: [...score.reasons, 'CITY_ONLY_GEOCODE'] }
 }
 
@@ -53,6 +68,7 @@ export type ReviewStopInput = {
   draftStopIndex?: number | null
   fieldConfidence?: Partial<Record<StopField, FieldScore>>
   geocodePrecision?: string | null
+  addressAlert?: AddressAlert | null
   values: Record<StopField, string>
   original?: Partial<Record<StopField, string>>
 }
@@ -62,11 +78,13 @@ export function stopViews(stops: ReviewStopInput[], verified: ReadonlySet<string
   return stops.map((stop) => {
     if (typeof stop.draftStopIndex !== 'number' || !stop.fieldConfidence) return []
     return STOP_FIELDS.flatMap((field) => {
-      const score = field === 'address' ? withGeocode(stop.fieldConfidence?.address, stop.geocodePrecision) : stop.fieldConfidence?.[field]
+      const alert = field === 'address' ? stop.addressAlert ?? null : null
+      const score = field === 'address' ? withGeocode(stop.fieldConfidence?.address, stop.geocodePrecision, alert) : stop.fieldConfidence?.[field]
       if (!score) return []
       const key = fieldKey(stop.draftStopIndex!, field)
       const changed = stop.original?.[field] !== undefined && !same(stop.values[field], stop.original[field])
-      return [{ key, field, score, state: changed || verified.has(key) ? 'RESOLVED' as const : score.level }]
+      // A corrected address is settled only while the services have nothing against the new one either.
+      return [{ key, field, score, state: verified.has(key) || (changed && !alert) ? 'RESOLVED' as const : score.level }]
     })
   })
 }
@@ -81,6 +99,11 @@ export function orderViews(scores: Partial<Record<OrderField, FieldScore>> | und
     const level = field !== 'orderNumber' && score.level === 'DOUBT' ? 'CHECK' : score.level
     return [{ key, field, score, state: changed || verified.has(key) ? 'RESOLVED' as const : level }]
   })
+}
+
+/** Addresses still yellow: a wrong address sends the truck to the wrong place, so each needs a look and «Верно» before the tour is saved. */
+export function openAddressChecks(views: FieldView[]): number {
+  return views.filter((view) => view.field === 'address' && view.state === 'CHECK').length
 }
 
 /** Doubts still open block the confirmation; fields to check are only counted. */
