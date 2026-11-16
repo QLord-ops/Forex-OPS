@@ -13,7 +13,7 @@ import { suggestionAddress, suggestionResolution, type AddressSuggestion } from 
 import { AppointmentReview } from './AppointmentReview'
 import { ImportCustomerNote, ImportCustomerSelect } from './ImportCustomer'
 import { ConfidenceSummary, FieldNote, FieldNotes } from './FieldConfidence'
-import { openCounts, orderViews, stateClass, stopViews, type StopField } from '../lib/field-confidence'
+import { addressAlertOf, openAddressChecks, openCounts, orderViews, stateClass, stopViews, type StopField } from '../lib/field-confidence'
 import { useImportCustomers } from '../hooks/useImportCustomers'
 import { PendingAppointments } from './PendingAppointments'
 import { pendingToDocument } from '../lib/appointments'
@@ -84,12 +84,13 @@ export function QuickOrderPanel({
   const matchState = useMemo(() => vehicleMatch(draft?.vehiclePlate || draft?.vehicleNumber, vehicles), [draft?.vehiclePlate, draft?.vehicleNumber, vehicles])
   const verifiedSet = useMemo(() => new Set(verified), [verified])
   const stopFieldViews = useMemo(() => stopViews(stops.map((stop) => ({
-    draftStopIndex: stop.draftStopIndex, fieldConfidence: stop.fieldConfidence, geocodePrecision: stop.resolution?.precision,
+    draftStopIndex: stop.draftStopIndex, fieldConfidence: stop.fieldConfidence, geocodePrecision: stop.resolution?.precision, addressAlert: addressAlertOf(stop.resolution),
     values: { type: stop.type, company: stop.company, address: stop.address, city: stop.city, time: stop.appointmentLocal || stop.appointmentWindowStartLocal || '', loadingMeters: stop.loadingMetersText, references: stop.referenceText },
     original: stop.original
   })), verifiedSet), [stops, verifiedSet])
   const orderFieldViews = useMemo(() => orderViews(draft?.orderConfidence, { orderNumber }, { orderNumber: draft?.orderNumber ?? '' }, verifiedSet), [draft, orderNumber, verifiedSet])
   const fieldCounts = openCounts([...stopFieldViews.flat(), ...orderFieldViews])
+  const addressChecks = openAddressChecks(stopFieldViews.flat())
   const fieldView = (index: number, field: StopField) => stopFieldViews[index]?.find((view) => view.field === field)
   const verify = (key: string) => setVerified((current) => current.includes(key) ? current : [...current, key])
 
@@ -282,6 +283,7 @@ export function QuickOrderPanel({
 
   async function confirm() {
     if (fieldCounts.doubt) { setError(`Под сомнением: ${fieldCounts.doubt}. Исправьте эти поля или отметьте «Верно».`); return }
+    if (addressChecks) { setError(`Адреса не проверены: ${addressChecks}. Посмотрите точку на карте и отметьте «Верно» или исправьте адрес.`); return }
     if ((!vehicleId && !createVehicle) || (createVehicle && !newVehicleNumber.trim()) || !orderNumber.trim() || stops.length < 2 || stops.some((stop) => !stop.address.trim())) {
       setEditing(true); setError('Выберите или создайте LKW, укажите номер Auftrag и заполните адреса минимум двух точек.'); return
     }
@@ -418,6 +420,8 @@ async function createImportFingerprint(input: { fileName: string; orderNumber: s
   })
 }
 function resolutionLabel(resolution: AddressResolution) {
+  if (resolution.second?.status === 'DIFFER') return `Сервисы адресов расходятся на ${resolution.second.meters < 1000 ? `${Math.round(resolution.second.meters / 10) * 10} м` : `${(resolution.second.meters / 1000).toFixed(1).replace('.', ',')} км`}: на карте ${resolution.resolvedAddress}, TomTom — ${resolution.second.label}. Проверьте точку.`
+  if (resolution.check && resolution.check.status !== 'OK' && resolution.check.message) return resolution.check.message
   if (resolution.researchUsed) return `ИИ нашёл вероятный полный адрес: ${resolution.resolvedAddress}. Проверьте перед подтверждением.`
   if (resolution.provider === 'tomtom-search') return `Фирма найдена в справочнике TomTom: ${resolution.resolvedAddress}`
   if (resolution.precision === 'EXACT') return `Точный адрес подтверждён: ${resolution.resolvedAddress}`

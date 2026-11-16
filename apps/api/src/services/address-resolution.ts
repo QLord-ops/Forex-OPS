@@ -23,7 +23,15 @@ export type AddressResolution = GeocodeResult & {
   researchUsed?: boolean;
   researchCandidates?: AddressResearchCandidate[];
   check?: AddressCheck | null;
+  /** What a second, independent geocoder says about the same address (owner, 15.11.2026). Absent when it was not asked. */
+  second?: SecondOpinion;
 };
+
+/** Two geocoders within this distance mean the same place. */
+export const SECOND_SOURCE_AGREE_METERS = 500;
+export type SecondOpinion =
+  | { status: "AGREE"; meters: number }
+  | { status: "DIFFER"; meters: number; latitude: number; longitude: number; label: string };
 
 export type AddressSources = { checker?: AddressChecker; places?: PlaceSearch };
 
@@ -43,9 +51,25 @@ export async function resolveAddressWithFallback(
   const checking = sources.checker && input.address.trim()
     ? sources.checker.check({ address: input.address, city: expandCity(input.city ?? null, rules.length ? rules : undefined) }).catch(() => null)
     : Promise.resolve(undefined);
-  const result = await resolveCore(routing, input, researcher, rules, places, sources.places);
+  const found = await resolveCore(routing, input, researcher, rules, places, sources.places);
+  const second = await secondOpinion(found, input, rules, sources.places);
+  const result = second ? { ...found, second } : found;
   const check = await checking;
   return check === undefined ? result : { ...result, check };
+}
+
+/**
+ * A street address the free geocoder found is asked of TomTom too. Places the fleet already knows (a learned rule, the
+ * address book, a gate where trucks stood) need no second opinion, and a town-level answer has nothing to compare.
+ */
+async function secondOpinion(found: AddressResolution, input: { address: string; city?: string | null; company?: string | null }, rules: AddressRuleRecord[], search?: PlaceSearch): Promise<SecondOpinion | undefined> {
+  if (!search?.findAddress || !(found.provider ?? "").includes("nominatim") || (found.precision !== "EXACT" && found.precision !== "STREET")) return undefined;
+  const query = buildAddressCandidates(input.address.trim(), expandCity(input.city ?? null, rules.length ? rules : undefined), input.company)[0]?.query;
+  const other = query ? await search.findAddress(query).catch(() => null) : null;
+  if (!other) return undefined;
+  const meters = Math.round(distanceKm(found, other) * 1000);
+  return meters <= SECOND_SOURCE_AGREE_METERS ? { status: "AGREE", meters }
+    : { status: "DIFFER", meters, latitude: other.latitude, longitude: other.longitude, label: other.label };
 }
 
 async function resolveCore(

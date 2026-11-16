@@ -445,6 +445,8 @@ export interface AddressResolution extends GeocodeResult {
   attempts: string[]
   researchUsed?: boolean
   check?: { status: 'OK' | 'UNKNOWN_POSTCODE' | 'POSTCODE_NOT_IN_CITY' | 'STREET_NOT_IN_POSTCODE'; message?: string; cities?: string[] } | null
+  /** A second geocoder on the same address: the same place, or another one this far away. */
+  second?: { status: 'AGREE'; meters: number } | { status: 'DIFFER'; meters: number; latitude: number; longitude: number; label: string }
   researchCandidates?: Array<{
     address: string
     rationale: string
