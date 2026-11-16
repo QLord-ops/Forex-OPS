@@ -26,14 +26,24 @@ describe('the Auftrag as text for the driver (owner, 16.11)', () => {
     expect(text).not.toMatch(/https?:|google|LDM/i)
   })
 
-  it('writes a time window, the Termin shared with the stop before, a stop note and the tour remark', () => {
+  it('writes a time window and the Termin shared with the stop before; notes stay with the dispatcher', () => {
     const windowed = { ...unload, appointmentAt: null, appointmentWindowStartAt: '2026-11-17T06:00:00Z', appointmentWindowEndAt: '2026-11-17T07:00:00Z', instructions: 'Halle 3, Tor 7' }
     const leergut = stop(3, { type: 'LOAD', company: 'Tesla Leergut', address: 'Eichenstraße 2b, 15537 Grünheide', terminSharedWithStopId: 's2', referenceNumbers: ['LG-55120'] })
-    const text = driverMessage(tour([load, windowed, leergut], { tourRemarks: 'Leergut zurück' }))
-    expect(text).toContain('15537 Grünheide\n17.11.2026 07:00–08:00\n📄 Referenz: SHP2611-A097616\nHalle 3, Tor 7')
+    const text = driverMessage(tour([load, windowed, leergut], { tourRemarks: 'Lorberg Ketzin OT Tremmen f Michaelis Braunschweig - Frachtauftrag: 111' }))
+    expect(text).toContain('15537 Grünheide\n17.11.2026 07:00–08:00\n📄 Referenz: SHP2611-A097616\n\n')
     // The Leergut stop names only its own reference, not the one of the unloading before it.
-    expect(text).toContain('📦 Загрузка Nr. 2: Tesla Leergut\nEichenstraße 2b\n15537 Grünheide\nTermin как у выгрузки Nr. 1\n📄 Referenz: LG-55120\n\n')
-    expect(text.endsWith('Примечание: Leergut zurück')).toBe(true)
+    expect(text.endsWith('📦 Загрузка Nr. 2: Tesla Leergut\nEichenstraße 2b\n15537 Grünheide\nTermin как у выгрузки Nr. 1\n📄 Referenz: LG-55120')).toBe(true)
+    expect(text).not.toMatch(/Примечание|Halle 3|Frachtauftrag/)
+  })
+
+  // The Lorberg Auftrag (owner, 16.11.2026): no postcode printed, so the found address gives it.
+  it('adds the postcode of the found address when the Auftrag prints none', () => {
+    const lorberg = stop(1, { type: 'LOAD', company: 'Lorberg Quality Plants GmbH & Co. KG', address: 'Zachower Str. 4, Ketzin OT Tremmen', city: 'Ketzin OT Tremmen',
+      resolvedAddress: 'Zachower Straße 4, 14669 Ketzin/Havel, Deutschland', plannedAt: '2026-11-16T05:00:00Z' })
+    const michaelis = stop(2, { type: 'UNLOAD', company: 'Hr. Michaelis', address: 'Am Lehmanger 50, Braunschweig', city: null, resolvedAddress: 'Am Lehmanger 50, 38120 Braunschweig, Deutschland' })
+    const text = driverMessage(tour([lorberg, michaelis]))
+    expect(text).toContain('📦 Загрузка Nr. 1: Lorberg Quality Plants GmbH & Co. KG\nZachower Str. 4\n14669 Ketzin OT Tremmen\n16.11.2026')
+    expect(text).toContain('📍 Выгрузка Nr. 1: Hr. Michaelis\nAm Lehmanger 50\n38120 Braunschweig')
   })
 
   it('leaves out what is done, keeps the numbers, and asks to check a stop known only by its town', () => {

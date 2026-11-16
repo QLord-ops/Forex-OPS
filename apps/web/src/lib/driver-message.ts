@@ -4,16 +4,15 @@ import { sharedTerminOf } from './tours'
 /**
  * The Auftrag as the driver gets it in WhatsApp, laid out like the owner's own messages (16.11.2026): few signs, «Загрузка Nr. 1»,
  * the full address in lines (firm, street with number, postcode with town), the date, a time only with a Termin, and the
- * stop's own Referenz. No links.
+ * stop's own Referenz. No links, no notes.
  * Never a phone, the driver's name or the system's own notes. A future WhatsApp bot sends the same text.
  */
-export function driverMessage(tour: Pick<Tour, 'orderNumber' | 'tourRemarks' | 'stops'>): string {
+export function driverMessage(tour: Pick<Tour, 'orderNumber' | 'stops'>): string {
   const stops = [...(tour.stops ?? [])].sort((a, b) => a.sequence - b.sequence)
   const open = stops.filter((stop) => !stop.completedAt)
   const shown = open.length ? open : stops
-  const blocks = [`📄 Auftrag: ${tour.orderNumber}`, ...shown.map((stop) => stopBlock(stops, stop))]
-  if (tour.tourRemarks?.trim()) blocks.push(`Примечание: ${tour.tourRemarks.trim()}`)
-  return blocks.join('\n\n')
+  // No notes: the Tourbemerkung and stop notes are written for the dispatcher, not the driver (owner, 16.11).
+  return [`📄 Auftrag: ${tour.orderNumber}`, ...shown.map((stop) => stopBlock(stops, stop))].join('\n\n')
 }
 
 /** «Загрузка Nr. 2»: counted per kind over the whole tour, so the numbers stay put while stops get done. */
@@ -37,20 +36,29 @@ function stopBlock(stops: Stop[], stop: Stop): string {
   // Each stop names its own references: the driver gives them at that gate (owner, 16.11).
   const references = (stop.referenceNumbers ?? parseReferences(stop.referenceNumbersJson) ?? []).map((value) => value.trim()).filter(Boolean)
   if (references.length) lines.push(`📄 Referenz: ${[...new Set(references)].join(', ')}`)
-  if (stop.instructions?.trim()) lines.push(stop.instructions.trim())
   return lines.join('\n')
 }
 
-/** «Sommerfeld 22-28, 45481 Mülheim an der Ruhr» → street with number, and postcode with town. */
-export function addressParts(stop: Pick<Stop, 'address' | 'city'>): { street: string; town: string } {
+/**
+ * «Sommerfeld 22-28, 45481 Mülheim an der Ruhr» → street with number, and postcode with town. An Auftrag that prints no
+ * postcode («Zachower Str. 4, Ketzin OT Tremmen») gets the one of the address the stop was found at.
+ */
+export function addressParts(stop: Pick<Stop, 'address' | 'city'> & { resolvedAddress?: string | null }): { street: string; town: string } {
   const address = stop.address.trim().replace(/,\s*(deutschland|germany|de)$/i, '')
   const split = address.match(/^(.*\S),\s*(\d{5}\s+\S.*)$/)
   if (split) return { street: split[1], town: split[2] }
-  const city = stop.city?.trim() ?? ''
+  let city = stop.city?.trim() ?? ''
+  let street = ''
   const townName = city.replace(/^\d{5}\s+/, '')
-  if (!townName) return { street: '', town: address }
-  const withoutTown = address.replace(new RegExp(`,?\\s*(\\d{5}\\s+)?${escapeRegExp(townName)}$`, 'i'), '').trim()
-  return { street: withoutTown, town: city }
+  if (townName) street = address.replace(new RegExp(`,?\\s*(\\d{5}\\s+)?${escapeRegExp(townName)}$`, 'i'), '').trim()
+  else {
+    const lastComma = address.lastIndexOf(',')
+    if (lastComma < 0) return { street: '', town: address }
+    street = address.slice(0, lastComma).trim()
+    city = address.slice(lastComma + 1).trim()
+  }
+  const postcode = /^\d{5}\s/.test(city) ? '' : stop.resolvedAddress?.match(/\b(\d{5})\b/)?.[1]
+  return { street, town: postcode ? `${postcode} ${city}` : city }
 }
 
 function timeLine(stops: Stop[], stop: Stop): string {
