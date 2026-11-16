@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 
 import { usePolling } from '../hooks/usePolling'
 import { AssignmentBar } from './AssignmentBar'
+import { CopyForDriver } from './CopyForDriver'
 import { RouteEditor } from './RouteEditor'
 import { api, documentFileUrl } from '../lib/api'
 import { classNames, formatDateTime, formatDelay, shortAddress, statusLabel, stopTypeLabel } from '../lib/format'
@@ -353,7 +354,7 @@ function TourTab({ vehicleId, row }: { vehicleId: string; row: DashboardVehicle 
                   {tourCancellable(tour) ? <RemoveButton busy={busyId === tour.id} orderNumber={tour.orderNumber} onClick={() => void remove(tour)} /> : null}
                   {open ? <div id={detailsId} className="truck-card-tour-details">
                     {tour.trailerPlate || tour.tourRemarks ? <p className="truck-card-muted">{[tour.trailerPlate ? `Прицеп ${tour.trailerPlate}` : null, tour.tourRemarks].filter(Boolean).join(' · ')}</p> : null}
-                    <DocumentLink tour={tour} />
+                    <div className="truck-card-tour-links"><DocumentLink tour={tour} /><CopyForDriver tourId={tour.id} /></div>
                     {zuladungState(tour) === 'OPEN' ? <p className="truck-card-zuladung" role="note">{ZULADUNG_NOTE}</p> : null}
                     {stops.length ? <ol className="truck-card-stops">
                       {stops.map((stop) => <li key={stop.id}>
@@ -403,7 +404,7 @@ function CurrentTour({ tour, row, busy, onRemove }: { tour: Tour; row: Dashboard
         <p className="truck-card-lead">{tour.orderNumber ?? 'Без номера'}{termin ? <span className="vehicle-row-termin truck-card-termin">{termin.label}</span> : null}</p>
         {removable ? <RemoveButton busy={busy} orderNumber={tour.orderNumber} onClick={onRemove} /> : <span className="truck-card-muted">Тур начат — удалить нельзя</span>}
       </div>
-      <DocumentLink tour={tour} />
+      <div className="truck-card-tour-links"><DocumentLink tour={tour} /><CopyForDriver tourId={tour.id} /></div>
       <div className="truck-card-grid">
         <Cell label="Следующая точка" value={target ? `${stopTypeLabel(target.type)} · ${shortAddress(target)}` : '–'} />
         <Cell label="ETA" value={target?.arrivedAt ? `на месте с ${formatDateTime(target.arrivedAt)}` : formatDateTime(row.eta)} />

@@ -4,6 +4,7 @@ import { useSearchParams } from 'react-router-dom'
 
 import { isPhone, useIsPhone } from '../hooks/useIsPhone'
 
+import { CopyForDriver } from '../components/CopyForDriver'
 import { LazyMapPanel } from '../components/LazyMapPanel'
 import { DecisionGroups } from '../components/OperationsNotifications'
 import { needsAttention } from '../lib/alerts'
@@ -502,6 +503,7 @@ function VehiclePanel({ row, position, drawerOpen, onToggleDrawer, collapsed, on
         <span className="vehicle-panel-note"><span>{remaining.text}</span><span>{remaining.source}</span></span>
       </div>
       <div className="vehicle-panel-actions">
+        {row.tour ? <CopyForDriver tourId={row.tour.id} large /> : null}
         {row.etaSource === 'GPS' ? <button type="button" className="secondary-button" onClick={onRouteOptions} disabled={optionsBusy} title="Три маршрута от GPS-позиции до точки"><GitFork className="h-4 w-4" aria-hidden="true" />Варианты</button> : null}
         <button type="button" className="secondary-button" onClick={onToggleDrawer} aria-expanded={drawerOpen} aria-label={drawerOpen ? 'Скрыть точки маршрута' : 'Показать точки маршрута'} disabled={!progress.stops.length}><Route className="h-4 w-4" aria-hidden="true" />Маршрут</button>
         <button type="button" className="primary-button" onClick={onOpen}>Открыть<ChevronRight className="h-4 w-4" aria-hidden="true" /></button>
