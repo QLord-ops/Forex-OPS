@@ -42,11 +42,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = init?.body && !(init.body instanceof FormData)
     ? { 'Content-Type': 'application/json', ...init.headers }
     : init?.headers
-  const response = await fetch(`${API_BASE}${path}`, {
+  // A request that got no answer says so in Russian instead of the browser's «Failed to fetch»; a read is tried once more.
+  const readOnly = !init?.method || init.method === 'GET'
+  const response = await withNetworkRetry(() => fetch(`${API_BASE}${path}`, {
     ...init,
     credentials: 'same-origin',
     headers: { ...headers, ...authHeaders() }
-  })
+  }), readOnly ? 1 : 0)
 
   if (!response.ok) {
     if (response.status === 401) notifySessionExpired()
@@ -105,6 +107,25 @@ function importFile(path: string, file: File, customerId?: string | null) {
 }
 
 const IMPORT_POLL_MS = 2000
+// A dropped connection (the server restarting during a deploy, a short network gap) is tried again before the dispatcher
+// sees an error: the upload twice more, the question «is it read yet?» for about half a minute.
+const UPLOAD_RETRIES = 2
+const POLL_RETRIES = 12
+const NETWORK_RETRY_MS = 2500
+export const NETWORK_ERROR_TEXT = 'Нет связи с сервером. Проверьте интернет и попробуйте ещё раз через минуту.'
+
+/** Retries a request that never reached the server or got no answer; an answer, even an error, is returned as it is. */
+export async function withNetworkRetry(send: () => Promise<Response>, retries: number, waitMs = NETWORK_RETRY_MS): Promise<Response> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await send()
+    } catch (error) {
+      if (!(error instanceof TypeError)) throw error
+      if (attempt >= retries) throw new ApiError(NETWORK_ERROR_TEXT, 0)
+      await new Promise((resolve) => setTimeout(resolve, waitMs))
+    }
+  }
+}
 
 /**
  * Reading an Auftrag can take minutes. The server answers 202 with a job once it has read for a while; the page then asks
@@ -116,7 +137,7 @@ async function importResult(path: string, init: RequestInit): Promise<OrderImpor
 
 /** Any long server job answered the same way: the result at once, or 202 with a job to poll until it is done. */
 async function jobResult<T>(path: string, init: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, { ...init, credentials: 'same-origin', headers: { ...init.headers, ...authHeaders() } })
+  const response = await withNetworkRetry(() => fetch(`${API_BASE}${path}`, { ...init, credentials: 'same-origin', headers: { ...init.headers, ...authHeaders() } }), UPLOAD_RETRIES)
   if (!response.ok) {
     if (response.status === 401) notifySessionExpired()
     throw new ApiError(await readErrorMessage(response), response.status)
@@ -125,7 +146,7 @@ async function jobResult<T>(path: string, init: RequestInit): Promise<T> {
   if (response.status !== 202 || !(typeof payload === 'object' && payload !== null && 'jobId' in payload)) return payload as T
   for (;;) {
     await new Promise((resolve) => setTimeout(resolve, IMPORT_POLL_MS))
-    const poll = await fetch(`${API_BASE}/imports/jobs/${encodeURIComponent(payload.jobId)}`, { credentials: 'same-origin', headers: authHeaders() })
+    const poll = await withNetworkRetry(() => fetch(`${API_BASE}/imports/jobs/${encodeURIComponent(payload.jobId)}`, { credentials: 'same-origin', headers: authHeaders() }), POLL_RETRIES)
     if (!poll.ok) {
       if (poll.status === 401) notifySessionExpired()
       throw new ApiError(await readErrorMessage(poll), poll.status)
