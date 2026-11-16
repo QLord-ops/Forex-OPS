@@ -165,6 +165,9 @@ test('в проверке распознавания можно добавить
   // Only the corrected place is remembered; the planned 06:00 travels as a plan, not a Termin.
   expect(created!.stops!.map((stop) => stop.learnLabel ?? null)).toEqual([null, null, 'Seifert Bremen', null])
   expect(created!.stops![1].plannedAt).toBe('2026-11-05T05:00:00.000Z')
+  // The confirmed tour stays in view with «Для водителя», so the driver gets it right away.
+  await expect(page.getByRole('status').filter({ hasText: 'Тур 71123515 создан' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Для водителя' })).toBeVisible()
 })
 
 test('«Открыть» в нижней панели показывает карточку; BELADEN вручную уходит с пометкой manual', async ({ page }) => {
@@ -324,6 +327,34 @@ test('сохранённый Auftrag открывается из карточк�
   await expect(activeLink).toHaveAttribute('target', '_blank')
   await card.getByRole('button', { name: /71123800/, expanded: false }).click()
   await expect(card.getByRole('link', { name: 'Auftrag (фото)' })).toHaveAttribute('href', '/api/documents/doc-2/file')
+})
+
+test('«Для водителя» в карточке «Тур» копирует Auftrag текстом: точки по порядку, время только при Termin, без ссылок', async ({ page, context }) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'])
+  const timed = stops.map((item, index) => ({ ...item, appointmentAt: index === 1 ? '2026-11-17T11:00:00.000Z' : null, plannedAt: index === 0 ? '2026-11-17T05:00:00.000Z' : null }))
+  const activeTour = { id: 'tour-1', vehicleId: 'v1', orderNumber: '71123727', trailerPlate: 'HROM2855', status: 'ACTIVE', planVersion: 1, stops: timed, vehicle: truck('v1', '321') }
+  await dashboard(page, async (route, path) => {
+    if (path === '/dashboard') {
+      await json(route, { vehicles: [{ vehicle: truck('v1', '321'), statusText: 'MOVING', etaSource: 'GPS', operationVersion: 1, tour: activeTour,
+        telemetry: { source: 'WEBFLEET', stale: false, ageSeconds: 60 }, mapPosition: { coordinate: [10.9, 49.4], source: 'WEBFLEET', stale: false, courseDeg: 0, standstill: false } }] }); return true
+    }
+    if (path === '/tours/tour-1') { await json(route, activeTour); return true }
+    if (path === '/vehicles/v1/tours') { await json(route, [activeTour]); return true }
+    if (path.endsWith('/card')) { await json(route, { vehicleId: 'v1', vehicleNumber: '321', licensePlate: null, currentTrailerPlate: null, generatedAt: new Date().toISOString(), webfleet: null, current: null, coupling: null, driver: null, events: null, trips: null, maintenance: null }); return true }
+    return false
+  })
+  await page.goto('/?vehicleId=v1&card=v1')
+  await page.evaluate(() => window.localStorage.setItem('ops-truck-card-tab', 'tour'))
+  await page.reload()
+  const card = page.getByRole('dialog', { name: /321/ })
+  await card.getByRole('button', { name: 'Для водителя' }).click()
+  await expect(card.getByRole('status').filter({ hasText: 'Скопировано' })).toBeVisible()
+  // The system clipboard may turn line ends into CRLF; WhatsApp reads both.
+  expect((await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, '\n')).toBe([
+    '📄 Auftrag: 71123727',
+    '📦 Загрузка Nr. 1: Werk Hannover\nWerkstraße 1\nHannover\n17.11.2026',
+    '📍 Выгрузка Nr. 1: Werk Emden\nWerkstraße 2\nEmden\n17.11.2026 12:00'
+  ].join('\n\n'))
 })
 
 test('машина на суточном отдыхе на загрузке: пометка в списке и панели, уведомление в «Требует решения»', async ({ page }) => {

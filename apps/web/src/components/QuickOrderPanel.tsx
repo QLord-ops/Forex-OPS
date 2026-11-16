@@ -12,6 +12,7 @@ import { RouteBuilder } from './RouteBuilder'
 import { AddressInput } from './AddressInput'
 import { suggestionAddress, suggestionResolution, type AddressSuggestion } from '../lib/address-book'
 import { AppointmentReview } from './AppointmentReview'
+import { CopyForDriver } from './CopyForDriver'
 import { ImportCustomerNote, ImportCustomerSelect } from './ImportCustomer'
 import { ConfidenceSummary, FieldNote, FieldNotes } from './FieldConfidence'
 import { addressAlertOf, openCounts, orderViews, stateClass, stopViews, type StopField } from '../lib/field-confidence'
@@ -59,6 +60,8 @@ export function QuickOrderPanel({
   const [readMs, setReadMs] = useState<number | null>(null)
   const [readStats, setReadStats] = useState<ReadStats | null>(null)
   const [error, setError] = useState('')
+  // The last confirmed Auftrag stays here with «Для водителя», so its text can go to the driver right away.
+  const [createdTour, setCreatedTour] = useState<{ id: string; orderNumber: string } | null>(null)
   const [fileName, setFileName] = useState(cachedImport?.fileName ?? '')
   const [draft, setDraft] = useState<ImportedOrderDraft | null>(cachedImport?.draft ?? null)
   const [pendingDrafts, setPendingDrafts] = useState<Array<{ draft: ImportedOrderDraft; fileName: string }>>(cachedImport?.pendingDrafts ?? [])
@@ -302,14 +305,12 @@ export function QuickOrderPanel({
     try {
       const resolved = await resolveStops(stops)
       const metadata = { trailerPlate: draft?.trailerPlate || undefined, tourRemarks: draft?.tourRemarks || undefined, documentId: draft?.documentId ?? null }
-      const createdVehicleId = createVehicle
-        ? (await api.createTourWithVehicle({ vehicle: { vehicleNumber: newVehicleNumber.trim(), licensePlate: newLicensePlate.trim() || undefined }, tour: { orderNumber: orderNumber.trim(), stops: resolved, ...metadata } })).vehicle.id
-        : vehicleId
-      if (!createVehicle) {
-        const importFingerprint = await createImportFingerprint({ fileName, orderNumber: orderNumber.trim(), stops, trailerPlate: draft?.trailerPlate })
-        await api.confirmImportedTour({ vehicleId, orderNumber: orderNumber.trim(), stops: resolved, ...metadata, importAttemptId, importFingerprint })
-      }
-      await onCreated(createdVehicleId)
+      const saved = createVehicle
+        ? await api.createTourWithVehicle({ vehicle: { vehicleNumber: newVehicleNumber.trim(), licensePlate: newLicensePlate.trim() || undefined }, tour: { orderNumber: orderNumber.trim(), stops: resolved, ...metadata } })
+        : await api.confirmImportedTour({ vehicleId, orderNumber: orderNumber.trim(), stops: resolved, ...metadata, importAttemptId,
+          importFingerprint: await createImportFingerprint({ fileName, orderNumber: orderNumber.trim(), stops, trailerPlate: draft?.trailerPlate }) })
+      setCreatedTour({ id: saved.tour.id, orderNumber: saved.tour.orderNumber })
+      await onCreated('vehicle' in saved ? saved.vehicle.id : vehicleId)
       nextFile()
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Не удалось создать Auftrag.') }
     finally { setBusy(false) }
@@ -368,6 +369,11 @@ export function QuickOrderPanel({
               onPick={(item) => { setSearchQuery(item.label); setSearchResult(`${item.label}, ${suggestionAddress(item)}`); setError(''); onAddressFound?.([item.longitude, item.latitude]) }} onFreeSearch={() => void findAddress()} /><button type="button" className="primary-button" onClick={() => void findAddress()} disabled={busy}><Search className="h-4 w-4" /></button></div>{searchResult ? <p className="map-action-result"><MapPin className="h-4 w-4" />{searchResult}</p> : null}</div> : null}
         {tab === 'route' ? <RouteBuilder vehicles={vehicles} selectedVehicleNumber={selectedVehicleNumber} onPreview={(preview) => onRoutePreview?.(preview)} /> : null}
         {tab === 'order' ? <div className="map-action-content"><ImportCustomerSelect customers={importCustomers.customers} value={importCustomers.customerId} onChange={importCustomers.setCustomerId} disabled={busy} /><div className={'quick-order-drop ' + (dragging ? 'dragging' : '')} onDragEnter={(event) => { event.preventDefault(); setDragging(true) }} onDragOver={(event) => event.preventDefault()} onDragLeave={() => setDragging(false)} onDrop={onDrop}><FileUp className="h-7 w-7" /><strong>{readingSince ? `Распознаём Auftrag… ${readingSeconds} с` : busy ? 'Подождите…' : 'Перетащите Auftrag сюда'}</strong><span>{readingSince ? 'Обычно до 10 секунд. Страницу не обновляйте.' : 'PDF, Excel или скриншот'}</span><label className="secondary-button cursor-pointer">Выбрать файлы<input className="sr-only" type="file" multiple accept=".pdf,.xlsx,.png,.jpg,.jpeg,.webp" onChange={onFileInput} disabled={busy} /></label></div><p className="quick-order-hint">Каждый заказ проверяется отдельно. В очереди: {pendingDrafts.length + pendingFiles.length}. Файл сохраняется вместе с туром.</p><PendingAppointments version={pendingVersion} onReview={(item: PendingAppointment) => { if (!draft && !termin) setTermin({ document: pendingToDocument(item), fingerprint: item.fingerprint, match: item.match, pendingId: item.id, alreadyApplied: false, fileName: 'Ожидающий термин' }) }} /></div> : null}
+        {tab === 'order' && createdTour ? <div className="quick-order-created">
+          <CheckCircle2 className="h-4 w-4" aria-hidden="true" /><span role="status">Тур {createdTour.orderNumber} создан</span>
+          <CopyForDriver tourId={createdTour.id} />
+          <button type="button" className="icon-button icon-button-compact" onClick={() => setCreatedTour(null)} aria-label="Скрыть"><X className="h-4 w-4" /></button>
+        </div> : null}
         {error && !draft ? <p className="quick-order-error"><AlertTriangle className="h-4 w-4" />{error}</p> : null}
       </div> : null}
     </aside>
