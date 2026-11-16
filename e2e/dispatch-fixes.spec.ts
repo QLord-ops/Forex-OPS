@@ -329,7 +329,7 @@ test('сохранённый Auftrag открывается из карточк�
   await expect(card.getByRole('link', { name: 'Auftrag (фото)' })).toHaveAttribute('href', '/api/documents/doc-2/file')
 })
 
-test('«Для водителя» в карточке «Тур» копирует Auftrag текстом: точки по порядку, время по Берлину, ссылка на карту', async ({ page, context }) => {
+test('«Для водителя» в карточке «Тур» копирует Auftrag текстом: точки по порядку со значками, Termin по Берлину, без ссылок', async ({ page, context }) => {
   await context.grantPermissions(['clipboard-read', 'clipboard-write'])
   const timed = stops.map((item, index) => ({ ...item, appointmentAt: index === 1 ? '2026-11-17T11:00:00.000Z' : null, plannedAt: index === 0 ? '2026-11-17T05:00:00.000Z' : null }))
   const activeTour = { id: 'tour-1', vehicleId: 'v1', orderNumber: '71123727', trailerPlate: 'HROM2855', status: 'ACTIVE', planVersion: 1, stops: timed, vehicle: truck('v1', '321') }
@@ -351,9 +351,9 @@ test('«Для водителя» в карточке «Тур» копируе�
   await expect(card.getByRole('status').filter({ hasText: 'Скопировано' })).toBeVisible()
   // The system clipboard may turn line ends into CRLF; WhatsApp reads both.
   expect((await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, '\n')).toBe([
-    '*Auftrag 71123727*\nLKW B-321 · прицеп HROM2855',
-    '*1. Загрузка* — Werk Hannover\nWerkstraße 1, Hannover\nПлан: 17.11 06:00, без Termin\nhttps://www.google.com/maps?q=52.37000,9.73000',
-    '*2. Выгрузка* — Werk Emden\nWerkstraße 2, Emden\nTermin: 17.11 12:00\nhttps://www.google.com/maps?q=53.36000,7.20000'
+    '🚛 *Auftrag 71123727*\nLKW: B-321\nПрицеп: HROM2855',
+    '1️⃣ 🟢 *ЗАГРУЗКА*\n🏭 Werk Hannover\n📍 Werkstraße 1\n🏙️ Hannover\n📅 17.11 (без Termin)',
+    '2️⃣ 🔴 *ВЫГРУЗКА*\n🏭 Werk Emden\n📍 Werkstraße 2\n🏙️ Emden\n⏰ Termin: 17.11 в 12:00'
   ].join('\n\n'))
 })
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { driverMessage } from '../src/lib/driver-message'
+import { addressParts, driverMessage } from '../src/lib/driver-message'
 import type { Stop, Tour } from '../src/types/domain'
 
 const stop = (sequence: number, extra: Partial<Stop>): Stop => ({ id: `s${sequence}`, tourId: 't1', sequence, type: 'UNLOAD', address: '', latitude: 52.4, longitude: 13.8, ...extra } as Stop)
@@ -13,34 +13,53 @@ const unload = stop(2, { type: 'UNLOAD', company: 'Tesla Blackbird Warehouse', a
   appointmentAt: '2026-11-17T11:00:00Z', referenceNumbersJson: '["SHP2611-A097451"]', instructions: 'Halle 3, Tor 7', geocodePrecision: 'EXACT' })
 
 describe('the Auftrag as text for the driver (owner, 16.11)', () => {
-  it('lists the stops in order in Russian, Berlin time, references, LDM and a map link', () => {
+  it('reads like a list: a sign per line, firm, street, postcode with town, Berlin time, no links', () => {
     expect(driverMessage(tour([unload, load]))).toBe([
-      '*Auftrag SHP2611-A097451*\nLKW GÖFX727 · прицеп HROM2855',
-      '*1. Загрузка* — Thyssenkrupp Presta AG\nSommerfeld 22-28, 45481 Mülheim an der Ruhr\nПлан: 16.11 06:00, без Termin\nRef: SHP2611-A097451 · 13,6 LDM\nhttps://www.google.com/maps?q=51.41234,6.88765',
-      '*2. Выгрузка* — Tesla Blackbird Warehouse\nEichenstraße 2b, 15537 Grünheide\nTermin: 17.11 12:00\nRef: SHP2611-A097451\nПримечание: Halle 3, Tor 7\nhttps://www.google.com/maps?q=52.39876,13.79012'
+      '🚛 *Auftrag SHP2611-A097451*\nLKW: GÖFX727\nПрицеп: HROM2855',
+      '1️⃣ 🟢 *ЗАГРУЗКА*\n🏭 Thyssenkrupp Presta AG\n📍 Sommerfeld 22-28\n🏙️ 45481 Mülheim an der Ruhr\n📅 16.11 (без Termin)\n🔖 Ref: SHP2611-A097451\n📏 13,6 LDM',
+      '2️⃣ 🔴 *ВЫГРУЗКА*\n🏭 Tesla Blackbird Warehouse\n📍 Eichenstraße 2b\n🏙️ 15537 Grünheide\n⏰ Termin: 17.11 в 12:00\n🔖 Ref: SHP2611-A097451\n💬 Halle 3, Tor 7'
     ].join('\n\n'))
+  })
+
+  it('gives the day alone without a Termin: the planned hour is not the plant\'s', () => {
+    const text = driverMessage(tour([load, unload]))
+    expect(text).toContain('📅 16.11 (без Termin)')
+    expect(text).not.toContain('06:00')
+    expect(text).not.toMatch(/https?:|google/i)
   })
 
   it('writes a time window, the Termin shared with the stop before, and the tour remark', () => {
     const windowed = { ...unload, appointmentAt: null, appointmentWindowStartAt: '2026-11-17T06:00:00Z', appointmentWindowEndAt: '2026-11-17T07:00:00Z' }
     const leergut = stop(3, { type: 'LOAD', company: 'Tesla Leergut', address: 'Eichenstraße 2b, 15537 Grünheide', terminSharedWithStopId: 's2', geocodePrecision: 'EXACT' })
     const text = driverMessage(tour([load, windowed, leergut], { tourRemarks: 'Tesla Grünheide, danach Leergut' }))
-    expect(text).toContain('Termin: 17.11 07:00–08:00')
-    expect(text).toContain('*3. Загрузка* — Tesla Leergut\nEichenstraße 2b, 15537 Grünheide\nTermin: вместе с точкой 2')
-    expect(text.endsWith('Примечание к туру: Tesla Grünheide, danach Leergut')).toBe(true)
+    expect(text).toContain('⏰ Termin: 17.11 с 07:00 до 08:00')
+    expect(text).toContain('3️⃣ 🟢 *ЗАГРУЗКА*\n🏭 Tesla Leergut\n📍 Eichenstraße 2b\n🏙️ 15537 Grünheide\n⏰ Termin тот же, что у точки 2')
+    expect(text.endsWith('📝 *Важно:* Tesla Grünheide, danach Leergut')).toBe(true)
   })
 
-  it('leaves out what is done, and sends no town centre as a navigation target', () => {
+  it('leaves out what is done, and asks to check a stop known only by its town', () => {
     const done = { ...load, completedAt: '2026-11-16T08:00:00Z' }
-    const town = { ...unload, geocodePrecision: 'CITY' as const }
+    const town = { ...unload, address: 'Grünheide', city: 'Grünheide', geocodePrecision: 'CITY' as const }
     const text = driverMessage(tour([done, town]))
-    expect(text).not.toContain('Загрузка')
-    expect(text).toContain('Точный адрес уточнить у диспетчера')
-    expect(text).not.toContain('google.com')
+    expect(text).not.toContain('ЗАГРУЗКА')
+    expect(text).toContain('🏙️ Grünheide\n❗ Точный адрес уточни у диспетчера')
+    expect(text).not.toContain('📍')
   })
 
   it('carries no phone, no driver and nothing of the system\'s own notes', () => {
     const text = driverMessage(tour([load, unload], { vehicle: { licensePlate: 'GÖFX727', servicePhone: '+49 151 0000000' } as Tour['vehicle'] }))
     expect(text).not.toMatch(/\+49|Fahrer|водител|точност|EXACT/i)
+  })
+})
+
+describe('the address in parts', () => {
+  it('splits street with number from postcode with town', () => {
+    expect(addressParts({ address: 'Halle 3, Eichenstraße 2b, 15537 Grünheide, Deutschland', city: 'Grünheide' })).toEqual({ street: 'Halle 3, Eichenstraße 2b', town: '15537 Grünheide' })
+  })
+
+  it('takes the town from the city field when the address has no postcode', () => {
+    expect(addressParts({ address: 'Mühlenweg 78, Bovenden', city: '37120 Bovenden' })).toEqual({ street: 'Mühlenweg 78', town: '37120 Bovenden' })
+    expect(addressParts({ address: 'Mühlenweg 78', city: '37120 Bovenden' })).toEqual({ street: 'Mühlenweg 78', town: '37120 Bovenden' })
+    expect(addressParts({ address: 'Bremen', city: 'Bremen' })).toEqual({ street: '', town: 'Bremen' })
   })
 })
