@@ -101,11 +101,6 @@ export function orderViews(scores: Partial<Record<OrderField, FieldScore>> | und
   })
 }
 
-/** Addresses still yellow: a wrong address sends the truck to the wrong place, so each needs a look and «Верно» before the tour is saved. */
-export function openAddressChecks(views: FieldView[]): number {
-  return views.filter((view) => view.field === 'address' && view.state === 'CHECK').length
-}
-
 /** Doubts still open block the confirmation; fields to check are only counted. */
 export function openCounts(views: FieldView[]): { doubt: number; check: number } {
   return { doubt: views.filter((view) => view.state === 'DOUBT').length, check: views.filter((view) => view.state === 'CHECK').length }

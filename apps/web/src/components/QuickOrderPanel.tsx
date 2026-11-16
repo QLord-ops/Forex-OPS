@@ -13,7 +13,7 @@ import { suggestionAddress, suggestionResolution, type AddressSuggestion } from 
 import { AppointmentReview } from './AppointmentReview'
 import { ImportCustomerNote, ImportCustomerSelect } from './ImportCustomer'
 import { ConfidenceSummary, FieldNote, FieldNotes } from './FieldConfidence'
-import { addressAlertOf, openAddressChecks, openCounts, orderViews, stateClass, stopViews, type StopField } from '../lib/field-confidence'
+import { addressAlertOf, openCounts, orderViews, stateClass, stopViews, type StopField } from '../lib/field-confidence'
 import { useImportCustomers } from '../hooks/useImportCustomers'
 import { PendingAppointments } from './PendingAppointments'
 import { pendingToDocument } from '../lib/appointments'
@@ -90,7 +90,6 @@ export function QuickOrderPanel({
   })), verifiedSet), [stops, verifiedSet])
   const orderFieldViews = useMemo(() => orderViews(draft?.orderConfidence, { orderNumber }, { orderNumber: draft?.orderNumber ?? '' }, verifiedSet), [draft, orderNumber, verifiedSet])
   const fieldCounts = openCounts([...stopFieldViews.flat(), ...orderFieldViews])
-  const addressChecks = openAddressChecks(stopFieldViews.flat())
   const fieldView = (index: number, field: StopField) => stopFieldViews[index]?.find((view) => view.field === field)
   const verify = (key: string) => setVerified((current) => current.includes(key) ? current : [...current, key])
 
@@ -283,7 +282,6 @@ export function QuickOrderPanel({
 
   async function confirm() {
     if (fieldCounts.doubt) { setError(`Под сомнением: ${fieldCounts.doubt}. Исправьте эти поля или отметьте «Верно».`); return }
-    if (addressChecks) { setError(`Адреса не проверены: ${addressChecks}. Посмотрите точку на карте и отметьте «Верно» или исправьте адрес.`); return }
     if ((!vehicleId && !createVehicle) || (createVehicle && !newVehicleNumber.trim()) || !orderNumber.trim() || stops.length < 2 || stops.some((stop) => !stop.address.trim())) {
       setEditing(true); setError('Выберите или создайте LKW, укажите номер Auftrag и заполните адреса минимум двух точек.'); return
     }
