@@ -60,8 +60,10 @@ const HAMBURG = { latitude: 53.55, longitude: 9.99 };
 // ~111 m per 0.001 degree of latitude.
 const north = (meters: number) => ({ latitude: BERLIN.latitude + meters / 111_000, longitude: BERLIN.longitude });
 
-async function arrivalScenario(name: string, options: { radius?: number; autoStopEvent?: boolean; unloadAt?: { latitude: number; longitude: number } } = {}) {
-  const vehicle = await db.vehicle.create({ data: { vehicleNumber: name, licensePlate: `B-${name}` } });
+async function arrivalScenario(name: string, options: { radius?: number; autoStopEvent?: boolean; unloadAt?: { latitude: number; longitude: number }; free?: boolean } = {}) {
+  // A taken truck by default: its dispatcher is asked. `free` is a truck nobody took («Свободна»).
+  const owner = options.free ? null : await db.dispatcher.create({ data: { login: `d-${name.toLowerCase()}`, displayName: `Disponent ${name}`, passwordHash: 'x' } });
+  const vehicle = await db.vehicle.create({ data: { vehicleNumber: name, licensePlate: `B-${name}`, ...(owner ? { assignedDispatcherId: owner.id } : {}) } });
   const tours = new TourService(asAppDatabase(db), new MockRoutingProvider());
   const tour = await tours.createTour({ vehicleId: vehicle.id, orderNumber: `ORD-${name}`, stops: [
     { sequence: 1, type: 'LOAD', address: 'Berlin', city: 'Berlin', ...BERLIN },
@@ -489,7 +491,7 @@ describe('leaving the town after a real stay at the stop', () => {
   const legsOf = async (tourId: string) => (await db.leg.findMany({ where: { tourId }, orderBy: { id: 'asc' } }))
     .map(({ id, status, startedAt, finishedAt, drivePlan }) => ({ id, status, startedAt, finishedAt, drivePlan }));
   type Feed = (minute: number, point: { latitude: number; longitude: number }, standstill: boolean) => Promise<unknown>;
-  async function stood(name: string, minutes = 25, options: { unloadAt?: { latitude: number; longitude: number } } = {}) {
+  async function stood(name: string, minutes = 25, options: { unloadAt?: { latitude: number; longitude: number }; free?: boolean } = {}) {
     const scenario = await arrivalScenario(name, { autoStopEvent: true, ...options });
     for (let minute = 0; minute <= minutes; minute += 1) await scenario.feed(minute, north(100), true);
     expect((await db.stop.findUniqueOrThrow({ where: { id: scenario.stopId } })).arrivedAt).toEqual(at(0));
@@ -556,6 +558,38 @@ describe('leaving the town after a real stay at the stop', () => {
     expect(after[0].acknowledgedAt).not.toBeNull();
   });
 
+  describe('a truck nobody took («Свободна», owner 16.11: «это не моя машина»)', () => {
+    it('is recorded by itself once it stood its time and stayed away half an hour, without a question', async () => {
+      const { stopId, feed } = await stood('FREE-1', 25, { free: true });
+      await feed(26, north(2000), false);
+      await feed(27, north(3000), true);
+      await feed(50, north(3000), true);
+      expect(await notes(stopId)).toHaveLength(0);
+      await feed(56, north(3000), true);
+      expect((await db.stop.findUniqueOrThrow({ where: { id: stopId } })).completedAt).toEqual(at(25));
+      const found = await notes(stopId);
+      expect(found.map((item) => item.type)).toEqual(['AUTO_STOP_EVENT']);
+      expect(found[0].message).toContain('(без диспетчера) уехала из Berlin и 31 мин не возвращалась — вероятно загружена');
+      expect(JSON.parse(found[0].payloadJson)).toMatchObject({ at: at(25).toISOString(), awayMinutes: 31 });
+      expect((await db.event.findFirstOrThrow({ where: { stopId } })).note).toContain('без диспетчера');
+    });
+
+    it('after a short stop nobody is asked and the stop stays open', async () => {
+      const { stopId, feed } = await stood('FREE-2', 10, { free: true });
+      await leaveTown(feed, 11);
+      await feed(60, north(20_000), true);
+      expect(await notes(stopId)).toHaveLength(0);
+      expect((await db.stop.findUniqueOrThrow({ where: { id: stopId } })).completedAt).toBeNull();
+    });
+
+    it('a taken truck parked nearby is still a question for its dispatcher', async () => {
+      const { stopId, feed } = await stood('TAKEN-1');
+      await feed(26, north(2000), false);
+      await feed(56, north(3000), true);
+      expect((await notes(stopId)).map((item) => item.type)).toEqual(['STOP_DEPARTED']);
+    });
+  });
+
   it('with the next stop in the same town, reaching it records BELADEN by itself at the exit time', async () => {
     const { stopId, tour, feed } = await stood('TOWN-4', 25, { unloadAt: north(5000) });
     await feed(26, north(2000), false);
@@ -586,7 +620,8 @@ describe('leaving the town after a real stay at the stop', () => {
   describe('unloading and loading at the same place (owner, 15.11)', () => {
     /** LOAD far away (done), then ENTLADEN and BELADEN of Leergut at one plant, then the last ENTLADEN in Hamburg. */
     async function onePlace(name: string, minutes: number) {
-      const vehicle = await db.vehicle.create({ data: { vehicleNumber: name, licensePlate: `B-${name}` } });
+      const owner = await db.dispatcher.create({ data: { login: `d-${name.toLowerCase()}`, displayName: `Disponent ${name}`, passwordHash: 'x' } });
+      const vehicle = await db.vehicle.create({ data: { vehicleNumber: name, licensePlate: `B-${name}`, assignedDispatcherId: owner.id } });
       const tours = new TourService(asAppDatabase(db), new MockRoutingProvider());
       const tour = await tours.createTour({ vehicleId: vehicle.id, orderNumber: `ORD-${name}`, stops: [
         { sequence: 1, type: 'LOAD', address: 'Leipzig', city: 'Leipzig', latitude: 51.34, longitude: 12.37 },

@@ -638,7 +638,7 @@ export class TourService {
           stopId: stop.id,
           type: eventType,
           timestamp: now,
-          note: options.auto ? (options.auto.meta.nextStop ? "Автоматически по GPS Webfleet: машина приехала на следующую точку" : "Автоматически по GPS Webfleet: машина выехала из города") : note
+          note: options.auto ? (options.auto.meta.nextStop ? "Автоматически по GPS Webfleet: машина приехала на следующую точку" : options.auto.meta.awayMinutes ? "Автоматически по GPS Webfleet: машина без диспетчера уехала с точки и не вернулась" : "Автоматически по GPS Webfleet: машина выехала из города") : note
         }
       });
       await writeAuditLog(tx, actor, { action: eventType, entityType: "Stop", entityId: stop.id,
@@ -682,7 +682,9 @@ export class TourService {
         const written = recordedStops.length > 1 ? "записаны" : "записан";
         const place = stop.city || stop.address;
         const dedupKey = `auto-stop-event:${chain[0]}:${now.toISOString()}`;
-        const message = options.auto.meta.nextStop
+        const message = options.auto.meta.awayMinutes
+          ? `LKW ${stop.tour.vehicle.vehicleNumber} (без диспетчера) уехала из ${place} и ${options.auto.meta.awayMinutes} мин не возвращалась — вероятно ${state}. ${done} ${written} автоматически на ${berlinClock(now)} (выезд с точки по GPS Webfleet). Если это ошибка, отмените.`
+          : options.auto.meta.nextStop
           ? `LKW ${stop.tour.vehicle.vehicleNumber} после стоянки в ${place} приехала на следующую точку ${options.auto.meta.nextStop} — вероятно ${state}. ${done} ${written} автоматически на ${berlinClock(now)} (выезд с точки по GPS Webfleet). Если это ошибка, отмените.`
           : `LKW ${stop.tour.vehicle.vehicleNumber} выехала из ${place} — вероятно ${state}. ${done} ${written} автоматически на ${berlinClock(now)} (выезд с точки по GPS Webfleet). Если это ошибка, отмените.`;
         const payloadJson = JSON.stringify({ stopType: stop.type, at: now.toISOString(), source: "WEBFLEET_AUTO", ...options.auto.meta,

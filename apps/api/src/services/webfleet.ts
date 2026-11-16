@@ -154,8 +154,8 @@ export type AutoStopEventInput = {
   now: Date;
   /** The stops of the same place done in that one stay, in order, `stopId` first; absent for a single stop. */
   chainStopIds?: string[];
-  /** `nextStop`: the truck reached the next stop of the same town, which says this one is done. */
-  meta: { enteredAt: string; leftZoneAt: string; stayMinutes: number; distanceMeters: number; nextStop?: string; chain?: string[] };
+  /** `nextStop`: the truck reached the next stop of the same town; `awayMinutes`: a free truck stayed away this long. */
+  meta: { enteredAt: string; leftZoneAt: string; stayMinutes: number; distanceMeters: number; nextStop?: string; chain?: string[]; awayMinutes?: number };
 };
 export type AutoStopEventHandler = (input: AutoStopEventInput) => Promise<unknown>;
 type ArrivalDecision = { suggested: boolean; confirmed: boolean };
@@ -254,17 +254,19 @@ export class WebfleetTelemetryService {
     // Leaving long before the stop's planned time is not this stop's BELADEN/ENTLADEN: the dispatcher is asked instead.
     const windowStart = autoWindowStart(stop);
     const inWindow = !windowStart || leftAt >= windowStart;
+    // A truck nobody took («Свободна») has no one to ask (owner, 16.11): it decides by GPS alone.
+    const free = !tour.vehicle.assignedDispatcherId;
+    const waiting = current.recordedAt.getTime() - leftAt.getTime() < DEPARTURE_QUESTION_DELAY_SECONDS * 1000;
     if (onAutoStopEvent && inWindow && stay && stay.seconds >= AUTO_STOP_EVENT_MIN_STAY_SECONDS) {
-      const record = async (nextStop?: string) => {
+      const record = async (nextStop?: string, awayMinutes?: number) => {
         try {
           // Unloading and loading at one place are both done by the time the truck leaves it.
           const chainStopIds = chain.length > 1 ? chain.map((item) => item.id) : undefined;
           await onAutoStopEvent({ stopId: stop.id, at: leftAt, now, ...(chainStopIds ? { chainStopIds } : {}), meta: { enteredAt: stay.enteredAt.toISOString(), leftZoneAt: leftAt.toISOString(),
-            stayMinutes: Math.round(stay.seconds / 60), distanceMeters: Math.round(away(current)), ...(nextStop ? { nextStop } : {}), ...(chainStopIds ? { chain: chainStopIds } : {}) } });
+            stayMinutes: Math.round(stay.seconds / 60), distanceMeters: Math.round(away(current)), ...(nextStop ? { nextStop } : {}), ...(awayMinutes ? { awayMinutes } : {}), ...(chainStopIds ? { chain: chainStopIds } : {}) } });
           return true;
         } catch { return false; /* The tour changed meanwhile: the dispatcher decides. */ }
       };
-      const waiting = current.recordedAt.getTime() - leftAt.getTime() < DEPARTURE_QUESTION_DELAY_SECONDS * 1000;
       if (nextDistance >= AUTO_STOP_EVENT_DISTANCE_METERS) {
         if (away(current) >= AUTO_STOP_EVENT_DISTANCE_METERS && ((current.speedKmh ?? 0) > DEPARTURE_FAST_KMH || (previous && away(previous) >= AUTO_STOP_EVENT_DISTANCE_METERS))) {
           if (await record()) return true;
@@ -277,7 +279,12 @@ export class WebfleetTelemetryService {
           if (await record(next.city || next.address)) return true;
         } else if (waiting) return false;
       }
+      // A free truck that stood its time and has stayed away for half an hour without coming back is done there: the
+      // event is recorded at the exit, with «Отменить», instead of a question nobody owns.
+      if (free && !waiting && await record(undefined, Math.round((current.recordedAt.getTime() - leftAt.getTime()) / 60_000))) return true;
     }
+    // After a short stop, or out of the stop's time, a free truck's stop simply stays open: nobody is asked.
+    if (free) return false;
     const open = await this.db.notification.findFirst({ where: { stopId: stop.id, type: 'STOP_DEPARTED', acknowledgedAt: null } });
     if (open) return false;
 
