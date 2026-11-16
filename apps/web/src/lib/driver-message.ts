@@ -3,7 +3,8 @@ import { sharedTerminOf } from './tours'
 
 /**
  * The Auftrag as the driver gets it in WhatsApp, laid out like the owner's own messages (16.11.2026): few signs, «Загрузка Nr. 1»,
- * the full address in lines (firm, street with number, postcode with town), the date, and a time only with a Termin. No links.
+ * the full address in lines (firm, street with number, postcode with town), the date, a time only with a Termin, and the
+ * stop's own Referenz. No links.
  * Never a phone, the driver's name or the system's own notes. A future WhatsApp bot sends the same text.
  */
 export function driverMessage(tour: Pick<Tour, 'orderNumber' | 'tourRemarks' | 'stops'>): string {
@@ -11,8 +12,6 @@ export function driverMessage(tour: Pick<Tour, 'orderNumber' | 'tourRemarks' | '
   const open = stops.filter((stop) => !stop.completedAt)
   const shown = open.length ? open : stops
   const blocks = [`📄 Auftrag: ${tour.orderNumber}`, ...shown.map((stop) => stopBlock(stops, stop))]
-  const references = [...new Set(shown.flatMap((stop) => stop.referenceNumbers ?? parseReferences(stop.referenceNumbersJson) ?? []).map((value) => value.trim()).filter(Boolean))]
-  if (references.length) blocks.push(`📄 Referenz: ${references.join(', ')}`)
   if (tour.tourRemarks?.trim()) blocks.push(`Примечание: ${tour.tourRemarks.trim()}`)
   return blocks.join('\n\n')
 }
@@ -35,6 +34,9 @@ function stopBlock(stops: Stop[], stop: Stop): string {
   }
   const time = timeLine(stops, stop)
   if (time) lines.push(time)
+  // Each stop names its own references: the driver gives them at that gate (owner, 16.11).
+  const references = (stop.referenceNumbers ?? parseReferences(stop.referenceNumbersJson) ?? []).map((value) => value.trim()).filter(Boolean)
+  if (references.length) lines.push(`📄 Referenz: ${[...new Set(references)].join(', ')}`)
   if (stop.instructions?.trim()) lines.push(stop.instructions.trim())
   return lines.join('\n')
 }

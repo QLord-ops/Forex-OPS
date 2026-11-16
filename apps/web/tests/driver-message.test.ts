@@ -11,18 +11,17 @@ const load = stop(1, { type: 'LOAD', company: 'Fuyao Europe GmbH', address: 'Lai
 const unload = stop(2, { type: 'UNLOAD', company: 'Tesla Blackbird Warehouse', address: 'Eichenstraße 2b, 15537 Grünheide', appointmentAt: '2026-11-17T13:00:00Z', referenceNumbersJson: '["SHP2611-A097616"]' })
 
 describe('the Auftrag as text for the driver (owner, 16.11)', () => {
-  it('is laid out like the owner\'s own message: few signs, full address in lines, one Referenz', () => {
+  it('is laid out like the owner\'s own message: few signs, full address in lines, each stop with its Referenz', () => {
     expect(driverMessage(tour([unload, load]))).toBe([
       '📄 Auftrag: 1698/611/0299',
-      '📦 Загрузка Nr. 1: Fuyao Europe GmbH\nLaichinger Straße 2\n89150 Laichingen\n16.11.2026',
-      '📍 Выгрузка Nr. 1: Tesla Blackbird Warehouse\nEichenstraße 2b\n15537 Grünheide\n17.11.2026 14:00',
-      '📄 Referenz: SHP2611-A097616'
+      '📦 Загрузка Nr. 1: Fuyao Europe GmbH\nLaichinger Straße 2\n89150 Laichingen\n16.11.2026\n📄 Referenz: SHP2611-A097616',
+      '📍 Выгрузка Nr. 1: Tesla Blackbird Warehouse\nEichenstraße 2b\n15537 Grünheide\n17.11.2026 14:00\n📄 Referenz: SHP2611-A097616'
     ].join('\n\n'))
   })
 
   it('gives the day alone without a Termin, and no links or loading meters', () => {
     const text = driverMessage(tour([load, unload]))
-    expect(text).toContain('89150 Laichingen\n16.11.2026\n\n')
+    expect(text).toContain('89150 Laichingen\n16.11.2026\n📄 Referenz')
     expect(text).not.toContain('06:00')
     expect(text).not.toMatch(/https?:|google|LDM/i)
   })
@@ -31,9 +30,9 @@ describe('the Auftrag as text for the driver (owner, 16.11)', () => {
     const windowed = { ...unload, appointmentAt: null, appointmentWindowStartAt: '2026-11-17T06:00:00Z', appointmentWindowEndAt: '2026-11-17T07:00:00Z', instructions: 'Halle 3, Tor 7' }
     const leergut = stop(3, { type: 'LOAD', company: 'Tesla Leergut', address: 'Eichenstraße 2b, 15537 Grünheide', terminSharedWithStopId: 's2', referenceNumbers: ['LG-55120'] })
     const text = driverMessage(tour([load, windowed, leergut], { tourRemarks: 'Leergut zurück' }))
-    expect(text).toContain('15537 Grünheide\n17.11.2026 07:00–08:00\nHalle 3, Tor 7')
-    expect(text).toContain('📦 Загрузка Nr. 2: Tesla Leergut\nEichenstraße 2b\n15537 Grünheide\nTermin как у выгрузки Nr. 1')
-    expect(text).toContain('📄 Referenz: SHP2611-A097616, LG-55120')
+    expect(text).toContain('15537 Grünheide\n17.11.2026 07:00–08:00\n📄 Referenz: SHP2611-A097616\nHalle 3, Tor 7')
+    // The Leergut stop names only its own reference, not the one of the unloading before it.
+    expect(text).toContain('📦 Загрузка Nr. 2: Tesla Leergut\nEichenstraße 2b\n15537 Grünheide\nTermin как у выгрузки Nr. 1\n📄 Referenz: LG-55120\n\n')
     expect(text.endsWith('Примечание: Leergut zurück')).toBe(true)
   })
 
