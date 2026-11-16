@@ -1,4 +1,5 @@
 import { AbbreviationQuestion } from './AbbreviationQuestion'
+import { copyIntoMemory, UNREADABLE_FILE_TEXT } from '../lib/file-copy'
 import { AlertTriangle, ArrowDown, ArrowUp, CheckCircle2, FileUp, LoaderCircle, MapPin, Pencil, Plus, RefreshCw, Route, Search, Trash2, X } from 'lucide-react'
 import type { ChangeEvent, DragEvent } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -151,6 +152,14 @@ export function QuickOrderPanel({
   })
 
   function queueFiles(files: File[]) {
+    // Read the bytes now: a file dragged from Outlook may be gone by the time it is uploaded.
+    void copyIntoMemory(files).then(({ files: copies, unreadable }) => {
+      if (unreadable.length && !copies.length) { setError(UNREADABLE_FILE_TEXT); return }
+      queueCopies(copies)
+    })
+  }
+
+  function queueCopies(files: File[]) {
     onImportActivity?.()
     const supported = files.filter((file) => classifyFile(file) !== 'UNKNOWN')
     if (!supported.length) { setError('Поддерживаются PDF, XLSX, PNG, JPG и WEBP.'); return }

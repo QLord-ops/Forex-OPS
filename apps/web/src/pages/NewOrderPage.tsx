@@ -1,4 +1,5 @@
 import { AlertTriangle, Camera, Check, CheckCircle2, ChevronRight, Clock3, FileText, LoaderCircle, Pencil, Plus, Sparkles, Trash2, Upload } from 'lucide-react'
+import { copyIntoMemory, UNREADABLE_FILE_TEXT } from '../lib/file-copy'
 import type { ChangeEvent, DragEvent, FormEvent } from 'react'
 import { AddressInput } from '../components/AddressInput'
 import { suggestionAddress, suggestionProvider } from '../lib/address-book'
@@ -238,9 +239,12 @@ export function NewOrderPage() {
     if (!importing) await importOrderFiles(Array.from(event.dataTransfer.files))
   }
 
-  async function importOrderFiles(files: File[]) {
-    if (!files.length) return
+  async function importOrderFiles(dropped: File[]) {
+    if (!dropped.length) return
     setError(null); setSuccessMessage(null)
+    // Read the bytes now: a file dragged from Outlook may be gone by the time it is uploaded.
+    const { files, unreadable } = await copyIntoMemory(dropped)
+    if (unreadable.length && !files.length) { setError(new Error(UNREADABLE_FILE_TEXT)); return }
     const existingKeys = new Set(importItems.map((item) => item.key))
     const newFiles = files.map((file) => ({ file, key: `${file.name}:${file.size}:${file.lastModified}` })).filter(({ key }) => !existingKeys.has(key)).slice(0, Math.max(0, 10 - importItems.length))
     if (!newFiles.length) { setError(new Error('Добавьте PDF, Excel или скриншот. Один файл повторно не добавляется.')); return }
