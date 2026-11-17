@@ -65,6 +65,8 @@ export class NotificationService {
 
   async publish(input: { dedupKey: string; vehicleId: string; stopId?: string; type: string; message: string; payload: unknown }, reopen = false) {
     const { payload, ...data } = input;
+    // Reopened for everybody: also for an admin who had set it aside.
+    if (reopen) await this.db.notificationRead.deleteMany({ where: { notification: { dedupKey: input.dedupKey } } });
     return this.db.notification.upsert({
       where: { dedupKey: input.dedupKey },
       create: { ...data, payloadJson: JSON.stringify(payload) },
@@ -76,9 +78,12 @@ export class NotificationService {
     });
   }
 
-  /** Open notifications, most important first: decisions, then risks, then information and what no longer applies; one lead per truck. */
-  async list(now = new Date()) {
-    const items = await this.db.notification.findMany({ where: { acknowledgedAt: null }, orderBy: { createdAt: 'asc' }, take: 300 });
+  /**
+   * Open notifications, most important first: decisions, then risks, then information and what no longer applies; one
+   * lead per truck. `readerId`: without those this person set aside for themselves.
+   */
+  async list(now = new Date(), readerId?: string | null) {
+    const items = await this.db.notification.findMany({ where: { acknowledgedAt: null, ...(readerId ? { reads: { none: { dispatcherId: readerId } } } : {}) }, orderBy: { createdAt: 'asc' }, take: 300 });
     const legIds = new Set<string>();
     const stopIds = new Set<string>();
     for (const item of items) {
@@ -100,6 +105,15 @@ export class NotificationService {
 
   acknowledgeMany(ids: string[], now = new Date()) {
     return this.db.notification.updateMany({ where: { id: { in: ids }, acknowledgedAt: null }, data: { acknowledgedAt: now } });
+  }
+
+  /** Sets open notifications aside for one person; for everybody else they stay as they are. */
+  async setAside(ids: string[], dispatcherId: string, now = new Date()) {
+    const open = await this.db.notification.findMany({ where: { id: { in: ids }, acknowledgedAt: null, reads: { none: { dispatcherId } } }, select: { id: true } });
+    for (const item of open) {
+      await this.db.notificationRead.upsert({ where: { notificationId_dispatcherId: { notificationId: item.id, dispatcherId } }, create: { notificationId: item.id, dispatcherId, readAt: now }, update: {} });
+    }
+    return { count: open.length };
   }
 }
 

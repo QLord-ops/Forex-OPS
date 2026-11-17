@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { PrismaClient } from '../src/generated/sqlite-client/index.js';
-import { CoverResolver, coveredStatusOwner, coverResolver, endCover, startCover, teamOverview, vehiclesVisibleTo } from '../src/services/covers.js';
+import { CoverResolver, coveredStatusOwner, coverResolver, endCover, startCover, teamOverview, vehiclesOfColleagues, vehiclesVisibleTo } from '../src/services/covers.js';
+import { NotificationService } from '../src/services/notifications.js';
 import { isMine } from '../src/services/customers.js';
 import { asAppDatabase, migrateTestDatabase } from './test-database.js';
 
@@ -138,6 +139,43 @@ describe('what follows the cover', () => {
     await sqlite.vehicle.update({ where: { id: ids['401'] }, data: { assignedDispatcherId: ids.chef } });
     try { expect(await seen('chef', now, 'MINE')).toEqual(['401']); }
     finally { await sqlite.vehicle.update({ where: { id: ids['401'] }, data: { assignedDispatcherId: null } }); }
+  });
+
+  it('knows the trucks a colleague looks after: taken by them or free on their line, covers included', async () => {
+    const theirs = async (login: string, when = now) => {
+      const colleague = await vehiclesOfColleagues(db(), ids[login]!, when);
+      return ['101', '201', '202', '203', '301', '401'].filter((number) => colleague(ids[number]!));
+    };
+    // For the admin every truck with a dispatcher is a colleague's; the line without a dispatcher is nobody's.
+    expect(await theirs('chef')).toEqual(['101', '201', '202', '203', '301']);
+    // Cem shares TESLA with Ben, so its free truck is also a colleague's; Anna's NORD is hers alone.
+    expect(await theirs('cem')).toEqual(['101', '201', '202', '203', '301']);
+    expect(await theirs('anna')).toEqual(['201', '202', '203', '301']);
+    await start('ben', 'anna', null);
+    // Anna stands in for Ben: SUED and his taken trucks are hers now, TESLA is still shared with Cem.
+    expect(await theirs('anna')).toEqual(['301']);
+  });
+
+  it('a notification an admin set aside stays open for the dispatcher and comes back when it is reopened', async () => {
+    const service = new NotificationService(db(), null as never);
+    const notice = await service.publish({ dedupKey: 'covers-test:aside', vehicleId: ids['101']!, type: 'LONG_DWELL', message: 'LKW 101 стоит', payload: {} });
+    try {
+      const openFor = async (login: string | null) => (await service.list(now, login ? ids[login] : null)).some((item) => item.id === notice.id);
+      expect(await service.setAside([notice.id], ids.chef!)).toEqual({ count: 1 });
+      expect(await service.setAside([notice.id], ids.chef!)).toEqual({ count: 0 });
+      expect(await openFor('chef')).toBe(false);
+      expect(await openFor('anna')).toBe(true);
+      expect(await openFor(null)).toBe(true);
+      expect((await sqlite.notification.findUniqueOrThrow({ where: { id: notice.id } })).acknowledgedAt).toBeNull();
+      // The stay became critical: the notification is raised again for everybody.
+      await service.publish({ dedupKey: 'covers-test:aside', vehicleId: ids['101']!, type: 'LONG_DWELL', message: 'LKW 101 стоит критически', payload: {} }, true);
+      expect(await openFor('chef')).toBe(true);
+      // Closed by the dispatcher: closed for everybody, an old mark changes nothing.
+      await service.acknowledge(notice.id);
+      expect(await openFor('anna')).toBe(false);
+      expect(await openFor('chef')).toBe(false);
+    } finally { await sqlite.notification.deleteMany({ where: { dedupKey: 'covers-test:aside' } }); }
+    expect(await sqlite.notificationRead.count()).toBe(0);
   });
 
   it('the status Excel: the truck goes to the stand-in and remembers whose it is', () => {

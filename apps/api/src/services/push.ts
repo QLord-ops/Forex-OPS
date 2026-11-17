@@ -70,8 +70,9 @@ export class PushService {
 
   config() { return { enabled: this.keys !== null, publicKey: this.keys?.publicKey ?? null }; }
 
-  async subscribe(input: { endpoint: string; keys: { p256dh: string; auth: string }; workHours?: WorkHours | null }, actor?: AuditActor) {
-    const data = { p256dh: input.keys.p256dh, auth: input.keys.auth, dispatcherId: actor?.dispatcherId ?? null, workHoursJson: input.workHours ? JSON.stringify(input.workHours) : null, failures: 0 };
+  /** `ownOnly`: the admin hid every line but their own on that device; a dispatcher's phone is own-only whatever is stored. */
+  async subscribe(input: { endpoint: string; keys: { p256dh: string; auth: string }; workHours?: WorkHours | null; ownOnly?: boolean }, actor?: AuditActor) {
+    const data = { p256dh: input.keys.p256dh, auth: input.keys.auth, dispatcherId: actor?.dispatcherId ?? null, workHoursJson: input.workHours ? JSON.stringify(input.workHours) : null, ownOnly: input.ownOnly === true, failures: 0 };
     const saved = await this.db.pushSubscription.upsert({ where: { endpoint: input.endpoint }, create: { endpoint: input.endpoint, ...data }, update: data });
     // The endpoint is a capability URL: only its host goes into the audit log.
     await writeAuditLog(this.db, actor, { action: 'PUSH_SUBSCRIBED', entityType: 'PushSubscription', entityId: saved.id, metadata: { service: new URL(input.endpoint).host } });
@@ -88,7 +89,7 @@ export class PushService {
    * Sends the notifications created since the last sweep. Every phone gets only what its dispatcher would see in the app
    * and what its working hours allow. A push service that says the subscription is gone (404/410) removes it.
    */
-  async sweep(candidates: () => Promise<PushCandidate[]>, visibleTo: (dispatcherId: string | null) => Promise<(vehicleId: string) => boolean>, now = new Date()) {
+  async sweep(candidates: () => Promise<PushCandidate[]>, visibleTo: (dispatcherId: string | null, ownOnly: boolean) => Promise<(vehicleId: string) => boolean>, now = new Date()) {
     if (!this.keys) return { sent: 0, removed: 0 };
     const state = await this.db.integrationSyncState.findUnique({ where: { id: WATERMARK } });
     if (!state?.lastSnapshotAt) {
@@ -103,10 +104,11 @@ export class PushService {
     const subscriptions = await this.db.pushSubscription.findMany();
     let sent = 0;
     let removed = 0;
-    const visibility = new Map<string | null, (vehicleId: string) => boolean>();
+    const visibility = new Map<string, (vehicleId: string) => boolean>();
     for (const subscription of subscriptions) {
-      if (!visibility.has(subscription.dispatcherId)) visibility.set(subscription.dispatcherId, await visibleTo(subscription.dispatcherId));
-      const visible = visibility.get(subscription.dispatcherId)!;
+      const audience = `${subscription.dispatcherId ?? ''}|${subscription.ownOnly}`;
+      if (!visibility.has(audience)) visibility.set(audience, await visibleTo(subscription.dispatcherId, subscription.ownOnly));
+      const visible = visibility.get(audience)!;
       let hours: unknown = null;
       try { hours = subscription.workHoursJson ? JSON.parse(subscription.workHoursJson) : null; } catch { hours = null; }
       const working = isWorkTime(now, validWorkHours(hours) ? hours : DEFAULT_WORK_HOURS);

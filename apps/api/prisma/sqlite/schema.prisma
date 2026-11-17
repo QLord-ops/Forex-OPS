@@ -226,6 +226,7 @@ model Notification {
   createdAt      DateTime  @default(now())
   acknowledgedAt DateTime?
 
+  reads NotificationRead[]
   @@index([acknowledgedAt, createdAt])
 }
 
@@ -404,6 +405,7 @@ model Dispatcher {
   vehicles Vehicle[]
   lines    DispatcherLine[]
   pushSubscriptions PushSubscription[]
+  notificationReads NotificationRead[]
   coversAsAbsent DispatcherCover[] @relation("CoverAbsent")
   coversAsCover  DispatcherCover[] @relation("CoverActing")
 }
@@ -419,6 +421,8 @@ model PushSubscription {
   dispatcher Dispatcher? @relation(fields: [dispatcherId], references: [id], onDelete: Cascade)
   /// The working hours of that device: outside them only urgent decisions are pushed.
   workHoursJson String?
+  /// An admin's «Мои линии» on that device: only their own trucks ring it. A dispatcher's phone is always own-only.
+  ownOnly Boolean @default(false)
   failures Int @default(0)
   lastSentAt DateTime?
   createdAt DateTime @default(now())
@@ -704,4 +708,17 @@ model DispatcherLine {
 
   @@id([dispatcherId, lineId])
   @@index([lineId])
+}
+
+/// An admin set a colleague's notification aside for themselves: it stays open for the dispatcher who runs the truck.
+model NotificationRead {
+  id String @id @default(cuid())
+  notificationId String
+  notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  dispatcherId String
+  dispatcher Dispatcher @relation(fields: [dispatcherId], references: [id], onDelete: Cascade)
+  readAt DateTime @default(now())
+
+  @@unique([notificationId, dispatcherId])
+  @@index([dispatcherId])
 }

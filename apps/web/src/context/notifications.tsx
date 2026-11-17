@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import { usePolling } from '../hooks/usePolling'
@@ -52,6 +52,13 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
   // Keeps polling in a hidden tab so the sound and the Windows notification arrive while the dispatcher is in Outlook or Excel.
   // An admin who hid every line but their own gets only those trucks here too; a dispatcher's list is cut by the server.
   const mineOnly = notificationsScope(useFleetScope().viewer) === 'mine'
+  // The phone follows the same choice: the subscription of this device is told when it changes.
+  const pushedScope = useRef(mineOnly)
+  useEffect(() => {
+    if (pushedScope.current === mineOnly) return
+    pushedScope.current = mineOnly
+    void syncPushWorkHours()
+  }, [mineOnly])
   const notifications = usePolling(() => operationsRequest<{ notifications: AlertNotification[] }>(mineOnly ? '/notifications?scope=mine' : '/notifications'), 30000, true, mineOnly ? 'notifications-mine' : 'notifications', true)
   const pendingPoll = usePolling(api.pendingAppointments, 60_000)
   const navigate = useNavigate()

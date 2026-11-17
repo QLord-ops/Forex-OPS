@@ -73,7 +73,7 @@ import { scoreDraft } from './services/field-confidence.js';
 import { berlinToday } from './services/order-dates.js';
 import { registerCustomerRoutes } from './routes/customers.js';
 import { registerCoverRoutes } from './routes/covers.js';
-import { coverResolver, vehiclesVisibleTo, type VisibilityScope } from './services/covers.js';
+import { coverResolver, vehiclesOfColleagues, vehiclesVisibleTo, type VisibilityScope } from './services/covers.js';
 import { ImportLearningService } from './services/import-learning.js';
 import { registerImportRuleRoutes } from './routes/import-rules.js';
 import { registerAppointmentDocumentRoutes } from './routes/appointments.js';
@@ -557,7 +557,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
       await trafficService.tick();
       await dailyStatus.runIfDue(new Date()).catch((error) => app.log.error(error));
       // New decisions reach the dispatchers' phones even when the app is closed.
-      await pushService.sweep(() => notificationService.list(), visibleTo).catch((error) => app.log.warn({ errorType: error instanceof Error ? error.name : 'unknown' }, 'Push не отправлен'));
+      await pushService.sweep(() => notificationService.list(), (dispatcherId, ownOnly) => visibleTo(dispatcherId, ownOnly ? 'MINE' : 'ALL')).catch((error) => app.log.warn({ errorType: error instanceof Error ? error.name : 'unknown' }, 'Push не отправлен'));
       lastNotificationRefreshAt = Date.now();
       for (const client of subscribers) client.write(`event: operations\ndata: ${JSON.stringify({ at: Date.now() })}\n\n`);
     } catch (error) { app.log.error(error); }
@@ -608,33 +608,46 @@ export async function buildApp(options: BuildAppOptions = {}) {
     subscriberSessions.clear();
   });
 
+  /**
+   * «Понятно»: whoever runs the truck closes its notification for everybody. An admin's «Понятно» on a colleague's
+   * truck only sets it aside for the admin (owner, 17.11: an admin sees every truck and must not clear the
+   * dispatchers' lists). A dispatcher cannot touch a colleague's truck at all.
+   */
+  async function closeNotifications(request: FastifyRequest, ids: string[]) {
+    const session = request.dispatcherSession;
+    const me = session?.dispatcherId ?? null;
+    const visible = await visibleTo(me);
+    const found = await prisma.notification.findMany({ where: { id: { in: ids } }, select: { id: true, vehicleId: true } });
+    const allowed = found.filter((item) => visible(item.vehicleId));
+    const theirs = me && session?.role === 'admin' ? await vehiclesOfColleagues(prisma, me) : () => false;
+    const aside = allowed.filter((item) => theirs(item.vehicleId)).map((item) => item.id);
+    const forAll = allowed.filter((item) => !theirs(item.vehicleId)).map((item) => item.id);
+    const closedForAll = forAll.length ? (await notificationService.acknowledgeMany(forAll)).count : 0;
+    const setAside = me && aside.length ? (await notificationService.setAside(aside, me)).count : 0;
+    return { count: closedForAll + setAside, aside: setAside, refused: found.length - allowed.length };
+  }
+
   app.get('/notifications', async (request) => {
     if (isServerless && Date.now() - lastNotificationRefreshAt >= 25_000) await refreshNotifications();
     const { scope } = z.object({ scope: z.enum(['mine', 'all']).default('all') }).parse(request.query);
-    const notifications = await notificationService.list();
+    const notifications = await notificationService.list(new Date(), request.dispatcherSession?.dispatcherId);
     // A dispatcher gets their own trucks whatever is asked; `mine` is the admin hiding every line but their own.
     const visible = await visibleTo(request.dispatcherSession?.dispatcherId, scope === 'mine' ? 'MINE' : 'ALL');
     return { notifications: notifications.filter((notification) => visible(notification.vehicleId)) };
   });
   app.post('/notifications/:id/ack', async (request) => {
     const { id } = z.object({ id: z.string() }).parse(request.params);
-    const found = await prisma.notification.findUnique({ where: { id }, select: { vehicleId: true } });
+    const closed = await closeNotifications(request, [id]);
     // A colleague's truck is not this dispatcher's to close: the notification stays open for its owner.
-    if (found && !(await visibleTo(request.dispatcherSession?.dispatcherId))(found.vehicleId)) {
-      throw Object.assign(new Error('Это уведомление по машине другого диспетчера.'), { statusCode: 404 });
-    }
-    await notificationService.acknowledge(id);
-    await audit(request, 'NOTIFICATION_ACKNOWLEDGED', 'Notification', id);
+    if (closed.refused) throw Object.assign(new Error('Это уведомление по машине другого диспетчера.'), { statusCode: 404 });
+    await audit(request, 'NOTIFICATION_ACKNOWLEDGED', 'Notification', id, closed.aside ? { metadata: { onlyForMe: true } } : undefined);
     return { ok: true };
   });
   app.post('/notifications/ack-many', async (request) => {
     const { ids } = z.object({ ids: z.array(z.string().min(1).max(64)).min(1).max(300) }).parse(request.body);
-    const visible = await visibleTo(request.dispatcherSession?.dispatcherId);
-    const own = (await prisma.notification.findMany({ where: { id: { in: [...new Set(ids)] } }, select: { id: true, vehicleId: true } }))
-      .filter((item) => visible(item.vehicleId)).map((item) => item.id);
-    const result = own.length ? await notificationService.acknowledgeMany(own) : { count: 0 };
-    await audit(request, 'NOTIFICATIONS_ACKNOWLEDGED', 'Notification', 'bulk', { metadata: { count: result.count } });
-    return { ok: true, count: result.count };
+    const closed = await closeNotifications(request, [...new Set(ids)]);
+    await audit(request, 'NOTIFICATIONS_ACKNOWLEDGED', 'Notification', 'bulk', { metadata: { count: closed.count, ...(closed.aside ? { onlyForMe: closed.aside } : {}) } });
+    return { ok: true, count: closed.count };
   });
   app.get('/events/stream', async (request, reply) => {
     const sessionId = request.dispatcherSession?.sessionId;

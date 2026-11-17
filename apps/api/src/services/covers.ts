@@ -120,6 +120,22 @@ export async function vehiclesVisibleTo(db: PrismaClient, dispatcherId: string |
   return (vehicleId) => mine.has(vehicleId);
 }
 
+/**
+ * Trucks somebody else looks after right now: taken by a colleague, or free on a line colleagues work on. An admin's
+ * «Понятно» on such a truck sets the notification aside for the admin only — it is the colleague's to close.
+ */
+export async function vehiclesOfColleagues(db: PrismaClient, dispatcherId: string, now = new Date()): Promise<(vehicleId: string) => boolean> {
+  const resolver = await coverResolver(db, now);
+  const vehicles = await db.vehicle.findMany({ select: { id: true, assignedDispatcherId: true, customerLineId: true,
+    customerLine: { select: { dispatchers: { where: { dispatcher: { active: true } }, select: { dispatcherId: true } } } } } });
+  const theirs = new Set(vehicles.filter((vehicle) => {
+    const owner = resolver.vehicle(vehicle).assignedDispatcherId;
+    if (owner) return owner !== dispatcherId;
+    return (vehicle.customerLine?.dispatchers ?? []).some((member) => resolver.actingFor(member.dispatcherId, vehicle.customerLineId) !== dispatcherId);
+  }).map((vehicle) => vehicle.id));
+  return (vehicleId) => theirs.has(vehicleId);
+}
+
 export type StartCoverInput = { absentDispatcherId: string; coverDispatcherId: string; lineIds: string[] | null; endsAt: Date };
 
 function requireParty(actor: AuditActor, absentDispatcherId: string, coverDispatcherId: string) {

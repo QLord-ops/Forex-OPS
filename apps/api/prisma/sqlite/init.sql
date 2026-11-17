@@ -511,6 +511,7 @@ CREATE TABLE "PushSubscription" (
     "auth" TEXT NOT NULL,
     "dispatcherId" TEXT,
     "workHoursJson" TEXT,
+    "ownOnly" BOOLEAN NOT NULL DEFAULT false,
     "failures" INTEGER NOT NULL DEFAULT 0,
     "lastSentAt" DATETIME,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -536,3 +537,14 @@ CREATE TABLE "DispatcherCover" (
 );
 CREATE INDEX "DispatcherCover_absentDispatcherId_endsAt_idx" ON "DispatcherCover"("absentDispatcherId", "endsAt");
 CREATE INDEX "DispatcherCover_coverDispatcherId_endsAt_idx" ON "DispatcherCover"("coverDispatcherId", "endsAt");
+
+CREATE TABLE "NotificationRead" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "notificationId" TEXT NOT NULL,
+    "dispatcherId" TEXT NOT NULL,
+    "readAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "NotificationRead_notificationId_fkey" FOREIGN KEY ("notificationId") REFERENCES "Notification" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT "NotificationRead_dispatcherId_fkey" FOREIGN KEY ("dispatcherId") REFERENCES "Dispatcher" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+CREATE UNIQUE INDEX "NotificationRead_notificationId_dispatcherId_key" ON "NotificationRead"("notificationId", "dispatcherId");
+CREATE INDEX "NotificationRead_dispatcherId_idx" ON "NotificationRead"("dispatcherId");
