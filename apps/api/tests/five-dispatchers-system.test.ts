@@ -227,6 +227,14 @@ describe('the whole system with five dispatchers at work', () => {
     working = false;
     await Promise.all(polling);
 
+    // Аналитика: the history never carries the drawn route, however long it is.
+    await db.leg.updateMany({ data: { routeGeometry: JSON.stringify(Array.from({ length: 5_000 }, (_, index) => [9 + index / 1e4, 51])) } });
+    const history = await call(team[0]!, 'GET', '/history');
+    expect(history.status).toBe(200);
+    expect(history.body.tours).toHaveLength(TEAM.length * TRUCKS_PER_LINE + TEAM.length);
+    expect(history.body.tours.every((tour: { legs: unknown[] }) => tour.legs.length > 0)).toBe(true);
+    expect(JSON.stringify(history.body)).not.toContain('routeGeometry');
+
     // «Мои» of every dispatcher are exactly the trucks of their line.
     const boards = await Promise.all(team.map((person) => call(person, 'GET', '/dashboard')));
     for (const [index, person] of team.entries()) {
