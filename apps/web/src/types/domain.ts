@@ -606,6 +606,8 @@ export interface ReadStats {
   settingsRejected: boolean
   /** The model's first answer was cut off or broken and it was asked once more. */
   retried?: 'INCOMPLETE' | 'BROKEN_JSON' | null
+  /** The text layer gave nothing and the PDF was read again from its pages. */
+  fromPagesAfterText?: boolean
   contextMs?: number
   totalMs?: number
   queueMs?: number

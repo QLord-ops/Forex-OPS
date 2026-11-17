@@ -48,6 +48,8 @@ export interface ReadStats {
   settingsRejected: boolean;
   /** The first answer was cut off or was no JSON, and the model was asked once more. */
   retried?: ModelAnswerFault | null;
+  /** The text layer gave nothing, and the PDF was read again from its pages; modelMs counts both readings. */
+  fromPagesAfterText?: boolean;
   /** Added by the route: the work before the model (customer, limits) and the whole reading as the server saw it. */
   contextMs?: number;
   /** Waited for a free place among the readings running at the same time. */
@@ -505,17 +507,31 @@ export async function importPdfPreview(
     detail: "high"
   };
   const textPart = (intro: string) => ({ type: "input_text", text: `${intro}\n${pagesAsText(text!)}` });
-  return importVisualOrderPreview({
+  const extractMs = Date.now() - extractStarted;
+  const preview = await importVisualOrderPreview({
     layout: "PDF",
     readMode: textual && !slip ? "text" : "file",
-    extractMs: Date.now() - extractStarted,
+    extractMs,
     content: slip
       ? [file, textPart("Text layer of the same PDF, for the exact characters; which value belongs to which label and which box is ticked is seen on the page above:")]
       : textual
         ? textPart("Text of the PDF, page by page in [Seite N] blocks (rows of its tables are lines, columns are separated by wider spaces):")
         : file,
     options
-  }) as Promise<PdfImportPreview>;
+  }) as PdfImportPreview;
+  if (preview.readMode !== "text" || !nothingRead(preview)) return preview;
+  // The text gave the model nothing to go on (a text layer of symbols, a form whose words are drawn, not written):
+  // the pages themselves are read instead, so a Termin slip or an Auftrag is not lost to its broken text layer.
+  const fromPages = await importVisualOrderPreview({ layout: "PDF", readMode: "file", extractMs, content: file, options }) as PdfImportPreview;
+  return fromPages.readStats && preview.readStats
+    ? { ...fromPages, readStats: { ...fromPages.readStats, modelMs: preview.readStats.modelMs + fromPages.readStats.modelMs, fromPagesAfterText: true } }
+    : fromPages;
+}
+
+/** An Auftrag without a single stop that names a company, an address or a town: nothing of the document was understood. */
+export function nothingRead(preview: Pick<DocumentImportPreview, "documentKind" | "drafts">): boolean {
+  if (preview.documentKind === "APPOINTMENT") return false;
+  return preview.drafts.every((draft) => draft.stops.every((stop) => !stop.company?.trim() && !stop.address?.trim() && !stop.city?.trim()));
 }
 
 // An mRoad Deckblatt is a web form printed to PDF: as text its values drift away from their labels (Von 12:00 and
