@@ -33,7 +33,6 @@ export function DispatcherLinesEditor({ account, customers, onSaved }: { account
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const names = new Map(customers.flatMap((customer) => customer.lines.map((line) => [line.id, `${customer.name} · ${line.name}`] as const)))
-  const summary = current.length ? current.map((line) => `${names.get(line.lineId) ?? '—'}${line.isPrimary && current.length > 1 ? ' (основная)' : ''}`).join(', ') : 'нет линий'
 
   async function save() {
     setBusy(true); setError('')
@@ -44,9 +43,10 @@ export function DispatcherLinesEditor({ account, customers, onSaved }: { account
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Не сохранено.') } finally { setBusy(false) }
   }
 
-  if (!open) return <div className="text-sm">
-    <span>{summary}</span>
-    {customers.length ? <button type="button" className="ml-2 text-xs text-blue-700 underline" onClick={() => setOpen(true)} aria-label={`Изменить линии ${account.displayName}`}>изменить</button> : null}
+  if (!open) return <div className="account-lines">
+    {current.length ? current.map((line) => <span key={line.lineId} className="account-line">{names.get(line.lineId) ?? '—'}{line.isPrimary && current.length > 1 ? <span className="account-line-main">основная</span> : null}</span>)
+      : <span className="account-line account-line-none">{account.role === 'admin' ? 'Нет линий' : 'Нет линий — видит только взятые машины'}</span>}
+    {customers.length ? <button type="button" className="account-link" onClick={() => setOpen(true)} aria-label={`Изменить линии ${account.displayName}`}>Изменить</button> : null}
   </div>
   return <fieldset className="space-y-2 text-sm">
     <legend className="sr-only">Линии {account.displayName}</legend>

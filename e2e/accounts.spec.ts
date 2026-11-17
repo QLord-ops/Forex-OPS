@@ -49,6 +49,7 @@ test('администратор создаёт аккаунт диспетче�
   await page.goto('/dispatchers')
   await expect(page.getByRole('heading', { name: 'Диспетчеры' })).toBeVisible()
   await expect(page.getByRole('row', { name: /Chef Admin.*это вы/ })).toBeVisible()
+  await page.getByRole('button', { name: 'Новый диспетчер' }).click()
   await page.getByPlaceholder('anna.b').fill('Anna.B')
   await page.getByPlaceholder('Anna Beispiel').fill('Anna Beispiel')
   await page.getByLabel('Временный пароль').fill('anna long password')
