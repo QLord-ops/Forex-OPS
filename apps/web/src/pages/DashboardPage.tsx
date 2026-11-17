@@ -24,11 +24,11 @@ import { classNames, formatAppointment, formatDateTime, formatDurationMinutes, f
 import type { Coordinate, CurrentPosition, DashboardVehicle, Stop } from '../types/domain'
 import { zuladungState } from '../lib/zuladung'
 import { customerColor } from '../lib/customers'
+import { fleetOnMap, inScope, useFleetScope, type FleetScope } from '../lib/fleet-scope'
 import '../components/customers.css'
 
 const PIN_STORAGE_KEY = 'ops-dashboard-pinned-vehicles'
 const SORT_STORAGE_KEY = 'ops-dashboard-sort'
-type FleetScope = 'MINE' | 'FLEET' | 'FREE'
 const scopes: Array<{ value: FleetScope; label: string }> = [
   { value: 'MINE', label: 'Мои' }, { value: 'FLEET', label: 'Весь парк' }, { value: 'FREE', label: 'Свободные' }
 ]
@@ -48,7 +48,7 @@ export function DashboardPage() {
   const [filter, setFilter] = useState<FleetFilter>('ALL')
   const [customerFilter, setCustomerFilter] = useState<string | null>(null)
   const [sort, setSort] = useState<FleetSort>(() => readSort())
-  const [scope, setScope] = useState<FleetScope | null>(null)
+  const { viewer, scope, setScope } = useFleetScope()
   const [drawerOpen, setDrawerOpen] = useState(false)
   // The bottom panel slides down to a thin strip so the map is free; the choice is remembered in this browser.
   // Collapsed by default on a phone, where the map is small; the choice is remembered either way.
@@ -83,12 +83,14 @@ export function DashboardPage() {
   // Pins belong to the person: each dispatcher keeps their own.
   const pinKey = me ? `${PIN_STORAGE_KEY}:${me}` : PIN_STORAGE_KEY
   useEffect(() => { setPinned(readPinnedVehicles(pinKey)) }, [pinKey])
-  // First view: own trucks when the dispatcher has some, otherwise the whole fleet.
+  // A dispatcher starts with their own trucks, an admin with the whole fleet; the map follows the same choice.
   const hasMine = vehicles.some((row) => row.mine)
-  const activeScope: FleetScope = !me ? 'FLEET' : scope ?? (hasMine ? 'MINE' : 'FLEET')
+  const activeScope: FleetScope = me ? scope : 'FLEET'
   const orderedVehicles = useMemo(() => vehicles.slice().sort((a, b) => compareVehicles(a, b, pinned, sort)), [pinned, sort, vehicles])
   const selectedId = searchParams.get('vehicleId') ?? ''
-  const selected = vehicles.find((row) => row.vehicle.id === selectedId) ?? orderedVehicles[0] ?? null
+  // Nothing picked yet: the first truck of the scope, never a colleague's truck for a dispatcher without their own.
+  const firstInScope = orderedVehicles.find((row) => inScope(row, activeScope)) ?? null
+  const selected = vehicles.find((row) => row.vehicle.id === selectedId) ?? firstInScope
   const cardId = searchParams.get('card')
   // Phone: the truck list and the map are two tabs (?view=map); every change of the selection keeps the tab.
   const view = searchParams.get('view') === 'map' ? 'map' : 'list'
@@ -96,18 +98,19 @@ export function DashboardPage() {
   const cardRow = cardId ? vehicles.find((row) => row.vehicle.id === cardId) ?? null : null
   cardIdRef.current = cardId
   useEffect(() => { setOpenWithCard(false) }, [cardId])
-  const fleet = useMemo(() => vehicles.flatMap((row) => row.mapPosition
+  const shownId = selected?.vehicle.id ?? null
+  const fleet = useMemo(() => fleetOnMap(vehicles, activeScope, shownId).flatMap((row) => row.mapPosition
     ? [{ id: row.vehicle.id, label: row.vehicle.vehicleNumber, ...row.mapPosition, termin: Boolean(terminOf(row.tour)), tone: vehicleStatus(row).tone }]
-    : []), [vehicles])
+    : []), [activeScope, shownId, vehicles])
   const position = useVehiclePosition(selected?.vehicle.id ?? '')
   const refetchPosition = position.refetch
   const notified = useMemo(() => new Set(notifications.open.map((item) => item.vehicleId)), [notifications.open])
   const stopsById = useMemo(() => new Map(vehicles.flatMap((row) => (row.tour?.stops ?? []).map((stop) => [stop.id, stop] as const))), [vehicles])
 
   useEffect(() => {
-    if (!orderedVehicles.length || vehicles.some((row) => row.vehicle.id === selectedId)) return
-    setSearchParams(withView({ vehicleId: orderedVehicles[0].vehicle.id }, view), { replace: true })
-  }, [orderedVehicles, selectedId, setSearchParams, vehicles, view])
+    if (!firstInScope || vehicles.some((row) => row.vehicle.id === selectedId)) return
+    setSearchParams(withView({ vehicleId: firstInScope.vehicle.id }, view), { replace: true })
+  }, [firstInScope, selectedId, setSearchParams, vehicles, view])
   useEffect(() => { setDrawerOpen(false); setRouteOptions(null); setOptionsError('') }, [selected?.vehicle.id])
   useEffect(() => {
     window.dispatchEvent(new CustomEvent('ops:assistant-context', { detail: { vehicleId: selected?.vehicle.id } }))
@@ -139,7 +142,7 @@ export function DashboardPage() {
     }
     return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name))
   }, [vehicles])
-  const scoped = orderedVehicles.filter((row) => activeScope === 'FLEET' || (activeScope === 'MINE' ? row.mine : !row.assignedTo))
+  const scoped = orderedVehicles.filter((row) => inScope(row, activeScope))
     .filter((row) => !customerFilter || row.customer?.id === customerFilter)
   const needle = query.trim().toLocaleLowerCase('ru-RU')
   const searched = scoped.filter((row) => !needle || [row.vehicle.vehicleNumber, `lkw ${row.vehicle.vehicleNumber}`, row.vehicle.licensePlate, row.telemetry?.objectNo, row.tour?.orderNumber, shortAddress(row.from), shortAddress(row.to)]
@@ -268,8 +271,9 @@ export function DashboardPage() {
               <span className="fleet-sort-label">{sorts.find((item) => item.value === sort)?.label}</span>
             </div>
             {me ? <div className="fleet-scope" role="group" aria-label="Чьи машины показать">
-              {scopes.map((item) => <button key={item.value} type="button" aria-pressed={activeScope === item.value} className={classNames('fleet-scope-button', activeScope === item.value && 'fleet-scope-button-active')} onClick={() => setScope(item.value)}>
-                {item.label}<span className="fleet-scope-count">{item.value === 'MINE' ? vehicles.filter((row) => row.mine).length : item.value === 'FREE' ? vehicles.filter((row) => !row.assignedTo).length : vehicles.length}</span>
+              {scopes.map((item) => <button key={item.value} type="button" aria-pressed={activeScope === item.value} className={classNames('fleet-scope-button', activeScope === item.value && 'fleet-scope-button-active')} onClick={() => setScope(item.value)}
+                title={item.value === 'MINE' && viewer.role === 'admin' ? 'Скрыть все линии, кроме своих: на карте, в списке и в уведомлениях' : undefined}>
+                {item.value === 'MINE' && viewer.role === 'admin' ? 'Мои линии' : item.label}<span className="fleet-scope-count">{item.value === 'MINE' ? vehicles.filter((row) => row.mine).length : item.value === 'FREE' ? vehicles.filter((row) => !row.assignedTo).length : vehicles.length}</span>
               </button>)}
             </div> : null}
           </div>

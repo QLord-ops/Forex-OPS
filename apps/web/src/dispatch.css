@@ -604,7 +604,7 @@ button.decision-card-title:focus-visible { outline: 2px solid var(--focus); outl
 .fleet-section-head { flex-wrap: wrap; row-gap: 6px; }
 .fleet-section-name { display: flex; min-width: 0; align-items: baseline; gap: 8px; }
 .fleet-section-name .fleet-sort-label { margin-left: 0; }
-.fleet-scope { margin-left: auto; }
+.fleet-scope { max-width: 100%; flex-wrap: wrap; margin-left: auto; }
 
 /* Truck card: the number line spans the whole card; the action buttons and the GPS tag take a fixed column from the
    second line down (BELADEN, ENTLADEN, «Продолжить» fit), so a long number never slides under a button. */

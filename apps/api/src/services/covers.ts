@@ -100,23 +100,24 @@ export function coveredStatusOwner(resolver: CoverResolver, vehicle: OwnedVehicl
   return coverFor ? { ...owner, coverFor } : owner;
 }
 
+/** `MINE`: an admin who hid every line but their own. A dispatcher is always `MINE`. */
+export type VisibilityScope = 'ALL' | 'MINE';
+
 /**
- * The trucks a dispatcher follows in pop-ups and on the phone: not those a colleague looks after, and not free trucks
- * on lines other dispatchers work on, once the dispatcher has lines of their own. A cover moves the trucks to the
- * stand-in: the absent dispatcher's phone stays quiet until it ends. The shared login sees everything.
+ * The trucks whose notifications reach a person, on the screen and on the phone (owner, 17.11: «только свои машины,
+ * чтобы не запутывать»). A dispatcher follows only their own: the trucks they took and the free trucks of their lines
+ * (`isMine`); a cover moves both to the stand-in. Nobody's trucks — no line, or a line without a dispatcher — reach
+ * the admins only. An admin and the shared login see every truck; an admin may narrow it to their own.
  */
-export async function vehiclesVisibleTo(db: PrismaClient, dispatcherId: string | null | undefined, now = new Date()): Promise<(vehicleId: string) => boolean> {
+export async function vehiclesVisibleTo(db: PrismaClient, dispatcherId: string | null | undefined, options: { scope?: VisibilityScope; now?: Date } = {}): Promise<(vehicleId: string) => boolean> {
   if (!dispatcherId) return () => true;
-  const resolver = await coverResolver(db, now);
+  const person = await db.dispatcher.findUnique({ where: { id: dispatcherId }, select: { role: true } });
+  if (person?.role === 'admin' && options.scope !== 'MINE') return () => true;
+  const resolver = await coverResolver(db, options.now ?? new Date());
   const myLines = await resolver.linesOf(db, dispatcherId);
-  const hasLines = myLines.size > 0 || await db.dispatcherLine.count({ where: { dispatcherId } }) > 0;
-  const vehicles = await db.vehicle.findMany({ select: { id: true, assignedDispatcherId: true, customerLineId: true, customerLine: { select: { _count: { select: { dispatchers: true } } } } } });
-  const others = new Set(vehicles.filter((vehicle) => {
-    const owner = resolver.vehicle(vehicle).assignedDispatcherId;
-    if (owner) return owner !== dispatcherId;
-    return hasLines && vehicle.customerLineId !== null && !myLines.has(vehicle.customerLineId) && (vehicle.customerLine?._count.dispatchers ?? 0) > 0;
-  }).map((vehicle) => vehicle.id));
-  return (vehicleId) => !others.has(vehicleId);
+  const vehicles = await db.vehicle.findMany({ select: { id: true, assignedDispatcherId: true, customerLineId: true } });
+  const mine = new Set(vehicles.filter((vehicle) => isMine(dispatcherId, resolver.vehicle(vehicle), myLines)).map((vehicle) => vehicle.id));
+  return (vehicleId) => mine.has(vehicleId);
 }
 
 export type StartCoverInput = { absentDispatcherId: string; coverDispatcherId: string; lineIds: string[] | null; endsAt: Date };

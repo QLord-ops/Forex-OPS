@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { PrismaClient } from '../src/generated/sqlite-client/index.js';
 import { registerPushRoutes } from '../src/routes/push.js';
+import { vehiclesVisibleTo } from '../src/services/covers.js';
 import type { DispatcherRole } from '../src/services/dispatcher-auth.js';
 import { isWorkTime, PushService, pushPayload, readPushKeys, shouldPush, type PushCandidate } from '../src/services/push.js';
 import { asAppDatabase, migrateTestDatabase } from './test-database.js';
@@ -86,6 +87,20 @@ describe('push to the dispatchers\' phones', () => {
     expect(sent.map((item) => [item.endpoint, item.payload.tag])).toEqual([['https://push.example/day', 'truck-v1']]);
     // Nothing new since: nothing is sent twice.
     expect(await push.sweep(async () => [old, ...fresh], everyone, monday10)).toEqual({ sent: 0, removed: 0 });
+  });
+
+  it('the phone of a dispatcher hears only their own trucks, the phone of an admin every truck (owner, 17.11)', async () => {
+    const [anna, chef] = await Promise.all([['anna', 'dispatcher'], ['chef', 'admin']].map(([login, role]) =>
+      db.dispatcher.create({ data: { login: login!, displayName: login!, role: role!, passwordHash: 'x' } })));
+    const [own, nobodys] = await Promise.all([
+      db.vehicle.create({ data: { vehicleNumber: '101', assignedDispatcherId: anna!.id } }), db.vehicle.create({ data: { vehicleNumber: '401' } })]);
+    await db.pushSubscription.create({ data: { endpoint: 'https://push.example/anna', p256dh: 'p', auth: 'a', dispatcherId: anna!.id } });
+    await db.pushSubscription.create({ data: { endpoint: 'https://push.example/chef', p256dh: 'p', auth: 'a', dispatcherId: chef!.id } });
+    await db.integrationSyncState.create({ data: { id: 'SYSTEM:PUSH_SWEEP', provider: 'SYSTEM', lastSnapshotAt: new Date('2026-11-09T08:00:00Z') } });
+    const visibleTo = (dispatcherId: string | null) => vehiclesVisibleTo(asAppDatabase(db), dispatcherId, { now: monday10 });
+    await service().sweep(async () => [candidate('own', { vehicleId: own!.id }), candidate('nobodys', { vehicleId: nobodys!.id })], visibleTo, monday10);
+    expect(sent.map((item) => [item.endpoint, item.payload.tag]).sort()).toEqual([
+      ['https://push.example/anna', `truck-${own!.id}`], ['https://push.example/chef', `truck-${nobodys!.id}`], ['https://push.example/chef', `truck-${own!.id}`]].sort());
   });
 
   it('removes a phone the push service no longer knows and stays off without keys', async () => {

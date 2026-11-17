@@ -7,6 +7,7 @@ import { readWorkHours, WORK_HOURS_EVENT, type WorkHours } from '../lib/work-hou
 import { onServiceWorkerOpen } from '../lib/pwa'
 import { syncPushWorkHours } from '../lib/push'
 import { api } from '../lib/api'
+import { notificationsScope, useFleetScope } from '../lib/fleet-scope'
 import { pendingToDocument } from '../lib/appointments'
 import type { PendingAppointment } from '../types/domain'
 import { operationsBase, operationsRequest } from '../components/VehicleOperationsPanel'
@@ -49,7 +50,9 @@ const Context = createContext<NotificationsState | null>(null)
 /** One poll for the whole app: the dashboard list, the bell and the toast on other pages read the same items. */
 export function NotificationsProvider({ children }: { children: ReactNode }) {
   // Keeps polling in a hidden tab so the sound and the Windows notification arrive while the dispatcher is in Outlook or Excel.
-  const notifications = usePolling(() => operationsRequest<{ notifications: AlertNotification[] }>('/notifications'), 30000, true, 'notifications', true)
+  // An admin who hid every line but their own gets only those trucks here too; a dispatcher's list is cut by the server.
+  const mineOnly = notificationsScope(useFleetScope().viewer) === 'mine'
+  const notifications = usePolling(() => operationsRequest<{ notifications: AlertNotification[] }>(mineOnly ? '/notifications?scope=mine' : '/notifications'), 30000, true, mineOnly ? 'notifications-mine' : 'notifications', true)
   const pendingPoll = usePolling(api.pendingAppointments, 60_000)
   const navigate = useNavigate()
   const [busyId, setBusyId] = useState<string | null>(null)
