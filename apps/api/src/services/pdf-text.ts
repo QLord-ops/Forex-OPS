@@ -44,9 +44,21 @@ async function extract(buffer: Buffer): Promise<PdfText | null> {
   }
 }
 
-/** Enough text to read the Auftrag from it rather than from the pages as images. */
+/** Enough readable text to read the Auftrag from it rather than from the pages as images. */
 export function hasTextLayer(text: PdfText | null): text is PdfText {
-  return Boolean(text && text.pages.length && text.chars >= MIN_CHARS_PER_PAGE * text.pages.length);
+  return Boolean(text && text.pages.length && text.chars >= MIN_CHARS_PER_PAGE * text.pages.length && readableShare(text) >= MIN_READABLE_SHARE);
+}
+
+// A web form printed to PDF may carry fonts without a character map: its text layer is symbols, not words (owner,
+// 17.11: an mRoad Deckblatt read as an empty Auftrag). Such a file is read from its pages.
+const MIN_READABLE_SHARE = 0.8;
+const READABLE = /[\p{Script=Latin}\p{N}.,:;\-–/()&+'"%€#*@_|[\]°]/u;
+
+/** Share of the characters that are Latin letters, digits or the punctuation of a German form. */
+export function readableShare(text: PdfText): number {
+  const chars = [...text.pages.join("").replace(/\s+/g, "")];
+  if (!chars.length) return 0;
+  return chars.filter((char) => READABLE.test(char)).length / chars.length;
 }
 
 /** The pages as the model sees them: numbered blocks, so sourcePage keeps its meaning. */

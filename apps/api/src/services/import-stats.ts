@@ -21,6 +21,7 @@ const readStatsSchema = z.object({
   reasoningTokens: tokens,
   settingsRejected: z.boolean(),
   retried: z.enum(["INCOMPLETE", "BROKEN_JSON"]).nullable().optional(),
+  fromPagesAfterText: z.boolean().optional(),
   contextMs: ms.optional(),
   totalMs: ms.optional(),
   queueMs: ms.optional()

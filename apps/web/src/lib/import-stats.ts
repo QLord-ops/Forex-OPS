@@ -37,7 +37,8 @@ export function readStatsLine(stats: ReadStats): string {
     `рассуждение ${stats.effort}`,
     tierLabel(stats.serviceTier),
     stats.settingsRejected ? 'настройки скорости отклонены OpenAI' : null,
-    stats.retried ? 'первый ответ ИИ сломан, прочитано повтором' : null
+    stats.retried ? 'первый ответ ИИ сломан, прочитано повтором' : null,
+    stats.fromPagesAfterText ? 'текст PDF не дал ничего, перечитано по страницам' : null
   ].filter(Boolean).join(' · ')
 }
 
