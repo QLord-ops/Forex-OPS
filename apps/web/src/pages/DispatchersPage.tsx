@@ -1,12 +1,13 @@
-import { KeyRound, UserPlus, Users } from 'lucide-react'
-import { useState, type FormEvent } from 'react'
+import { ChevronLeft, KeyRound, Search, UserPlus } from 'lucide-react'
+import { Fragment, useMemo, useState, type FormEvent } from 'react'
+import { Link } from 'react-router-dom'
 
+import { DispatcherLinesEditor } from '../components/CustomerLineCells'
 import { EmptyState, ErrorState, LoadingState } from '../components/States'
 import { usePolling } from '../hooks/usePolling'
 import { accountsApi, customersApi, type DispatcherAccount } from '../lib/api'
-import { DispatcherLinesEditor } from '../components/CustomerLineCells'
 import { currentDispatcher, currentDispatcherRole } from '../lib/auth'
-import { formatDateTime } from '../lib/format'
+import { accountCounts, filterAccounts, initialsOf, lastLoginText, type AccountFilter } from '../lib/dispatcher-list'
 
 const MIN_PASSWORD = 12
 
@@ -16,13 +17,26 @@ export function DispatchersPage() {
   const { data, error, loading, refetch } = usePolling(accountsApi.list, 0, isAdmin)
   const customers = usePolling(customersApi.list, 0, isAdmin).data ?? []
   const [form, setForm] = useState({ login: '', displayName: '', role: 'dispatcher' as 'admin' | 'dispatcher', password: '' })
+  const [creating, setCreating] = useState(false)
+  const [filter, setFilter] = useState<AccountFilter>('active')
+  const [query, setQuery] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   const [message, setMessage] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null)
   const [resetFor, setResetFor] = useState<string | null>(null)
   const [resetPassword, setResetPassword] = useState('')
   const me = currentDispatcher()
+  const lineNames = useMemo(() => new Map(customers.flatMap((customer) => customer.lines.map((line) => [line.id, `${customer.name} · ${line.name}`] as const))), [customers])
 
   if (!isAdmin) return <EmptyState label="Раздел доступен только администратору." />
+
+  const accounts = data ?? []
+  const counts = accountCounts(accounts)
+  const shown = filterAccounts(accounts, filter, query, (id) => lineNames.get(id))
+  const filters: Array<{ id: AccountFilter; label: string; count: number }> = [
+    { id: 'active', label: 'Активные', count: counts.active },
+    { id: 'no-lines', label: 'Без линий', count: counts.noLines },
+    { id: 'off', label: 'Отключённые', count: counts.off }
+  ]
 
   async function run(key: string, work: () => Promise<unknown>, done: string) {
     setBusy(key)
@@ -43,6 +57,7 @@ export function DispatchersPage() {
     void run('create', async () => {
       await accountsApi.create({ ...form, login: form.login.trim().toLowerCase(), displayName: form.displayName.trim() })
       setForm({ login: '', displayName: '', role: 'dispatcher', password: '' })
+      setCreating(false)
     }, 'Аккаунт создан. Сообщите пароль коллеге лично и попросите сменить его после входа.')
   }
 
@@ -55,19 +70,27 @@ export function DispatchersPage() {
     }, `Пароль для ${account.displayName} изменён.`)
   }
 
-  return (
-    <div className="mx-auto max-w-5xl space-y-5">
-      <header className="flex items-center gap-3">
-        <Users className="h-6 w-6 text-slate-500" aria-hidden="true" />
-        <div>
-          <h1 className="text-xl font-semibold text-slate-950">Диспетчеры</h1>
-          <p className="text-sm text-slate-500">Личные аккаунты: каждый входит под своим логином, журнал показывает, кто что сделал.</p>
-        </div>
-      </header>
+  function toggleActive(account: DispatcherAccount) {
+    if (account.active && !window.confirm(`Отключить ${account.displayName}? Вход перестанет работать в течение минуты, история сохранится.`)) return
+    void run(`active-${account.id}`, () => accountsApi.update(account.id, { active: !account.active }), account.active ? 'Аккаунт отключён.' : 'Аккаунт включён.')
+  }
 
-      <section className="work-surface p-4" aria-label="Новый диспетчер">
-        <h2 className="mb-3 flex items-center gap-2 font-semibold text-slate-900"><UserPlus className="h-4 w-4" aria-hidden="true" />Новый диспетчер</h2>
-        <form className="grid gap-3 md:grid-cols-[1fr_1.4fr_auto_1.2fr_auto] md:items-end" onSubmit={create}>
+  return (
+    <div className="accounts-page">
+      <Link to="/settings" className="accounts-back"><ChevronLeft className="h-4 w-4" aria-hidden="true" />Настройки</Link>
+      <div className="page-header">
+        <div className="min-w-0">
+          <h1 className="page-title">Диспетчеры</h1>
+          <p className="page-subtitle">Личные аккаунты: каждый входит под своим логином, журнал показывает, кто что сделал</p>
+        </div>
+        <button type="button" className="primary-button" aria-expanded={creating} aria-controls="new-dispatcher" onClick={() => setCreating((value) => !value)}>
+          <UserPlus className="h-4 w-4" aria-hidden="true" />Новый диспетчер
+        </button>
+      </div>
+
+      {creating ? <section id="new-dispatcher" className="work-surface accounts-new" aria-labelledby="new-dispatcher-title">
+        <h2 id="new-dispatcher-title" className="section-title">Новый диспетчер</h2>
+        <form className="accounts-new-form" onSubmit={create}>
           <label className="block text-sm">
             <span className="metric-label">Логин</span>
             <input className="field-input" required autoComplete="off" autoCapitalize="none" spellCheck={false} pattern="[A-Za-z0-9._\-]{3,40}" title="3–40 символов: латиница, цифры, точка, дефис, подчёркивание"
@@ -88,66 +111,95 @@ export function DispatchersPage() {
             <span className="metric-label">Временный пароль</span>
             <input className="field-input" type="password" required minLength={MIN_PASSWORD} maxLength={1024} autoComplete="new-password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} />
           </label>
-          <button type="submit" className="primary-button" disabled={busy !== null || form.password.length < MIN_PASSWORD}>{busy === 'create' ? 'Создаём…' : 'Создать'}</button>
+          <div className="accounts-new-actions">
+            <button type="submit" className="primary-button" disabled={busy !== null || form.password.length < MIN_PASSWORD}>{busy === 'create' ? 'Создаём…' : 'Создать'}</button>
+            <button type="button" className="secondary-button" onClick={() => setCreating(false)}>Отмена</button>
+            <p className="accounts-hint">Пароль — не меньше {MIN_PASSWORD} символов. Его не видно ни в журнале, ни администратору после сохранения. Сообщите его коллеге лично.</p>
+          </div>
         </form>
-        <p className="mt-2 text-xs text-slate-500">Пароль — не меньше {MIN_PASSWORD} символов. Его не видно ни в журнале, ни администратору после сохранения.</p>
-      </section>
+      </section> : null}
 
       {message ? <p role={message.tone === 'error' ? 'alert' : 'status'} className={message.tone === 'error' ? 'text-sm text-red-700' : 'text-sm text-emerald-800'}>{message.text}</p> : null}
 
-      <section className="work-surface overflow-x-auto" aria-label="Аккаунты">
-        {loading && !data ? <LoadingState /> : error && !data ? <ErrorState error={error} onRetry={refetch} /> : !data?.length ? <EmptyState label="Аккаунтов пока нет. Создайте первый — после этого общий пароль диспетчера перестанет работать." /> : (
-          <table className="w-full text-left text-sm">
-            <thead className="border-b border-slate-200 text-xs text-slate-500">
-              <tr><th className="px-4 py-2 font-medium">Имя</th><th className="px-4 py-2 font-medium">Логин</th><th className="px-4 py-2 font-medium">Роль</th><th className="px-4 py-2 font-medium">Линии</th><th className="px-4 py-2 font-medium">Последний вход</th><th className="px-4 py-2 font-medium">Обучение</th><th className="px-4 py-2 font-medium">Статус</th><th className="px-4 py-2" /></tr>
+      <div className="accounts-toolbar">
+        <label className="accounts-search">
+          <Search className="h-4 w-4" aria-hidden="true" />
+          <input type="search" aria-label="Найти диспетчера по имени, логину или линии" placeholder="Имя, логин или линия" value={query} maxLength={80} onChange={(event) => setQuery(event.target.value)} />
+        </label>
+        <div className="accounts-filters" role="group" aria-label="Показать">
+          {filters.map((item) => <button key={item.id} type="button" className="accounts-filter" aria-pressed={filter === item.id} onClick={() => setFilter(item.id)}>
+            {item.label}<span>{item.count}</span>
+          </button>)}
+        </div>
+        <span className="accounts-meta">{counts.active} активных · {counts.admins} {counts.admins === 1 ? 'администратор' : 'администраторов'}</span>
+      </div>
+
+      <section className="work-surface accounts-list" aria-label="Аккаунты">
+        {loading && !data ? <LoadingState /> : error && !data ? <ErrorState error={error} onRetry={refetch} /> : !accounts.length ? <EmptyState label="Аккаунтов пока нет. Создайте первый — после этого общий пароль диспетчера перестанет работать." />
+          : !shown.length ? <EmptyState label={query ? 'Никого не нашли.' : filter === 'no-lines' ? 'У всех активных диспетчеров есть линии.' : 'Отключённых аккаунтов нет.'} /> : (
+          <table className="accounts-table">
+            <thead>
+              <tr><th scope="col">Диспетчер</th><th scope="col">Роль</th><th scope="col">Линии</th><th scope="col">Последний вход</th><th scope="col"><span className="sr-only">Действия</span></th></tr>
             </thead>
             <tbody>
-              {data.map((account) => {
+              {shown.map((account) => {
                 const self = account.id === me?.id
+                const resetting = resetFor === account.id
                 return (
-                  <tr key={account.id} className={account.active ? 'border-b border-slate-100' : 'border-b border-slate-100 text-slate-400'}>
-                    <td className="px-4 py-3 font-medium">{account.displayName}{self ? <span className="ml-2 text-xs text-slate-500">это вы</span> : null}</td>
-                    <td className="px-4 py-3 font-mono text-xs">{account.login}</td>
-                    <td className="px-4 py-3">
-                      <select className="rounded-md border border-slate-300 bg-white px-2 py-1 text-sm" aria-label={`Роль ${account.displayName}`} value={account.role} disabled={self || busy !== null || !account.active}
-                        onChange={(event) => void run(`role-${account.id}`, () => accountsApi.update(account.id, { role: event.target.value as 'admin' | 'dispatcher' }), 'Роль изменена.')}>
-                        <option value="dispatcher">Диспетчер</option>
-                        <option value="admin">Администратор</option>
-                      </select>
-                    </td>
-                    <td className="px-4 py-3"><DispatcherLinesEditor account={account} customers={customers} onSaved={(text) => { setMessage({ tone: 'ok', text }); void refetch() }} /></td>
-                    <td className="px-4 py-3 tabular-nums">{account.lastLoginAt ? formatDateTime(account.lastLoginAt) : 'ещё не входил'}</td>
-                    <td className="px-4 py-3">{account.onboardingCompletedAt ? 'пройдено' : 'нет'}</td>
-                    <td className="px-4 py-3">{account.active ? 'Активен' : 'Отключён'}</td>
-                    <td className="px-4 py-3">
-                      <div className="flex flex-wrap justify-end gap-2">
-                        {resetFor === account.id ? (
-                          <form className="flex gap-2" onSubmit={(event) => reset(account, event)}>
-                            <input className="rounded-md border border-slate-300 px-2 py-1 text-sm" type="password" autoComplete="new-password" minLength={MIN_PASSWORD} required aria-label={`Новый пароль для ${account.displayName}`} value={resetPassword} onChange={(event) => setResetPassword(event.target.value)} />
-                            <button type="submit" className="secondary-button" disabled={busy !== null || resetPassword.length < MIN_PASSWORD}>Сохранить</button>
-                            <button type="button" className="secondary-button" onClick={() => { setResetFor(null); setResetPassword('') }}>Отмена</button>
-                          </form>
-                        ) : (
-                          <button type="button" className="secondary-button" disabled={busy !== null || !account.active} onClick={() => setResetFor(account.id)}><KeyRound className="h-4 w-4" aria-hidden="true" />Сбросить пароль</button>
-                        )}
-                        {!self ? (
-                          <button type="button" className="secondary-button" disabled={busy !== null}
-                            onClick={() => {
-                              if (account.active && !window.confirm(`Отключить ${account.displayName}? Вход перестанет работать в течение минуты, история сохранится.`)) return
-                              void run(`active-${account.id}`, () => accountsApi.update(account.id, { active: !account.active }), account.active ? 'Аккаунт отключён.' : 'Аккаунт включён.')
-                            }}>
-                            {account.active ? 'Отключить' : 'Включить'}
-                          </button>
-                        ) : null}
-                      </div>
-                    </td>
-                  </tr>
+                  <Fragment key={account.id}>
+                    <tr className={account.active ? undefined : 'accounts-row-off'}>
+                      <td>
+                        <div className="accounts-person">
+                          <span className="accounts-avatar" aria-hidden="true">{initialsOf(account.displayName)}</span>
+                          <div className="min-w-0">
+                            <p className="accounts-name">{account.displayName}{self ? <span className="accounts-self">это вы</span> : null}</p>
+                            <p className="accounts-sub"><span className="font-mono">{account.login}</span> · {account.active
+                              ? <span className={account.onboardingCompletedAt ? undefined : 'accounts-warn'}>{account.onboardingCompletedAt ? 'обучение пройдено' : 'обучение не пройдено'}</span>
+                              : 'отключён'}</p>
+                          </div>
+                        </div>
+                      </td>
+                      <td>
+                        <select className="accounts-role" aria-label={`Роль ${account.displayName}`} value={account.role} disabled={self || busy !== null || !account.active}
+                          onChange={(event) => void run(`role-${account.id}`, () => accountsApi.update(account.id, { role: event.target.value as 'admin' | 'dispatcher' }), 'Роль изменена.')}>
+                          <option value="dispatcher">Диспетчер</option>
+                          <option value="admin">Администратор</option>
+                        </select>
+                      </td>
+                      <td><DispatcherLinesEditor account={account} customers={customers} onSaved={(text) => { setMessage({ tone: 'ok', text }); void refetch() }} /></td>
+                      <td><span className="accounts-phone-label">Последний вход: </span><span className={`accounts-last${account.lastLoginAt ? '' : ' accounts-warn'}`}>{lastLoginText(account.lastLoginAt)}</span></td>
+                      <td>
+                        <div className="accounts-actions">
+                          {account.active ? <button type="button" className="secondary-button" aria-expanded={resetting} disabled={busy !== null}
+                            onClick={() => { setResetFor(resetting ? null : account.id); setResetPassword('') }}><KeyRound className="h-4 w-4" aria-hidden="true" />Сбросить пароль</button> : null}
+                          {!self ? <button type="button" className={account.active ? 'accounts-quiet' : 'secondary-button'} disabled={busy !== null} onClick={() => toggleActive(account)}>{account.active ? 'Отключить' : 'Включить'}</button> : null}
+                        </div>
+                      </td>
+                    </tr>
+                    {resetting ? <tr className="accounts-reset-row">
+                      <td colSpan={5}>
+                        <form className="accounts-reset" onSubmit={(event) => reset(account, event)}>
+                          <label className="block text-sm">
+                            <span className="metric-label">Новый пароль для {account.displayName}</span>
+                            <input className="field-input" type="password" autoComplete="new-password" minLength={MIN_PASSWORD} maxLength={1024} required value={resetPassword} onChange={(event) => setResetPassword(event.target.value)} autoFocus />
+                          </label>
+                          <button type="submit" className="primary-button" disabled={busy !== null || resetPassword.length < MIN_PASSWORD}>Сохранить</button>
+                          <button type="button" className="secondary-button" onClick={() => { setResetFor(null); setResetPassword('') }}>Отмена</button>
+                          <p className="accounts-hint">Не меньше {MIN_PASSWORD} символов. Старый пароль перестанет работать сразу.</p>
+                        </form>
+                      </td>
+                    </tr> : null}
+                  </Fragment>
                 )
               })}
             </tbody>
           </table>
         )}
       </section>
+
+      {filter !== 'off' && counts.off ? <button type="button" className="accounts-off-link" onClick={() => setFilter('off')}>
+        Отключённые · {counts.off}<span>— вход не работает, история с их именем сохранена</span>
+      </button> : null}
     </div>
   )
 }
