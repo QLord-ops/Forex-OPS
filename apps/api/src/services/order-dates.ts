@@ -71,6 +71,8 @@ export function normalizeAiSchedule(stop: {
   const midnightOnly = isMidnight(stop.appointmentLocal) || (isMidnight(stop.appointmentWindowStartLocal) && !stop.appointmentLocal);
   if (stop.appointmentLocal && !midnightOnly) return { ...EMPTY, appointmentLocal: stop.appointmentLocal };
   if (stop.appointmentWindowStartLocal && stop.appointmentWindowEndLocal && !midnightOnly) {
+    // "Zeitfenster 19.11.2026 04:00 bis 4:00" (DSV): a window without length is an exact time.
+    if (stop.appointmentWindowStartLocal === stop.appointmentWindowEndLocal) return { ...EMPTY, appointmentLocal: stop.appointmentWindowStartLocal };
     return { ...EMPTY, appointmentWindowStartLocal: stop.appointmentWindowStartLocal, appointmentWindowEndLocal: stop.appointmentWindowEndLocal };
   }
   if (day) return options.dateOnly === "window" ? window(day, DATE_ONLY_WINDOW.start, DATE_ONLY_WINDOW.end, "DATE_ONLY") : dateOnly(day);

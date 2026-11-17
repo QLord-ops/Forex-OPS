@@ -36,7 +36,7 @@ function sameCompany(a: PlaceLike, b: PlaceLike, precise: boolean): boolean {
 }
 
 /** Street line and postcode of "Industriestraße Nord 1, 38239 Salzgitter"; null when the address has no postcode. */
-function streetKey(address: string): string | null {
+export function streetKey(address: string): string | null {
   const parts = address.split(",").map((part) => part.trim());
   const index = parts.findIndex((part) => /\b\d{5}\b/.test(part));
   if (index < 0) return null;
