@@ -1,4 +1,5 @@
 import { authHeaders } from './auth'
+import { currentViewer, notificationsScope } from './fleet-scope'
 import { readWorkHours } from './work-hours'
 
 /** Push to this device: on (subscribed here), off, blocked by the browser, not set up on the server, or not possible here. */
@@ -41,7 +42,7 @@ export async function pushState(): Promise<PushState> {
 
 function payload(current: PushSubscription) {
   const json = current.toJSON() as { endpoint?: string; keys?: { p256dh?: string; auth?: string } }
-  return { endpoint: json.endpoint ?? current.endpoint, keys: { p256dh: json.keys?.p256dh ?? '', auth: json.keys?.auth ?? '' }, workHours: readWorkHours() }
+  return { endpoint: json.endpoint ?? current.endpoint, keys: { p256dh: json.keys?.p256dh ?? '', auth: json.keys?.auth ?? '' }, workHours: readWorkHours(), ownOnly: notificationsScope(currentViewer()) === 'mine' }
 }
 
 /** Asks the browser for permission, subscribes this device and tells the server, with this device's working hours. */
@@ -67,7 +68,7 @@ export async function disablePush(): Promise<PushState> {
   return 'off'
 }
 
-/** New working hours in the settings: the server learns them, so a closed phone rings only when it should. */
+/** New working hours, or an admin's «Мои линии» switched on or off: the server learns them, so a closed phone rings only when and for what it should. */
 export async function syncPushWorkHours() {
   const current = await subscription().catch(() => null)
   if (current) await call('/push/subscribe', 'POST', payload(current)).catch(() => undefined)

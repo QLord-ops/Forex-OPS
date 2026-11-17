@@ -92,15 +92,20 @@ describe('push to the dispatchers\' phones', () => {
   it('the phone of a dispatcher hears only their own trucks, the phone of an admin every truck (owner, 17.11)', async () => {
     const [anna, chef] = await Promise.all([['anna', 'dispatcher'], ['chef', 'admin']].map(([login, role]) =>
       db.dispatcher.create({ data: { login: login!, displayName: login!, role: role!, passwordHash: 'x' } })));
-    const [own, nobodys] = await Promise.all([
-      db.vehicle.create({ data: { vehicleNumber: '101', assignedDispatcherId: anna!.id } }), db.vehicle.create({ data: { vehicleNumber: '401' } })]);
+    const [own, nobodys, chefs] = await Promise.all([
+      db.vehicle.create({ data: { vehicleNumber: '101', assignedDispatcherId: anna!.id } }), db.vehicle.create({ data: { vehicleNumber: '401' } }),
+      db.vehicle.create({ data: { vehicleNumber: '501', assignedDispatcherId: chef!.id } })]);
+    // The second phone of the admin has «Мои линии» switched on.
     await db.pushSubscription.create({ data: { endpoint: 'https://push.example/anna', p256dh: 'p', auth: 'a', dispatcherId: anna!.id } });
     await db.pushSubscription.create({ data: { endpoint: 'https://push.example/chef', p256dh: 'p', auth: 'a', dispatcherId: chef!.id } });
+    await db.pushSubscription.create({ data: { endpoint: 'https://push.example/chef-own', p256dh: 'p', auth: 'a', dispatcherId: chef!.id, ownOnly: true } });
     await db.integrationSyncState.create({ data: { id: 'SYSTEM:PUSH_SWEEP', provider: 'SYSTEM', lastSnapshotAt: new Date('2026-11-09T08:00:00Z') } });
-    const visibleTo = (dispatcherId: string | null) => vehiclesVisibleTo(asAppDatabase(db), dispatcherId, { now: monday10 });
-    await service().sweep(async () => [candidate('own', { vehicleId: own!.id }), candidate('nobodys', { vehicleId: nobodys!.id })], visibleTo, monday10);
+    const visibleTo = (dispatcherId: string | null, ownOnly: boolean) => vehiclesVisibleTo(asAppDatabase(db), dispatcherId, { now: monday10, scope: ownOnly ? 'MINE' : 'ALL' });
+    await service().sweep(async () => [candidate('own', { vehicleId: own!.id }), candidate('nobodys', { vehicleId: nobodys!.id }), candidate('chefs', { vehicleId: chefs!.id })], visibleTo, monday10);
     expect(sent.map((item) => [item.endpoint, item.payload.tag]).sort()).toEqual([
-      ['https://push.example/anna', `truck-${own!.id}`], ['https://push.example/chef', `truck-${nobodys!.id}`], ['https://push.example/chef', `truck-${own!.id}`]].sort());
+      ['https://push.example/anna', `truck-${own!.id}`],
+      ['https://push.example/chef', `truck-${nobodys!.id}`], ['https://push.example/chef', `truck-${own!.id}`], ['https://push.example/chef', `truck-${chefs!.id}`],
+      ['https://push.example/chef-own', `truck-${chefs!.id}`]].sort());
   });
 
   it('removes a phone the push service no longer knows and stays off without keys', async () => {
@@ -129,6 +134,11 @@ describe('push to the dispatchers\' phones', () => {
       const app = await build('dispatcher');
       expect((await app.inject({ method: 'GET', url: '/push/config' })).json()).toEqual({ enabled: true, publicKey: keys.publicKey });
       expect((await app.inject({ method: 'POST', url: '/push/subscribe', payload: body })).statusCode).toBe(200);
+      expect((await db.pushSubscription.findFirstOrThrow()).ownOnly).toBe(false);
+      // «Мои линии» switched on on that device: the same subscription is told.
+      expect((await app.inject({ method: 'POST', url: '/push/subscribe', payload: { ...body, ownOnly: true } })).statusCode).toBe(200);
+      expect(await db.pushSubscription.findMany()).toMatchObject([{ ownOnly: true }]);
+      expect((await app.inject({ method: 'POST', url: '/push/subscribe', payload: { ...body, ownOnly: 'yes' } })).statusCode).toBe(400);
       expect((await app.inject({ method: 'POST', url: '/push/subscribe', payload: { ...body, endpoint: 'http://push.example/phone' } })).statusCode).toBe(400);
       expect((await app.inject({ method: 'POST', url: '/push/unsubscribe', payload: { endpoint: body.endpoint } })).json()).toEqual({ removed: 1 });
     });

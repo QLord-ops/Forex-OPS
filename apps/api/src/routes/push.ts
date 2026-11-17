@@ -25,7 +25,7 @@ export function registerPushRoutes(app: FastifyInstance, push: PushService) {
 
   app.post('/push/subscribe', { preHandler: roles, config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request, reply) => {
     if (!push.config().enabled) return reply.status(503).send({ error: 'Push-уведомления на сервере ещё не настроены.' });
-    const input = z.object({ endpoint, keys: z.object({ p256dh: base64url, auth: base64url }), workHours: workHours.nullable().optional() }).parse(request.body);
+    const input = z.object({ endpoint, keys: z.object({ p256dh: base64url, auth: base64url }), workHours: workHours.nullable().optional(), ownOnly: z.boolean().optional() }).parse(request.body);
     return push.subscribe(input, actorOf(request));
   });
 

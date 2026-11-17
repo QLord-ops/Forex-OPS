@@ -264,8 +264,25 @@ describe('the whole system with five dispatchers at work', () => {
     expect((await call(ben, 'POST', '/notifications/ack-many', { ids: [annaNotice.id, benNotice.id] })).body).toMatchObject({ ok: true, count: 1 });
     expect(await noticesOf(ben)).toEqual([]);
     expect(await noticesOf(anna)).toHaveLength(1);
-    expect((await call(anna, 'POST', `/notifications/${annaNotice.id}/ack`, {})).status).toBe(200);
+
+    // «Понятно» of the admin on a truck of a dispatcher sets the notification aside for the admin only.
+    expect((await call(chef, 'POST', `/notifications/${annaNotice.id}/ack`, {})).status).toBe(200);
     expect((await noticesOf(chef)).map((notice) => notice.vehicleId)).not.toContain(ids.trucks.anna[2]);
+    expect(await noticesOf(anna)).toHaveLength(1);
+    expect((await db.notification.findUniqueOrThrow({ where: { id: annaNotice.id } })).acknowledgedAt).toBeNull();
+    expect(await db.auditLog.findFirst({ where: { action: 'NOTIFICATION_ACKNOWLEDGED', entityId: annaNotice.id, actorDispatcherId: chef.id } })).toMatchObject({ metadataJson: expect.stringContaining('onlyForMe') });
+    // «Прочитать все» of the admin: the truck of a dispatcher is set aside, the truck of nobody is closed for everybody.
+    const claraNotice = (await noticesOf(team[2]))[0];
+    const spareNotice = (await noticesOf(chef)).find((notice) => notice.vehicleId === ids.spare)!;
+    expect((await call(chef, 'POST', '/notifications/ack-many', { ids: [claraNotice.id, spareNotice.id] })).body).toMatchObject({ ok: true, count: 2 });
+    expect(await noticesOf(team[2])).toHaveLength(1);
+    expect((await db.notification.findUniqueOrThrow({ where: { id: spareNotice.id } })).acknowledgedAt).not.toBeNull();
+    expect((await noticesOf(chef)).map((notice) => notice.vehicleId).sort()).toEqual([ids.trucks.dmitri[2], ids.trucks.elena[2]].sort());
+
+    // The dispatcher who runs the truck closes it for everybody.
+    expect((await call(anna, 'POST', `/notifications/${annaNotice.id}/ack`, {})).status).toBe(200);
+    expect((await db.notification.findUniqueOrThrow({ where: { id: annaNotice.id } })).acknowledgedAt).not.toBeNull();
+    expect(await noticesOf(anna)).toEqual([]);
 
     // Every action is in the journal under the dispatcher who did it.
     for (const person of team) {

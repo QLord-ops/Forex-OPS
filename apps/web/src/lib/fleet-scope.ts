@@ -54,12 +54,12 @@ export function fleetOnMap<T extends ScopedRow>(rows: T[], scope: FleetScope, se
   return rows.filter((row) => inScope(row, scope) || row.vehicle.id === selectedId)
 }
 
-const viewerNow = (): FleetViewer => ({ id: currentDispatcher()?.id ?? null, role: currentDispatcherRole() ?? null })
+export const currentViewer = (): FleetViewer => ({ id: currentDispatcher()?.id ?? null, role: currentDispatcherRole() ?? null })
 const subscribe = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener) } }
 
 export function useFleetScope(): { viewer: FleetViewer; scope: FleetScope; setScope: (scope: FleetScope) => void } {
-  const viewer = viewerNow()
-  const scope = useSyncExternalStore(subscribe, () => scopeOf(viewerNow()))
+  const viewer = currentViewer()
+  const scope = useSyncExternalStore(subscribe, () => scopeOf(currentViewer()))
   return { viewer, scope, setScope: (next) => chooseScope(viewer, next) }
 }
 

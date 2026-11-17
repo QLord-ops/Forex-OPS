@@ -202,6 +202,7 @@ export class OperationsService {
       await writeAuditLog(tx, actor, { action: 'ARRIVAL_CONFIRMED', entityType: 'Stop', entityId: stopId,
         vehicleId: stop.tour.vehicleId, tourId: stop.tourId, stopId, metadata: { arrivedAt: arrivedAt.toISOString(), source, ...options.meta }, createdAt: now });
       if (source === 'WEBFLEET_AUTO') {
+        await tx.notificationRead.deleteMany({ where: { notification: { dedupKey: `auto-arrival:${stopId}` } } });
         await tx.notification.upsert({
           where: { dedupKey: `auto-arrival:${stopId}` },
           create: { dedupKey: `auto-arrival:${stopId}`, vehicleId: stop.tour.vehicleId, stopId, type: 'AUTO_ARRIVAL',

@@ -49,6 +49,8 @@ const modelOrder = [
   "apiQuota",
   "operationEvent",
   "notification",
+  // A personal «set aside» mark references its notification and its dispatcher.
+  "notificationRead",
   "routeRevision",
   "routePreview",
   "vehicleIntegration",
