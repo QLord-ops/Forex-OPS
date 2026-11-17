@@ -6,7 +6,7 @@ describe("address resolution fallback", () => {
   it("normalizes German postal prefixes and falls back from house number to street", async () => {
     const geocode = vi.fn(async (query: string) => {
       if (query.includes(" 2")) throw new RoutingError("Адрес не найден.", 404);
-      return { label: "Rudolf-Diesel-Straße, 14974 Ludwigsfelde, Deutschland", city: "Ludwigsfelde", latitude: 52.3, longitude: 13.2, provider: "nominatim" };
+      return { label: "Rudolf-Diesel-Straße, 14974 Ludwigsfelde, Deutschland", city: "Ludwigsfelde", postalCode: "14974", latitude: 52.3, longitude: 13.2, provider: "nominatim" };
     });
     const routing = { geocode } as unknown as RoutingProvider;
 

@@ -18,6 +18,7 @@ import {
   type StructuredCity
 } from "../domain.js";
 import type { RoutingProvider } from "./routing.js";
+import { resolveAddressWithFallback } from "./address-resolution.js";
 import { OFF_ROUTE_METERS, projectOnLine, splitAtProjection } from "./route-projection.js";
 import { cleanTravelled } from "./travelled-path.js";
 import { mergeAddressRules, requiresTermin, type AddressRuleRecord } from "./address-rules.js";
@@ -1270,8 +1271,9 @@ async function resolveStopCoordinate(
   if (typeof stop.latitude === "number" && typeof stop.longitude === "number") {
     return { latitude: stop.latitude, longitude: stop.longitude };
   }
-
-  return routingProvider.geocode(stop.address);
+  // Through the same checks as the Auftrag page: the bare address text may name a namesake town (Petershagen).
+  const city = typeof stop.city === "object" && stop.city ? [stop.city.postalCode, stop.city.name].filter(Boolean).join(" ") : stop.city ?? null;
+  return resolveAddressWithFallback(routingProvider, { address: stop.address, city, company: stop.company ?? null });
 }
 
 function validateTourInput(input: CreateTourInput): void {

@@ -13,7 +13,7 @@ import { asAppDatabase, migrateTestDatabase } from './test-database.js';
 
 const LUDWIGSFELDE = { latitude: 52.3, longitude: 13.25 };
 const HAMBURG = { latitude: 53.55, longitude: 10.0 };
-const place = (name: string, city: string, point: { latitude: number; longitude: number }): GeocodeResult => ({ label: name, city, ...point, provider: 'nominatim' });
+const place = (name: string, city: string, point: { latitude: number; longitude: number }): GeocodeResult => ({ label: name, city, postalCode: name.match(/\b\d{5}\b/)?.[0] ?? null, ...point, provider: 'nominatim' });
 
 /** Nominatim as it answered on 09.11.2026: "Lager, Ludwigsfelde" found a Lagerstraße in Hamburg. */
 class WrongTownRouting extends MockRoutingProvider {
@@ -32,7 +32,7 @@ describe('a place far from its own town is not accepted', () => {
     const routing = new WrongTownRouting();
     const result = await resolveAddressWithFallback(routing, { address: 'Lager', city: 'D 14974 Ludwigsfelde', company: 'Schnellecke Transportlogistik GmbH' });
     expect(result).toMatchObject({ latitude: LUDWIGSFELDE.latitude, longitude: LUDWIGSFELDE.longitude, precision: 'POSTCODE_CITY' });
-    expect(result.attempts.join(' | ')).toMatch(/Hamburg.*км от 14974 Ludwigsfelde, отброшено/);
+    expect(result.attempts.join(' | ')).toMatch(/Hamburg.*индекс 20095, а не 14974, отброшено/);
   });
 
   it('drops a learned rule whose point lies in another town and geocodes the address instead', async () => {
