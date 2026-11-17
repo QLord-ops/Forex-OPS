@@ -110,33 +110,34 @@ async function resolveCore(
   const anchor = cityAnchor(sourceAddress, city);
   let anchorPoint: GeocodeResult | null | undefined;
   const anchored = async () => {
-    if (anchorPoint === undefined) {
-      try { anchorPoint = anchor ? (await routing.geocode(anchor.query)) ?? null : null; } catch { anchorPoint = null; }
-    }
+    if (anchorPoint === undefined) anchorPoint = anchor ? await findTown(routing, anchor) : null;
     return anchorPoint;
   };
   /**
-   * Kilometres from the town when the result lies too far from it; null when it is plausible or cannot be checked.
-   * The town's name alone is not proof: there are three Petershagens, so another postcode means measuring the distance.
+   * How far the result lies from the town when that is too far («UNCHECKED» when the town could not be found and the
+   * result does not carry the printed postcode); null when it is plausible. The town's name alone is not proof: there
+   * are three Petershagens, so without the printed postcode the distance decides.
    */
-  const farFromCity = async (point: { latitude: number; longitude: number }, resultCity?: string | null, resultPostalCode?: string | null): Promise<number | null> => {
+  const farFromCity = async (point: { latitude: number; longitude: number }, resultCity?: string | null, resultPostalCode?: string | null): Promise<number | typeof UNCHECKED | null> => {
     if (!anchor) return null;
-    if (resultCity && sameCity(resultCity, anchor.city) && !postcodesDiffer(anchor.postalCode, resultPostalCode)) return null;
+    const postcodeFits = !anchor.postalCode || resultPostalCode === anchor.postalCode;
+    if (resultCity && sameCity(resultCity, anchor.city) && postcodeFits) return null;
     const town = await anchored();
-    if (!town) return null;
+    if (!town) return postcodeFits ? null : UNCHECKED;
     const km = distanceKm(town, point);
     return km > MAX_DISTANCE_FROM_CITY_KM ? km : null;
   };
+  const away = (km: number | typeof UNCHECKED) => km === UNCHECKED ? `не индекс ${anchor!.postalCode}, город не проверить` : `${Math.round(km)} км от ${anchor!.query}`;
 
   const site = findSiteRule(input.company, city, rules);
   if (site && site.latitude !== null && site.longitude !== null) {
     const label = [site.company, site.street, [site.postalCode, site.city].filter(Boolean).join(" ")].filter(Boolean).join(", ");
-    const km = await farFromCity({ latitude: site.latitude, longitude: site.longitude });
+    const km = await farFromCity({ latitude: site.latitude, longitude: site.longitude }, site.city, site.postalCode);
     if (km === null) {
       return { latitude: site.latitude, longitude: site.longitude, city: site.city, label, provider: "address-rule",
         sourceAddress, resolvedAddress: label, precision: "EXACT", attempts: [`правило: ${site.pattern}`] };
     }
-    attempts.push(`правило «${site.pattern}» отброшено: ${Math.round(km)} км от ${anchor!.query}`);
+    attempts.push(`правило «${site.pattern}» отброшено: ${away(km)}`);
   }
 
   // The same door (street, house number, postcode) is in the address book: its coordinates need no geocoder.
@@ -153,7 +154,7 @@ async function resolveCore(
         attempts.push(`TomTom: ${input.company.trim()} у ${anchor.query}`);
         return { ...hit, sourceAddress, resolvedAddress: hit.label, precision: "EXACT", attempts };
       }
-      attempts.push(`TomTom: ${hit.label}: ${Math.round(km)} км от ${anchor.query}, отброшено`);
+      attempts.push(`TomTom: ${hit.label}: ${away(km)}, отброшено`);
     }
   }
 
@@ -179,7 +180,7 @@ async function resolveCore(
       if (area && distanceKm(area, hit) > SAME_POSTCODE_AREA_KM) { attempts.push(`${source}: ${hit.label}: индекс ${hit.postalCode}, а не ${printed.postalCode}, отброшено`); return null; }
     }
     const km = await farFromCity(hit, hit.city, hit.postalCode);
-    if (km !== null) { attempts.push(`${source}: ${hit.label}: ${Math.round(km)} км от ${anchor!.query}, отброшено`); return null; }
+    if (km !== null) { attempts.push(`${source}: ${hit.label}: ${away(km)}, отброшено`); return null; }
     attempts.push(`${source}: ${hit.label}`);
     // EXACT is the printed house itself; a street without the printed number (or none printed) is STREET. A source that
     // names neither street nor house cannot be judged and keeps the precision of the query.
@@ -231,7 +232,7 @@ async function resolveCore(
       }
       const km = await farFromCity(result, result.city, result.postalCode);
       if (km !== null) {
-        attempts.push(`${result.label}: ${Math.round(km)} км от ${anchor!.query}, отброшено`);
+        attempts.push(`${result.label}: ${away(km)}, отброшено`);
         lastNotFound = { statusCode: 404 };
         continue;
       }
@@ -266,7 +267,7 @@ async function resolveCore(
       try {
         const result = await routing.geocode(candidate.address);
         const km = await farFromCity(result, result.city, result.postalCode);
-        if (km !== null) { attempts.push(`${result.label}: ${Math.round(km)} км от ${anchor!.query}, отброшено`); continue; }
+        if (km !== null) { attempts.push(`${result.label}: ${away(km)}, отброшено`); continue; }
         return {
           ...result,
           provider: result.provider ? `openai-web+${result.provider}` : "openai-web",
@@ -286,8 +287,31 @@ async function resolveCore(
   }
 
   if (approximateResult) return approximateResult;
+  // Every answer lay in a namesake town: the printed postcode's own area is still the right town.
+  const town = !anchor?.postalCode ? null : geocoderDown ? anchorPoint ?? null : await anchored();
+  if (town) {
+    attempts.push(`индекс ${anchor!.postalCode}: ${town.label}`);
+    return { ...town, sourceAddress, resolvedAddress: town.label, precision: "POSTCODE_CITY", attempts };
+  }
   if (geocoderDown) throw new RoutingError("Сервисы адресов сейчас перегружены — повторите через минуту.", 503);
   throw new RoutingError(`Адрес не найден. Проверены: ${attempts.join(" → ")}.`, 404);
+}
+
+const UNCHECKED = "UNCHECKED";
+
+/**
+ * The stop's town on the map. With a printed postcode it is that postcode's own area: "15370 Petershagen" as free text
+ * came back as the bigger Petershagen at Minden (32469) and drew a Berlin stop 300 km west (owner, 17.11.2026). A text
+ * answer counts only when it does not name another postcode.
+ */
+async function findTown(routing: RoutingProvider, anchor: { query: string; postalCode?: string }): Promise<GeocodeResult | null> {
+  if (anchor.postalCode && routing.geocodePostcode) {
+    const area = await routing.geocodePostcode(anchor.postalCode).catch(() => null);
+    if (area) return area;
+  }
+  const town = await routing.geocode(anchor.query).catch(() => null);
+  if (!town || postcodesDiffer(anchor.postalCode, town.postalCode)) return null;
+  return town;
 }
 
 /** The town a stop belongs to, as a geocoder query: "14974 Ludwigsfelde" when the postcode is printed, else the city. */
@@ -356,9 +380,9 @@ function baseCandidates(address: string, city?: string | null, company?: string 
   const inTown = (value: string) => postalCode && !addressPostalCode && effectiveCity ? withPostcode(value, effectiveCity, town) : appendCity(value, effectiveCity);
   // Only a city was printed ("Bremen" for "Seifert & BLG Bremen"): the company in that city first, the bare city last,
   // and never a city centre presented as an exact address.
-  if (company?.trim() && effectiveCity && normalizeForCompare(normalizedAddress) === normalizeForCompare(effectiveCity)) {
+  if (effectiveCity && normalizeForCompare(normalizedAddress.replace(/\b\d{5}\b/, "")) === normalizeForCompare(effectiveCity)) {
     return dedupeCandidates([
-      { query: `${company.trim()}, ${town}`, precision: "POSTCODE_CITY" },
+      ...(company?.trim() ? [{ query: `${company.trim()}, ${town}`, precision: "POSTCODE_CITY" as const }] : []),
       { query: town, precision: postalCode ? "POSTCODE_CITY" : "CITY" }
     ]);
   }

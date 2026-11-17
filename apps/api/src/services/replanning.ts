@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Prisma, PrismaClient } from '@prisma/client';
 import type { Coordinate, CurrentPosition, RouteResult } from '../domain.js';
 import type { RoutingProvider } from './routing.js';
+import { resolveAddressWithFallback } from './address-resolution.js';
 import { calculateSimulatedDuration } from './simulation.js';
 import { shareTerminAtSamePlace } from './termin-groups.js';
 import { TourService, snapshotVehicleClock, rebaseActiveLeg } from './tours.js';
@@ -82,7 +83,7 @@ export class ReplanningService {
     for (const stop of input.futureStops) {
       const min = stop.serviceMinMinutes ?? 60, max = stop.serviceMaxMinutes ?? 120;
       if (!stop.address.trim() || !['LOAD', 'UNLOAD'].includes(stop.type) || !Number.isInteger(min) || !Number.isInteger(max) || min < 0 || max < min || max > 10080 || (stop.appointmentAt && !Number.isFinite(Date.parse(stop.appointmentAt)))) throw new ReplanConflict('Некорректные данные точки.');
-      const point = stop.latitude !== undefined && stop.longitude !== undefined ? stop as Coordinate : await this.routing.geocode(stop.address);
+      const point = stop.latitude !== undefined && stop.longitude !== undefined ? stop as Coordinate : await resolveAddressWithFallback(this.routing, { address: stop.address, city: stop.city ?? null, company: stop.company ?? null });
       if (!Number.isFinite(point.latitude) || Math.abs(point.latitude) > 90 || !Number.isFinite(point.longitude) || Math.abs(point.longitude) > 180) throw new ReplanConflict('Некорректные координаты.');
       stops.push({ ...stop, id: stop.id ?? randomUUID(), latitude: point.latitude, longitude: point.longitude, serviceMinMinutes: min, serviceMaxMinutes: max });
     }

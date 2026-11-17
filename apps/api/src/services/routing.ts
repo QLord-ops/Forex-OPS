@@ -11,6 +11,8 @@ export interface RoutingProvider {
   calculateMultiStopRoute(stops: Coordinate[], options?: RouteRequestOptions): Promise<RouteResult>;
   /** The nearest postal address of a spot on the map; null when there is none. Not every provider has it. */
   reverseGeocode?(latitude: number, longitude: number): Promise<string | null>;
+  /** The area of a German postcode, asked as a postcode alone; null when unknown. Not every provider has it. */
+  geocodePostcode?(postalCode: string): Promise<GeocodeResult | null>;
 }
 
 export class RoutingService implements RoutingProvider {
@@ -22,6 +24,10 @@ export class RoutingService implements RoutingProvider {
 
   async reverseGeocode(latitude: number, longitude: number): Promise<string | null> {
     return await this.provider.reverseGeocode?.(latitude, longitude) ?? null;
+  }
+
+  async geocodePostcode(postalCode: string): Promise<GeocodeResult | null> {
+    return await this.provider.geocodePostcode?.(postalCode) ?? null;
   }
 
   calculateRoute(origin: Coordinate, destination: Coordinate, options?: RouteRequestOptions): Promise<RouteResult> {
@@ -136,11 +142,30 @@ export class OsrmRoutingProvider implements RoutingProvider {
     const query = address.trim();
     if (!query) throw new RoutingError("Адрес не может быть пустым.", 400);
 
-    const cacheKey = normalize(query);
+    return this.cachedGeocode(normalize(query), () => this.fetchGeocode({ q: query }, query));
+  }
+
+  /**
+   * The postcode's own area, asked as a postcode: "15370 Petershagen" as free text may come back as the bigger
+   * Petershagen at Minden (32469), and a town found under another postcode is no town of this stop.
+   */
+  async geocodePostcode(postalCode: string): Promise<GeocodeResult | null> {
+    const code = postalCode.trim();
+    if (!/^\d{5}$/.test(code)) return null;
+    try {
+      const found = await this.cachedGeocode(`postcode|${code}`, () => this.fetchGeocode({ postalcode: code, countrycodes: "de" }, code));
+      return found.postalCode === code ? found : null;
+    } catch (error) {
+      if (error instanceof RoutingError && error.statusCode === 404) return null;
+      throw error;
+    }
+  }
+
+  private cachedGeocode(cacheKey: string, load: () => Promise<GeocodeResult>): Promise<GeocodeResult> {
     const cached = this.geocodeCache.get(cacheKey);
     if (cached) return cached;
 
-    const request = this.enqueueGeocode(query).catch((error) => {
+    const request = this.enqueueGeocode(load).catch((error) => {
       this.geocodeCache.delete(cacheKey);
       throw error;
     });
@@ -157,14 +182,14 @@ export class OsrmRoutingProvider implements RoutingProvider {
     return now < this.pausedUntil;
   }
 
-  private enqueueGeocode(address: string): Promise<GeocodeResult> {
+  private enqueueGeocode(load: () => Promise<GeocodeResult>): Promise<GeocodeResult> {
     if (this.geocoderPaused()) return Promise.reject(new RoutingError("Сервис адресов перегружен, ищем в других источниках.", 503));
     const request = this.geocodeQueue.then(async () => {
       if (this.geocoderPaused()) throw new RoutingError("Сервис адресов перегружен, ищем в других источниках.", 503);
       const waitMs = this.nominatimMinIntervalMs - (Date.now() - this.lastGeocodeAt);
       if (waitMs > 0) await delay(waitMs);
       this.lastGeocodeAt = Date.now();
-      return this.fetchGeocode(address);
+      return load();
     });
     this.geocodeQueue = request.then(() => undefined, () => undefined);
     return request;
@@ -197,10 +222,10 @@ export class OsrmRoutingProvider implements RoutingProvider {
     }
   }
 
-  private async fetchGeocode(address: string): Promise<GeocodeResult> {
+  private async fetchGeocode(query: Record<string, string>, address: string): Promise<GeocodeResult> {
     try {
       const url = new URL("search", this.nominatimBaseUrl);
-      url.searchParams.set("q", address);
+      for (const [key, value] of Object.entries(query)) url.searchParams.set(key, value);
       url.searchParams.set("format", "jsonv2");
       url.searchParams.set("limit", "1");
 
