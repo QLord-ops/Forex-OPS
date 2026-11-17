@@ -1,11 +1,17 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 
 import { currentDispatcherRole } from '../lib/auth'
 import { GROUP_LABEL, LINE_LABEL, statusApi, type StatusPresetCandidate } from '../lib/daily-status'
 import type { StatusGroup, Vehicle, VehicleLine } from '../types/domain'
 
+/** A table cell, or a labelled field when the same controls sit in the «Изменить» row of a truck. */
+export function EditSlot({ fields, label, className = 'px-3 py-2', children }: { fields: boolean; label: string; className?: string; children: ReactNode }) {
+  if (!fields) return <td className={className}>{children}</td>
+  return <div className="vehicle-field"><span className="field-label">{label}</span>{children}</div>
+}
+
 /** Line, block, service phone and A Schild / AppSped of one truck, saved on change: what the 07:00 status list uses. */
-export function VehicleStatusCells({ vehicle, onSaved, withLine = true }: { vehicle: Vehicle; onSaved: () => void; withLine?: boolean }) {
+export function VehicleStatusCells({ vehicle, onSaved, withLine = true, fields = false }: { vehicle: Vehicle; onSaved: () => void; withLine?: boolean; fields?: boolean }) {
   const [phone, setPhone] = useState(vehicle.servicePhone ?? '')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -15,32 +21,32 @@ export function VehicleStatusCells({ vehicle, onSaved, withLine = true }: { vehi
   }
   const number = vehicle.vehicleNumber
   return <>
-    {withLine ? <><td className="px-3 py-2">
+    {withLine ? <><EditSlot fields={fields} label="Линия">
       <select className="field-input h-8 min-w-32" aria-label={`Линия LKW ${number}`} disabled={busy} value={vehicle.line ?? ''}
         onChange={(event) => void save({ line: (event.target.value || null) as VehicleLine | null })}>
         <option value="">—</option>
         {(Object.keys(LINE_LABEL) as VehicleLine[]).map((line) => <option key={line} value={line}>{LINE_LABEL[line]}</option>)}
       </select>
-    </td>
-    <td className="px-3 py-2">
+    </EditSlot>
+    <EditSlot fields={fields} label="Группа в статусе">
       <select className="field-input h-8 min-w-24" aria-label={`Группа в статусе LKW ${number}`} disabled={busy} value={vehicle.statusGroup ?? ''}
         onChange={(event) => void save({ statusGroup: (event.target.value || null) as StatusGroup | null })}>
         <option value="">—</option>
         {(Object.keys(GROUP_LABEL) as StatusGroup[]).map((group) => <option key={group} value={group}>{GROUP_LABEL[group]}</option>)}
       </select>
-    </td></> : null}
-    <td className="px-3 py-2">
+    </EditSlot></> : null}
+    <EditSlot fields={fields} label="Телефон машины">
       <input className="field-input h-8 min-w-36" aria-label={`Служебный телефон LKW ${number}`} title="Служебный номер машины — не личный номер водителя" inputMode="tel" maxLength={30}
         value={phone} disabled={busy} onChange={(event) => setPhone(event.target.value)}
         onBlur={() => { if (phone.trim() !== (vehicle.servicePhone ?? '')) void save({ servicePhone: phone.trim() || null }) }} />
       {error ? <span className="mt-1 block text-xs text-red-700" role="alert">{error}</span> : null}
-    </td>
-    <td className="px-3 py-2 text-center">
+    </EditSlot>
+    <EditSlot fields={fields} label="A Schild" className="px-3 py-2 text-center">
       <input type="checkbox" className="h-4 w-4" aria-label={`A Schild LKW ${number}`} checked={Boolean(vehicle.aSchild)} disabled={busy} onChange={(event) => void save({ aSchild: event.target.checked })} />
-    </td>
-    <td className="px-3 py-2 text-center">
+    </EditSlot>
+    <EditSlot fields={fields} label="AppSped" className="px-3 py-2 text-center">
       <input type="checkbox" className="h-4 w-4" aria-label={`AppSped LKW ${number}`} checked={Boolean(vehicle.appSped)} disabled={busy} onChange={(event) => void save({ appSped: event.target.checked })} />
-    </td>
+    </EditSlot>
   </>
 }
 

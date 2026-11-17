@@ -572,6 +572,100 @@ button.decision-card-title:focus-visible { outline: 2px solid var(--focus); outl
   .accounts-phone-label { display: inline; }
 }
 
+/* Trucks: Webfleet as one status line, trucks by customer line with GPS, current work and who runs them; edits under the row. */
+.fleet-page { display: grid; width: 100%; max-width: 1360px; margin: 0 auto; gap: 16px; }
+.webfleet-panel { display: grid; gap: 10px; padding: 12px 16px; }
+.webfleet-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; }
+.webfleet-state { display: inline-flex; align-items: center; gap: 8px; color: rgb(var(--tx-0f172a)); font-size: .875rem; font-weight: 600; }
+.webfleet-dot { width: 8px; height: 8px; flex: none; border-radius: 999px; background: rgb(var(--bg-94a3b8)); }
+.webfleet-dot-ok { background: rgb(var(--bg-16a34a)); }
+.webfleet-dot-warn { background: rgb(var(--bg-d97706)); }
+.webfleet-dot-error { background: rgb(var(--bg-dc2626)); }
+.webfleet-facts { min-width: 0; flex: 1 1 320px; color: var(--text-muted); font-size: .75rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.webfleet-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+.webfleet-actions .secondary-button { white-space: nowrap; }
+.webfleet-count { color: var(--scope-shared-ink); }
+.webfleet-warning { color: var(--scope-shared-ink); font-size: .8125rem; }
+.webfleet-error { color: rgb(var(--tx-b91c1c)); font-size: .8125rem; }
+[data-theme="dark"] .webfleet-error { color: #f08a8a; }
+.webfleet-details { display: grid; gap: 10px; border-top: 1px solid rgb(var(--ln-eef1f5)); padding-top: 12px; }
+.fleet-new { display: grid; gap: 12px; padding: 16px 20px; }
+.fleet-new-form { display: grid; grid-template-columns: 160px 200px 180px minmax(0, 1fr); align-items: end; gap: 12px; }
+.fleet-new-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.fleet-hint { color: var(--text-muted); font-size: .75rem; }
+.fleet-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; }
+.fleet-search { display: flex; width: 280px; max-width: 100%; height: 36px; align-items: center; gap: 8px; border: 1px solid rgb(var(--ln-dbe2ea)); border-radius: 8px; background: rgb(var(--bg-ffffff)); padding: 0 12px; color: var(--text-muted); }
+.fleet-search:focus-within { outline: 2px solid var(--focus); outline-offset: 2px; }
+.fleet-search input { min-width: 0; flex: 1; border: 0; background: transparent; color: rgb(var(--tx-0f172a)); font-size: .8125rem; outline: none; }
+.fleet-filters { display: flex; flex-wrap: wrap; gap: 6px; }
+.fleet-filter { display: inline-flex; min-height: 32px; align-items: center; gap: 6px; border: 1px solid rgb(var(--ln-dbe2ea)); border-radius: 999px; padding: 0 12px; color: rgb(var(--tx-334155)); font-size: .8125rem; font-weight: 500; white-space: nowrap; }
+.fleet-filter span { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.fleet-filter:hover { background: rgb(var(--bg-f1f5f9)); }
+.fleet-filter[aria-pressed="true"] { border-color: var(--acc); background: var(--acc); color: var(--acc-ink); }
+.fleet-filter[aria-pressed="true"] span { color: var(--acc-ink); }
+.fleet-filter:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.fleet-board { overflow-x: auto; }
+.fleet-table { width: 100%; min-width: 1040px; border-collapse: collapse; font-size: .875rem; }
+.fleet-table thead th { border-bottom: 1px solid rgb(var(--ln-e3e8ef)); padding: 10px 16px; color: var(--text-muted); font-size: .75rem; font-weight: 500; text-align: left; white-space: nowrap; }
+.fleet-table thead th:nth-child(1) { width: 140px; }
+.fleet-table thead th:nth-child(2) { width: 150px; }
+.fleet-table thead th:nth-child(4) { width: 150px; }
+.fleet-table thead th:nth-child(5) { width: 190px; }
+.fleet-table thead th:nth-child(6) { width: 210px; }
+.fleet-table td { border-bottom: 1px solid rgb(var(--ln-eef1f5)); padding: 12px 16px; vertical-align: middle; }
+.fleet-group th { border-bottom: 1px solid rgb(var(--ln-eef1f5)); background: rgb(var(--bg-f8fafc)); padding: 10px 16px; color: var(--text-muted); font-size: .75rem; font-weight: 400; text-align: left; }
+.fleet-group th span { margin-right: 10px; color: rgb(var(--tx-0f172a)); font-size: .8125rem; font-weight: 600; }
+.fleet-row-open td { border-bottom: 0; }
+.fleet-number { display: block; color: rgb(var(--tx-0f172a)); font-size: 1.125rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.fleet-plate { display: block; color: var(--text-muted); font-size: .75rem; font-variant-numeric: tabular-nums; }
+.fleet-gps { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+.fleet-dot { width: 8px; height: 8px; flex: none; border-radius: 999px; background: rgb(var(--bg-94a3b8)); }
+.fleet-gps-live .fleet-dot { background: rgb(var(--bg-16a34a)); }
+.fleet-gps-stale { color: var(--scope-shared-ink); }
+.fleet-gps-stale .fleet-dot { background: rgb(var(--bg-d97706)); }
+.fleet-gps-none { color: var(--text-muted); }
+.fleet-now { display: block; color: rgb(var(--tx-0f172a)); overflow-wrap: anywhere; }
+.fleet-now-sub { display: block; margin-top: 2px; color: var(--text-muted); font-size: .75rem; font-variant-numeric: tabular-nums; }
+.fleet-late { color: rgb(var(--tx-b91c1c)); font-weight: 500; }
+[data-theme="dark"] .fleet-late { color: #f08a8a; }
+.fleet-muted { color: var(--text-muted); }
+.fleet-marks { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.fleet-mark { border-radius: 6px; background: rgb(var(--bg-f1f5f9)); padding: 2px 8px; color: rgb(var(--tx-0f172a)); font-size: .6875rem; font-weight: 500; white-space: nowrap; }
+.fleet-speed { color: var(--text-muted); font-size: .6875rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.fleet-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.fleet-actions .secondary-button { min-height: 34px; padding: 0 10px; white-space: nowrap; }
+.fleet-edit-row td { padding: 0 16px 16px; }
+.fleet-edit { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 12px; }
+.fleet-edit .vehicle-field:nth-child(1) { width: 110px; }
+.fleet-edit .vehicle-field:nth-child(2) { width: 160px; }
+.fleet-edit .vehicle-field:nth-child(3) { width: 120px; }
+.fleet-edit-actions { display: flex; gap: 8px; }
+.fleet-edit-live { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 16px; margin-top: 12px; }
+.fleet-edit-live .vehicle-field input[type="checkbox"] { height: 18px; width: 18px; margin: 9px 0; }
+.fleet-edit-row .fleet-hint { margin-top: 10px; }
+.vehicle-field { display: grid; gap: 4px; min-width: 0; }
+@media (max-width: 760px) {
+  .fleet-new-form { grid-template-columns: minmax(0, 1fr); }
+  .fleet-search { width: 100%; }
+  .webfleet-actions { margin-left: 0; }
+  .fleet-board { overflow: visible; border: 0; background: transparent; box-shadow: none; }
+  .fleet-table { min-width: 0; }
+  .fleet-table thead { display: none; }
+  .fleet-table, .fleet-table tbody, .fleet-table tr, .fleet-table td, .fleet-table th { display: block; width: auto; }
+  .fleet-table tbody { display: grid; gap: 8px; margin-bottom: 12px; }
+  .fleet-group th { border: 0; background: transparent; padding: 4px 2px 0; }
+  .fleet-group th span { display: block; }
+  .fleet-row { display: grid !important; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; border: 1px solid rgb(var(--ln-e3e8ef)); border-radius: 12px; background: rgb(var(--bg-ffffff)); padding: 12px 14px; }
+  .fleet-row td { border: 0; padding: 0; }
+  .fleet-row td:nth-child(1) { grid-column: 1 / -1; display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+  .fleet-row td:nth-child(3), .fleet-row td:nth-child(5), .fleet-row td:nth-child(6) { grid-column: 1 / -1; }
+  .fleet-actions { justify-content: stretch; }
+  .fleet-actions > * { flex: 1 1 0; justify-content: center; min-height: 44px !important; }
+  .fleet-edit-row { margin-top: -10px; border: 1px solid rgb(var(--ln-e3e8ef)); border-top: 0; border-radius: 0 0 12px 12px; background: rgb(var(--bg-ffffff)); padding: 0 14px 14px; }
+  .fleet-edit-row td { padding: 0; }
+  .fleet-edit .vehicle-field { width: 100% !important; }
+}
+
 /* ---- Narrower screens ---- */
 @media (max-width: 1360px) {
   .topbar { gap: 12px; }
