@@ -113,18 +113,31 @@ describe('a dispatcher works for a colleague', () => {
 });
 
 describe('what follows the cover', () => {
+  const seen = async (login: string | null, when = now, scope?: 'ALL' | 'MINE') => {
+    const visible = await vehiclesVisibleTo(db(), login ? ids[login] : null, { now: when, scope });
+    return ['101', '201', '202', '203', '301', '401'].filter((number) => visible(ids[number]!));
+  };
+
   it('pop-ups and push: the stand-in sees the trucks, the absent dispatcher does not, and back after the end', async () => {
-    const seen = async (login: string, when = now) => {
-      const visible = await vehiclesVisibleTo(db(), ids[login], when);
-      return ['101', '201', '202', '203', '301', '401'].filter((number) => visible(ids[number]!));
-    };
-    expect(await seen('anna')).toEqual(['101', '401']);
-    expect(await seen('ben')).toEqual(['201', '202', '203', '301', '401']);
+    expect(await seen('anna')).toEqual(['101']);
+    expect(await seen('ben')).toEqual(['201', '202', '203', '301']);
     await start('ben', 'anna', null);
-    expect(await seen('anna')).toEqual(['101', '201', '202', '203', '301', '401']);
-    expect(await seen('ben')).toEqual(['401']);
-    expect(await seen('ben', at(10))).toEqual(['201', '202', '203', '301', '401']);
-    expect((await vehiclesVisibleTo(db(), null))(ids['202']!)).toBe(true);
+    expect(await seen('anna')).toEqual(['101', '201', '202', '203', '301']);
+    expect(await seen('ben')).toEqual([]);
+    expect(await seen('ben', at(10))).toEqual(['201', '202', '203', '301']);
+  });
+
+  it('a dispatcher follows only their own trucks; trucks of nobody reach the admin and the shared login (owner, 17.11)', async () => {
+    // Cem: the free truck of his line, not the one Ben took, not a colleague's line, not the line without a dispatcher.
+    expect(await seen('cem')).toEqual(['301']);
+    expect(await seen('cem', now, 'ALL')).toEqual(['301']);
+    expect(await seen('chef')).toEqual(['101', '201', '202', '203', '301', '401']);
+    expect(await seen(null)).toEqual(['101', '201', '202', '203', '301', '401']);
+    // «Мои линии»: the admin has no line and took nothing, until a truck is theirs.
+    expect(await seen('chef', now, 'MINE')).toEqual([]);
+    await sqlite.vehicle.update({ where: { id: ids['401'] }, data: { assignedDispatcherId: ids.chef } });
+    try { expect(await seen('chef', now, 'MINE')).toEqual(['401']); }
+    finally { await sqlite.vehicle.update({ where: { id: ids['401'] }, data: { assignedDispatcherId: null } }); }
   });
 
   it('the status Excel: the truck goes to the stand-in and remembers whose it is', () => {

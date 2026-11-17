@@ -245,6 +245,28 @@ describe('the whole system with five dispatchers at work', () => {
       expect(seen.map((notice) => notice.vehicleId), `уведомления ${person.login}`).toEqual([ids.trucks[person.login][2]]);
     }
 
+    // Nobody's truck (free, no line) reaches the admin only, whatever a dispatcher asks for (owner, 17.11).
+    await db.notification.create({ data: { dedupKey: 'system-test:spare', vehicleId: ids.spare, type: 'DWELL_WARNING', message: 'LKW FREI стоит дольше плана', payloadJson: '{}' } });
+    const noticesOf = async (who: Session, query = '') =>
+      ((await call(who, 'GET', `/notifications${query}`)).body.notifications as Array<{ id: string; vehicleId: string; message: string }>).filter((notice) => notice.message.includes('стоит дольше плана'));
+    const [anna, ben] = team;
+    expect((await noticesOf(anna, '?scope=all')).map((notice) => notice.vehicleId)).toEqual([ids.trucks.anna[2]]);
+    const chef = await signIn('chef' as Login);
+    expect((await noticesOf(chef)).map((notice) => notice.vehicleId).sort()).toEqual([...TEAM.map((login) => ids.trucks[login][2]), ids.spare].sort());
+    // «Мои линии»: the admin runs no line and took no truck.
+    expect(await noticesOf(chef, '?scope=mine')).toEqual([]);
+    expect((await call(chef, 'GET', '/notifications?scope=fleet')).status).toBe(400);
+
+    // A dispatcher closes only notifications of their own trucks.
+    const [annaNotice] = await noticesOf(anna);
+    const [benNotice] = await noticesOf(ben);
+    expect((await call(ben, 'POST', `/notifications/${annaNotice.id}/ack`, {})).status).toBe(404);
+    expect((await call(ben, 'POST', '/notifications/ack-many', { ids: [annaNotice.id, benNotice.id] })).body).toMatchObject({ ok: true, count: 1 });
+    expect(await noticesOf(ben)).toEqual([]);
+    expect(await noticesOf(anna)).toHaveLength(1);
+    expect((await call(anna, 'POST', `/notifications/${annaNotice.id}/ack`, {})).status).toBe(200);
+    expect((await noticesOf(chef)).map((notice) => notice.vehicleId)).not.toContain(ids.trucks.anna[2]);
+
     // Every action is in the journal under the dispatcher who did it.
     for (const person of team) {
       const own = await db.auditLog.findMany({ where: { vehicleId: { in: ids.trucks[person.login] } }, select: { actorDispatcherId: true, actorRole: true } });
@@ -311,9 +333,11 @@ describe('the whole system with five dispatchers at work', () => {
 
   it('never answered with a server error, never refused for load, and never asked a service outside', () => {
     const expected401 = (row: (typeof log)[number]) => row.status === 401 && row.who === 'elena';
+    // Ben tried to close Anna's notification, and the admin asked for a scope that does not exist: both on purpose.
+    const expectedRefusal = (row: (typeof log)[number]) => (row.status === 404 && row.who === 'ben' && row.path === '/notifications/:id/ack') || (row.status === 400 && row.who === 'chef' && row.path === '/notifications');
     const failures = log.filter((row) => row.status >= 500);
     const refused = log.filter((row) => row.status === 429);
-    const odd = log.filter((row) => row.status >= 400 && row.status !== 409 && !expected401(row));
+    const odd = log.filter((row) => row.status >= 400 && row.status !== 409 && !expected401(row) && !expectedRefusal(row));
     const board = log.filter((row) => row.path === '/dashboard' && row.status === 200).map((row) => row.ms).sort((a, b) => a - b);
     const byStatus = Object.fromEntries([...new Set(log.map((row) => row.status))].sort().map((status) => [status, log.filter((row) => row.status === status).length]));
     const report = {
