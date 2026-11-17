@@ -14,6 +14,7 @@ import {
   importImagePreview,
   importPdfPreview,
   isSupportedImageMimeType,
+  ModelAnswerError,
   type ImageImportPreview,
   type PdfImportPreview
 } from "./services/pdf-order-import.js";
@@ -497,6 +498,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
   const importJobs = new ImportJobs();
   const importWaitMs = options.importWaitMs ?? (isServerless ? 110_000 : 20_000);
   const importOwner = (request: FastifyRequest) => assistantSessionKey(request);
+  const readingFailedText = (error: unknown, otherwise: string) =>
+    error instanceof ModelAnswerError ? "ИИ ответил с ошибкой два раза подряд. Загрузите Auftrag ещё раз." : otherwise;
   async function answerImportJob<T>(job: ImportJobHandle<T>, reply: FastifyReply) {
     const state = await job.settled(importWaitMs);
     if (state.status === "done") return state.result;
@@ -1029,6 +1032,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
         try {
           const started = Date.now();
           const read = reused ?? await pdfImport(buffer, filename, customerContext);
+          if (read.readStats?.retried) importHealth.readingRetried();
           const aiMs = Date.now() - started;
           const checked = withQueueTime(await finishRead(read, buffer, customerContext, contextMs, started), queueMs);
           request.log.info({ readMode: read.readMode ?? null, ...checked.readStats, aiMs, pdfBytes: buffer.length, answerReused: Boolean(reused) }, 'PDF-заказ распознан');
@@ -1037,7 +1041,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
           if (error instanceof Error && error.message.includes("OPENAI_API_KEY")) throw new ImportJobError("OpenAI ещё не настроен для импорта PDF.", 503);
           importHealth.readingFailed();
           request.log.error({ err: error }, "Не удалось распознать PDF-заказ");
-          throw new ImportJobError("Не удалось прочитать PDF-заказ. Проверьте файл и повторите попытку.", 502);
+          // Not 5xx: the proxies in front of the API replace a 502 with their own page and the dispatcher would read «server down».
+          throw new ImportJobError(readingFailedText(error, "Не удалось прочитать PDF-заказ. Проверьте файл и повторите попытку."), 422);
         }
       }, () => slot.leave());
       return answerImportJob(job, reply);
@@ -1089,6 +1094,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
         try {
           const started = Date.now();
           const read = reused ?? await imageImport(buffer, filename, mimeType, customerContext);
+          if (read.readStats?.retried) importHealth.readingRetried();
           const aiMs = Date.now() - started;
           const checked = withQueueTime(await finishRead(read, buffer, customerContext, contextMs, started), queueMs);
           request.log.info({ ...checked.readStats, aiMs, imageBytes: buffer.length, answerReused: Boolean(reused) }, 'Скриншот заказа распознан');
@@ -1097,7 +1103,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
           if (error instanceof Error && error.message.includes("OPENAI_API_KEY")) throw new ImportJobError("OpenAI ещё не настроен для импорта скриншотов.", 503);
           importHealth.readingFailed();
           request.log.error({ err: error }, "Не удалось распознать скриншот заказа");
-          throw new ImportJobError("Не удалось прочитать скриншот. Проверьте файл и повторите попытку.", 502);
+          throw new ImportJobError(readingFailedText(error, "Не удалось прочитать скриншот. Проверьте файл и повторите попытку."), 422);
         }
       }, () => slot.leave());
       return answerImportJob(job, reply);

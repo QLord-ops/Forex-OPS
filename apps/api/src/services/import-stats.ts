@@ -20,6 +20,7 @@ const readStatsSchema = z.object({
   outputTokens: tokens,
   reasoningTokens: tokens,
   settingsRejected: z.boolean(),
+  retried: z.enum(["INCOMPLETE", "BROKEN_JSON"]).nullable().optional(),
   contextMs: ms.optional(),
   totalMs: ms.optional(),
   queueMs: ms.optional()
@@ -111,6 +112,8 @@ export async function importSpeed(documents: { recentPreviews(take: number): Pro
 export type ImportHealthSummary = {
   since: string;
   readingsFailed: number;
+  /** The model's first answer was cut off or broken, and the reading succeeded on the second ask. */
+  readingsRetried: number;
   queueFull: number;
   limitReached: number;
   addressLookups: number;
@@ -127,6 +130,7 @@ export type ImportHealthSummary = {
 export class ImportHealth {
   private readonly since: Date;
   private readingsFailed = 0;
+  private readingsRetried = 0;
   private queueFull = 0;
   private limitReached = 0;
   private addressFailed = 0;
@@ -137,6 +141,7 @@ export class ImportHealth {
   constructor(now = new Date()) { this.since = now; }
 
   readingFailed() { this.readingsFailed += 1; }
+  readingRetried() { this.readingsRetried += 1; }
   readingRefused(reason: "queue" | "limit") { if (reason === "queue") this.queueFull += 1; else this.limitReached += 1; }
   addressLookup(ms: number, outcome: "found" | "not-found" | "busy") {
     this.addressLookups += 1;
@@ -148,7 +153,7 @@ export class ImportHealth {
 
   summary(): ImportHealthSummary {
     return {
-      since: this.since.toISOString(), readingsFailed: this.readingsFailed, queueFull: this.queueFull, limitReached: this.limitReached,
+      since: this.since.toISOString(), readingsFailed: this.readingsFailed, readingsRetried: this.readingsRetried, queueFull: this.queueFull, limitReached: this.limitReached,
       addressLookups: this.addressLookups, addressFailed: this.addressFailed, addressBusy: this.addressBusy,
       addressMedianMs: percentile(this.addressMs, 0.5), addressP90Ms: percentile(this.addressMs, 0.9)
     };

@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../src/app.js';
 import { ImportJobError, ImportJobs } from '../src/services/import-jobs.js';
+import { ModelAnswerError } from '../src/services/pdf-order-import.js';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -29,7 +30,8 @@ describe('reading an Auftrag as a background job', () => {
     expect(await own.settled(100)).toMatchObject({ status: 'failed', statusCode: 503, error: 'OpenAI ещё не настроен для импорта PDF.' });
     const raw = jobs.start('anna', async () => { throw new Error('ECONNRESET api.openai.com secret-token'); });
     const state = await raw.settled(100);
-    expect(state).toMatchObject({ status: 'failed', statusCode: 502 });
+    // Never 5xx: the proxies in front of the API swap a 502 for their own page («Сервер временно недоступен», 17.11).
+    expect(state).toMatchObject({ status: 'failed', statusCode: 422 });
     expect(JSON.stringify(state)).not.toContain('secret-token');
   });
 
@@ -109,7 +111,16 @@ describe('POST /imports/pdf/preview with a slow AI', () => {
     expect(upload.statusCode).toBe(202);
     await sleep(200);
     const result = await app.inject({ method: 'GET', url: `/imports/jobs/${(upload.json() as { jobId: string }).jobId}` });
-    expect(result.statusCode).toBe(502);
+    expect(result.statusCode).toBe(422);
     expect(result.json()).toEqual({ error: 'Не удалось прочитать PDF-заказ. Проверьте файл и повторите попытку.' });
+  });
+
+  it('two broken answers of the model say so in words, not as a server failure', async () => {
+    const pdfImport = vi.fn(async () => { throw new ModelAnswerError(); });
+    const app = await buildApp({ pdfImport, auth: { disabled: true }, importWaitMs: 1_000 });
+    apps.push(app);
+    const upload = await app.inject({ method: 'POST', url: '/imports/pdf/preview', ...pdf });
+    expect(upload.statusCode).toBe(422);
+    expect(upload.json()).toEqual({ error: 'ИИ ответил с ошибкой два раза подряд. Загрузите Auftrag ещё раз.' });
   });
 });

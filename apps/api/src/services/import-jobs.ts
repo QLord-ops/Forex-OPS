@@ -42,7 +42,7 @@ export class ImportJobs {
         const own = error instanceof Error && typeof (error as { statusCode?: unknown }).statusCode === 'number' ? error as Error & { statusCode: number } : null;
         job.state = own
           ? { status: 'failed', startedAt: job.state.startedAt, statusCode: own.statusCode, error: own.message }
-          : { status: 'failed', startedAt: job.state.startedAt, statusCode: 502, error: 'Не удалось прочитать Auftrag. Проверьте файл и повторите попытку.' };
+          : { status: 'failed', startedAt: job.state.startedAt, statusCode: 422, error: 'Не удалось прочитать Auftrag. Проверьте файл и повторите попытку.' };
       })
       .finally(() => {
         onFinish?.();
