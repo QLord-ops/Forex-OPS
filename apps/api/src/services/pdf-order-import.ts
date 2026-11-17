@@ -10,6 +10,7 @@ export { mentionsZuladung } from "./zuladung.js";
 import { extractPdfText, hasTextLayer, pagesAsText } from "./pdf-text.js";
 import { BUILT_IN_RULES } from "./address-rules.js";
 import { decodeCityCode, looksLikeCityCode } from "./route-decoding.js";
+import { streetKey } from "./termin-groups.js";
 
 // The reading runs as a background job, so the model may take minutes; this only stops a request that will never answer.
 export const DEFAULT_TIMEOUT_MS = 240_000;
@@ -710,7 +711,7 @@ export function finishModelAnswer(answer: unknown, context: {
             sourcePage: draft.departmentSourcePage,
             carrierAddress: draft.carrierAddress
           }, learned)
-        : { stops: orderedStops.map((stop) => ({ ...withLearnedStopType(stop, learned), provenance: "TABLE" as const })), warnings: [] as PdfImportWarning[] };
+        : mergeSamePlaceRows(orderedStops.map((stop) => withLearnedStopType(stop, learned)));
       const dateNotes: PdfImportWarning[] = [];
       const stops = reconciled.stops.map((stop, index) => {
         const { appointmentDateLocal, ...rest } = stop as typeof stop & { appointmentDateLocal?: string | null };
@@ -1369,6 +1370,59 @@ function mergeDuplicateStopDetails(primary: ParsedStop, duplicates: ParsedStop[]
     referenceNumbers: references,
     instructions: notes.length ? notes.join("\n") : null
   };
+}
+
+/** Street with house number and postcode of a table row; null when either is missing, then nothing is merged. */
+function rowPlaceKey(stop: ParsedStop): string | null {
+  const key = streetKey([stop.address, stop.city].filter(Boolean).join(", "));
+  return key && /\d/.test(key.split("|")[0]!) ? key : null;
+}
+
+/**
+ * Several rows of the stop table that unload (or load) one after another at the same street, house number and
+ * postcode are one stop of the tour, as in a Schnellecke Tourbemerkung (owner, 17.11, DSV: «VZ PARSDORF» twice,
+ * «BMW VZ ECHING» and «BMW AG VZE Werk 1.8» at Freisinger Str. 15-19). References and Lademeter add up; the
+ * Termin printed on any of them is the Termin of the stop, two different ones keep the earlier and are named.
+ */
+export function mergeSamePlaceRows(rows: ParsedStop[]): { stops: ReconciledStop[]; warnings: PdfImportWarning[] } {
+  const groups: ParsedStop[][] = [];
+  for (const row of rows) {
+    const last = groups.at(-1);
+    const key = rowPlaceKey(row);
+    if (last && key && last[0]!.type === row.type && rowPlaceKey(last[0]!) === key) last.push(row);
+    else groups.push([row]);
+  }
+  const warnings: PdfImportWarning[] = [];
+  const start = (stop: ParsedStop) => stop.appointmentLocal ?? stop.appointmentWindowStartLocal ?? null;
+  const termin = (stop: ParsedStop) => [stop.appointmentLocal, stop.appointmentWindowStartLocal, stop.appointmentWindowEndLocal].map((value) => value ?? "").join("|");
+  const text = (stop: ParsedStop) => stop.appointmentLocal ? stop.appointmentLocal.slice(11)
+    : [stop.appointmentWindowStartLocal?.slice(11), stop.appointmentWindowEndLocal?.slice(11)].filter(Boolean).join("–");
+  const stops = groups.map((group, index): ReconciledStop => {
+    const [first, ...rest] = group;
+    if (!rest.length) return { ...first!, provenance: "TABLE" };
+    const timed = group.filter((stop) => start(stop)).sort((left, right) => start(left)!.localeCompare(start(right)!));
+    const distinct = timed.filter((stop, position) => timed.findIndex((other) => termin(other) === termin(stop)) === position);
+    const lead = timed[0] ?? group.find((stop) => stop.appointmentDateLocal) ?? first!;
+    const merged = mergeDuplicateStopDetails(first!, rest);
+    const place = [first!.company, first!.address].filter(Boolean).join(", ");
+    const operation = first!.type === "UNLOAD" ? "выгрузка" : "загрузка";
+    warnings.push({ code: "SAME_PLACE_ROWS_MERGED", stopIndex: index,
+      message: `Строки ${group.map((stop) => stop.sequence).join(", ")} таблицы — одна ${operation} по одному адресу (${place}): в туре одна точка.` });
+    if (distinct.length > 1) {
+      warnings.push({ code: "SAME_PLACE_TERMIN_CONFLICT", stopIndex: index, field: "time",
+        message: `У строк ${group.map((stop) => stop.sequence).join(", ")} разные Termin (${distinct.map(text).join(" и ")}) — взят ранний ${text(lead)}, проверьте.` });
+    }
+    return {
+      ...merged,
+      appointmentLocal: lead.appointmentLocal,
+      appointmentWindowStartLocal: lead.appointmentWindowStartLocal,
+      appointmentWindowEndLocal: lead.appointmentWindowEndLocal,
+      appointmentDateLocal: lead.appointmentDateLocal,
+      confidence: Math.min(...group.map((stop) => stop.confidence)),
+      provenance: "TABLE"
+    };
+  });
+  return { stops, warnings };
 }
 
 /**
