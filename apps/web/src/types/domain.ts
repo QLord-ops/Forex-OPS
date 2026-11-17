@@ -604,6 +604,8 @@ export interface ReadStats {
   outputTokens: number | null
   reasoningTokens: number | null
   settingsRejected: boolean
+  /** The model's first answer was cut off or broken and it was asked once more. */
+  retried?: 'INCOMPLETE' | 'BROKEN_JSON' | null
   contextMs?: number
   totalMs?: number
   queueMs?: number
@@ -636,6 +638,7 @@ export interface ImportSpeedSummary {
 export interface ImportHealthSummary {
   since: string
   readingsFailed: number
+  readingsRetried?: number
   queueFull: number
   limitReached: number
   addressLookups: number

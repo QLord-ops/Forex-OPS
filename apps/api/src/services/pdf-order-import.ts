@@ -46,6 +46,8 @@ export interface ReadStats {
   reasoningTokens: number | null;
   /** OpenAI refused the speed settings (HTTP 400) and the reading ran with the plain ones. */
   settingsRejected: boolean;
+  /** The first answer was cut off or was no JSON, and the model was asked once more. */
+  retried?: ModelAnswerFault | null;
   /** Added by the route: the work before the model (customer, limits) and the whole reading as the server saw it. */
   contextMs?: number;
   /** Waited for a free place among the readings running at the same time. */
@@ -53,6 +55,28 @@ export interface ReadStats {
   totalMs?: number;
 }
 const MAX_OPENAI_OUTPUT_CHARS = 100_000;
+
+export type ModelAnswerFault = "INCOMPLETE" | "BROKEN_JSON";
+
+/** The model answered twice with a cut-off or broken JSON; the dispatcher only has to upload the file again. */
+export class ModelAnswerError extends Error {
+  constructor() {
+    super("ИИ дважды вернул неполный ответ.");
+    this.name = "ModelAnswerError";
+  }
+}
+
+/** The JSON answer, or why it cannot be used: cut off by the token limit, too long, or no JSON at all. The text itself is never logged. */
+export function modelAnswerOf(payload: unknown): { payload: unknown; answer: unknown } | { broken: ModelAnswerFault } {
+  if ((payload as { status?: unknown } | null)?.status === "incomplete") return { broken: "INCOMPLETE" };
+  const text = extractResponseText(payload);
+  if (text.length > MAX_OPENAI_OUTPUT_CHARS) return { broken: "INCOMPLETE" };
+  try {
+    return { payload, answer: JSON.parse(text) as unknown };
+  } catch {
+    return { broken: "BROKEN_JSON" };
+  }
+}
 const ROUTE_SYNTAX =
   "Interpret Tourbemerkung as German route syntax: every location before the first 'für' (or an arrow '-->', '->', '→', or 'nach') is a LOAD in written order, and every location after it is an UNLOAD in written order. A '+', ',' or 'und' separates additional stops of the same type on that side; '&' joins companies that share the city written after the last of them ('Seifert & BLG Bremen' = Seifert in Bremen and BLG in Bremen, two separate stops). One stop per company, city and operation: several table rows or addresses of the same company in the same city with the same operation are one stop. When the truck unloads at a place and also loads there (for example the empties, Leergut, collected at the plant it delivers to), output two stops with that address, first the UNLOAD and then the LOAD, each with the Termin printed for it. Example: 'Hydro Crimmitschau + Voestalpine Schmölln für VW Braunschweig' means exactly 1) LOAD Hydro Crimmitschau, 2) LOAD Voestalpine Schmölln, 3) UNLOAD VW Braunschweig. A trailing parenthetical place after a destination is supplementary information, not the city: 'für Rudolph Großmehring (Győr)' means company Rudolph in city Großmehring. ";
 const ROUTE_SOURCE_RULE =
@@ -592,24 +616,28 @@ async function importVisualOrderPreview(input: {
   try {
     const modelStarted = Date.now();
     let settings: ModelSettings = { effort: importReasoningEffort(), tier: importServiceTier(), cache: true };
-    let response = await ask(settings);
-    // A model that does not know a speed or cache setting answers 400: such a setting must never cost the dispatcher the reading.
-    const settingsRejected = response.status === 400;
-    if (settingsRejected) {
-      settings = { effort: DEFAULT_REASONING_EFFORT, tier: null, cache: false };
-      response = await ask(settings);
-    }
+    let settingsRejected = false;
+    const read = async (): Promise<{ payload: unknown; answer: unknown } | { broken: ModelAnswerFault }> => {
+      let response = await ask(settings);
+      // A model that does not know a speed or cache setting answers 400: such a setting must never cost the dispatcher the reading.
+      if (response.status === 400 && !settingsRejected) {
+        settingsRejected = true;
+        settings = { effort: DEFAULT_REASONING_EFFORT, tier: null, cache: false };
+        response = await ask(settings);
+      }
+      if (!response.ok) throw new Error(`Запрос OpenAI завершился ошибкой HTTP ${response.status}.`);
+      const payload = (await response.json()) as unknown;
+      return modelAnswerOf(payload);
+    };
 
-    if (!response.ok) throw new Error(`Запрос OpenAI завершился ошибкой HTTP ${response.status}.`);
-
-    const payload = (await response.json()) as unknown;
+    // Now and then the model runs on in blank lines inside the JSON until the token limit cuts it off (owner, 17.11:
+    // 12 830 lines in 17 000 characters). The same file reads fine the next time, so it is asked once more at once.
+    let first = await read();
+    const retried = "broken" in first ? first.broken : null;
+    if ("broken" in first) first = await read();
+    if ("broken" in first) throw new ModelAnswerError();
+    const { payload, answer } = first;
     const modelDone = Date.now();
-    const text = extractResponseText(payload);
-    if (text.length > MAX_OPENAI_OUTPUT_CHARS) {
-      throw new Error(`Ответ OpenAI превышает ${MAX_OPENAI_OUTPUT_CHARS} символов.`);
-    }
-
-    const answer = JSON.parse(text) as unknown;
     const preview = finishModelAnswer(answer, { layout, readMode: input.readMode, learned: options.learned, customer: options.customer });
     return {
       ...preview,
@@ -624,7 +652,8 @@ async function importVisualOrderPreview(input: {
         modelMs: modelDone - modelStarted,
         postMs: Date.now() - modelDone,
         ...tokenUsage(payload),
-        settingsRejected
+        settingsRejected,
+        retried
       }
     };
   } finally {

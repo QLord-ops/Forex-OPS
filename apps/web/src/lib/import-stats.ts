@@ -36,7 +36,8 @@ export function readStatsLine(stats: ReadStats): string {
     tokens ? `токены: ${tokens}` : null,
     `рассуждение ${stats.effort}`,
     tierLabel(stats.serviceTier),
-    stats.settingsRejected ? 'настройки скорости отклонены OpenAI' : null
+    stats.settingsRejected ? 'настройки скорости отклонены OpenAI' : null,
+    stats.retried ? 'первый ответ ИИ сломан, прочитано повтором' : null
   ].filter(Boolean).join(' · ')
 }
 
@@ -76,6 +77,7 @@ export function healthRows(health: ImportHealthSummary): SpeedRow[] {
   const since = new Date(health.since).toLocaleString('de-DE', { timeZone: 'Europe/Berlin', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
   const rows: SpeedRow[] = [
     { label: 'Не прочитано', value: `${health.readingsFailed} с ${since}` },
+    { label: 'ИИ ответил с ошибкой, прочитано повтором', value: String(health.readingsRetried ?? 0) },
     { label: 'Отказ: очередь полна', value: String(health.queueFull) },
     { label: 'Отказ: лимит ИИ', value: String(health.limitReached) }
   ]

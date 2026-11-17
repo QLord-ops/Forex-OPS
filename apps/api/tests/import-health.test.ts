@@ -8,11 +8,13 @@ describe('the speed card sees refusals and waits (owner, 16.11: «долго и 
     health.readingRefused('limit');
     health.readingRefused('limit');
     health.readingFailed();
+    health.readingRetried();
+    health.readingRetried();
     health.addressLookup(400, 'found');
     health.addressLookup(900, 'found');
     health.addressLookup(3_000, 'busy');
     health.addressLookup(1_200, 'not-found');
-    expect(health.summary()).toEqual({ since: '2026-11-16T14:00:00.000Z', readingsFailed: 1, queueFull: 1, limitReached: 2,
+    expect(health.summary()).toEqual({ since: '2026-11-16T14:00:00.000Z', readingsFailed: 1, readingsRetried: 2, queueFull: 1, limitReached: 2,
       addressLookups: 4, addressFailed: 1, addressBusy: 1, addressMedianMs: 900, addressP90Ms: 3_000 });
   });
 

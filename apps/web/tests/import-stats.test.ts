@@ -66,10 +66,11 @@ describe('reading speed texts', () => {
 describe('what went wrong since the server started (owner, 16.11)', () => {
   it('lists refusals, failures and how the address lookups went', async () => {
     const { healthRows } = await import('../src/lib/import-stats')
-    const rows = healthRows({ since: '2026-11-16T14:00:00.000Z', readingsFailed: 2, queueFull: 1, limitReached: 3, addressLookups: 40, addressFailed: 1, addressBusy: 4, addressMedianMs: 600, addressP90Ms: 2_400 })
+    const rows = healthRows({ since: '2026-11-16T14:00:00.000Z', readingsFailed: 2, readingsRetried: 5, queueFull: 1, limitReached: 3, addressLookups: 40, addressFailed: 1, addressBusy: 4, addressMedianMs: 600, addressP90Ms: 2_400 })
     const text = rows.map((row) => `${row.label}: ${row.value}`.replace(/\u00a0/g, ' '))
     expect(text).toEqual([
       'Не прочитано: 2 с 16.11., 15:00',
+      'ИИ ответил с ошибкой, прочитано повтором: 5',
       'Отказ: очередь полна: 1',
       'Отказ: лимит ИИ: 3',
       'Поиск адреса: 40 раз, медиана 0,6 с, 90 % — до 2,4 с',
