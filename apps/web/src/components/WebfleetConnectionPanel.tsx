@@ -1,4 +1,4 @@
-import { Link2, RefreshCw, Satellite, Unlink } from 'lucide-react'
+import { Link2, RefreshCw, Unlink } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { AddressBookStatus } from './AddressBookStatus'
 
@@ -41,6 +41,7 @@ export function WebfleetConnectionPanel({ vehicles = [] }: { vehicles?: Vehicle[
   const [selection, setSelection] = useState<Record<string, string>>({})
   const [bindingBusy, setBindingBusy] = useState<string | null>(null)
   const [bindingError, setBindingError] = useState<string | null>(null)
+  const [open, setOpen] = useState(false)
 
   async function changeBinding(key: string, action: () => Promise<unknown>) {
     setBindingBusy(key)
@@ -94,20 +95,35 @@ export function WebfleetConnectionPanel({ vehicles = [] }: { vehicles?: Vehicle[
     : null
   const healthy = Boolean(data?.configured && validSync && !stale && !providerFailed && !error && !syncError)
 
+  const statusText = !data ? 'Статус не получен' : !data.configured ? 'Не настроено' : providerFailed || error || syncError ? 'Ошибка подключения' : !validSync ? 'Ожидает первой синхронизации' : stale ? 'Данные устарели' : 'Данные получены'
+  const tone = healthy ? 'ok' : providerFailed || error || syncError ? 'error' : 'warn'
+  const suggested = suggestions.data?.length ?? 0
+  const matchLabel = [suggested ? `${suggested} предложено` : null, summary.unmatched.length ? `${summary.unmatched.length} без машины` : null].filter(Boolean).join(' · ')
+
   return (
-    <section className="work-surface space-y-3 p-4" aria-label="Подключение Webfleet">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-3">
-          <Satellite className="h-5 w-5 shrink-0 text-sky-600" aria-hidden="true" />
-          <div>
-            <h3 className="font-bold text-slate-900">Webfleet</h3>
-            <p className="text-sm text-slate-500">Получение телеметрии · без отправки команд в Webfleet</p>
-          </div>
+    <section className="work-surface webfleet-panel" aria-label="Подключение Webfleet">
+      <div className="webfleet-bar">
+        <p className="webfleet-state"><span className={`webfleet-dot webfleet-dot-${tone}`} aria-hidden="true" />Webfleet: {statusText.toLocaleLowerCase('ru')}</p>
+        {data?.configured ? <p className="webfleet-facts" aria-live="polite">
+          {validSync ? `сводка ${validSync.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}` : 'синхронизации ещё не было'}
+          {data.details ? ` · тахограф ${feedText(data.details.drivingTimes)}` : ''} · только чтение, раз в {data.pollingIntervalSeconds} сек
+          {summary.received !== null ? <span> · {summary.received} объектов, {bindings.data?.length ?? summary.matched ?? '—'} привязаны к машинам OPS</span> : null}
+        </p> : null}
+        <div className="webfleet-actions">
+          {data?.configured ? <button type="button" className="secondary-button" aria-expanded={open} aria-controls="webfleet-details" onClick={() => setOpen((value) => !value)}>
+            Сопоставление{matchLabel ? <span className={summary.unmatched.length || suggested ? 'webfleet-count' : undefined}> · {matchLabel}</span> : null}
+          </button> : null}
+          {data?.configured ? <button type="button" className="secondary-button" onClick={() => void sync()} disabled={syncing}>
+            <RefreshCw className={`h-4 w-4 ${syncing ? 'animate-spin' : ''}`} aria-hidden="true" />
+            {syncing ? 'Проверяем…' : 'Проверить подключение'}
+          </button> : <button type="button" className="secondary-button" disabled={loading} onClick={() => void refetch()}>{loading ? 'Получаем статус…' : 'Обновить статус'}</button>}
         </div>
-        <span className={`rounded-full px-3 py-1 text-xs font-semibold ${healthy ? 'bg-emerald-50 text-emerald-800' : providerFailed || error || syncError ? 'bg-rose-50 text-rose-800' : 'bg-amber-50 text-amber-800'}`}>
-          {!data ? 'Статус не получен' : !data.configured ? 'Не настроено' : providerFailed || error || syncError ? 'Ошибка подключения' : !validSync ? 'Ожидает первой синхронизации' : stale ? 'Данные устарели' : 'Данные получены'}
-        </span>
       </div>
+
+      {stale && data?.configured ? <p className="webfleet-warning">Актуальная позиция не подтверждена. Сохранённые координаты могут быть устаревшими.</p> : null}
+      {providerFailed ? <p className="webfleet-error">{failureText}{validRetryAfter ? ` Следующая автоматическая попытка после ${validRetryAfter.toLocaleTimeString('ru-RU')}.` : ''}</p> : null}
+      {error || syncError ? <p role="alert" className="webfleet-error">{syncError || error?.message}</p> : null}
+      {bindingError ? <p role="alert" className="webfleet-error">{bindingError}</p> : null}
 
       {data && !data.configured ? (
         <div className="rounded-xl bg-slate-50 p-3 text-sm text-slate-600">
@@ -120,116 +136,99 @@ export function WebfleetConnectionPanel({ vehicles = [] }: { vehicles?: Vehicle[
         </div>
       ) : null}
 
-      {data?.configured ? (
-        <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
-          <div className="min-w-0 text-slate-600" aria-live="polite">
-            <p>Последняя синхронизация: {validSync ? validSync.toLocaleString('ru-RU') : 'ещё не выполнялась'}</p>
-            {summary.received !== null ? <p>Объектов получено: {summary.received} · Сопоставлено: {summary.matched ?? '—'}{summary.rejected ? ` · Отклонено устаревших/некорректных: ${summary.rejected}` : ''}</p> : null}
-            {stale ? <p className="mt-1 text-amber-800">Актуальная позиция не подтверждена. Сохранённые координаты могут быть устаревшими.</p> : null}
-            {providerFailed ? <p className="mt-1 text-rose-700">{failureText}{validRetryAfter ? ` Следующая автоматическая попытка после ${validRetryAfter.toLocaleTimeString('ru-RU')}.` : ''}</p> : null}
-            <p className="mt-1 text-xs text-slate-500">Режим: только чтение · общий снимок не чаще раза в {data.pollingIntervalSeconds} сек.</p>
-            {data.details ? <p className="mt-1 text-xs text-slate-500">Тахограф: {feedText(data.details.drivingTimes)} · данные машин: {feedText(data.details.vehicles)}</p> : null}
-          </div>
-          <button type="button" className="secondary-button" onClick={() => void sync()} disabled={syncing}>
-            <RefreshCw className={`h-4 w-4 ${syncing ? 'animate-spin' : ''}`} aria-hidden="true" />
-            {syncing ? 'Проверяем…' : 'Проверить подключение'}
-          </button>
-        </div>
-      ) : null}
-
-      {suggestions.data && suggestions.data.length > 0 ? (
-        <details className="rounded-xl border border-sky-200 p-3 text-sm" open={isAdmin}>
-          <summary className="cursor-pointer font-semibold text-sky-900">Предложенные привязки: {suggestions.data.length}</summary>
-          <p className="mt-2 text-slate-600">{isAdmin ? 'Совпадение найдено по номеру. Проверьте пару и подтвердите: автоматически ничего не привязывается.' : 'Подтвердить привязку может администратор.'}</p>
-          <ul className="mt-2 max-h-64 space-y-2 overflow-y-auto">
-            {suggestions.data.map(item => {
-              const key = `suggest-${item.objectUid}`
-              return (
-                <li key={key} className="flex flex-wrap items-center justify-between gap-2 text-slate-700">
-                  <span className="min-w-0 break-words">Webfleet {item.objectNo || item.objectUid} → LKW {item.vehicleNumber}{item.licensePlate ? ` · ${item.licensePlate}` : ''} <span className="text-xs text-slate-500">{item.reason === 'EXACT' ? 'госномер совпадает' : 'совпадают цифры номера'}</span></span>
-                  {isAdmin ? (
-                    <button type="button" className="secondary-button" disabled={bindingBusy !== null}
-                      onClick={() => void changeBinding(key, () => webfleetApi.bind({ objectUid: item.objectUid, vehicleId: item.vehicleId, objectNo: item.objectNo || undefined }))}>
-                      <Link2 className="h-4 w-4" aria-hidden="true" />
-                      {bindingBusy === key ? 'Привязываем…' : 'Привязать'}
-                    </button>
-                  ) : null}
-                </li>
-              )
-            })}
-          </ul>
-        </details>
-      ) : null}
-
-      {summary.unmatched.length > 0 ? (
-        <details className="rounded-xl border border-amber-200 p-3 text-sm">
-          <summary className="cursor-pointer font-semibold text-amber-900">Требуют сопоставления: {summary.unmatched.length}</summary>
-          <p className="mt-2 text-slate-600">{isAdmin ? 'Выберите грузовик OPS для каждого объекта Webfleet. Привязка сохраняется и записывается в журнал аудита.' : 'Сверьте номер и госномер в карточках машин или попросите администратора привязать объект вручную.'} Новые машины автоматически не создаются.</p>
-          <ul className="mt-2 max-h-64 space-y-2 overflow-y-auto">
-            {summary.unmatched.map((object, index) => {
-              const key = object.objectUid || String(index)
-              const label = object.objectNo || object.objectUid || 'Без номера'
-              return (
-                <li key={`${key}-${index}`} className="flex flex-wrap items-center justify-between gap-2 break-words text-slate-700">
-                  <span className="min-w-0">{label}{object.licensePlate ? ` · ${object.licensePlate}` : ''} — {object.ambiguous ? 'несколько совпадений' : 'машина не найдена'}</span>
-                  {isAdmin && object.objectUid ? (
-                    <span className="flex flex-wrap items-center gap-2">
-                      <select
-                        aria-label={`Грузовик OPS для ${label}`}
-                        className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm"
-                        value={selection[key] ?? ''}
-                        onChange={event => setSelection(current => ({ ...current, [key]: event.target.value }))}
-                      >
-                        <option value="">Выберите грузовик…</option>
-                        {freeVehicles.map(vehicle => <option key={vehicle.id} value={vehicle.id}>{vehicle.vehicleNumber}{vehicle.licensePlate ? ` · ${vehicle.licensePlate}` : ''}</option>)}
-                      </select>
-                      <button
-                        type="button"
-                        className="secondary-button"
-                        disabled={!selection[key] || bindingBusy !== null}
-                        onClick={() => void changeBinding(key, () => webfleetApi.bind({ objectUid: object.objectUid, vehicleId: selection[key], objectNo: object.objectNo || undefined, licensePlate: object.licensePlate || undefined }))}
-                      >
+      {open ? <div id="webfleet-details" className="webfleet-details">
+        <p className="text-sm text-slate-600">Объекты Webfleet и машины OPS. Без машины чаще всего прицепы и машины не нашего парка; если это наша машина, выберите её номер — GPS и тахограф начнут приходить сразу. Новые машины автоматически не создаются.</p>
+        {suggested ? (
+          <details className="rounded-xl border border-sky-200 p-3 text-sm" open={isAdmin}>
+            <summary className="cursor-pointer font-semibold text-sky-900">Предложенные привязки: {suggested}</summary>
+            <p className="mt-2 text-slate-600">{isAdmin ? 'Совпадение найдено по номеру. Проверьте пару и подтвердите: автоматически ничего не привязывается.' : 'Подтвердить привязку может администратор.'}</p>
+            <ul className="mt-2 max-h-64 space-y-2 overflow-y-auto">
+              {suggestions.data!.map(item => {
+                const key = `suggest-${item.objectUid}`
+                return (
+                  <li key={key} className="flex flex-wrap items-center justify-between gap-2 text-slate-700">
+                    <span className="min-w-0 break-words">Webfleet {item.objectNo || item.objectUid} → LKW {item.vehicleNumber}{item.licensePlate ? ` · ${item.licensePlate}` : ''} <span className="text-xs text-slate-500">{item.reason === 'EXACT' ? 'госномер совпадает' : 'совпадают цифры номера'}</span></span>
+                    {isAdmin ? (
+                      <button type="button" className="secondary-button" disabled={bindingBusy !== null}
+                        onClick={() => void changeBinding(key, () => webfleetApi.bind({ objectUid: item.objectUid, vehicleId: item.vehicleId, objectNo: item.objectNo || undefined }))}>
                         <Link2 className="h-4 w-4" aria-hidden="true" />
                         {bindingBusy === key ? 'Привязываем…' : 'Привязать'}
                       </button>
-                    </span>
+                    ) : null}
+                  </li>
+                )
+              })}
+            </ul>
+          </details>
+        ) : null}
+
+        {summary.unmatched.length > 0 ? (
+          <details className="rounded-xl border border-amber-200 p-3 text-sm">
+            <summary className="cursor-pointer font-semibold text-amber-900">Требуют сопоставления: {summary.unmatched.length}</summary>
+            <p className="mt-2 text-slate-600">{isAdmin ? 'Выберите грузовик OPS для каждого объекта Webfleet. Привязка сохраняется и записывается в журнал аудита.' : 'Сверьте номер и госномер в карточках машин или попросите администратора привязать объект вручную.'}</p>
+            <ul className="mt-2 max-h-64 space-y-2 overflow-y-auto">
+              {summary.unmatched.map((object, index) => {
+                const key = object.objectUid || String(index)
+                const label = object.objectNo || object.objectUid || 'Без номера'
+                return (
+                  <li key={`${key}-${index}`} className="flex flex-wrap items-center justify-between gap-2 break-words text-slate-700">
+                    <span className="min-w-0">{label}{object.licensePlate ? ` · ${object.licensePlate}` : ''} — {object.ambiguous ? 'несколько совпадений' : 'машина не найдена'}</span>
+                    {isAdmin && object.objectUid ? (
+                      <span className="flex flex-wrap items-center gap-2">
+                        <select
+                          aria-label={`Грузовик OPS для ${label}`}
+                          className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm"
+                          value={selection[key] ?? ''}
+                          onChange={event => setSelection(current => ({ ...current, [key]: event.target.value }))}
+                        >
+                          <option value="">Выберите грузовик…</option>
+                          {freeVehicles.map(vehicle => <option key={vehicle.id} value={vehicle.id}>{vehicle.vehicleNumber}{vehicle.licensePlate ? ` · ${vehicle.licensePlate}` : ''}</option>)}
+                        </select>
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          disabled={!selection[key] || bindingBusy !== null}
+                          onClick={() => void changeBinding(key, () => webfleetApi.bind({ objectUid: object.objectUid, vehicleId: selection[key], objectNo: object.objectNo || undefined, licensePlate: object.licensePlate || undefined }))}
+                        >
+                          <Link2 className="h-4 w-4" aria-hidden="true" />
+                          {bindingBusy === key ? 'Привязываем…' : 'Привязать'}
+                        </button>
+                      </span>
+                    ) : null}
+                  </li>
+                )
+              })}
+            </ul>
+          </details>
+        ) : null}
+
+        {bindings.data && bindings.data.length > 0 ? (
+          <details className="rounded-xl border border-slate-200 p-3 text-sm">
+            <summary className="cursor-pointer font-semibold text-slate-800">Привязанные машины: {bindings.data.length}</summary>
+            <ul className="mt-2 max-h-64 space-y-2 overflow-y-auto">
+              {bindings.data.map(binding => (
+                <li key={binding.objectUid} className="flex flex-wrap items-center justify-between gap-2 text-slate-700">
+                  <span className="min-w-0 break-words">{binding.vehicleNumber}{binding.licensePlate ? ` · ${binding.licensePlate}` : ''} ↔ Webfleet {binding.objectNo || binding.objectUid}</span>
+                  {isAdmin ? (
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      disabled={bindingBusy !== null}
+                      onClick={() => { if (window.confirm(`Отвязать ${binding.vehicleNumber} от Webfleet? История позиций сохранится.`)) void changeBinding(`unbind-${binding.vehicleId}`, () => webfleetApi.unbind(binding.vehicleId)) }}
+                    >
+                      <Unlink className="h-4 w-4" aria-hidden="true" />
+                      {bindingBusy === `unbind-${binding.vehicleId}` ? 'Отвязываем…' : 'Отвязать'}
+                    </button>
                   ) : null}
                 </li>
-              )
-            })}
-          </ul>
-        </details>
-      ) : null}
+              ))}
+            </ul>
+          </details>
+        ) : null}
 
-      {bindings.data && bindings.data.length > 0 ? (
-        <details className="rounded-xl border border-slate-200 p-3 text-sm">
-          <summary className="cursor-pointer font-semibold text-slate-800">Привязанные машины: {bindings.data.length}</summary>
-          <ul className="mt-2 max-h-64 space-y-2 overflow-y-auto">
-            {bindings.data.map(binding => (
-              <li key={binding.objectUid} className="flex flex-wrap items-center justify-between gap-2 text-slate-700">
-                <span className="min-w-0 break-words">{binding.vehicleNumber}{binding.licensePlate ? ` · ${binding.licensePlate}` : ''} ↔ Webfleet {binding.objectNo || binding.objectUid}</span>
-                {isAdmin ? (
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    disabled={bindingBusy !== null}
-                    onClick={() => { if (window.confirm(`Отвязать ${binding.vehicleNumber} от Webfleet? История позиций сохранится.`)) void changeBinding(`unbind-${binding.vehicleId}`, () => webfleetApi.unbind(binding.vehicleId)) }}
-                  >
-                    <Unlink className="h-4 w-4" aria-hidden="true" />
-                    {bindingBusy === `unbind-${binding.vehicleId}` ? 'Отвязываем…' : 'Отвязать'}
-                  </button>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        </details>
-      ) : null}
-
-      {bindingError ? <p role="alert" className="text-sm text-red-700">{bindingError}</p> : null}
-      {error || syncError ? <p role="alert" className="text-sm text-red-700">{syncError || error?.message}</p> : null}
-      {!data?.configured ? <button type="button" className="secondary-button" disabled={loading} onClick={() => void refetch()}>{loading ? 'Получаем статус…' : 'Обновить статус'}</button> : null}
-      {data?.configured ? <AddressBookStatus /> : null}
-      <p className="text-xs text-slate-500">GPS не подтверждает загрузку или выгрузку автоматически. Доступность тахографа и рабочих часов проверяется отдельно; расчётные часы машины не заменяются.</p>
+        <AddressBookStatus />
+        <p className="text-xs text-slate-500">GPS не подтверждает загрузку или выгрузку сам по себе. Доступность тахографа и рабочих часов проверяется отдельно; расчётные часы машины не заменяются.</p>
+      </div> : null}
     </section>
   )
 }

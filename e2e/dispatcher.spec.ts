@@ -196,6 +196,7 @@ test('показывает причину ошибки Webfleet, и диспет
   await expect(panel.getByText('Webfleet отклонил вход')).toBeVisible()
   await expect(panel.getByText('Код Webfleet: 1101.')).toBeVisible()
 
+  await panel.getByRole('button', { name: /Сопоставление · 1 без машины/ }).click()
   await panel.getByText('Требуют сопоставления: 1').click()
   await panel.getByRole('combobox', { name: 'Грузовик OPS для LKW 125' }).selectOption(vehicle.id)
   await panel.getByRole('button', { name: 'Привязать' }).click()

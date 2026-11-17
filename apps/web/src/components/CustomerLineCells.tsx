@@ -2,17 +2,18 @@ import { useState } from 'react'
 
 import { customersApi, type Customer, type DispatcherAccount } from '../lib/api'
 import { lineOptions } from '../lib/customers'
+import { EditSlot } from './VehicleStatusSettings'
 import type { Vehicle } from '../types/domain'
 
 /** The customer line of one truck, saved on change; replaces the old line + block selects once customers exist. */
-export function CustomerLineSelect({ vehicle, customers, onSaved }: { vehicle: Vehicle; customers: Customer[]; onSaved: () => void }) {
+export function CustomerLineSelect({ vehicle, customers, onSaved, fields = false }: { vehicle: Vehicle; customers: Customer[]; onSaved: () => void; fields?: boolean }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   async function change(lineId: string | null) {
     setBusy(true); setError('')
     try { await customersApi.setVehicleLine(vehicle.id, lineId); onSaved() } catch (cause) { setError(cause instanceof Error ? cause.message : 'Не сохранено.') } finally { setBusy(false) }
   }
-  return <td className="px-3 py-2">
+  return <EditSlot fields={fields} label="Заказчик · линия">
     <select className="field-input h-8 min-w-48" aria-label={`Линия заказчика LKW ${vehicle.vehicleNumber}`} disabled={busy} value={vehicle.customerLineId ?? ''}
       onChange={(event) => void change(event.target.value || null)}>
       <option value="">— без линии —</option>
@@ -21,7 +22,7 @@ export function CustomerLineSelect({ vehicle, customers, onSaved }: { vehicle: V
       </optgroup>)}
     </select>
     {error ? <span className="mt-1 block text-xs text-red-700" role="alert">{error}</span> : null}
-  </td>
+  </EditSlot>
 }
 
 /** Admin: the lines a dispatcher works on, with the primary line that sets the default customer of an import. */
