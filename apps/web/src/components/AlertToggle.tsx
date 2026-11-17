@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { alertPermission, requestAlertPermission, setSoundEnabled, soundEnabled, type AlertPermission } from '../lib/alerts'
 
 /** Sound and Windows notifications for this browser. The browser only allows the permission request on a click. */
-export function AlertToggle({ className = '' }: { className?: string }) {
+export function AlertToggle({ className = '', onChange }: { className?: string; onChange?: () => void }) {
   const [permission, setPermission] = useState<AlertPermission>(alertPermission)
   const [sound, setSound] = useState(soundEnabled)
   const label = permission === 'default' ? 'Включить уведомления'
@@ -14,9 +14,10 @@ export function AlertToggle({ className = '' }: { className?: string }) {
   const title = permission === 'denied' ? 'Разрешите уведомления для этого сайта в настройках браузера (значок замка слева от адреса).' : label
 
   async function onClick() {
-    if (permission === 'default') { setPermission(await requestAlertPermission()); setSoundEnabled(true); setSound(true); return }
+    if (permission === 'default') { setPermission(await requestAlertPermission()); setSoundEnabled(true); setSound(true); onChange?.(); return }
     setSoundEnabled(!sound)
     setSound(!sound)
+    onChange?.()
   }
 
   const muted = permission === 'denied' || !sound

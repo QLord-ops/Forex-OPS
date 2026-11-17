@@ -32,6 +32,10 @@
   --brand-word-2: #1d4ed8;
   --brand-sub: #64748b;
   --focus: #1d4ed8;
+  --scope-shared-ink: #8a5300;
+  --scope-shared-line: #e2c27a;
+  --scope-admin-ink: #6d28d9;
+  --scope-admin-line: #c4b5fd;
 }
 [data-theme="dark"] {
   color-scheme: dark;
@@ -46,6 +50,10 @@
   --brand-word-2: #c8a96a;
   --brand-sub: #8996aa;
   --focus: #c8a96a;
+  --scope-shared-ink: #d9bf86;
+  --scope-shared-line: #6b5a36;
+  --scope-admin-ink: #c9b6f2;
+  --scope-admin-line: #4a3f5e;
 }
 
 * {

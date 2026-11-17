@@ -15,17 +15,17 @@ const NOTE: Record<PushState, string> = {
  * «Push на этот телефон»: decisions reach this device even when OPS is closed. Outside its working hours only urgent ones
  * ring. Switching it on asks the browser for permission; it switches off on logout.
  */
-export function PushToggle({ className = '' }: { className?: string }) {
+export function PushToggle({ className = '', onChange }: { className?: string; onChange?: (state: PushState) => void }) {
   const [state, setState] = useState<PushState | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  useEffect(() => { let alive = true; void pushState().then((value) => { if (alive) setState(value) }); return () => { alive = false } }, [])
+  useEffect(() => { let alive = true; void pushState().then((value) => { if (alive) { setState(value); onChange?.(value) } }); return () => { alive = false } }, [onChange])
   const on = state === 'on'
   const available = state === 'on' || state === 'off'
 
   async function toggle() {
     setBusy(true); setError('')
-    try { setState(on ? await disablePush() : await enablePush()) }
+    try { const next = on ? await disablePush() : await enablePush(); setState(next); onChange?.(next) }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Push не включён.') }
     finally { setBusy(false) }
   }

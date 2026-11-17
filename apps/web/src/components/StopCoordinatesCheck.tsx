@@ -2,6 +2,7 @@ import { useState } from 'react'
 
 import { api, type StopCoordinateIssue } from '../lib/api'
 import { stopTypeLabel } from '../lib/format'
+import { SettingsSection } from './SettingsSection'
 
 /**
  * Admin check for stops drawn in the wrong town: every future stop is resolved again and the ones far from their
@@ -31,9 +32,8 @@ export function StopCoordinatesCheck() {
     finally { setBusy(null) }
   }
 
-  return <section className="settings-card" aria-labelledby="settings-stop-coordinates">
-    <h3 id="settings-stop-coordinates" className="section-title">Координаты точек</h3>
-    <p className="page-subtitle">Проверяет будущие точки активных и запланированных туров: если адрес сегодня находится дальше 40 км от сохранённой точки, маршрут рисуется не туда. Проверка занимает до пары минут.</p>
+  return <SettingsSection id="stop-coordinates" titleId="settings-stop-coordinates" title="Координаты точек" scope="admin"
+    subtitle="Проверяет будущие точки активных и запланированных туров: если адрес сегодня находится дальше 40 км от сохранённой точки, маршрут рисуется не туда. Проверка занимает до пары минут.">
     <div className="flex flex-wrap items-center gap-2">
       <button type="button" className="secondary-button" onClick={() => void check()} disabled={busy !== null}>{busy === 'check' ? 'Проверяем…' : 'Проверить точки'}</button>
       {issues?.length ? <button type="button" className="primary-button" onClick={() => void fix(issues.map((issue) => issue.stopId))} disabled={busy !== null}>{busy === 'fix' ? 'Исправляем…' : `Исправить все · ${issues.length}`}</button> : null}
@@ -51,5 +51,5 @@ export function StopCoordinatesCheck() {
         <td role="cell"><button type="button" className="secondary-button" onClick={() => void fix([issue.stopId])} disabled={busy !== null}>Исправить</button></td>
       </tr>)}</tbody>
     </table> : null}
-  </section>
+  </SettingsSection>
 }
