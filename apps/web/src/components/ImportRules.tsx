@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from 'react'
 
 import { api, customersApi, type Customer, type ImportRule } from '../lib/api'
 import { currentDispatcherRole } from '../lib/auth'
+import { SettingsSection } from './SettingsSection'
 
 const KIND_LABEL: Record<string, string> = { ALIAS: 'Сокращение', IGNORE_LABEL: 'Не точка', STOP_TYPE: 'Тип точки' }
 const ALL = ''
@@ -49,9 +50,8 @@ export function ImportRules() {
     void act(rule, () => api.promoteImportRule(rule.id), 'Правило не стало общим.')
   }
 
-  return <section className="settings-card" aria-labelledby="settings-import-rules">
-    <h3 id="settings-import-rules" className="section-title">Правила импорта</h3>
-    <p className="page-subtitle">Каждая ваша правка распознанного Auftrag запоминается для его заказчика. Правило включается после двух одинаковых правок в Auftrag одного заказчика и применяется к его следующим Auftrag; ИИ получает его вместе с примерами подтверждённых туров.{corrections ? ` Правок за 7 дней: ${corrections}.` : ''}</p>
+  return <SettingsSection id="import-rules" titleId="settings-import-rules" title="Правила импорта" scope="shared"
+    subtitle={<>Каждая ваша правка распознанного Auftrag запоминается для его заказчика. Правило включается после двух одинаковых правок в Auftrag одного заказчика и применяется к его следующим Auftrag; ИИ получает его вместе с примерами подтверждённых туров.{corrections ? ` Правок за 7 дней: ${corrections}.` : ''}</>}>
     {customers.length ? <label className="rules-filter"><span className="field-label">Заказчик</span>
       <select className="field-input" value={customerId} onChange={(event) => setCustomerId(event.target.value)}>
         <option value={ALL}>Все правила</option>
@@ -77,5 +77,5 @@ export function ImportRules() {
       <summary>Встроенные, для всех заказчиков · {builtIn.length}</summary>
       <p>{builtIn.map(describe).join(' · ')}</p>
     </details>
-  </section>
+  </SettingsSection>
 }

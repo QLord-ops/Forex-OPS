@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 
 import { addressBookApi, type OwnAddressRow } from '../lib/address-book'
 import { currentDispatcherRole } from '../lib/auth'
+import { SettingsSection } from './SettingsSection'
 
 /**
  * The fleet's own address book: exact addresses of confirmed Auftrag and tours. Everybody can look an address up;
@@ -43,9 +44,8 @@ export function OwnAddresses() {
     await load(query)
   })
 
-  return <section className="settings-card" aria-labelledby="settings-own-addresses">
-    <h3 id="settings-own-addresses" className="section-title">Адреса из Auftrag{total !== null ? `: ${total}` : ''}</h3>
-    <p className="page-subtitle">Точные адреса подтверждённых Auftrag и туров. Подсказываются при вводе адреса с пометкой «из Auftrag» и сразу дают точку на карте при разборе следующего Auftrag.</p>
+  return <SettingsSection id="own-addresses" titleId="settings-own-addresses" title={`Адреса из Auftrag${total !== null ? `: ${total}` : ''}`} scope="shared"
+    subtitle="Точные адреса подтверждённых Auftrag и туров. Подсказываются при вводе адреса с пометкой «из Auftrag» и сразу дают точку на карте при разборе следующего Auftrag.">
     <label className="block"><span className="field-label">Поиск по фирме, улице или городу</span>
       <input className="field-input" value={query} maxLength={120} onChange={(event) => setQuery(event.target.value)} /></label>
     {rows.length ? <ul className="own-address-list">{rows.map((row) => <li key={row.id} className={row.active ? '' : 'own-address-hidden'}>
@@ -61,5 +61,5 @@ export function OwnAddresses() {
     </div> : null}
     {message ? <p className="page-subtitle" role="status">{message}</p> : null}
     {error ? <p className="quick-order-error" role="alert">{error}</p> : null}
-  </section>
+  </SettingsSection>
 }
