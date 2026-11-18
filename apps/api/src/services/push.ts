@@ -47,7 +47,8 @@ export function shouldPush(item: PushCandidate, working: boolean) {
 
 const HEADINGS: Record<string, string> = {
   STOP_DEPARTED: 'Машина уехала с точки', LONG_DWELL: 'Долгая стоянка', ROUTE_DEVIATION: 'Отклонение от маршрута',
-  PREVIOUS_TOUR_OPEN: 'Прошлый тур не закрыт', APPOINTMENT_MATCH: 'Termin на проверку', AUTO_ARRIVAL: 'Прибытие по GPS', AUTO_STOP_EVENT: 'Выехала из города, отметка записана', TRAFFIC_DELAY: 'Пробка на маршруте'
+  PREVIOUS_TOUR_OPEN: 'Прошлый тур не закрыт', APPOINTMENT_MATCH: 'Termin на проверку', AUTO_ARRIVAL: 'Прибытие по GPS', AUTO_STOP_EVENT: 'Выехала из города, отметка записана', TRAFFIC_DELAY: 'Пробка на маршруте',
+  STOP_MOVED_TO_GATE: 'Точка перенесена на ворота'
 };
 
 /** The push message: a heading by type, the notification text, one slot per truck on the phone (tag), a link to the truck. */

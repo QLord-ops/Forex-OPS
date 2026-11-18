@@ -55,13 +55,24 @@ export function DecisionCard({ item, stop, onSelect, openLink = false, nested = 
     const event = autoEventOf(item.payloadJson)
     const types = event?.stopTypes ?? [(event?.stopType ?? stop?.type) === 'LOAD' ? 'LOAD' : 'UNLOAD']
     const done = types.map((type) => type === 'LOAD' ? 'BELADEN' : 'ENTLADEN').join(' и ')
+    const finished = types.map((type) => type === 'LOAD' ? 'загружена' : 'выгружена').join(' и ')
     tone = 'ok'; Icon = PackageCheck
-    title = `${vehicle ? `LKW ${vehicle}` : 'Машина'} выехала из города — вероятно ${types.map((type) => type === 'LOAD' ? 'загружена' : 'выгружена').join(' и ')}`
-    detail = event
-      ? `${done} ${types.length > 1 ? 'записаны' : 'записан'} автоматически на ${event.time}${place ? `, ${place}` : ''}${event.stayMinutes ? ` · стояла ${formatDurationMinutes(event.stayMinutes)}` : ''} · GPS Webfleet`
-      : item.message
+    if (event?.offsite) {
+      title = `${vehicle ? `LKW ${vehicle}` : 'Машина'} была на точке не по адресу — вероятно ${finished}`
+      detail = `Стояла${event.stayMinutes ? ` ${formatDurationMinutes(event.stayMinutes)}` : ''} в ${distanceText(event.offsite.distanceMeters)} от адреса${place ? ` ${place}` : ''} и уехала дальше. Прибытие ${event.offsite.arrivedTime} и ${done} ${event.time} записаны автоматически · GPS Webfleet. Место стоянки запомнено как ворота`
+    } else {
+      title = `${vehicle ? `LKW ${vehicle}` : 'Машина'} выехала из города — вероятно ${finished}`
+      detail = event
+        ? `${done} ${types.length > 1 ? 'записаны' : 'записан'} автоматически на ${event.time}${place ? `, ${place}` : ''}${event.stayMinutes ? ` · стояла ${formatDurationMinutes(event.stayMinutes)}` : ''} · GPS Webfleet`
+        : item.message
+    }
     actions = [{ label: 'Понятно', primary: true, run: () => void state.resolve(item, 'ack') }]
     if (item.stopId && !item.resolved) actions.push({ label: `Отменить ${done}`, run: () => void state.resolve(item, 'revert-event') })
+  } else if (item.type === 'STOP_MOVED_TO_GATE') {
+    tone = 'info'; Icon = MapPinCheck
+    title = `${vehicle ? `LKW ${vehicle}` : 'Машина'}: точка перенесена на ворота завода`
+    detail = item.message
+    actions = [{ label: 'Понятно', primary: true, run: () => void state.resolve(item, 'ack') }]
   } else if (item.type === 'ROUTE_DEVIATION') {
     const rebuilt = routeRebuilt(item.payloadJson)
     const options = { label: 'Варианты маршрута', run: () => { state.hide(item.id); void state.resolve(item, 'ack'); navigate(`/?vehicleId=${encodeURIComponent(item.vehicleId)}&routes=1`) } }
@@ -159,6 +170,10 @@ export function DecisionGroups({ items, stopOf, onSelect, openLink = false }: { 
   </div>
 }
 
+/** «2,3 км» or «800 м». */
+function distanceText(meters: number) {
+  return meters >= 1000 ? `${(Math.round(meters / 100) / 10).toLocaleString('de-DE')} км` : `${Math.round(meters / 10) * 10} м`
+}
 function routeRebuilt(payloadJson?: string | null) {
   try { return (JSON.parse(payloadJson ?? '{}') as { rebuilt?: boolean }).rebuilt === true } catch { return false }
 }

@@ -87,7 +87,8 @@ export class StopCoordinatesService {
     return { fixed, skipped };
   }
 
-  private async rebuildLegs(vehicleId: string, now: Date, actor?: AuditActor) {
+  /** Draws the truck's legs again after its points moved: the active tour from the truck's position, queued tours between their points. */
+  async rebuildLegs(vehicleId: string, now: Date, actor?: AuditActor): Promise<void> {
     const tours = await this.db.tour.findMany({
       where: { vehicleId, status: { in: ['ACTIVE', 'QUEUED'] } },
       include: { stops: { orderBy: { sequence: 'asc' } }, legs: { include: { fromStop: true, toStop: true } } },

@@ -256,17 +256,21 @@ export function departureOf(payloadJson?: string | null): Departure | null {
 }
 
 /** `stopTypes`: unloading and loading at one place recorded together, in order; absent for a single stop. */
-export type AutoStopEvent = { stopType: 'LOAD' | 'UNLOAD'; at: string; time: string; stayMinutes: number | null; stopTypes?: Array<'LOAD' | 'UNLOAD'> }
+/** `offsite`: the truck stood away from the stop's address (at the real gate) and drove on; the arrival came with the event. */
+export type AutoStopEvent = { stopType: 'LOAD' | 'UNLOAD'; at: string; time: string; stayMinutes: number | null; stopTypes?: Array<'LOAD' | 'UNLOAD'>;
+  offsite?: { distanceMeters: number; arrivedTime: string } }
 
 /** BELADEN/ENTLADEN the system recorded after the truck stood at the stop and left the town. */
 // eslint-disable-next-line react-refresh/only-export-components
 export function autoEventOf(payloadJson?: string | null): AutoStopEvent | null {
   try {
-    const payload = JSON.parse(payloadJson ?? '{}') as { stopType?: string; at?: string; stayMinutes?: number; stopTypes?: unknown }
+    const payload = JSON.parse(payloadJson ?? '{}') as { stopType?: string; at?: string; stayMinutes?: number; stopTypes?: unknown; enteredAt?: string; offsite?: { distanceMeters?: unknown } }
     if (!payload.at || (payload.stopType !== 'LOAD' && payload.stopType !== 'UNLOAD')) return null
-    const time = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit' }).format(new Date(payload.at))
+    const clock = (value: string) => new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit' }).format(new Date(value))
     const stopTypes = Array.isArray(payload.stopTypes) ? payload.stopTypes.filter((type): type is 'LOAD' | 'UNLOAD' => type === 'LOAD' || type === 'UNLOAD') : []
-    return { stopType: payload.stopType, at: payload.at, time, stayMinutes: typeof payload.stayMinutes === 'number' ? payload.stayMinutes : null, ...(stopTypes.length > 1 ? { stopTypes } : {}) }
+    const offsite = typeof payload.offsite?.distanceMeters === 'number' && payload.enteredAt ? { distanceMeters: payload.offsite.distanceMeters, arrivedTime: clock(payload.enteredAt) } : null
+    return { stopType: payload.stopType, at: payload.at, time: clock(payload.at), stayMinutes: typeof payload.stayMinutes === 'number' ? payload.stayMinutes : null,
+      ...(stopTypes.length > 1 ? { stopTypes } : {}), ...(offsite ? { offsite } : {}) }
   } catch { return null }
 }
 

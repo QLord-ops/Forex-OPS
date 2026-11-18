@@ -341,8 +341,10 @@ export class TourService {
     for (const [index, stopId] of stopIds.entries()) {
       const stop = await this.db.stop.findUniqueOrThrow({ where: { id: stopId } });
       try {
+        // A stay away from the address had no arrival: the first stop of the place arrives when the stay began.
+        const arrivedAt = index === 0 ? input.arrivedAt : undefined;
         tour = await this.recordStopEvent(stopId, stop.type === "LOAD" ? "LOADED" : "UNLOADED", input.at, undefined, actor,
-          { arriveWithEvent: index > 0, auto: { detectedAt: input.now, meta: input.meta } });
+          { arriveWithEvent: index > 0 || Boolean(arrivedAt), ...(arrivedAt ? { arrivedAt } : {}), auto: { detectedAt: input.now, meta: input.meta } });
       } catch (error) {
         // The first stop decides; a later one that cannot be recorded is left to the dispatcher.
         if (!tour) throw error;
@@ -566,7 +568,8 @@ export class TourService {
     const context = await readDepartureContext(this.db, stopId);
     // Without a GPS arrival the dispatcher's BELADEN/ENTLADEN also records the arrival at the same moment.
     const arriveNow = Boolean(options.arriveWithEvent && !context.stop.arrivedAt);
-    assertStopActionAllowed(context.stop.completedAt, context.stop.tour.status, arriveNow ? now : context.stop.arrivedAt);
+    const arrivalAt = arriveNow && options.arrivedAt && options.arrivedAt <= now ? options.arrivedAt : now;
+    assertStopActionAllowed(context.stop.completedAt, context.stop.tour.status, arriveNow ? arrivalAt : context.stop.arrivedAt);
     assertStopEventTime(now, context.stop.arrivedAt);
     let refreshed: RouteResult | null = null;
     if (context.departureLeg) {
@@ -597,7 +600,7 @@ export class TourService {
       if ((eventType === "LOADED" && stop.type !== "LOAD") || (eventType === "UNLOADED" && stop.type !== "UNLOAD")) {
         throw new TourPlanConflictError("Событие не соответствует типу точки.");
       }
-      assertStopActionAllowed(stop.completedAt, stop.tour.status, arriveNow ? now : stop.arrivedAt);
+      assertStopActionAllowed(stop.completedAt, stop.tour.status, arriveNow ? arrivalAt : stop.arrivedAt);
       if (stop.tour.stops.some((candidate) => candidate.sequence < stop.sequence && !candidate.completedAt)) {
         throw new TourPlanConflictError("Сначала необходимо завершить предыдущие точки.");
       }
@@ -609,12 +612,17 @@ export class TourService {
         arrivedAt: stop.arrivedAt?.toISOString() ?? null
       } : null;
       if (arriveNow) {
-        const arrived = await tx.stop.updateMany({ where: { id: stop.id, arrivedAt: null }, data: { arrivedAt: now } });
+        const offsite = options.auto?.meta.offsite && arrivalAt < now ? options.auto.meta.offsite : null;
+        const source = offsite ? "WEBFLEET_AUTO" : "WITH_STOP_EVENT";
+        const leg = stop.tour.legs.find((item) => item.toStopId === stop.id);
+        if (leg?.startedAt && arrivalAt < leg.startedAt) throw new TourPlanConflictError("Прибытие не может быть раньше начала движения.");
+        const arrived = await tx.stop.updateMany({ where: { id: stop.id, arrivedAt: null }, data: { arrivedAt: arrivalAt } });
         if (!arrived.count) throw new TourPlanConflictError("Прибытие уже зафиксировано. Обновите страницу.");
+        const arrivalMeta = { arrivedAt: arrivalAt.toISOString(), source, event: eventType, ...(offsite ? { zone: "OFFSITE", offsite } : {}) };
         await tx.operationEvent.create({ data: { vehicleId: stop.tour.vehicleId, tourId: stop.tourId, stopId: stop.id, type: "ARRIVAL_CONFIRMED",
-          payloadJson: JSON.stringify({ arrivedAt: now, source: "WITH_STOP_EVENT", event: eventType }), createdAt: now } });
+          payloadJson: JSON.stringify(arrivalMeta), createdAt: options.auto?.detectedAt ?? now } });
         await writeAuditLog(tx, actor, { action: "ARRIVAL_CONFIRMED", entityType: "Stop", entityId: stop.id, vehicleId: stop.tour.vehicleId,
-          tourId: stop.tourId, stopId: stop.id, metadata: { arrivedAt: now.toISOString(), source: "WITH_STOP_EVENT", event: eventType }, createdAt: now });
+          tourId: stop.tourId, stopId: stop.id, metadata: arrivalMeta, createdAt: options.auto?.detectedAt ?? now });
       }
       const clock = snapshotVehicleClock(stop.tour.vehicle, null, now).clockState;
       await tx.vehicle.update({ where: { id: stop.tour.vehicleId }, data: { clockState: JSON.stringify(clock), operationVersion: { increment: 1 } } });
@@ -639,7 +647,7 @@ export class TourService {
           stopId: stop.id,
           type: eventType,
           timestamp: now,
-          note: options.auto ? (options.auto.meta.nextStop ? "Автоматически по GPS Webfleet: машина приехала на следующую точку" : options.auto.meta.awayMinutes ? "Автоматически по GPS Webfleet: машина без диспетчера уехала с точки и не вернулась" : "Автоматически по GPS Webfleet: машина выехала из города") : note
+          note: options.auto ? (options.auto.meta.offsite ? `Автоматически по GPS Webfleet: стоянка в ${kilometres(options.auto.meta.offsite.distanceMeters)} от адреса точки, затем машина уехала дальше` : options.auto.meta.nextStop ? "Автоматически по GPS Webfleet: машина приехала на следующую точку" : options.auto.meta.awayMinutes ? "Автоматически по GPS Webfleet: машина без диспетчера уехала с точки и не вернулась" : "Автоматически по GPS Webfleet: машина выехала из города") : note
         }
       });
       await writeAuditLog(tx, actor, { action: eventType, entityType: "Stop", entityId: stop.id,
@@ -674,7 +682,7 @@ export class TourService {
         const record: AutoStopEventRecord = { eventId: recorded.id, eventType, at: now.toISOString(), before,
           activated: activated ? { tourId: activated.tour.id, transferLeg: activated.transferLeg } : null, meta: options.auto.meta };
         await tx.operationEvent.create({ data: { vehicleId: stop.tour.vehicleId, tourId: stop.tourId, stopId: stop.id, type: "STOP_EVENT_AUTO",
-          reason: options.auto.meta.nextStop ? "Приехала на следующую точку после стоянки на этой" : "Выехала из города после стоянки на точке", payloadJson: JSON.stringify(record), createdAt: options.auto.detectedAt } });
+          reason: options.auto.meta.offsite ? "Стояла не у адреса точки и уехала дальше" : options.auto.meta.nextStop ? "Приехала на следующую точку после стоянки на этой" : "Выехала из города после стоянки на точке", payloadJson: JSON.stringify(record), createdAt: options.auto.detectedAt } });
         // One note for all the stops of a place recorded so far; «Отменить» on it undoes them together.
         const chain = options.auto.meta.chain ?? [stop.id];
         const recordedStops = stop.tour.stops.filter((item) => chain.includes(item.id) && item.sequence <= stop.sequence);
@@ -683,7 +691,10 @@ export class TourService {
         const written = recordedStops.length > 1 ? "записаны" : "записан";
         const place = stop.city || stop.address;
         const dedupKey = `auto-stop-event:${chain[0]}:${now.toISOString()}`;
-        const message = options.auto.meta.awayMinutes
+        const offsite = options.auto.meta.offsite;
+        const message = offsite
+          ? `LKW ${stop.tour.vehicle.vehicleNumber} стояла ${options.auto.meta.stayMinutes} мин в ${kilometres(offsite.distanceMeters)} от адреса ${place} и уехала ${options.auto.meta.nextStop ? `на следующую точку ${options.auto.meta.nextStop}` : "дальше"} — вероятно ${state} там. Прибытие на ${berlinClock(new Date(options.auto.meta.enteredAt))} и ${done} на ${berlinClock(now)} записаны автоматически по GPS Webfleet, место стоянки запомнено как ворота. Если это ошибка, отмените.`
+          : options.auto.meta.awayMinutes
           ? `LKW ${stop.tour.vehicle.vehicleNumber} (без диспетчера) уехала из ${place} и ${options.auto.meta.awayMinutes} мин не возвращалась — вероятно ${state}. ${done} ${written} автоматически на ${berlinClock(now)} (выезд с точки по GPS Webfleet). Если это ошибка, отмените.`
           : options.auto.meta.nextStop
           ? `LKW ${stop.tour.vehicle.vehicleNumber} после стоянки в ${place} приехала на следующую точку ${options.auto.meta.nextStop} — вероятно ${state}. ${done} ${written} автоматически на ${berlinClock(now)} (выезд с точки по GPS Webfleet). Если это ошибка, отмените.`
@@ -701,7 +712,12 @@ export class TourService {
   }
 }
 
-export type StopEventOptions = { arriveWithEvent?: boolean; auto?: { detectedAt: Date; meta: AutoStopEventInput["meta"] } };
+/** «2,3 км» or «800 м». */
+function kilometres(meters: number) {
+  return meters >= 1000 ? `${(Math.round(meters / 100) / 10).toLocaleString("de-DE")} км` : `${Math.round(meters / 10) * 10} м`;
+}
+
+export type StopEventOptions = { arriveWithEvent?: boolean; /** The arrival time when it differs from the event (a stay away from the address). */ arrivedAt?: Date; auto?: { detectedAt: Date; meta: AutoStopEventInput["meta"] } };
 
 type LegState = { id: string; status: string; startedAt: string | null; finishedAt: string | null; drivePlan: string | null };
 type AutoStopEventRecord = {

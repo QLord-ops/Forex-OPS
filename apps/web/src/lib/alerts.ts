@@ -169,6 +169,7 @@ export function alertHeading(type: string) {
   if (type === 'ROUTE_DEVIATION') return 'Отклонение от маршрута'
   if (type === 'TERMIN_MET') return 'Прибытие к Termin'
   if (type === 'PREVIOUS_TOUR_OPEN') return 'Прошлый тур не закрыт'
+  if (type === 'STOP_MOVED_TO_GATE') return 'Точка перенесена на ворота'
   return 'Уведомление OPS'
 }
 
