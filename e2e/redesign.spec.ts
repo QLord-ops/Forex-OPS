@@ -38,7 +38,7 @@ async function mainScreen(page: Page, notices: unknown[] = []) {
   return recorded
 }
 
-test('«Сообщить заказчику»: письмо на немецком с адресом из профиля заказчика, отметка «заказчик уведомлён» в туре', async ({ page, context }) => {
+test('«Сообщить заказчику»: маленькое окно с одной строкой как в письмах диспетчера, отметка «заказчик уведомлён» в туре', async ({ page, context }) => {
   await context.grantPermissions(['clipboard-read', 'clipboard-write'])
   const recorded = await mainScreen(page)
   await page.setViewportSize({ width: 1440, height: 900 })
@@ -46,21 +46,27 @@ test('«Сообщить заказчику»: письмо на немецко�
   const panel = page.locator('.vehicle-panel')
   await expect(panel).toContainText('опоздание 40 мин')
   await panel.getByRole('button', { name: 'Сообщить заказчику' }).click()
-  const dialog = page.getByRole('dialog', { name: 'Сообщить заказчику · LKW 187' })
-  await expect(dialog.getByLabel('Кому')).toHaveValue('dispo@musterwerk.example')
-  await expect(dialog.getByLabel('Тема')).toHaveValue('Verspätung LKW 187 · Auftrag FX-48211 · Jena')
-  await expect(dialog.getByLabel(/Текст/)).toHaveValue(/unser LKW 187 \(GÖ FX 187\) zum Auftrag FX-48211 kommt später als geplant\./)
-  await expect(dialog.getByLabel(/Текст/)).toHaveValue(/Mit freundlichen Grüßen\nAnna Demo\nForex GmbH · Disposition/)
-  await dialog.getByRole('button', { name: 'Скопировать текст' }).click()
-  await expect(dialog.getByRole('status')).toContainText('Отмечено: заказчик уведомлён')
+  const popup = page.getByRole('dialog', { name: 'Сообщить заказчику · LKW 187' })
+  // A small window by its button, not a page-wide dialog.
+  const box = await popup.boundingBox()
+  expect(box && box.width <= 360 && box.height < 360).toBe(true)
+  await expect(popup.getByLabel('Кому')).toHaveValue('dispo@musterwerk.example')
+  await expect(popup.getByLabel('Тема')).toHaveValue('187')
+  await expect(popup.getByLabel('Текст')).toHaveValue(/^Hi, der Fahrer hat Verspätung zum Termin um \d{1,2}(:\d{2}| Uhr) bei Musterwerk Jena, er wird gegen \d{2}:\d{2} Uhr da$/)
+  await popup.getByRole('button', { name: 'Ждёт на точке' }).click()
+  await expect(popup.getByLabel('Текст')).toHaveValue(/^Der Fahrer erwartet auf Entladung seit /)
+  await popup.getByRole('button', { name: 'Опоздание' }).click()
+  await popup.getByRole('button', { name: 'Копировать' }).click()
+  await expect(popup.getByRole('status')).toContainText('Отмечено: заказчик уведомлён')
   expect(recorded).toEqual([{ tourId: 't187', stopId: 's2', channel: 'COPY', etaAt: late.eta, delayMinutes: 40, recipients: 1 }])
-  expect(await page.evaluate(() => navigator.clipboard.readText())).toContain('Entladung: Musterwerk Jena, Werkstraße 1, 07745 Jena')
-  await dialog.getByRole('button', { name: 'Готово' }).click()
-  await expect(dialog).toBeHidden()
-  // Not offered to the truck that already stands at its stop.
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toMatch(/^Hi, der Fahrer hat Verspätung zum Termin/)
+  await page.keyboard.press('Escape')
+  await expect(popup).toBeHidden()
+  // The truck waiting almost two hours at its stop gets the waiting line.
   await page.locator('.vehicle-card').filter({ hasText: 'LKW 231' }).locator('.vehicle-row-main').click()
   await page.getByRole('button', { name: 'Закрыть карточку' }).click()
-  await expect(page.locator('.vehicle-panel').getByRole('button', { name: 'Сообщить заказчику' })).toHaveCount(0)
+  await page.locator('.vehicle-panel').getByRole('button', { name: 'Сообщить заказчику' }).click()
+  await expect(page.getByRole('dialog', { name: 'Сообщить заказчику · LKW 231' }).getByLabel('Текст')).toHaveValue('Der Fahrer erwartet auf Entladung seit 2 Stunden')
 })
 
 test('сводка над картой: числа смены и фильтр «на точке» одним нажатием', async ({ page }) => {

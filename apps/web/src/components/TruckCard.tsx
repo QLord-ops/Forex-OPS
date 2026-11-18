@@ -414,7 +414,7 @@ function CurrentTour({ tour, row, busy, onRemove }: { tour: Tour; row: Dashboard
         <Cell label="Отклонение" value={formatDelay(row.delayMinutes)} warn={(row.delayMinutes ?? 0) > 0} />
       </div>
       {tour.status === 'ACTIVE' && (noticeDue(row) || noticeLine(row)) ? <div className="truck-card-notice">
-        {noticeLine(row) ? <span className="customer-notice-line">{noticeLine(row)}</span> : <span className="truck-card-muted">ETA позже Termin или запас меньше 15 мин.</span>}
+        {noticeLine(row) ? <span className="customer-notice-line">{noticeLine(row)}</span> : <span className="truck-card-muted">Опоздание к Termin или машина ждёт на точке больше часа.</span>}
         <CustomerNoticeButton row={row} className="secondary-button compact-button" />
       </div> : null}
       {zuladung === 'OPEN' ? <div className="truck-card-zuladung" role="note">

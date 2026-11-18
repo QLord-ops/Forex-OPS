@@ -376,8 +376,8 @@ function DecisionStack({ items, stopOf, onSelect, rowOf }: { items: AlertNotific
       {expanded ? <button type="button" className="decision-stack-toggle" onClick={() => setExpanded(false)}>Свернуть</button> : null}
     </h2>
     <DecisionGroups items={compact ? decisions.slice(0, DECISIONS_SHOWN) : items} stopOf={stopOf} onSelect={onSelect} extraOf={(item) => {
-      // A jam that makes the truck late: the letter to the customer is one click from the notice.
-      const row = item.type === 'TRAFFIC_DELAY' && !item.resolved ? rowOf(item.vehicleId) : undefined
+      // A jam that makes the truck late or a long wait at the gate: the letter to the customer is one click from the notice.
+      const row = (item.type === 'TRAFFIC_DELAY' || item.type === 'LONG_DWELL') && !item.resolved ? rowOf(item.vehicleId) : undefined
       return row && noticeDue(row) ? <CustomerNoticeButton row={row} className="decision-button" /> : null
     }} />
     {compact ? <button type="button" className="decision-stack-more" onClick={() => setExpanded(true)}>

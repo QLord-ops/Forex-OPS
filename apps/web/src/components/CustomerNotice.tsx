@@ -1,47 +1,54 @@
-import { Copy, Mail, MessageSquareText, X } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Check, Copy, Mail, MessageSquareText, X } from 'lucide-react'
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
+import { createPortal } from 'react-dom'
 
 import { useNotifications } from '../context/notifications'
 import { api, customersApi } from '../lib/api'
-import { currentDispatcher } from '../lib/auth'
 import { terminMargin } from '../lib/fleet-status'
-import { draftNotice } from '../lib/customer-notice'
+import { draftNotice, noticeKind, type NoticeKind } from '../lib/customer-notice'
 import { formatTime } from '../lib/format'
 import { currentStopOf } from '../lib/tours'
-import type { AlertNotification } from '../lib/alerts'
 import type { DashboardVehicle } from '../types/domain'
 import './customer-notice.css'
 
+const WIDTH = 360
+
 export function CustomerNoticeButton({ row, className = 'secondary-button', compact = false }: { row: DashboardVehicle; className?: string; compact?: boolean }) {
-  const [open, setOpen] = useState(false)
+  const [anchor, setAnchor] = useState<DOMRect | null>(null)
+  const button = useRef<HTMLButtonElement | null>(null)
   if (!row.tour || !row.customer) return null
   return <>
-    <button type="button" className={className} onClick={() => setOpen(true)} title="Письмо заказчику об опоздании к Termin">
+    <button ref={button} type="button" className={className} aria-expanded={Boolean(anchor)} onClick={(event) => setAnchor(anchor ? null : event.currentTarget.getBoundingClientRect())} title="Короткое письмо заказчику: опоздание к Termin или ожидание на точке">
       <MessageSquareText className="h-4 w-4" aria-hidden="true" />{compact ? 'Заказчику' : 'Сообщить заказчику'}
     </button>
-    {open ? <CustomerNoticeDialog row={row} onClose={() => setOpen(false)} /> : null}
+    {anchor ? createPortal(<CustomerNoticePopup row={row} anchor={anchor} onClose={() => { setAnchor(null); button.current?.focus() }} />, document.body) : null}
   </>
 }
 
-/** The reason a dispatcher would give: the jam or the detour that made the truck late, if OPS knows it. */
-function reasonOf(items: AlertNotification[], vehicleId: string) {
-  const own = items.filter((item) => item.vehicleId === vehicleId && !item.resolved)
-  if (own.some((item) => item.type === 'TRAFFIC_DELAY')) return 'Stau auf der Strecke'
-  if (own.some((item) => item.type === 'ROUTE_DEVIATION')) return 'Umleitung auf der Strecke'
-  return ''
+/** Beside the button, opening upwards when there is room above it (the bottom panel), downwards otherwise. */
+function placement(anchor: DOMRect): CSSProperties {
+  const left = Math.max(8, Math.min(anchor.right - WIDTH, window.innerWidth - WIDTH - 8))
+  return anchor.top > 320 ? { left, bottom: window.innerHeight - anchor.top + 8, width: WIDTH } : { left, top: anchor.bottom + 8, width: WIDTH }
 }
 
-function CustomerNoticeDialog({ row, onClose }: { row: DashboardVehicle; onClose: () => void }) {
+/**
+ * «Сообщить заказчику» as a small window, written the way the dispatchers write (owner, 18.11.2026): the truck number as
+ * the subject and one German line; Outlook adds the signature. OPS records that the customer was told.
+ */
+function CustomerNoticePopup({ row, anchor, onClose }: { row: DashboardVehicle; anchor: DOMRect; onClose: () => void }) {
   const { open } = useNotifications()
-  const signature = currentDispatcher()?.name ?? 'Disposition'
-  const initial = useMemo(() => draftNotice(row, reasonOf(open, row.vehicle.id), signature), [open, row, signature])
+  const jam = open.some((item) => item.vehicleId === row.vehicle.id && !item.resolved && item.type === 'TRAFFIC_DELAY')
+  const [kind, setKind] = useState<NoticeKind>(() => noticeKind(row) ?? 'LATE')
   const [to, setTo] = useState('')
-  const [subject, setSubject] = useState(initial.subject)
-  const [body, setBody] = useState(initial.body)
+  const [subject, setSubject] = useState(() => draftNotice(row, kind, jam).subject)
+  const [body, setBody] = useState(() => draftNotice(row, kind, jam).body)
   const [state, setState] = useState<{ kind: 'idle' | 'busy' | 'done' | 'error'; text?: string }>({ kind: 'idle' })
   const [contacts, setContacts] = useState<'loading' | 'none' | 'ok'>('loading')
-  const first = useRef<HTMLInputElement | null>(null)
+  const box = useRef<HTMLElement | null>(null)
+  const text = useRef<HTMLTextAreaElement | null>(null)
   const stop = row.tour ? currentStopOf(row.tour) : null
+  const [style, setStyle] = useState<CSSProperties>(() => placement(anchor))
+  useLayoutEffect(() => { setStyle(placement(anchor)) }, [anchor])
 
   useEffect(() => {
     let alive = true
@@ -55,13 +62,21 @@ function CustomerNoticeDialog({ row, onClose }: { row: DashboardVehicle; onClose
     }).catch(() => { if (alive) setContacts('none') })
     return () => { alive = false }
   }, [row.customer?.id])
-  useEffect(() => { first.current?.focus() }, [])
+  useEffect(() => { text.current?.focus(); text.current?.setSelectionRange(text.current.value.length, text.current.value.length) }, [])
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
+    const onPointer = (event: MouseEvent) => { if (box.current && !box.current.contains(event.target as Node)) onClose() }
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    document.addEventListener('mousedown', onPointer)
+    return () => { window.removeEventListener('keydown', onKey); document.removeEventListener('mousedown', onPointer) }
   }, [onClose])
 
+  function pick(next: NoticeKind) {
+    setKind(next)
+    const draft = draftNotice(row, next, jam)
+    setBody(draft.body)
+    setSubject(draft.subject)
+  }
   const recipients = to.split(/[,;\s]+/).map((item) => item.trim()).filter(Boolean)
   async function record(channel: 'EMAIL' | 'COPY') {
     if (!row.tour || !stop) return
@@ -69,47 +84,42 @@ function CustomerNoticeDialog({ row, onClose }: { row: DashboardVehicle; onClose
     try {
       const margin = terminMargin(row)
       const notice = await api.recordCustomerNotice(row.vehicle.id, { tourId: row.tour.id, stopId: stop.id, channel, etaAt: row.eta ?? null, delayMinutes: margin !== null && margin < 0 ? -margin : null, recipients: recipients.length })
-      setState({ kind: 'done', text: `Отмечено: заказчик уведомлён ${formatTime(notice.at)}.` })
+      setState({ kind: 'done', text: `Отмечено: заказчик уведомлён ${formatTime(notice.at)}` })
       window.dispatchEvent(new CustomEvent('ops:data-changed'))
     } catch (cause) {
       setState({ kind: 'error', text: cause instanceof Error ? cause.message : 'Отметка не сохранена.' })
     }
   }
   function openMail() {
-    const href = `mailto:${recipients.map(encodeURIComponent).join(',')}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
-    window.location.href = href
+    window.location.href = `mailto:${recipients.map(encodeURIComponent).join(',')}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
     void record('EMAIL')
   }
   async function copy() {
-    try { await navigator.clipboard.writeText(`${subject}\n\n${body}`) } catch {
-      setState({ kind: 'error', text: 'Браузер не дал скопировать: выделите текст в поле и скопируйте сами.' })
+    try { await navigator.clipboard.writeText(body) } catch {
+      setState({ kind: 'error', text: 'Браузер не дал скопировать: выделите текст и скопируйте сами.' })
       return
     }
     void record('COPY')
   }
 
-  return <div className="account-dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
-    <section className="account-dialog customer-notice-dialog" role="dialog" aria-modal="true" aria-labelledby="customer-notice-title">
-      <header className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h2 id="customer-notice-title" className="font-semibold">Сообщить заказчику · LKW {row.vehicle.vehicleNumber}</h2>
-          <p className="text-sm text-slate-500">{row.customer?.name}{stop ? ` · ${stop.city || stop.address}` : ''}. Письмо откроется в вашей почте: проверьте и отправьте.</p>
-        </div>
-        <button type="button" className="icon-button icon-button-compact" onClick={onClose} aria-label="Закрыть"><X className="h-4 w-4" /></button>
-      </header>
-      <label className="block text-sm">
-        <span className="metric-label">Кому</span>
-        <input ref={first} className="field-input" type="text" inputMode="email" value={to} onChange={(event) => setTo(event.target.value)} placeholder="dispo@kunde.de" />
-        {contacts === 'none' ? <span className="customer-notice-hint">В профиле заказчика нет адресов. Впишите адрес здесь или добавьте их в «Заказчики» → «Статус» → «Контакты для уведомлений».</span> : null}
-      </label>
-      <label className="block text-sm"><span className="metric-label">Тема</span><input className="field-input" value={subject} onChange={(event) => setSubject(event.target.value)} /></label>
-      <label className="block text-sm"><span className="metric-label">Текст (немецкий, можно править)</span><textarea className="field-input customer-notice-body" rows={12} value={body} onChange={(event) => setBody(event.target.value)} /></label>
-      {state.text ? <p role={state.kind === 'error' ? 'alert' : 'status'} className={state.kind === 'error' ? 'text-sm text-red-700' : 'text-sm text-emerald-800'}>{state.text}</p> : null}
-      <div className="flex flex-wrap justify-end gap-2">
-        <button type="button" className="secondary-button" onClick={onClose}>{state.kind === 'done' ? 'Готово' : 'Отмена'}</button>
-        <button type="button" className="secondary-button" onClick={() => void copy()} disabled={state.kind === 'busy'}><Copy className="h-4 w-4" aria-hidden="true" />Скопировать текст</button>
-        <button type="button" className="primary-button" onClick={openMail} disabled={state.kind === 'busy' || !recipients.length}><Mail className="h-4 w-4" aria-hidden="true" />Открыть в почте</button>
-      </div>
-    </section>
-  </div>
+  return <section ref={box} className="customer-notice-pop" style={style} role="dialog" aria-labelledby="customer-notice-title">
+    <header className="customer-notice-head">
+      <h2 id="customer-notice-title">Сообщить заказчику · LKW {row.vehicle.vehicleNumber}</h2>
+      <button type="button" className="icon-button icon-button-compact" onClick={onClose} aria-label="Закрыть"><X className="h-4 w-4" /></button>
+    </header>
+    <div className="customer-notice-kinds" role="group" aria-label="О чём письмо">
+      <button type="button" aria-pressed={kind === 'LATE'} onClick={() => pick('LATE')}>Опоздание</button>
+      <button type="button" aria-pressed={kind === 'WAITING'} onClick={() => pick('WAITING')}>Ждёт на точке</button>
+    </div>
+    <label className="customer-notice-field"><span>Кому</span><input type="text" inputMode="email" value={to} onChange={(event) => setTo(event.target.value)} placeholder="dispo@kunde.de" /></label>
+    {contacts === 'none' ? <p className="customer-notice-hint">Адресов в профиле заказчика нет: впишите здесь или в «Заказчики» → «Статус».</p> : null}
+    <label className="customer-notice-field"><span>Тема</span><input value={subject} onChange={(event) => setSubject(event.target.value)} /></label>
+    <label className="customer-notice-text"><span className="sr-only">Текст</span><textarea ref={text} rows={3} value={body} onChange={(event) => setBody(event.target.value)} /></label>
+    <p className="customer-notice-hint">Подпись добавит ваша почта.</p>
+    {state.text ? <p role={state.kind === 'error' ? 'alert' : 'status'} className={state.kind === 'error' ? 'customer-notice-error' : 'customer-notice-done'}>{state.kind === 'done' ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : null}{state.text}</p> : null}
+    <div className="customer-notice-actions">
+      <button type="button" className="secondary-button compact-button" onClick={() => void copy()} disabled={state.kind === 'busy'}><Copy className="h-4 w-4" aria-hidden="true" />Копировать</button>
+      <button type="button" className="primary-button compact-button" onClick={openMail} disabled={state.kind === 'busy' || !recipients.length}><Mail className="h-4 w-4" aria-hidden="true" />Открыть в почте</button>
+    </div>
+  </section>
 }

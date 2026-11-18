@@ -1,5 +1,18 @@
-/* «Сообщить заказчику»: the delay letter, opened in the dispatcher's own mail program. */
-.customer-notice-dialog { width: min(560px, 100%); max-height: calc(100dvh - 32px); overflow-y: auto; }
-.customer-notice-body { height: auto; min-height: 240px; padding-top: 8px; padding-bottom: 8px; font: .8125rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; resize: vertical; }
-.customer-notice-hint { display: block; margin-top: 4px; color: var(--t-muted); font-size: .75rem; line-height: 1.4; }
+/* «Сообщить заказчику»: a small window beside its button, one German line as the dispatchers write it. */
+.customer-notice-pop { position: fixed; z-index: 70; display: grid; gap: 8px; border: 1px solid var(--b-default); border-radius: 14px; background: var(--s-card); padding: 12px; color: var(--t-primary); box-shadow: var(--shadow-float); }
+.customer-notice-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.customer-notice-head h2 { margin: 0; font-size: .875rem; font-weight: 600; }
+.customer-notice-kinds { display: flex; gap: 2px; border-radius: 9px; background: var(--s-sunken); padding: 2px; }
+.customer-notice-kinds button { flex: 1; height: 28px; border-radius: 7px; color: var(--t-muted); font-size: .75rem; font-weight: 500; }
+.customer-notice-kinds button[aria-pressed="true"] { background: var(--s-card); color: var(--t-primary); box-shadow: var(--shadow-card); }
+.customer-notice-kinds button:focus-visible, .customer-notice-field input:focus-visible, .customer-notice-text textarea:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.customer-notice-field { display: grid; grid-template-columns: 44px minmax(0, 1fr); align-items: center; gap: 8px; font-size: .75rem; }
+.customer-notice-field span { color: var(--t-muted); }
+.customer-notice-field input, .customer-notice-text textarea { width: 100%; border: 1px solid var(--b-default); border-radius: 8px; background: var(--s-card); padding: 5px 8px; color: var(--t-primary); font-size: .8125rem; }
+.customer-notice-text textarea { min-height: 64px; resize: vertical; line-height: 1.45; }
+.customer-notice-hint { margin: -2px 0 0; color: var(--t-muted); font-size: .6875rem; line-height: 1.35; }
+.customer-notice-done { display: flex; align-items: center; gap: 4px; margin: 0; color: var(--st-go); font-size: .75rem; font-weight: 500; }
+.customer-notice-error { margin: 0; color: var(--st-late); font-size: .75rem; }
+.customer-notice-actions { display: flex; justify-content: flex-end; gap: 6px; }
 .customer-notice-line { color: var(--t-muted); font-size: .75rem; }
+.decision-card-actions .decision-button:has(svg) { display: inline-flex; align-items: center; gap: 6px; }
