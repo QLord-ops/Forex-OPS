@@ -67,7 +67,7 @@ async function main() {
     ]
   });
 
-  await tourService.recordLoaded(tour936Active.stops[0].id, new Date(Date.now() - 2 * 60 * 60 * 1000), "Seed: beladen");
+  await tourService.recordLoaded(tour936Active.stops[0].id, new Date(Date.now() - 2 * 60 * 60 * 1000), "Seed: beladen", undefined, { arriveWithEvent: true });
 
   await tourService.createTour({
     vehicleId: v936.id,
@@ -98,7 +98,7 @@ async function main() {
       { sequence: 2, type: "UNLOAD", address: "Bremen", appointmentAt: hoursFromNow(1) }
     ]
   });
-  await tourService.recordLoaded(tour728.stops[0].id, new Date(Date.now() - 70 * 60 * 1000), "Seed: beladen");
+  await tourService.recordLoaded(tour728.stops[0].id, new Date(Date.now() - 70 * 60 * 1000), "Seed: beladen", undefined, { arriveWithEvent: true });
 
   const tour414 = await tourService.createTour({
     vehicleId: v414.id,
@@ -108,8 +108,8 @@ async function main() {
       { sequence: 2, type: "UNLOAD", address: "Erfurt", appointmentAt: hoursFromNow(-1.5) }
     ]
   });
-  await tourService.recordLoaded(tour414.stops[0].id, new Date(Date.now() - 4 * 60 * 60 * 1000), "Seed: beladen");
-  await tourService.recordUnloaded(tour414.stops[1].id, new Date(Date.now() - 90 * 60 * 1000), "Seed: entladen");
+  await tourService.recordLoaded(tour414.stops[0].id, new Date(Date.now() - 4 * 60 * 60 * 1000), "Seed: beladen", undefined, { arriveWithEvent: true });
+  await tourService.recordUnloaded(tour414.stops[1].id, new Date(Date.now() - 90 * 60 * 1000), "Seed: entladen", undefined, { arriveWithEvent: true });
 
   console.log("Seed complete: vehicles 936, 728, 414, 563 created.");
 }
