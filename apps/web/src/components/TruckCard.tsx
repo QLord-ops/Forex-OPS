@@ -5,6 +5,8 @@ import { Link } from 'react-router-dom'
 import { usePolling } from '../hooks/usePolling'
 import { AssignmentBar } from './AssignmentBar'
 import { CopyForDriver } from './CopyForDriver'
+import { CustomerNoticeButton } from './CustomerNotice'
+import { noticeDue, noticeLine } from '../lib/customer-notice'
 import { RouteEditor } from './RouteEditor'
 import { api, documentFileUrl } from '../lib/api'
 import { classNames, formatDateTime, formatDelay, shortAddress, statusLabel, stopTypeLabel } from '../lib/format'
@@ -411,6 +413,10 @@ function CurrentTour({ tour, row, busy, onRemove }: { tour: Tour; row: Dashboard
         <Cell label="Срок" value={target?.appointmentAt ? formatDateTime(target.appointmentAt) : (target && sharedTerminOf(stops, target)?.label) || 'без срока'} />
         <Cell label="Отклонение" value={formatDelay(row.delayMinutes)} warn={(row.delayMinutes ?? 0) > 0} />
       </div>
+      {tour.status === 'ACTIVE' && (noticeDue(row) || noticeLine(row)) ? <div className="truck-card-notice">
+        {noticeLine(row) ? <span className="customer-notice-line">{noticeLine(row)}</span> : <span className="truck-card-muted">ETA позже Termin или запас меньше 15 мин.</span>}
+        <CustomerNoticeButton row={row} className="secondary-button compact-button" />
+      </div> : null}
       {zuladung === 'OPEN' ? <div className="truck-card-zuladung" role="note">
         <span>{ZULADUNG_NOTE}</span>
         {tour.status === 'ACTIVE' ? <button type="button" className="secondary-button compact-button" onClick={() => setZuladungRequest((value) => value + 1)}>Добавить Zuladung</button> : null}

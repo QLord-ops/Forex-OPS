@@ -814,20 +814,6 @@ button.decision-card-title:focus-visible { outline: 2px solid var(--focus); outl
 .fleet-section-name .fleet-sort-label { margin-left: 0; }
 .fleet-scope { max-width: 100%; flex-wrap: wrap; margin-left: auto; }
 
-/* Truck card: the number line spans the whole card; the action buttons and the GPS tag take a fixed column from the
-   second line down (BELADEN, ENTLADEN, «Продолжить» fit), so a long number never slides under a button. */
-.vehicle-card { display: grid; grid-template-columns: minmax(0, 1fr) 148px; grid-template-rows: 26px auto; align-items: start; gap: 0; }
-.vehicle-card > .vehicle-row-main { grid-column: 1 / -1; grid-row: 1 / span 2; }
-.vehicle-card > .vehicle-card-side { z-index: 1; grid-column: 2; grid-row: 2; padding-left: 10px; }
-.vehicle-card > .vehicle-card-activity { grid-column: 1 / -1; grid-row: 3; min-width: 0; margin: 6px 0 0 52px; }
-.vehicle-card > .vehicle-action-popover { grid-column: 1 / -1; grid-row: 4; }
-.vehicle-row-main .vehicle-row-line, .vehicle-row-main .vehicle-row-meta, .vehicle-row-main .vehicle-row-owner { margin-right: 148px; }
-.vehicle-row-title { min-height: 24px; }
-.vehicle-row-title strong { flex: none; }
-.vehicle-row-title .vehicle-row-muted, .vehicle-row-title .vehicle-row-customer { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.vehicle-card-tags { display: flex; align-items: center; gap: 4px; }
-.vehicle-card-tags .icon-button.vehicle-pin-button { width: 26px; height: 26px; border-radius: 6px; }
-
 /* A narrow panel (laptop at 1280 px): chips a little tighter so the filters take fewer lines. */
 .fleet-rail { container: fleet / inline-size; }
 @media (min-width: 768px) { .dashboard-screen { grid-template-columns: clamp(360px, 28vw, 440px) minmax(0, 1fr); } }

@@ -38,7 +38,7 @@
   --scope-shared-line: #e2c27a;
   --scope-admin-ink: #6d28d9;
   --scope-admin-line: #c4b5fd;
-  /* Surfaces of the 11.2026 redesign (Figma «OPS · Ïîâåğõíîñòè»): the canvas under everything, cards on it, sunken wells
+  /* Surfaces of the 11.2026 redesign (Figma Â«OPS Â· ĞŸĞ¾Ğ²ĞµÑ€Ñ…Ğ½Ğ¾ÑÑ‚Ğ¸Â»): the canvas under everything, cards on it, sunken wells
      inside cards, glass for panels that float over the map. */
   --s-canvas: #e4e9f0;
   --s-panel: #f1f4f8;
@@ -54,6 +54,13 @@
   --t-muted: #55627a;
   --shadow-card: 0 1px 3px rgb(15 23 41 / 0.07), 0 4px 12px rgb(15 23 41 / 0.05);
   --shadow-float: 0 2px 6px rgb(15 23 41 / 0.08), 0 12px 32px rgb(15 23 41 / 0.14);
+  /* Status colours of the redesign: the word next to the colour stays, the soft tone is its chip. */
+  --st-go: #0f7a4d; --st-go-soft: #ddf2e6;
+  --st-stop: #b45309; --st-stop-soft: #fbead2;
+  --st-late: #b91c1c; --st-late-soft: #fbe3e3;
+  --st-plan: #1d4f91; --st-plan-soft: #e0ebf8;
+  --st-termin: #6d28d9; --st-termin-soft: #ede6fd;
+  --st-idle: #64748b; --st-idle-soft: #e8ecf2;
 }
 [data-theme="dark"] {
   color-scheme: dark;
@@ -86,6 +93,12 @@
   --t-muted: #9fb0c8;
   --shadow-card: 0 1px 3px rgb(0 0 0 / 0.3), 0 4px 12px rgb(0 0 0 / 0.22);
   --shadow-float: 0 2px 6px rgb(0 0 0 / 0.34), 0 12px 32px rgb(0 0 0 / 0.4);
+  --st-go: #4ade80; --st-go-soft: #12301f;
+  --st-stop: #fbbf24; --st-stop-soft: #33260b;
+  --st-late: #f87171; --st-late-soft: #3a1518;
+  --st-plan: #7db4f5; --st-plan-soft: #132a45;
+  --st-termin: #c4a5ff; --st-termin-soft: #2a1d4d;
+  --st-idle: #94a3b8; --st-idle-soft: #1b2638;
 }
 
 * {
