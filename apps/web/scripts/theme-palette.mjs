@@ -44,7 +44,10 @@ const fromHsl = ([h, s, l]) => {
 }
 
 /** Dark surfaces of "Ночная смена". */
-export const DARK = { page: '#08101b', surface: '#0f1a29', raised: '#152236', text: '#e7ecf3' }
+export const DARK = { page: '#060b14', surface: '#172338', raised: '#1c2b44', text: '#e8eef7' }
+
+/** Light values the redesign (11.2026) changed on purpose: muted text has to read on the tinted canvas too. */
+export const LIGHT = { 'tx-64748b': '#55627a' }
 
 // Neutral ramps, keyed by the light colour's lightness. Interpolated between anchors.
 const ramp = (anchors) => (l) => {
@@ -58,9 +61,9 @@ const ramp = (anchors) => (l) => {
 }
 // Light backgrounds become navy surfaces (white is the card, the grey page is darker than the card);
 // dark fills (buttons, the rail) stay dark but lift off the page.
-const neutralBg = ramp([[1, DARK.surface], [0.985, '#132235'], [0.965, '#0b1523'], [0.95, '#0c1726'], [0.91, '#1b2a40'], [0.84, '#26364e'], [0.65, '#3a4b64'], [0.47, '#4e5f78'], [0.35, '#2a3b55'], [0.25, '#22324a'], [0.15, '#1a2940'], [0.05, '#0a1220']])
-const neutralText = ramp([[1, '#ffffff'], [0.95, '#ffffff'], [0.84, '#4b5a71'], [0.65, '#76839a'], [0.47, '#929eb2'], [0.35, '#aab5c6'], [0.25, '#c9d2de'], [0.1, DARK.text], [0, '#f3f6fa']])
-const neutralLine = ramp([[1, '#22324a'], [0.96, '#172538'], [0.91, '#1e2d43'], [0.84, '#2a3a52'], [0.65, '#44546c'], [0.4, '#5b6b83'], [0, '#8b97a9']])
+const neutralBg = ramp([[1, DARK.surface], [0.985, DARK.raised], [0.965, '#0f1a2c'], [0.95, '#0d1626'], [0.91, '#24344f'], [0.84, '#2f405a'], [0.65, '#43546e'], [0.47, '#566781'], [0.35, '#30425f'], [0.25, '#293a56'], [0.15, '#22324c'], [0.05, '#0a1220']])
+const neutralText = ramp([[1, '#ffffff'], [0.95, '#ffffff'], [0.84, '#56657d'], [0.65, '#7f8da4'], [0.47, '#9fb0c8'], [0.35, '#b1bdce'], [0.25, '#c9d2de'], [0.1, DARK.text], [0, '#f3f6fa']])
+const neutralLine = ramp([[1, '#2c3c57'], [0.96, '#223149'], [0.91, '#27364f'], [0.84, '#33445f'], [0.65, '#4a5b76'], [0.4, '#5b6b83'], [0, '#8b97a9']])
 
 const chroma = ([r, g, b]) => (Math.max(r, g, b) - Math.min(r, g, b)) / 255
 

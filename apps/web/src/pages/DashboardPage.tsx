@@ -319,9 +319,9 @@ export function DashboardPage() {
 
 function SortMenu({ sort, onChange }: { sort: FleetSort; onChange: (value: FleetSort) => void }) {
   const menu = usePopover()
-  return <div className="topbar-popover-anchor" ref={menu.ref}>
+  return <div className="popover-anchor" ref={menu.ref}>
     <button type="button" className="fleet-filter-button" aria-expanded={menu.open} onClick={menu.toggle} aria-label="Порядок списка" title="Порядок списка"><ListFilter className="h-4 w-4" aria-hidden="true" /></button>
-    {menu.open ? <div className="topbar-popover sort-popover" role="group" aria-label="Порядок списка">
+    {menu.open ? <div className="popover-menu sort-popover" role="group" aria-label="Порядок списка">
       {sorts.map((item) => <button key={item.value} type="button" className="account-menu-item" aria-pressed={sort === item.value} onClick={() => { onChange(item.value); menu.close() }}>
         <Check className={classNames('h-4 w-4', sort !== item.value && 'invisible')} aria-hidden="true" /><span>{item.label}</span>
       </button>)}

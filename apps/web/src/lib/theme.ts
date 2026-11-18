@@ -2,7 +2,7 @@ export type Theme = 'light' | 'dark'
 
 const STORAGE_KEY = 'ops-theme'
 export const THEME_EVENT = 'ops:theme-changed'
-const THEME_COLOR: Record<Theme, string> = { light: '#ffffff', dark: '#08101b' }
+const THEME_COLOR: Record<Theme, string> = { light: '#e4e9f0', dark: '#060b14' }
 
 function stored(): Theme | null {
   try {

@@ -4,7 +4,7 @@ export interface OnboardingStep {
   route: string
   /** Element to highlight; null for a plain card (the finish, or a part that may be absent). */
   selector: string | null
-  /** The same place on a phone, where the bottom tabs replace the top bar and the bell. */
+  /** The same place on a phone, where the bottom tabs replace the rail and the bell. */
   mobileSelector?: string | null
   title: string
   text: string
@@ -14,7 +14,7 @@ export interface OnboardingStep {
 
 export const ONBOARDING_STEPS: OnboardingStep[] = [
   { id: 'nav', route: '/', selector: 'nav[aria-label="Основная навигация"]', mobileSelector: 'nav.mobile-tabbar', title: 'Разделы программы',
-    text: 'Диспозиция — карта и машины. Auftrag — загрузка заказов. Машины, Туры, Статус 07:00, Аналитика и Настройки — остальные разделы. Текущий раздел подсвечен.' },
+    text: 'Карта — диспозиция: карта и машины. Auftrag — загрузка заказов. Машины, Заказчики, Туры, Статус 07:00, Аналитика и Настройки — остальные разделы. Текущий раздел подсвечен.' },
   { id: 'fleet', route: '/', selector: 'aside[aria-label="Список грузовиков"]', title: 'Список машин',
     text: 'Каждая строка — машина с её состоянием, следующей точкой и ETA. Поиск находит по номеру LKW, Auftrag или городу. Фильтры сверху отбирают по состоянию, «Мои / Свободные / Все» — чьи машины показывать.' },
   { id: 'decisions', route: '/', selector: 'section[aria-label="Требует решения"]', title: 'Требует решения',
@@ -25,7 +25,7 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
     text: 'Открывается по щелчку на строке или на машине на карте. Вкладки: Машина, Водитель, Тур, События, Сервис, Поездки. Во вкладке «Тур» — точки, BELADEN/ENTLADEN, «Изменить тур» и сохранённый Auftrag. «Взять себе» закрепляет машину за вами.' },
   { id: 'panel', route: '/', selector: 'section.vehicle-panel', title: 'Нижняя панель',
     text: 'Этап тура, следующая точка, ETA с учётом пробок и часы тахографа. Полоска сверху сворачивает панель, чтобы карте было больше места.' },
-  { id: 'bell', route: '/', selector: '.topbar-bell', mobileSelector: '.mobile-tabbar [data-tab="decisions"]', title: 'Уведомления',
+  { id: 'bell', route: '/', selector: '.rail-bell', mobileSelector: '.mobile-tabbar [data-tab="decisions"]', title: 'Уведомления',
     text: 'Срочное требует решения и звучит даже в тихие часы; «Для сведения» приходит без звука. Рабочие часы и звук настраиваются в Настройках.' },
   { id: 'menu', route: '/', selector: '.account-menu', mobileSelector: '.mobile-tabbar [data-tab="more"]', title: 'Меню диспетчера',
     text: 'Тема дня и ночной смены, звук, ИИ-диспетчер, смена пароля и выход. Здесь же «Обучение» и «Справка», если захотите вернуться к этому туру.' },

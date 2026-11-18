@@ -26,7 +26,7 @@ const row = (index: number) => {
 
 // The system font decides text width (Segoe on Windows, SF on a Mac, DejaVu in CI); Verdana is wider than all of them.
 for (const font of ['system', 'wide'] as const) for (const width of [1280, 1440, 1512]) {
-  test(`Диспозиция ${width} px, шрифт ${font}: шапка не наезжает, список не ездит вбок, номер машины виден целиком`, async ({ page }) => {
+  test(`Диспозиция ${width} px, шрифт ${font}: разделы целиком в колонке, список не ездит вбок, номер машины виден целиком`, async ({ page }) => {
     if (font === 'wide') await page.addInitScript(() => document.addEventListener('DOMContentLoaded', () => {
       const style = document.createElement('style')
       style.textContent = ':root { font-family: Verdana, "DejaVu Sans", sans-serif !important; }'
@@ -47,7 +47,8 @@ for (const font of ['system', 'wide'] as const) for (const width of [1280, 1440,
 
     const layout = await page.evaluate(() => {
       const box = (element: Element | null) => element!.getBoundingClientRect()
-      const links = [...document.querySelectorAll('.topbar-nav .topbar-link')]
+      const links = [...document.querySelectorAll('.rail-nav .rail-link')] as HTMLElement[]
+      const nav = box(document.querySelector('.rail-nav'))
       const scroll = document.querySelector('.fleet-scroll') as HTMLElement
       const rail = box(document.querySelector('.fleet-rail'))
       const chips = [...document.querySelectorAll('.fleet-rail .filter-chip')]
@@ -58,13 +59,17 @@ for (const font of ['system', 'wide'] as const) for (const width of [1280, 1440,
         return { overlapsButtons: number.right > side.left && number.bottom > side.top, cut: number.right > title.right + 0.5 }
       })
       return {
-        navOverlap: box(links.at(-1)!).right - box(document.querySelector('.topbar-tools')).left,
+        sections: links.length,
+        sectionsCut: links.filter((link) => link.scrollWidth > link.clientWidth || box(link).bottom > nav.bottom + 0.5 || box(link).right > nav.right + 0.5).length,
+        listUnderRail: box(document.querySelector('.app-rail')).right - rail.left,
         sideways: scroll.scrollWidth - scroll.clientWidth,
         chipsOutside: chips.filter((chip) => box(chip).right > rail.right || box(chip).left < rail.left).length,
         numbersHidden: cards.filter((card) => card.overlapsButtons || card.cut).length
       }
     })
-    expect(layout.navOverlap).toBeLessThanOrEqual(0)
+    expect(layout.sections).toBe(8)
+    expect(layout.sectionsCut).toBe(0)
+    expect(layout.listUnderRail).toBeLessThanOrEqual(0)
     expect(layout.sideways).toBe(0)
     expect(layout.chipsOutside).toBe(0)
     expect(layout.numbersHidden).toBe(0)
@@ -81,3 +86,48 @@ for (const font of ['system', 'wide'] as const) for (const width of [1280, 1440,
     if (await panel.locator('.vehicle-panel-bar').count()) expect(await textClashes(page, '.vehicle-panel'), 'нижняя панель').toEqual([])
   })
 }
+
+// A laptop with the browser's bars leaves about 620 px: the sections may scroll, the bell and the menu never leave the screen.
+test('Колонка разделов в низком окне: разделы, колокольчик и меню на экране, списки открываются рядом с колонкой', async ({ page }) => {
+  const termin = (id: string) => ({ id, fingerprint: id.repeat(32), documentKind: 'VW_FAHRTENSCHEIN', vehiclePlate: null, company: null, site: null, city: 'München', stopType: 'UNLOAD',
+    appointmentAt: '2026-11-04T10:00:00Z', windowStartAt: null, windowEndAt: null, references: [], sourceExcerpt: null, createdAt: new Date().toISOString(),
+    match: { status: 'UNMATCHED', vehicle: { status: 'NO_PLATE' }, candidates: [] } })
+  await page.route('**/api/**', async (route) => {
+    const path = new URL(route.request().url()).pathname.replace(/^\/api/, '')
+    if (path === '/auth/session') return json(route, { authenticated: true, role: 'admin', csrfToken: 'e2e', dispatcherId: 'd1', displayName: 'Anna Demo', onboardingCompletedAt: '2026-11-01T00:00:00Z' })
+    if (path === '/notifications') return json(route, { notifications: [] })
+    if (path === '/appointments/pending') return json(route, { items: [termin('p1'), termin('p2')] })
+    if (path === '/dashboard') return json(route, { me: 'd1', vehicles: [row(0), row(1)] })
+    if (path.endsWith('/current-position')) return json(route, { status: 'AT_STOP' })
+    return json(route, [])
+  })
+  await page.route('https://tile.openstreetmap.org/**', (route) => route.abort())
+  await page.setViewportSize({ width: 1366, height: 620 })
+  await page.goto('/?vehicleId=v0')
+  await page.locator('.vehicle-card').first().waitFor()
+
+  const nav = page.getByRole('navigation', { name: 'Основная навигация' })
+  await expect(nav.getByRole('link')).toHaveText(['Карта', 'Auftrag2', 'Машины', 'Заказчики', 'Туры', 'Статус', 'Аналитика', 'Настройки'])
+  await expect(nav.getByRole('link', { name: 'Карта' })).toHaveAttribute('aria-current', 'page')
+  await expect(nav.getByLabel('2 Termin ждут проверки')).toBeVisible()
+  await expect(nav.getByRole('link', { name: 'Настройки' })).toBeInViewport({ ratio: 1 })
+
+  const onScreen = async (selector: string) => page.locator(selector).evaluate((element) => {
+    const box = element.getBoundingClientRect()
+    return box.top >= 0 && box.left >= 0 && box.bottom <= window.innerHeight && box.right <= window.innerWidth
+  })
+  await page.getByRole('button', { name: 'Уведомления' }).click()
+  await expect(page.getByText('Открытых вопросов нет.')).toBeVisible()
+  expect(await onScreen('.bell-popover')).toBe(true)
+  expect(await page.evaluate(() => document.querySelector('.bell-popover')!.getBoundingClientRect().left - document.querySelector('.app-rail')!.getBoundingClientRect().right)).toBeGreaterThanOrEqual(0)
+  await page.keyboard.press('Escape')
+
+  await page.getByRole('button', { name: /меню$/ }).click()
+  await expect(page.getByRole('button', { name: 'Ночная смена' })).toBeVisible()
+  expect(await onScreen('.account-menu-popover')).toBe(true)
+  await page.keyboard.press('Escape')
+
+  await nav.getByRole('link', { name: 'Машины' }).click()
+  await expect(page).toHaveURL(/\/vehicles$/)
+  await expect(nav.getByRole('link', { name: 'Машины' })).toHaveAttribute('aria-current', 'page')
+})

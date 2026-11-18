@@ -866,10 +866,15 @@ function tomTomMapKey(): string | undefined {
 type Padding = number | { top: number; right: number; bottom: number; left: number }
 
 /** The bottom panel's height changes (strip, open, route stops): it is measured each time the map fits a route. */
+const LEFT_FIT_PADDING = 88
 function fitPadding(container: HTMLElement | null, fill: boolean | undefined): Padding {
   if (!fill) return 64
-  const panel = container?.closest('.dashboard-stage')?.querySelector<HTMLElement>('.vehicle-panel')
-  return { top: 96, right: 80, bottom: panel ? Math.max(96, panel.offsetHeight + 40) : 96, left: 88 }
+  const stage = container?.closest('.dashboard-stage')
+  const panel = stage?.querySelector<HTMLElement>('.vehicle-panel')
+  // An open «Адрес» / «Маршрут» dock covers the right of the map: the route is fitted beside it while 200 px are left for it.
+  const dock = stage?.querySelector<HTMLElement>('.map-action-dock .map-action-content')
+  const besideDock = dock && container && container.clientWidth - LEFT_FIT_PADDING - dock.offsetWidth - 32 >= 200
+  return { top: 96, right: besideDock ? dock.offsetWidth + 32 : 80, bottom: panel ? Math.max(96, panel.offsetHeight + 40) : 96, left: LEFT_FIT_PADDING }
 }
 
 function fitRoute(map: Map | null, coordinates: Coordinate[], maxZoom: number, duration: number, padding: Padding = 64) {

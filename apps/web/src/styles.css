@@ -6,12 +6,14 @@
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: rgb(var(--tx-0f172a));
-  background: rgb(var(--bg-f1f5f9));
+  background: var(--s-canvas);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   --map-height: 520px;
-  --topbar-h: 64px;
+  --rail-w: 72px;
+  --r-panel: 20px;
+  --r-item: 12px;
 }
 :root, [data-theme="light"] {
   color-scheme: light;
@@ -36,6 +38,22 @@
   --scope-shared-line: #e2c27a;
   --scope-admin-ink: #6d28d9;
   --scope-admin-line: #c4b5fd;
+  /* Surfaces of the 11.2026 redesign (Figma «OPS · Ïîâåðõíîñòè»): the canvas under everything, cards on it, sunken wells
+     inside cards, glass for panels that float over the map. */
+  --s-canvas: #e4e9f0;
+  --s-panel: #f1f4f8;
+  --s-card: #ffffff;
+  --s-card-selected: #eaf0ff;
+  --s-sunken: #eef2f7;
+  --s-glass: rgb(255 255 255 / 0.9);
+  --s-glass-border: rgb(255 255 255 / 0.7);
+  --s-hover: rgb(15 23 42 / 0.05);
+  --b-default: #d3dae5;
+  --b-strong: #aeb9c9;
+  --t-primary: #0f172a;
+  --t-muted: #55627a;
+  --shadow-card: 0 1px 3px rgb(15 23 41 / 0.07), 0 4px 12px rgb(15 23 41 / 0.05);
+  --shadow-float: 0 2px 6px rgb(15 23 41 / 0.08), 0 12px 32px rgb(15 23 41 / 0.14);
 }
 [data-theme="dark"] {
   color-scheme: dark;
@@ -54,6 +72,20 @@
   --scope-shared-line: #6b5a36;
   --scope-admin-ink: #c9b6f2;
   --scope-admin-line: #4a3f5e;
+  --s-canvas: #060b14;
+  --s-panel: #0d1626;
+  --s-card: #172338;
+  --s-card-selected: #20324f;
+  --s-sunken: #0f1a2c;
+  --s-glass: rgb(13 22 38 / 0.88);
+  --s-glass-border: rgb(255 255 255 / 0.1);
+  --s-hover: rgb(255 255 255 / 0.06);
+  --b-default: #27364f;
+  --b-strong: #3c4f6e;
+  --t-primary: #e8eef7;
+  --t-muted: #9fb0c8;
+  --shadow-card: 0 1px 3px rgb(0 0 0 / 0.3), 0 4px 12px rgb(0 0 0 / 0.22);
+  --shadow-float: 0 2px 6px rgb(0 0 0 / 0.34), 0 12px 32px rgb(0 0 0 / 0.4);
 }
 
 * {
@@ -63,7 +95,7 @@
 body {
   margin: 0;
   min-width: 320px;
-  background: rgb(var(--bg-f3f5f8));
+  background: var(--s-canvas);
 }
 
 main,

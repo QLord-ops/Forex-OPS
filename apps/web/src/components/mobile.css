@@ -1,4 +1,4 @@
-/* Phone layout (≤ 767 px), the installed app: bottom tabs instead of the top bar and the bell, the truck list and the map
+/* Phone layout (≤ 767 px), the installed app: bottom tabs instead of the rail and the bell, the truck list and the map
    as two tabs, the truck card as a sheet. Targets 44 px, fields 16 px (no iOS zoom), safe areas, no sideways scroll. */
 .mobile-tabbar, .mobile-only, .truck-sheet-handle { display: none; }
 .push-toggle { display: flex; align-items: center; gap: 12px; text-align: left; }
@@ -9,9 +9,9 @@
 
 @media (max-width: 767px) {
   :root { --tabbar-h: 58px; --safe-top: env(safe-area-inset-top, 0px); --safe-bottom: env(safe-area-inset-bottom, 0px); }
-  .topbar { display: none; }
+  .app-rail { display: none; }
   .mobile-only { display: inline-flex; }
-  .app-shell { padding-top: var(--safe-top); padding-bottom: calc(var(--tabbar-h) + var(--safe-bottom)); }
+  .app-shell { padding-top: var(--safe-top); padding-left: 0; padding-bottom: calc(var(--tabbar-h) + var(--safe-bottom)); }
   .page-main { padding: 16px 16px 24px; }
   .dashboard-main { height: calc(100dvh - var(--tabbar-h) - var(--safe-bottom) - var(--safe-top)); padding: 0; }
   .app-shell input:not([type='checkbox']):not([type='radio']), .app-shell select, .app-shell textarea { font-size: 16px; }
