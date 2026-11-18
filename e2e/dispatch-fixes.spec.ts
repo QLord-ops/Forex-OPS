@@ -185,7 +185,7 @@ test('«Открыть» в нижней панели показывает ка�
     return false
   })
   await page.goto('/?vehicleId=v1')
-  await page.getByRole('button', { name: 'Открыть', exact: true }).click()
+  await page.getByRole('button', { name: 'Открыть панель', exact: true }).click()
   await expect(page.getByRole('dialog', { name: /124/ })).toBeVisible()
   await page.getByRole('button', { name: 'Закрыть карточку' }).click()
 
@@ -430,10 +430,12 @@ test('нижняя панель: этап под «бровью», следую�
   const panel = page.locator('.vehicle-panel')
   await expect(panel.locator('.vehicle-panel-stage')).toContainText('Тур 20565181')
   const [stage, bar] = await Promise.all([panel.locator('.vehicle-panel-stage').boundingBox(), panel.locator('.vehicle-panel-bar').boundingBox()])
-  expect(stage!.y).toBeLessThan(bar!.y)
+  // The tour header sits inside the bar now, as in the design (owner, 18.11): its own column, not a line above.
+  expect(stage!.y).toBeGreaterThanOrEqual(bar!.y)
   await expect(panel.locator('.vehicle-panel-next')).toContainText('Следующая точка')
   await expect(panel.locator('.vehicle-panel-next')).toContainText('Hannover')
-  await expect(panel.getByLabel('Часы водителя')).toContainText('Вождение: осталось 1 ч 37 мин')
+  await expect(panel.getByLabel('Часы водителя')).toContainText('Сегодня осталось1:37')
+  await expect(panel.getByLabel('Часы водителя')).toContainText('До паузы0:45')
   await expect(panel.getByLabel('Часы водителя')).toContainText('по тахографу Webfleet')
   await page.screenshot({ path: 'test-results/panel-open.png' })
 
