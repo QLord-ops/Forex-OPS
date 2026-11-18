@@ -226,7 +226,7 @@ export class CustomerService {
     return updated;
   }
 
-  /** The lines a dispatcher works on; at most one primary line, which sets the default customer of an import. */
+  /** The lines a dispatcher works on; at most one primary line, which sets the default customer of an import. The primary line is optional (owner, 18.11). */
   async setDispatcherLines(dispatcherId: string, lineIds: string[], primaryLineId: string | null, actor?: AuditActor) {
     if (!await this.db.dispatcher.findUnique({ where: { id: dispatcherId }, select: { id: true } })) throw new CustomerError('Диспетчер не найден.', 404);
     const unique = [...new Set(lineIds)];
@@ -235,9 +235,9 @@ export class CustomerService {
     if (primaryLineId && !unique.includes(primaryLineId)) throw new CustomerError('Основная линия должна быть среди выбранных.');
     await this.db.$transaction([
       this.db.dispatcherLine.deleteMany({ where: { dispatcherId } }),
-      ...unique.map((lineId) => this.db.dispatcherLine.create({ data: { dispatcherId, lineId, isPrimary: lineId === (primaryLineId ?? unique[0]) } }))
+      ...unique.map((lineId) => this.db.dispatcherLine.create({ data: { dispatcherId, lineId, isPrimary: lineId === primaryLineId } }))
     ]);
-    await writeAuditLog(this.db, actor, { action: 'DISPATCHER_LINES_SET', entityType: 'Dispatcher', entityId: dispatcherId, metadata: { lines: unique, primary: primaryLineId ?? unique[0] ?? null } });
+    await writeAuditLog(this.db, actor, { action: 'DISPATCHER_LINES_SET', entityType: 'Dispatcher', entityId: dispatcherId, metadata: { lines: unique, primary: primaryLineId } });
     return this.db.dispatcherLine.findMany({ where: { dispatcherId }, include: { line: { include: { customer: { select: { id: true, name: true, color: true } } } } } });
   }
 

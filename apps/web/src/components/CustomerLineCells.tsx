@@ -39,24 +39,25 @@ export function DispatcherLinesEditor({ account, customers, onSaved }: { account
     setBusy(true); setError('')
     try {
       const ids = [...selected]
-      await customersApi.setDispatcherLines(account.id, ids, primary && selected.has(primary) ? primary : ids[0] ?? null)
+      await customersApi.setDispatcherLines(account.id, ids, primary && selected.has(primary) ? primary : null)
       setOpen(false); onSaved(`Линии ${account.displayName} сохранены.`)
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Не сохранено.') } finally { setBusy(false) }
   }
 
   if (!open) return <div className="account-lines">
-    {current.length ? current.map((line) => <span key={line.lineId} className="account-line">{names.get(line.lineId) ?? '—'}{line.isPrimary && current.length > 1 ? <span className="account-line-main">основная</span> : null}</span>)
+    {current.length ? current.map((line) => <span key={line.lineId} className="account-line">{names.get(line.lineId) ?? '—'}{line.isPrimary ? <span className="account-line-main">основная</span> : null}</span>)
       : <span className="account-line account-line-none">{account.role === 'admin' ? 'Нет линий' : 'Нет линий — видит только взятые машины'}</span>}
     {customers.length ? <button type="button" className="account-link" onClick={() => setOpen(true)} aria-label={`Изменить линии ${account.displayName}`}>Изменить</button> : null}
   </div>
   return <fieldset className="space-y-2 text-sm">
     <legend className="sr-only">Линии {account.displayName}</legend>
+    <p className="text-xs text-slate-500">Основная — по желанию: новый Auftrag сразу получает её заказчика. Без основной заказчик определяется по машине или по документу.</p>
     {lineOptions(customers).map((group) => <div key={group.customer.id}>
       <span className="text-xs font-medium text-slate-500">{group.customer.name}</span>
       {group.lines.map((line) => <div key={line.id} className="flex items-center gap-3">
         <label className="inline-flex items-center gap-1.5"><input type="checkbox" checked={selected.has(line.id)}
           onChange={(event) => setSelected((value) => { const next = new Set(value); if (event.target.checked) next.add(line.id); else next.delete(line.id); return next })} />{line.label.replace(`${group.customer.name} · `, '')}</label>
-        {selected.has(line.id) ? <label className="inline-flex items-center gap-1 text-xs text-slate-500"><input type="radio" name={`primary-${account.id}`} checked={primary === line.id} onChange={() => setPrimary(line.id)} />основная</label> : null}
+        {selected.has(line.id) ? <label className="inline-flex items-center gap-1 text-xs text-slate-500"><input type="checkbox" checked={primary === line.id} onChange={(event) => setPrimary(event.target.checked ? line.id : null)} aria-label={`Основная линия: ${line.label}`} />основная</label> : null}
       </div>)}
     </div>)}
     <div className="flex gap-2">

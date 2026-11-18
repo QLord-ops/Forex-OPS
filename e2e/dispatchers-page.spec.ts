@@ -14,13 +14,14 @@ const accounts = [
   { id: 'd-erik', login: 'erik.l', displayName: 'Erik Lang', role: 'dispatcher', active: false, lastLoginAt: '2026-11-11T08:25:00Z', createdAt: '2026-11-01T00:00:00Z', onboardingCompletedAt: null, lines: [] }
 ]
 const customers = [
-  { id: 'c-sn', name: 'Schnellecke', lines: [{ id: 'nord', name: 'Nord' }] },
-  { id: 'c-walter', name: 'Walter (Tesla)', lines: [{ id: 'tesla', name: 'Tesla' }] },
-  { id: 'c-dsv', name: 'DSV', lines: [{ id: 'dsv', name: 'DSV' }] }
+  { id: 'c-sn', name: 'Schnellecke', active: true, lines: [{ id: 'nord', name: 'Nord', active: true, sortIndex: 1 }] },
+  { id: 'c-walter', name: 'Walter (Tesla)', active: true, lines: [{ id: 'tesla', name: 'Tesla', active: true, sortIndex: 1 }] },
+  { id: 'c-dsv', name: 'DSV', active: true, lines: [{ id: 'dsv', name: 'DSV', active: true, sortIndex: 1 }] }
 ]
 
 async function signedIn(page: Page, theme: 'light' | 'dark' = 'light') {
   const resets: unknown[] = []
+  const lines: unknown[] = []
   await page.addInitScript((value) => { try { localStorage.setItem('ops-theme', value) } catch { /* private mode */ } }, theme)
   await page.route('**/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname.replace(/^\/api/, '')
@@ -29,10 +30,11 @@ async function signedIn(page: Page, theme: 'light' | 'dark' = 'light') {
     if (path === '/customers') return json(route, { customers })
     if (path === '/dispatchers') return json(route, accounts)
     if (path === '/dispatchers/d-ben/password') { resets.push(route.request().postDataJSON()); return json(route, { ok: true }) }
+    if (path === '/dispatchers/d-chef/lines') { lines.push(route.request().postDataJSON()); return json(route, { lines: [] }) }
     return json(route, [])
   })
   await page.route('https://tile.openstreetmap.org/**', (route) => route.abort())
-  return resets
+  return Object.assign(resets, { lines })
 }
 
 test('диспетчеры: линии метками, фильтры, сброс пароля под строкой', async ({ page }) => {
@@ -63,6 +65,15 @@ test('диспетчеры: линии метками, фильтры, сбро�
   await page.getByLabel('Найти диспетчера по имени, логину или линии').fill('dsv')
   await expect(rows).toHaveCount(1)
   await page.getByLabel('Найти диспетчера по имени, логину или линии').fill('')
+
+  // The primary line is optional: it can be taken off again.
+  await page.getByRole('button', { name: 'Изменить линии Chef Admin' }).click()
+  const primary = page.getByRole('checkbox', { name: 'Основная линия: Walter (Tesla) · Tesla' })
+  await expect(primary).toBeChecked()
+  await primary.uncheck()
+  await page.getByRole('button', { name: 'Сохранить' }).click()
+  await expect(page.getByRole('status')).toContainText('Линии Chef Admin сохранены')
+  expect(resets.lines).toEqual([{ lineIds: ['nord', 'tesla'], primaryLineId: null }])
 
   const ben = page.getByRole('row', { name: /Ben Hoffmann/ })
   await ben.getByRole('button', { name: 'Сбросить пароль' }).click()
