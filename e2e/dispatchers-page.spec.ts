@@ -14,9 +14,9 @@ const accounts = [
   { id: 'd-erik', login: 'erik.l', displayName: 'Erik Lang', role: 'dispatcher', active: false, lastLoginAt: '2026-11-11T08:25:00Z', createdAt: '2026-11-01T00:00:00Z', onboardingCompletedAt: null, lines: [] }
 ]
 const customers = [
-  { id: 'c-sn', name: 'Schnellecke', active: true, lines: [{ id: 'nord', name: 'Nord', active: true, sortIndex: 1 }] },
-  { id: 'c-walter', name: 'Walter (Tesla)', active: true, lines: [{ id: 'tesla', name: 'Tesla', active: true, sortIndex: 1 }] },
-  { id: 'c-dsv', name: 'DSV', active: true, lines: [{ id: 'dsv', name: 'DSV', active: true, sortIndex: 1 }] }
+  { id: 'c-sn', name: 'Schnellecke', active: true, lines: [{ id: 'nord', name: 'Nord', active: true, sortIndex: 1, vehicleCount: 0, dispatchers: [] }] },
+  { id: 'c-walter', name: 'Walter (Tesla)', active: true, lines: [{ id: 'tesla', name: 'Tesla', active: true, sortIndex: 1, vehicleCount: 0, dispatchers: [] }] },
+  { id: 'c-dsv', name: 'DSV', active: true, lines: [{ id: 'dsv', name: 'DSV', active: true, sortIndex: 1, vehicleCount: 0, dispatchers: [] }] }
 ]
 
 async function signedIn(page: Page, theme: 'light' | 'dark' = 'light') {
@@ -34,11 +34,11 @@ async function signedIn(page: Page, theme: 'light' | 'dark' = 'light') {
     return json(route, [])
   })
   await page.route('https://tile.openstreetmap.org/**', (route) => route.abort())
-  return Object.assign(resets, { lines })
+  return { resets, lines }
 }
 
 test('диспетчеры: линии метками, фильтры, сброс пароля под строкой', async ({ page }) => {
-  const resets = await signedIn(page)
+  const { resets, lines } = await signedIn(page)
   await page.goto('/dispatchers')
   await expect(page.getByRole('heading', { name: 'Диспетчеры' })).toBeVisible()
   // The form waits behind its button.
@@ -73,7 +73,7 @@ test('диспетчеры: линии метками, фильтры, сбро�
   await primary.uncheck()
   await page.getByRole('button', { name: 'Сохранить' }).click()
   await expect(page.getByRole('status')).toContainText('Линии Chef Admin сохранены')
-  expect(resets.lines).toEqual([{ lineIds: ['nord', 'tesla'], primaryLineId: null }])
+  expect(lines).toEqual([{ lineIds: ['nord', 'tesla'], primaryLineId: null }])
 
   const ben = page.getByRole('row', { name: /Ben Hoffmann/ })
   await ben.getByRole('button', { name: 'Сбросить пароль' }).click()
