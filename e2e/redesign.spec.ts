@@ -106,8 +106,9 @@ test('Auftrag на главной: кнопка рядом с «Адрес» и 
   await expect(map.getByText('Перетащите Auftrag сюда')).toBeVisible()
   await map.getByRole('button', { name: 'Auftrag', exact: true }).click()
   await expect(map.getByText('Добавить Auftrag')).toBeHidden()
-  // Dragging a file over the map shows where it goes.
+  // A file dragged over the map is accepted quietly: no frame and no banner over the map (owner, 18.11).
   const transfer = await page.evaluateHandle(() => { const data = new DataTransfer(); data.items.add(new File(['x'], 'auftrag.pdf', { type: 'application/pdf' })); return data })
   await page.locator('.dashboard-stage').dispatchEvent('dragover', { dataTransfer: transfer })
-  await expect(page.getByText('Отпустите файл: Auftrag откроется на проверку')).toBeVisible()
+  await expect(page.getByText(/Отпустите файл/)).toHaveCount(0)
+  expect(await page.locator('.dashboard-stage').evaluate((element) => getComputedStyle(element, '::after').borderStyle)).not.toBe('dashed')
 })
