@@ -30,7 +30,7 @@ type DockTab = 'search' | 'route' | 'order'
 export type AuftragDraftSummary = {
   orderNumber: string
   vehicleId: string
-  stops: Array<{ address: string; city: string; type: 'LOAD' | 'UNLOAD'; coords: { latitude: number; longitude: number } | null; appointmentAt: string | null }>
+  stops: Array<{ address: string; company: string; city: string; type: 'LOAD' | 'UNLOAD'; coords: { latitude: number; longitude: number } | null; appointmentAt: string | null }>
 }
 /** A file dropped on the map of the main screen goes here (owner, 18.11.2026: Auftrag на главной). */
 export const AUFTRAG_DROP_EVENT = 'ops:auftrag-drop'
@@ -182,7 +182,7 @@ export function QuickOrderPanel({
     draftChange.current?.(draft ? {
       orderNumber: orderNumber.trim(),
       vehicleId,
-      stops: stops.map((stop) => ({ address: [stop.company, stop.address].filter(Boolean).join(', ') || stop.city, city: stop.city, type: stop.type === 'LOAD' ? 'LOAD' : 'UNLOAD',
+      stops: stops.map((stop) => ({ address: [stop.company, stop.address].filter(Boolean).join(', ') || stop.city, company: stop.company, city: stop.city, type: stop.type === 'LOAD' ? 'LOAD' : 'UNLOAD',
         coords: stop.resolution ? { latitude: stop.resolution.latitude, longitude: stop.resolution.longitude } : null,
         appointmentAt: stop.appointmentLocal ? berlinLocalToIso(stop.appointmentLocal) ?? null : null }))
     } : null)

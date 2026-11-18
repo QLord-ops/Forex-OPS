@@ -25,7 +25,7 @@ import type { AlertNotification } from '../lib/alerts'
 import { getRoutePreview, setRoutePreview, subscribeRoutePreview } from '../lib/route-preview'
 import { etaText, routeProgress, type StopState } from '../lib/route-progress'
 import { currentStopOf, terminOf } from '../lib/tours'
-import { classNames, formatAppointment, formatDateTime, formatDurationMinutes, formatTime, shortAddress, statusLabel, stopTypeLabel } from '../lib/format'
+import { classNames, formatAppointment, formatDateTime, formatDurationMinutes, formatTime, placeName, shortAddress, statusLabel, stopTypeLabel } from '../lib/format'
 import type { Coordinate, CurrentPosition, DashboardVehicle, Stop } from '../types/domain'
 import { zuladungState } from '../lib/zuladung'
 import { customerColor } from '../lib/customers'
@@ -391,7 +391,7 @@ const DECISIONS_SHOWN = 2
 function auftragStops(draft: AuftragDraftSummary | null) {
   if (!draft) return undefined
   const stops = draft.stops.flatMap((stop, index) => stop.coords
-    ? [{ coordinate: [stop.coords.longitude, stop.coords.latitude] as Coordinate, label: String(index + 1), title: `${index + 1} · ${stop.type === 'LOAD' ? 'BELADEN' : 'ENTLADEN'} ${stop.city || stop.address}` }]
+    ? [{ coordinate: [stop.coords.longitude, stop.coords.latitude] as Coordinate, label: String(index + 1), title: `${index + 1} · ${stop.type === 'LOAD' ? 'BELADEN' : 'ENTLADEN'} ${placeName(stop) || stop.address}` }]
     : [])
   return stops.length ? stops : undefined
 }
@@ -417,7 +417,7 @@ function AuftragCheck({ draft, vehicles }: { draft: AuftragDraftSummary; vehicle
         stops: draft.stops.map((stop) => ({ address: stop.address, type: stop.type, ...(stop.coords ? { coords: stop.coords } : {}), appointmentAt: stop.appointmentAt })) })
       setResult({ key, scenario: next })
       if (next.geometry.length >= 2) setRoutePreview({ geometry: next.geometry, trafficSegments: next.trafficSegments, label: `Черновик Auftrag ${draft.orderNumber || ''} · LKW ${row.vehicle.vehicleNumber}`.replace('  ', ' '), key: `auftrag-${Date.now()}`,
-        stops: next.stops.map((stop, index) => ({ coordinate: [stop.coords.longitude, stop.coords.latitude] as Coordinate, label: String(index + 1), title: `${index + 1} · ${stop.type === 'LOAD' ? 'BELADEN' : 'ENTLADEN'} ${draft.stops[index]?.city || stop.address}` })) })
+        stops: next.stops.map((stop, index) => ({ coordinate: [stop.coords.longitude, stop.coords.latitude] as Coordinate, label: String(index + 1), title: `${index + 1} · ${stop.type === 'LOAD' ? 'BELADEN' : 'ENTLADEN'} ${(draft.stops[index] && placeName(draft.stops[index])) || stop.address}` })) })
       setState({ busy: false, error: '' })
     } catch (cause) { setState({ busy: false, error: cause instanceof Error ? cause.message : 'Маршрут не рассчитан.' }) }
   }
@@ -431,7 +431,7 @@ function AuftragCheck({ draft, vehicles }: { draft: AuftragDraftSummary; vehicle
           const termin = draft.stops[index]?.appointmentAt
           const eta = stop.latestArrival ?? stop.earliestArrival
           const margin = termin && eta ? Math.round((Date.parse(termin) - Date.parse(eta)) / 60_000) : null
-          return <li key={index}><b>{index + 1}</b><span>{draft.stops[index]?.city || stop.address}</span>
+          return <li key={index}><b>{index + 1}</b><span>{draft.stops[index] ? placeName(draft.stops[index]) || draft.stops[index].address : stop.address}</span>
             <span>{eta ? `ETA ${formatDateTime(eta)}` : 'ETA нет'}{margin !== null ? <em className={margin < 0 ? 'timing-late' : 'timing-ok'}>{margin < 0 ? ` · опоздание ${formatDurationMinutes(-margin)}` : ` · запас ${formatDurationMinutes(margin)}`}</em> : null}</span></li>
         })}
       </ul> : null}
@@ -481,7 +481,7 @@ function VehicleRow({ row, selected, open, pinned, owner, busy, unread, onOpen, 
           <span className="vehicle-row-title"><strong>{number}</strong>{unread ? <span className="vehicle-row-unread" aria-label={`открытых вопросов: ${unread}`}>{unread}</span> : null}{plate && plate !== row.vehicle.vehicleNumber ? <span className="vehicle-row-muted">{plate}</span> : null}</span>
           {clock ? <span className="vehicle-row-clock"><small>{clock.label}</small>{clock.value}</span> : null}
         </span>
-        <span className="vehicle-row-line"><span className={`status-dot status-dot-${status.tone}`} aria-hidden="true" /><span className={`vehicle-row-status status-text-${status.tone}`}>{status.label}</span>{place ? <span className="truncate">· {place}</span> : null}{km ? <span className="vehicle-row-km">· {km}</span> : null}</span>
+        <span className="vehicle-row-line"><span className={`status-dot status-dot-${status.tone}`} aria-hidden="true" /><span className={`vehicle-row-status status-text-${status.tone}`}>{status.label}</span>{place ? <span className="truncate" title={place}>· {place}</span> : null}</span>
         <span className="vehicle-row-meta">
           {margin !== null && row.eta && status.tone !== 'stop' ? <span className={classNames('vehicle-row-chip', margin < 0 ? 'vehicle-row-chip-late' : 'vehicle-row-chip-ok')}>{margin < 0 ? `опоздание ${formatDurationMinutes(-margin)}` : `запас ${formatDurationMinutes(margin)}`}</span> : null}
           {dwell ? <span className="vehicle-row-chip vehicle-row-chip-stop">на точке {formatDurationMinutes(dwell)}</span> : null}
@@ -489,7 +489,8 @@ function VehicleRow({ row, selected, open, pinned, owner, busy, unread, onOpen, 
           {!termin && plannedAt ? <span className="vehicle-row-chip">план {formatDateTime(plannedAt)}</span> : null}
           {row.customer ? <span className="vehicle-row-customer"><span className="customer-swatch" style={{ background: customerColor(row.customer) }} aria-hidden="true" />{row.customer.name}{row.line ? ` · ${row.line.name}` : ''}</span> : null}
         </span>
-        {speed || driving ? <span className="vehicle-row-info">{[speed, driving].filter(Boolean).join(' · ')}</span> : null}
+        {/* The way left sits here so the line above keeps room for firm and town (owner, 18.11). */}
+        {speed || driving || km ? <span className="vehicle-row-info">{[km, speed, driving].filter(Boolean).join(' · ')}</span> : null}
         {attention.rank <= 2 ? <span className="sr-only">{attention.label}: {attention.reason}</span> : null}
       </button>
       {/* Its own line across the card: next to the GPS chip the tachograph line had no room (09.11). */}
@@ -649,7 +650,7 @@ function VehiclePanel({ row, position, drawerOpen, onToggleDrawer, collapsed, on
         <span className="vehicle-panel-chips">
           <span className={`status-pill status-pill-${status.tone}`}><span className={`status-dot status-dot-${status.tone}`} aria-hidden="true" />{status.label}</span>
           {margin !== null && !arrived ? <span className={classNames('vehicle-row-chip', margin < 0 ? 'vehicle-row-chip-late' : 'vehicle-row-chip-ok')}>{margin < 0 ? `опоздание ${formatDurationMinutes(-margin)}` : `запас ${formatDurationMinutes(margin)}`}</span> : null}
-          {termin ? <span className="vehicle-row-termin">{termin.label}{terminStop?.city ? ` · ${terminStop.city}` : ''}</span> : <span className="vehicle-panel-muted">Termin нет</span>}
+          {termin ? <span className="vehicle-row-termin">{termin.label}{terminStop ? ` · ${shortAddress(terminStop)}` : ''}</span> : <span className="vehicle-panel-muted">Termin нет</span>}
         </span>
       </div>
       <div className="vehicle-panel-position">
@@ -665,7 +666,7 @@ function VehiclePanel({ row, position, drawerOpen, onToggleDrawer, collapsed, on
         <span className="vehicle-panel-route"><MapPin className="h-4 w-4" aria-hidden="true" />{nextText}</span>
         {nextStop?.company ? <span className="vehicle-panel-note"><span>{nextStop.company}</span></span> : null}
         {upcoming.length > 1 ? <ol className="vehicle-panel-stops" aria-label="Точки тура">
-          {upcoming.map((stop) => <li key={stop.id}><span className={`vehicle-panel-stop-dot vehicle-panel-stop-${stop.type === 'LOAD' ? 'load' : 'unload'}`} aria-hidden="true" /><b>{stop.type === 'LOAD' ? 'BELADEN' : 'ENTLADEN'}</b><span>{stop.city || shortAddress(stop)}</span><time>{stop.appointmentAt ? `Termin ${formatTime(stop.appointmentAt)}` : stop.predictedEta ? `ETA ${formatTime(stop.predictedEta)}` : ''}</time></li>)}
+          {upcoming.map((stop) => <li key={stop.id}><span className={`vehicle-panel-stop-dot vehicle-panel-stop-${stop.type === 'LOAD' ? 'load' : 'unload'}`} aria-hidden="true" /><b>{stop.type === 'LOAD' ? 'BELADEN' : 'ENTLADEN'}</b><span>{shortAddress(stop)}</span><time>{stop.appointmentAt ? `Termin ${formatTime(stop.appointmentAt)}` : stop.predictedEta ? `ETA ${formatTime(stop.predictedEta)}` : ''}</time></li>)}
         </ol> : null}
         <span className="vehicle-panel-note">
           {termin && row.eta ? <span>ETA {formatTime(row.eta)}</span> : null}
@@ -700,13 +701,13 @@ function mapLabel(row: DashboardVehicle): { headline: string | null; detail: str
   const source = positionSource(row)
   if (status.tone === 'stop') {
     const dwell = row.dwellMinutes ? Math.round(row.dwellMinutes) : null
-    return { headline: dwell ? `на точке ${formatDurationMinutes(dwell)}` : 'на точке', detail: [row.currentStop?.city || null, source.kind === 'stale' ? source.long : null].filter(Boolean).join(' · ') || null }
+    return { headline: dwell ? `на точке ${formatDurationMinutes(dwell)}` : 'на точке', detail: [row.currentStop ? shortAddress(row.currentStop) : null, source.kind === 'stale' ? source.long : null].filter(Boolean).join(' · ') || null }
   }
   if (!row.eta) return { headline: null, detail: source.kind === 'stale' ? source.long : null }
   const margin = terminMargin(row)
   const headline = `${formatTime(row.eta)}${margin !== null ? margin < 0 ? ` · опоздание ${formatDurationMinutes(-margin)}` : ` · запас ${formatDurationMinutes(margin)}` : ''}`
   const speed = row.telemetry?.source === 'WEBFLEET' && typeof row.telemetry.speedKmh === 'number' && status.tone === 'ok' ? `${Math.round(row.telemetry.speedKmh)} км/ч` : null
-  const way = typeof row.remainingKm === 'number' ? `до ${row.to?.city || shortAddress(row.to)} ${Math.round(row.remainingKm)} км` : null
+  const way = typeof row.remainingKm === 'number' ? `до ${shortAddress(row.to)} ${Math.round(row.remainingKm)} км` : null
   return { headline, detail: source.kind === 'stale' ? source.long : [speed, way].filter(Boolean).join(' · ') || null }
 }
 

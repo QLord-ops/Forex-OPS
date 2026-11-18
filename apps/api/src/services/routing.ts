@@ -40,16 +40,16 @@ export class RoutingService implements RoutingProvider {
 }
 
 const KNOWN_ADDRESSES: Record<string, GeocodeResult> = {
-  gottingen: { label: "Гёттинген, Германия", city: "Гёттинген", latitude: 51.5413, longitude: 9.9158, provider: "mock" },
-  "göttingen": { label: "Гёттинген, Германия", city: "Гёттинген", latitude: 51.5413, longitude: 9.9158, provider: "mock" },
-  zwickau: { label: "Цвиккау, Германия", city: "Цвиккау", latitude: 50.7189, longitude: 12.4961, provider: "mock" },
-  leipzig: { label: "Лейпциг, Германия", city: "Лейпциг", latitude: 51.3397, longitude: 12.3731, provider: "mock" },
-  hannover: { label: "Ганновер, Германия", city: "Ганновер", latitude: 52.3759, longitude: 9.732, provider: "mock" },
-  hamburg: { label: "Гамбург, Германия", city: "Гамбург", latitude: 53.5511, longitude: 9.9937, provider: "mock" },
-  kassel: { label: "Кассель, Германия", city: "Кассель", latitude: 51.3127, longitude: 9.4797, provider: "mock" },
-  erfurt: { label: "Эрфурт, Германия", city: "Эрфурт", latitude: 50.9848, longitude: 11.0299, provider: "mock" },
-  dortmund: { label: "Дортмунд, Германия", city: "Дортмунд", latitude: 51.5136, longitude: 7.4653, provider: "mock" },
-  bremen: { label: "Бремен, Германия", city: "Бремен", latitude: 53.0793, longitude: 8.8017, provider: "mock" }
+  gottingen: { label: "Göttingen, Deutschland", city: "Göttingen", latitude: 51.5413, longitude: 9.9158, provider: "mock" },
+  "göttingen": { label: "Göttingen, Deutschland", city: "Göttingen", latitude: 51.5413, longitude: 9.9158, provider: "mock" },
+  zwickau: { label: "Zwickau, Deutschland", city: "Zwickau", latitude: 50.7189, longitude: 12.4961, provider: "mock" },
+  leipzig: { label: "Leipzig, Deutschland", city: "Leipzig", latitude: 51.3397, longitude: 12.3731, provider: "mock" },
+  hannover: { label: "Hannover, Deutschland", city: "Hannover", latitude: 52.3759, longitude: 9.732, provider: "mock" },
+  hamburg: { label: "Hamburg, Deutschland", city: "Hamburg", latitude: 53.5511, longitude: 9.9937, provider: "mock" },
+  kassel: { label: "Kassel, Deutschland", city: "Kassel", latitude: 51.3127, longitude: 9.4797, provider: "mock" },
+  erfurt: { label: "Erfurt, Deutschland", city: "Erfurt", latitude: 50.9848, longitude: 11.0299, provider: "mock" },
+  dortmund: { label: "Dortmund, Deutschland", city: "Dortmund", latitude: 51.5136, longitude: 7.4653, provider: "mock" },
+  bremen: { label: "Bremen, Deutschland", city: "Bremen", latitude: 53.0793, longitude: 8.8017, provider: "mock" }
 };
 
 export class MockRoutingProvider implements RoutingProvider {

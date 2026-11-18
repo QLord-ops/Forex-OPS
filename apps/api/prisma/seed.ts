@@ -94,8 +94,8 @@ async function main() {
     vehicleId: v728.id,
     orderNumber: "DEMO-728-A",
     stops: [
-      { sequence: 1, type: "LOAD", address: "Hamburg", appointmentAt: hoursFromNow(-1) },
-      { sequence: 2, type: "UNLOAD", address: "Bremen", appointmentAt: hoursFromNow(1) }
+      { sequence: 1, type: "LOAD", company: "Demo Hafen Hamburg", address: "Hamburg", appointmentAt: hoursFromNow(-1) },
+      { sequence: 2, type: "UNLOAD", company: "Demo Werk Bremen", address: "Bremen", appointmentAt: hoursFromNow(1) }
     ]
   });
   await tourService.recordLoaded(tour728.stops[0].id, new Date(Date.now() - 70 * 60 * 1000), "Seed: beladen", undefined, { arriveWithEvent: true });
@@ -104,8 +104,8 @@ async function main() {
     vehicleId: v414.id,
     orderNumber: "DEMO-414-A",
     stops: [
-      { sequence: 1, type: "LOAD", address: "Kassel", appointmentAt: hoursFromNow(-4) },
-      { sequence: 2, type: "UNLOAD", address: "Erfurt", appointmentAt: hoursFromNow(-1.5) }
+      { sequence: 1, type: "LOAD", company: "Demo Lager Kassel", address: "Kassel", appointmentAt: hoursFromNow(-4) },
+      { sequence: 2, type: "UNLOAD", company: "Demo Kunde Erfurt", address: "Erfurt", appointmentAt: hoursFromNow(-1.5) }
     ]
   });
   await tourService.recordLoaded(tour414.stops[0].id, new Date(Date.now() - 4 * 60 * 60 * 1000), "Seed: beladen", undefined, { arriveWithEvent: true });

@@ -1,5 +1,5 @@
 import { getDwellMinutes, terminMargin, vehicleStatus } from './fleet-status'
-import { formatTime } from './format'
+import { formatTime, placeName } from './format'
 import { currentStopOf, terminOf } from './tours'
 import type { DashboardVehicle } from '../types/domain'
 
@@ -47,13 +47,9 @@ export function waitText(minutes: number) {
   return hours === 1 ? '1 Stunde' : `${hours.toLocaleString('de-DE')} Stunden`
 }
 
-/** «MB Düsseldorf», «Musterwerk Jena»: the plant as the customer calls it, without the legal form. */
+/** «MB Düsseldorf», «Musterwerk Jena»: the plant as the customer calls it, without the legal form or the postcode. */
 export function placeText(stop: { company?: string | null; city?: string | null; address?: string | null }) {
-  const company = (stop.company ?? '').replace(/\b(GmbH|AG|SE|KG|Co\.?|& Co\.?|mbH|Transportlogistik|Logistik)\b/gi, '').replace(/\s+/g, ' ').trim()
-  const short = company.length > 24 ? company.split(' ')[0] : company
-  const city = (stop.city ?? '').replace(/^\d{4,5}\s+/, '').trim()
-  if (!short) return city || stop.address || ''
-  return city && !short.toLowerCase().includes(city.toLowerCase()) ? `${short} ${city}` : short
+  return placeName(stop, false) || stop.address || ''
 }
 
 /**

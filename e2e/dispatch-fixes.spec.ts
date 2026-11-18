@@ -220,7 +220,7 @@ test('в карточке «Тур» у текущей точки есть ма�
   await expect(card.getByRole('tab', { name: 'Тур' })).toHaveAttribute('aria-selected', 'true')
   // Only the stop the truck is heading to gets the button; the later stops wait their turn.
   await expect(card.getByRole('button', { name: /^BELADEN/ })).toHaveCount(1)
-  await card.getByRole('button', { name: 'BELADEN Hannover' }).click()
+  await card.getByRole('button', { name: 'BELADEN Werk Hannover' }).click()
   await expect(card).toContainText('Прибытия по GPS нет')
   await card.getByRole('button', { name: 'Записать BELADEN' }).click()
   await expect.poll(() => loaded).toMatchObject({ manual: true })
