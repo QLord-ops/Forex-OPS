@@ -52,21 +52,20 @@ test('«Сообщить заказчику»: маленькое окно с о
   expect(box && box.width <= 360 && box.height < 360).toBe(true)
   await expect(popup.getByLabel('Кому')).toHaveValue('dispo@musterwerk.example')
   await expect(popup.getByLabel('Тема')).toHaveValue('187')
-  await expect(popup.getByLabel('Текст')).toHaveValue(/^Hi, der Fahrer hat Verspätung zum Termin um \d{1,2}(:\d{2}| Uhr) bei Musterwerk Jena, er wird gegen \d{2}:\d{2} Uhr da$/)
-  await popup.getByRole('button', { name: 'Ждёт на точке' }).click()
-  await expect(popup.getByLabel('Текст')).toHaveValue(/^Der Fahrer erwartet auf Entladung seit /)
-  await popup.getByRole('button', { name: 'Опоздание' }).click()
+  await expect(popup.getByLabel('Текст')).toHaveValue(/^Hallo, der Fahrer verspätet sich zum Termin um \d{1,2}(:\d{2})? Uhr bei Musterwerk Jena, er wird voraussichtlich gegen \d{2}:\d{2} Uhr da sein$/)
+  // The truck is on the road: a letter about waiting at the stop cannot be written about it.
+  await expect(popup.getByRole('button', { name: 'Ждёт на точке' })).toBeDisabled()
   await popup.getByRole('button', { name: 'Копировать' }).click()
   await expect(popup.getByRole('status')).toContainText('Отмечено: заказчик уведомлён')
   expect(recorded).toEqual([{ tourId: 't187', stopId: 's2', channel: 'COPY', etaAt: late.eta, delayMinutes: 40, recipients: 1 }])
-  expect(await page.evaluate(() => navigator.clipboard.readText())).toMatch(/^Hi, der Fahrer hat Verspätung zum Termin/)
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toMatch(/^Hallo, der Fahrer verspätet sich zum Termin/)
   await page.keyboard.press('Escape')
   await expect(popup).toBeHidden()
   // The truck waiting almost two hours at its stop gets the waiting line.
   await page.locator('.vehicle-card').filter({ hasText: 'LKW 231' }).locator('.vehicle-row-main').click()
   await page.getByRole('button', { name: 'Закрыть карточку' }).click()
   await page.locator('.vehicle-panel').getByRole('button', { name: 'Сообщить заказчику' }).click()
-  await expect(page.getByRole('dialog', { name: 'Сообщить заказчику · LKW 231' }).getByLabel('Текст')).toHaveValue('Der Fahrer erwartet auf Entladung seit 2 Stunden')
+  await expect(page.getByRole('dialog', { name: 'Сообщить заказчику · LKW 231' }).getByLabel('Текст')).toHaveValue(/^Hallo, der Fahrer wartet seit 2 Stunden auf die Entladung bei /)
 })
 
 test('сводка над картой: числа смены и фильтр «на точке» одним нажатием', async ({ page }) => {
@@ -111,4 +110,80 @@ test('Auftrag на главной: кнопка рядом с «Адрес» и 
   await page.locator('.dashboard-stage').dispatchEvent('dragover', { dataTransfer: transfer })
   await expect(page.getByText(/Отпустите файл/)).toHaveCount(0)
   expect(await page.locator('.dashboard-stage').evaluate((element) => getComputedStyle(element, '::after').borderStyle)).not.toBe('dashed')
+  // Dropped on the map the file is read once: the assistant's own window does not take the same drop (18.11: two readings).
+  let readings = 0
+  page.on('request', (request) => { if (request.method() === 'POST' && request.url().includes('/api/imports/')) readings += 1 })
+  await page.locator('.dashboard-stage').dispatchEvent('drop', { dataTransfer: transfer })
+  await expect.poll(() => readings).toBe(1)
+  await page.waitForTimeout(700)
+  expect(readings).toBe(1)
+})
+
+test('строка списка не шире карточки: время и кнопки на месте при длинной подписи «ведёт … за …»', async ({ page }) => {
+  await mainScreen(page)
+  await page.route('**/api/dashboard', (route) => json(route, { me: 'd1', vehicles: [
+    { ...late, mine: false, assignedTo: { id: 'd2', name: 'Maximilian Mustermann' }, cover: { id: 'c', absent: { id: 'd3', name: 'Alexandra Beispielfrau' }, by: { id: 'd2', name: 'Maximilian Mustermann' }, endsAt: soon(300) },
+      customer: { ...customer, name: 'Beispiel Logistik International' }, line: { id: 'l', code: 'L1', name: 'Linie Nordhessen 1' }, currentAction: { type: 'MARK_UNLOADED', label: 'ENTLADEN', stopId: 's2', manual: true, withoutGpsArrival: true } },
+    parked] }))
+  await page.setViewportSize({ width: 1280, height: 720 })
+  await page.goto('/?vehicleId=v231')
+  await page.getByRole('group', { name: 'Чьи машины показать' }).getByRole('button', { name: /Весь парк/ }).click()
+  const card = page.locator('.vehicle-card').filter({ hasText: 'LKW 187' })
+  await expect(card).toContainText('ведёт Maximilian Mustermann за Alexandra Beispielfrau')
+  expect(await card.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1)
+  const [box, clock, action] = await Promise.all([card.boundingBox(), card.locator('.vehicle-row-clock').boundingBox(), card.getByRole('button', { name: 'ENTLADEN' }).boundingBox()])
+  expect(box && clock && clock.x + clock.width <= box.x + box.width).toBe(true)
+  expect(box && action && action.x + action.width <= box.x + box.width).toBe(true)
+})
+
+test('ноутбук с открытой карточкой: вопросы свёрнуты в заголовок и не закрывают карту; уже 1200 px карточка встаёт на место списка', async ({ page }) => {
+  await mainScreen(page, [question('n1', 'v187', 5), question('n2', 'v231', 10), question('n3', 'v187', 15)])
+  await page.setViewportSize({ width: 1280, height: 720 })
+  await page.goto('/?vehicleId=v187&card=v187')
+  const stack = page.getByRole('region', { name: 'Требует решения' })
+  const card = page.locator('.truck-card')
+  await expect(card).toBeVisible()
+  await expect(stack.getByRole('article')).toHaveCount(0)
+  const [cardBox, stackBox] = await Promise.all([card.boundingBox(), stack.boundingBox()])
+  // At least 200 px of map between the card and the folded questions (they used to lie over each other).
+  expect({ gap: Math.round((stackBox?.x ?? 0) - ((cardBox?.x ?? 0) + (cardBox?.width ?? 0))) >= 200, folded: (stackBox?.height ?? 999) < 60 }).toEqual({ gap: true, folded: true })
+  await stack.getByRole('button', { name: 'Показать' }).click()
+  await expect(stack.locator('.decision-card:not(.decision-card-nested)')).toHaveCount(3)
+  await stack.getByRole('button', { name: 'Свернуть' }).click()
+  await expect(stack.getByRole('article')).toHaveCount(0)
+  await page.setViewportSize({ width: 1024, height: 768 })
+  await expect(page.locator('.fleet-rail')).toBeHidden()
+  const narrow = await card.boundingBox()
+  expect(narrow && narrow.x < 120 && 1024 - (narrow.x + narrow.width) >= 500).toBe(true)
+  await page.getByRole('button', { name: 'Закрыть карточку' }).click()
+  await expect(page.locator('.fleet-rail')).toBeVisible()
+})
+
+test('точки тура в нижней панели: Termin и ETA у каждой, у следующих — «≈»', async ({ page }) => {
+  await mainScreen(page)
+  const stops = [stop('s1', { sequence: 1, type: 'LOAD', city: 'Bovenden', completedAt: soon(-200), arrivedAt: soon(-240) }),
+    stop('s2', { predictedEta: soon(70), etaEarliest: soon(70), etaLatest: soon(70), etaBasis: 'ETA' }),
+    stop('s4', { sequence: 3, type: 'LOAD', city: 'Jena', appointmentAt: null, terminSharedWithStopId: 's2', predictedEta: soon(160), etaEarliest: soon(130), etaLatest: soon(190), etaBasis: 'ETA' })]
+  await page.route('**/api/dashboard', (route) => json(route, { me: 'd1', vehicles: [{ ...late, tour: { ...late.tour, stops } }, parked] }))
+  await page.setViewportSize({ width: 1920, height: 1080 })
+  await page.goto('/?vehicleId=v187')
+  const list = page.getByRole('list', { name: 'Точки тура' })
+  await expect(list.getByRole('listitem').nth(1)).toContainText(/Termin \d{2}:\d{2}ETA \d{2}:\d{2}/)
+  await expect(list.getByRole('listitem').nth(2)).toContainText(/Termin точки 2ETA ≈ \d{2}:\d{2}/)
+  await page.getByRole('button', { name: /Точки маршрута/ }).click()
+  const track = page.getByRole('list', { name: 'Этапы маршрута' })
+  await expect(track).toContainText('общий Termin с точкой 2')
+  await expect(track).not.toContainText('Без срока')
+  await expect(track).toContainText(/ETA ≈ /)
+})
+
+test('телефон: сводка смены отдельной полосой, кнопки карты под ней', async ({ page }) => {
+  await mainScreen(page)
+  await page.setViewportSize({ width: 393, height: 851 })
+  await page.goto('/?vehicleId=v187&view=map')
+  const summary = await page.getByRole('group', { name: 'Смена: сводка' }).boundingBox()
+  const locate = await page.locator('.map-zoom').boundingBox()
+  const layers = await page.locator('.map-layers').boundingBox()
+  expect(summary && summary.x >= 0 && summary.x + summary.width <= 393).toBe(true)
+  expect(summary && locate && layers && locate.y >= summary.y + summary.height && layers.y >= summary.y + summary.height).toBe(true)
 })

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { draftNotice, noticeDue, noticeKind, noticeLine, placeText, waitText } from '../src/lib/customer-notice'
+import { draftNotice, noticeDue, noticeKind, noticeLine, placeText, waitsAtStop, waitText } from '../src/lib/customer-notice'
 import type { DashboardVehicle, Stop } from '../src/types/domain'
 
 const stop = (id: string, extra: Partial<Stop> = {}): Stop => ({ id, tourId: 't1', sequence: 2, type: 'UNLOAD', company: 'MB', address: 'Werkstraße 1, 40001 Düsseldorf', city: 'Düsseldorf',
@@ -30,13 +30,27 @@ describe('«Сообщить заказчику» (owner, 18.11.2026)', () => {
     expect(noticeDue(waiting(30))).toBe(false)
   })
 
+  const noon = Date.parse('2026-11-18T10:00:00.000Z')
   it('writes one line as the dispatchers do, the truck number as the subject, no signature (Outlook adds it)', () => {
-    expect(draftNotice(row(), 'LATE')).toEqual({ subject: '131', body: 'Hi, der Fahrer hat Verspätung zum Termin um 12 Uhr bei MB Düsseldorf, er wird gegen 14:20 Uhr da' })
-    expect(draftNotice(row(), 'LATE', true).body).toBe('Hi, der Fahrer hat Verspätung zum Termin um 12 Uhr bei MB Düsseldorf, er wird gegen 14:20 Uhr da, er steht im Stau')
-    expect(draftNotice(row({ delayMinutes: 0, eta: '2026-11-18T10:50:00.000Z' }, { appointmentAt: '2026-11-18T10:55:00.000Z' }), 'LATE').body)
-      .toBe('Hi, der Fahrer schafft den Termin um 11:55 bei MB Düsseldorf knapp, er wird gegen 11:50 Uhr da')
-    expect(draftNotice(waiting(65), 'WAITING').body).toBe('Der Fahrer erwartet auf Entladung seit 1 Stunde')
-    expect(draftNotice(waiting(150, 'LOAD'), 'WAITING').body).toBe('Der Fahrer erwartet auf Beladung seit 2,5 Stunden')
+    expect(draftNotice(row(), 'LATE', false, noon)).toEqual({ subject: '131', body: 'Hallo, der Fahrer verspätet sich zum Termin um 12 Uhr bei MB Düsseldorf, er wird voraussichtlich gegen 14:20 Uhr da sein' })
+    expect(draftNotice(row(), 'LATE', true, noon).body).toBe('Hallo, der Fahrer verspätet sich zum Termin um 12 Uhr bei MB Düsseldorf, er steht im Stau und wird voraussichtlich gegen 14:20 Uhr da sein')
+    expect(draftNotice(row({ delayMinutes: 0, eta: '2026-11-18T10:50:00.000Z' }, { appointmentAt: '2026-11-18T10:55:00.000Z' }), 'LATE', false, noon).body)
+      .toBe('Hallo, der Fahrer schafft den Termin um 11:55 Uhr bei MB Düsseldorf nur knapp, er wird voraussichtlich gegen 11:50 Uhr da sein')
+  })
+
+  it('is whole German sentences: the wait as it was measured, the day with a time that is not today (owner, 18.11)', () => {
+    expect(draftNotice(waiting(65), 'WAITING').body).toBe('Hallo, der Fahrer wartet seit 1 Stunde auf die Entladung bei MB Düsseldorf')
+    expect(draftNotice(waiting(150, 'LOAD'), 'WAITING').body).toBe('Hallo, der Fahrer wartet seit 2,5 Stunden auf die Beladung bei MB Düsseldorf')
+    // A truck on the road has no wait: the letter never invents «seit 1 Stunde».
+    expect(waitsAtStop(row())).toBe(false)
+    expect(waitsAtStop(waiting(5))).toBe(true)
+    expect(draftNotice(row(), 'WAITING', false, noon).body).toBe('Hallo, der Fahrer wartet auf die Entladung bei MB Düsseldorf')
+    // Termin 18:15 today, the truck comes after midnight: «morgen», and a later day by its date.
+    const night = row({ eta: '2026-11-18T23:30:00.000Z', delayMinutes: 375 }, { appointmentAt: '2026-11-18T17:15:00.000Z' })
+    expect(draftNotice(night, 'LATE', false, noon).body).toBe('Hallo, der Fahrer verspätet sich zum Termin um 18:15 Uhr bei MB Düsseldorf, er wird voraussichtlich morgen gegen 00:30 Uhr da sein')
+    const later = row({ eta: '2026-11-20T07:05:00.000Z', delayMinutes: 65 }, { appointmentAt: '2026-11-20T06:00:00.000Z' })
+    expect(draftNotice(later, 'LATE', false, noon).body).toBe('Hallo, der Fahrer verspätet sich zum Termin am 20.11. um 7 Uhr bei MB Düsseldorf, er wird voraussichtlich am 20.11. gegen 08:05 Uhr da sein')
+    for (const body of [draftNotice(row(), 'LATE', true, noon).body, draftNotice(waiting(65), 'WAITING').body]) expect(body).not.toMatch(/[а-яё]|\bHi\b|erwartet auf/i)
   })
 
   it('names the plant without its legal form and the wait in German', () => {

@@ -92,3 +92,24 @@ test('выгрузка и Leergut на одном заводе — один об
   await review.getByRole('button', { name: 'Применить' }).click()
   await expect.poll(() => calls.apply).toMatchObject({ stopId: 'stop-l', scope: 'STOP', version: 4, fingerprint: document.fingerprint })
 })
+
+test('расчёт Termin на странице машины: после ошибки не повторяется сам, новое время — одна новая попытка', async ({ page }) => {
+  // 18.11: a failed calculation was asked again at once, 30 requests in 9 s, each building a route.
+  await setup(page, null)
+  const stop = { id: 'stop-m', tourId: 'tour-m', sequence: 1, type: 'UNLOAD', company: 'Beispielwerk', address: 'Werkstraße 1, 80995 München', city: 'München', latitude: 48.2, longitude: 11.5,
+    serviceMinMinutes: 60, serviceMaxMinutes: 120, arrivedAt: null, completedAt: null, appointmentAt: '2026-11-04T10:00:00.000Z' }
+  const tour = { id: 'tour-m', vehicleId: vehicle.id, orderNumber: 'A-900', status: 'ACTIVE', planVersion: 4, stops: [stop], legs: [], events: [] }
+  let previews = 0
+  await page.route('**/api/vehicles/veh-900/tours', (route) => json(route, [tour]))
+  await page.route('**/api/vehicles/veh-900/timeline', (route) => json(route, []))
+  await page.route('**/api/vehicles/veh-900/current-position*', (route) => json(route, { status: 'WAITING' }))
+  await page.route('**/api/stops/stop-m/appointment/preview', (route) => { previews += 1; return json(route, { error: 'Маршрут до точки не построен.' }, 422) })
+  await page.goto('/vehicles/veh-900')
+  await expect(page.getByText('Маршрут до точки не построен.')).toBeVisible()
+  await page.waitForTimeout(1500)
+  expect(previews).toBe(1)
+  await page.getByLabel('Новый термин').fill('2026-11-04T12:30')
+  await expect.poll(() => previews).toBe(2)
+  await page.waitForTimeout(1000)
+  expect(previews).toBe(2)
+})

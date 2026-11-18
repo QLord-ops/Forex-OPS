@@ -11,6 +11,7 @@ import { RouteEditor } from './RouteEditor'
 import { api, documentFileUrl } from '../lib/api'
 import { classNames, formatDateTime, formatDelay, shortAddress, statusLabel, stopTypeLabel } from '../lib/format'
 import { currentStopOf, followingTours, sharedTerminOf, sortedStops, terminOf, tourCancellable } from '../lib/tours'
+import { stopEta } from '../lib/stop-times'
 import { ZULADUNG_NOTE, zuladungBeforeStopId, zuladungState } from '../lib/zuladung'
 import { berlinClock, courseText, durationBetween, formatDurationMs, formatFuel, formatWholeKm, share, tripsWithParking, workState } from '../lib/telemetry-format'
 import type { CardFeedStatus, Coordinate, DashboardVehicle, DrivingTimes, Stop, Tour, VehicleCardData } from '../types/domain'
@@ -380,7 +381,9 @@ function DocumentLink({ tour }: { tour: Tour }) {
 }
 
 function CurrentTour({ tour, row, busy, onRemove }: { tour: Tour; row: DashboardVehicle; busy: boolean; onRemove: () => void }) {
-  const stops = sortedStops(tour)
+  // The forecast of each stop comes with the main screen's row; the tour chain itself carries none.
+  const forecast = new Map((row.tour?.id === tour.id ? row.tour.stops ?? [] : []).map((stop) => [stop.id, stop]))
+  const stops = sortedStops(tour).map((stop) => { const known = forecast.get(stop.id); return known ? { ...stop, predictedEta: known.predictedEta, etaEarliest: known.etaEarliest, etaLatest: known.etaLatest, etaBasis: known.etaBasis } : stop })
   const target = currentStopOf(tour)
   const [marking, setMarking] = useState<{ stopId: string; time: string; busy: boolean; error: string } | null>(null)
   // BELADEN/ENTLADEN from the card, also when GPS never saw the truck at the stop: marked «вручную» on the server.
@@ -453,10 +456,11 @@ function stopState(stop: Stop, stops: Stop[]) {
   const done = stop.type === 'LOAD' ? 'BELADEN' : 'ENTLADEN'
   if (stop.completedAt) return `${done} ${formatDateTime(stop.completedAt)}`
   if (stop.arrivedAt) return `прибыл ${formatDateTime(stop.arrivedAt)} · ждёт ${done}`
-  if (stop.appointmentAt) return `впереди · срок ${formatDateTime(stop.appointmentAt)}`
-  if (stop.appointmentWindowStartAt) return `впереди · окно ${formatDateTime(stop.appointmentWindowStartAt)}–${formatDateTime(stop.appointmentWindowEndAt)}`
+  const eta = stop.predictedEta ? ` · ${stopEta(stop, stops).text}` : ''
+  if (stop.appointmentAt) return `впереди · срок ${formatDateTime(stop.appointmentAt)}${eta}`
+  if (stop.appointmentWindowStartAt) return `впереди · окно ${formatDateTime(stop.appointmentWindowStartAt)}–${formatDateTime(stop.appointmentWindowEndAt)}${eta}`
   const shared = sharedTerminOf(stops, stop)
-  return shared ? `впереди · ${shared.label}` : 'впереди · без срока'
+  return `${shared ? `впереди · ${shared.label}` : 'впереди · без срока'}${eta}`
 }
 
 function RemoveButton({ busy, orderNumber, onClick }: { busy: boolean; orderNumber: string; onClick: () => void }) {

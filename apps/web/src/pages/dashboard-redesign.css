@@ -4,7 +4,7 @@
 
 /* ---- Truck cards (list on every screen size) ---- */
 .fleet-list { gap: 8px; }
-.vehicle-card { display: grid; gap: 6px; border: 1px solid transparent; border-radius: var(--r-item); background: var(--s-card); padding: 10px 12px 8px 16px; box-shadow: var(--shadow-card); }
+.vehicle-card { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; border: 1px solid transparent; border-radius: var(--r-item); background: var(--s-card); padding: 10px 12px 8px 16px; box-shadow: var(--shadow-card); }
 .vehicle-card::before { top: 0; bottom: 0; left: 0; border-radius: var(--r-item) 0 0 var(--r-item); }
 .vehicle-card:hover { border-color: var(--b-default); }
 .vehicle-card-selected { border-color: var(--acc); background: var(--s-card-selected); }
@@ -14,7 +14,10 @@
 .vehicle-card-status-stop:not(.vehicle-card-critical, .vehicle-card-dwell, .vehicle-card-action, .vehicle-card-termin, .vehicle-card-selected)::before { background: var(--st-stop); }
 .vehicle-card-status-late:not(.vehicle-card-selected)::before { background: var(--st-late); }
 .vehicle-card-status-plan:not(.vehicle-card-critical, .vehicle-card-dwell, .vehicle-card-action, .vehicle-card-termin, .vehicle-card-selected)::before { background: var(--st-plan); }
-.vehicle-row-main { display: grid; width: 100%; min-width: 0; gap: 4px; }
+.vehicle-row-main { display: grid; width: 100%; min-width: 0; grid-template-columns: minmax(0, 1fr); gap: 4px; }
+/* The card is one column as wide as the list: a long name is cut with «…», the ETA and the buttons never leave the card. */
+.vehicle-row-line > .truncate { min-width: 0; }
+.vehicle-row-meta > * { max-width: 100%; }
 /* A long number (B-WY9724 in a wide font) keeps its whole width: the time moves to its own line instead. */
 .vehicle-row-head { display: flex; min-width: 0; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0 8px; }
 .vehicle-row-title { min-width: min-content; flex: 1 1 auto; }
@@ -34,9 +37,10 @@
 .vehicle-row-meta .vehicle-row-customer { display: inline-flex; min-width: 0; align-items: center; gap: 5px; overflow: hidden; color: var(--t-muted); font-size: .75rem; text-overflow: ellipsis; white-space: nowrap; }
 .vehicle-row-info { color: var(--t-muted); font-size: .75rem; font-variant-numeric: tabular-nums; }
 .vehicle-card-activity { margin: 0; }
-.vehicle-card-side { flex-direction: row; align-items: center; justify-content: space-between; gap: 8px; border-top: 1px solid var(--b-default); padding-top: 6px; }
-.vehicle-card-tags { display: flex; min-width: 0; align-items: center; gap: 8px; }
-.vehicle-card-tags .vehicle-row-owner { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vehicle-card-side { min-width: 0; flex-direction: row; align-items: center; justify-content: space-between; gap: 8px; border-top: 1px solid var(--b-default); padding-top: 6px; }
+.vehicle-card-tags { display: flex; min-width: 0; flex: 1 1 auto; align-items: center; gap: 8px; }
+.vehicle-card-tags .source-tag, .vehicle-card-actions { flex: none; }
+.vehicle-row-meta .vehicle-row-owner { min-width: 0; margin: 0; overflow: hidden; color: var(--t-muted); font-size: .75rem; text-overflow: ellipsis; white-space: nowrap; }
 .vehicle-card-actions .icon-button { width: 30px; height: 30px; }
 .vehicle-card-actions .vehicle-action-button { height: 30px; }
 
@@ -117,7 +121,7 @@ button.fleet-summary-item:focus-visible { outline: 2px solid var(--focus); outli
 .vehicle-panel { border-color: var(--b-default); border-radius: var(--r-panel); background: var(--s-card); box-shadow: var(--shadow-float); }
 .vehicle-panel > #vehicle-panel-body { border-radius: var(--r-panel); }
 .vehicle-panel-handle { border-color: var(--b-default); background: var(--s-card); }
-.vehicle-panel-bar { grid-template-columns: minmax(120px, 170px) minmax(140px, 1fr) minmax(180px, 1.25fr) minmax(140px, 200px) minmax(150px, 190px); align-items: start; gap: 0; padding: 12px 4px 12px 16px; }
+.vehicle-panel-bar { grid-template-columns: minmax(120px, 150px) minmax(150px, 1fr) minmax(250px, 1.5fr) minmax(120px, 160px) minmax(170px, 200px); align-items: start; gap: 0; padding: 12px 4px 12px 16px; }
 .vehicle-panel-bar > * { min-width: 0; }
 .vehicle-panel-bar > .vehicle-panel-position, .vehicle-panel-bar > .vehicle-panel-next, .vehicle-panel-bar > .vehicle-panel-hours { border-left: 1px solid var(--b-default); padding: 0 12px; }
 .vehicle-panel-bar > .vehicle-panel-id { padding-right: 14px; }
@@ -126,7 +130,7 @@ button.fleet-summary-item:focus-visible { outline: 2px solid var(--focus); outli
 .vehicle-panel-bar > .vehicle-panel-next { grid-column: 3; grid-row: 1; }
 .vehicle-panel-bar > .vehicle-panel-hours { grid-column: 4; grid-row: 1; }
 .vehicle-panel-actions { display: grid; grid-column: 5; grid-row: 1; align-self: stretch; align-content: center; justify-self: stretch; gap: 6px; padding-right: 12px; }
-.vehicle-panel-actions .primary-button, .vehicle-panel-actions .secondary-button { min-height: 36px; justify-content: center; padding: 0 12px; font-size: .875rem; }
+.vehicle-panel-actions .primary-button, .vehicle-panel-actions .secondary-button { min-width: 0; min-height: 36px; justify-content: center; padding: 0 8px; font-size: .875rem; }
 .vehicle-panel-id { display: grid; gap: 3px; }
 .vehicle-panel-kicker { color: var(--t-muted); font-size: .6875rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .vehicle-panel-kicker strong { color: var(--t-muted); font-size: .6875rem; font-weight: 600; }
@@ -145,6 +149,8 @@ button.fleet-summary-item:focus-visible { outline: 2px solid var(--focus); outli
 .vehicle-panel-source-live { color: var(--st-go); }
 .vehicle-panel-source-stale { color: var(--st-stop); }
 .vehicle-panel-position .rest-at-stop { font-size: .6875rem; }
+/* The position column is narrow on a laptop: its lines wrap to a second line instead of losing their end. */
+.vehicle-panel-position .vehicle-panel-route, .vehicle-panel-position .vehicle-panel-line, .vehicle-panel-position .vehicle-panel-source { display: -webkit-box; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .vehicle-panel-link { display: inline-flex; width: max-content; align-items: center; gap: 4px; margin-top: 2px; border-radius: 6px; padding: 1px 4px 1px 0; color: var(--acc); font-size: .75rem; font-weight: 600; }
 .vehicle-panel-link:hover { text-decoration: underline; }
 .vehicle-panel-link:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
@@ -155,11 +161,21 @@ button.fleet-summary-item:focus-visible { outline: 2px solid var(--focus); outli
 .vehicle-panel-stage-chevron { color: var(--t-muted); transition: transform 150ms ease; }
 .vehicle-panel-next .vehicle-panel-stage .route-stage-bar { grid-column: 1 / -1; height: 3px; }
 .vehicle-panel-stops { display: grid; gap: 1px; margin: 2px 0 0; padding: 0; list-style: none; font-size: .75rem; }
-.vehicle-panel-stops li { display: grid; min-width: 0; grid-template-columns: 8px auto minmax(0, 1fr) auto; align-items: center; gap: 6px; }
+.vehicle-panel-stops li { display: grid; min-width: 0; grid-template-columns: 8px auto minmax(0, 1fr) auto; align-items: center; gap: 0 6px; }
 .vehicle-panel-stops b { font-weight: 600; }
-.vehicle-panel-stops span:not(.vehicle-panel-stop-dot) { overflow: hidden; color: var(--t-muted); text-overflow: ellipsis; white-space: nowrap; }
-.vehicle-panel-stops time { color: var(--t-primary); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.vehicle-panel-stop-name { overflow: hidden; color: var(--t-muted); text-overflow: ellipsis; white-space: nowrap; }
+/* Termin and ETA of the stop side by side; in a narrow column they go under the name. */
+.vehicle-panel-stop-times { display: inline-flex; min-width: 0; gap: 8px; color: var(--t-primary); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .vehicle-panel-stops .vehicle-panel-stop-termin { color: var(--st-termin); font-weight: 600; }
+.vehicle-panel-stops .timing-late { color: var(--st-late); }
+.vehicle-panel-next { container: stops / inline-size; }
+@container stops (max-width: 380px) {
+  .vehicle-panel-stops { gap: 3px; }
+  .vehicle-panel-stops li { grid-template-columns: 8px auto minmax(0, 1fr); }
+  .vehicle-panel-stop-times { grid-column: 2 / -1; overflow: hidden; }
+  /* Two lines a stop: the one already done gives its place to the stops ahead. */
+  .vehicle-panel-stops .vehicle-panel-stop-done { display: none; }
+}
 .vehicle-panel-stop-done b, .vehicle-panel-stop-done time { color: var(--t-muted); font-weight: 500; }
 .vehicle-panel-stop-next b { color: var(--t-primary); }
 .vehicle-panel-stop-dot { width: 8px; height: 8px; border-radius: 50%; }
@@ -178,13 +194,13 @@ button.fleet-summary-item:focus-visible { outline: 2px solid var(--focus); outli
 .vehicle-panel-hours .vehicle-panel-hours-source { margin: 0; overflow: hidden; color: var(--t-muted); font-size: .625rem; text-overflow: ellipsis; white-space: nowrap; }
 .vehicle-panel-popover { position: relative; padding: 0 20px 12px; }
 .vehicle-panel-popover .vehicle-action-popover { position: static; width: auto; max-width: 420px; margin-left: auto; }
-/* Narrower (the truck card open, a laptop): position and driver hours go under the three main columns. */
-@container panel (max-width: 880px) {
-  .vehicle-panel-bar { grid-template-columns: minmax(120px, 170px) minmax(0, 1fr) minmax(160px, 190px); row-gap: 10px; }
-  .vehicle-panel-bar > .vehicle-panel-next { grid-column: 2; grid-row: 1; }
-  .vehicle-panel-actions { grid-column: 3; grid-row: 1 / span 2; }
-  .vehicle-panel-bar > .vehicle-panel-position { grid-column: 1 / 2; grid-row: 2; border-left: 0; border-top: 1px solid var(--b-default); padding: 8px 14px 0 0; }
-  .vehicle-panel-bar > .vehicle-panel-hours { grid-column: 2; grid-row: 2; border-top: 1px solid var(--b-default); padding-top: 8px; }
+/* Narrower (the truck card open, a laptop): the tour keeps the first row, position and driver hours share the second. */
+@container panel (max-width: 960px) {
+  .vehicle-panel-bar { grid-template-columns: minmax(120px, 150px) minmax(0, 1fr) minmax(0, 1fr) minmax(170px, 200px); row-gap: 10px; }
+  .vehicle-panel-bar > .vehicle-panel-next { grid-column: 2 / 4; grid-row: 1; }
+  .vehicle-panel-actions { grid-column: 4; grid-row: 1 / span 2; }
+  .vehicle-panel-bar > .vehicle-panel-position { grid-column: 1 / 3; grid-row: 2; border-left: 0; border-top: 1px solid var(--b-default); padding: 8px 14px 0 0; }
+  .vehicle-panel-bar > .vehicle-panel-hours { grid-column: 3; grid-row: 2; border-top: 1px solid var(--b-default); padding-top: 8px; }
 }
 @container panel (max-width: 620px) {
   .vehicle-panel-bar { grid-template-columns: minmax(0, 1fr); padding: 12px; }
@@ -233,6 +249,8 @@ button.fleet-summary-item:focus-visible { outline: 2px solid var(--focus); outli
 /* The questions end above the selected-truck panel, which is taller on a narrower screen. */
 @media (min-width: 768px) and (max-width: 1440px) { .dashboard-stage { --panel-space: 312px; } }
 .dashboard-stage:has(.vehicle-panel-collapsed) { --panel-space: 96px; }
+/* With all the stops opened above the panel the questions end above them too. */
+.dashboard-stage:has(.vehicle-panel-open) { --panel-space: 580px; }
 
 /* ---- Auftrag on the main screen ---- */
 .auftrag-check { position: absolute; z-index: 7; bottom: 16px; left: var(--stage-left, 16px); display: grid; width: min(380px, calc(100% - 32px)); gap: 6px; border: 1px solid var(--s-glass-border); border-radius: var(--r-panel); background: var(--s-glass); padding: 14px 16px; box-shadow: var(--shadow-float); backdrop-filter: blur(12px); }
@@ -253,4 +271,42 @@ button.fleet-summary-item:focus-visible { outline: 2px solid var(--focus); outli
   .dashboard-stage:has(.dispatcher-review) .map-action-dock .map-action-body { display: none; }
   /* The selected truck steps aside while an Auftrag is checked; «Если взять LKW …» takes the foot of the map. */
   .dashboard-stage:has(.dispatcher-review) .vehicle-panel { display: none; }
+}
+
+/* ---- Laptop (768–1500 px): the map stays in view next to the floating panels (owner, 18.11) ---- */
+.decision-stack-show { display: none; }
+@media (min-width: 768px) and (max-width: 1280px) {
+  .decision-stack-panel { width: min(320px, calc(100% - 32px)); }
+}
+@media (min-width: 768px) and (max-width: 1500px) {
+  /* With the truck card open the questions fold to their heading: the selected truck is not under them. */
+  .dashboard-stage:has(.truck-card) .decision-stack-panel:not(.decision-stack-panel-open) { width: auto; padding: 8px 8px 8px 12px; }
+  .dashboard-stage:has(.truck-card) .decision-stack-panel:not(.decision-stack-panel-open) > :not(.decision-stack-head) { display: none; }
+  .dashboard-stage:has(.truck-card) .decision-stack-panel:not(.decision-stack-panel-open) .decision-stack-show { display: inline-flex; }
+  .dashboard-stage:has(.truck-card) .decision-stack-panel-open { z-index: 12; }
+}
+@media (min-width: 768px) and (max-width: 1199px) {
+  /* No room for the list, the card and the map side by side: the card takes the place of the list until it is closed. */
+  .dashboard-screen:has(.truck-card) { --stage-left: var(--list-left); }
+  .dashboard-screen:has(.truck-card) .fleet-rail, .dashboard-stage:has(.truck-card) .map-legend { display: none; }
+}
+@media (min-width: 768px) and (max-height: 820px) {
+  /* A low screen: filters in one row that scrolls sideways, so the trucks keep the height. */
+  .fleet-rail .fleet-controls .fleet-chips, .fleet-rail .fleet-controls .fleet-customers { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
+  .fleet-rail .fleet-controls .fleet-chips::-webkit-scrollbar, .fleet-rail .fleet-controls .fleet-customers::-webkit-scrollbar { display: none; }
+  .fleet-controls .fleet-scope { flex-wrap: nowrap; }
+  .fleet-controls .fleet-scope-button { min-width: 0; padding: 0 4px; }
+}
+
+/* ---- Phone: the shift summary is a strip of its own above the map buttons ---- */
+@media (max-width: 767px) {
+  .dashboard-stage .fleet-summary { top: 8px; right: 8px; left: 8px; overflow-x: auto; border-radius: 14px; scrollbar-width: none; }
+  .dashboard-stage .fleet-summary::-webkit-scrollbar { display: none; }
+  .fleet-summary-item { min-width: 0; flex: 1 0 auto; padding: 3px 7px; }
+  .fleet-summary-item span { font-size: .6875rem; }
+  /* The longest wait is on the trucks' own cards; five figures fit the width. */
+  .fleet-summary > :nth-child(6) { display: none; }
+  .dashboard-stage .map-zoom, .dashboard-stage .map-layers { top: 68px; }
+  .dashboard-stage .map-action-dock { top: 120px; }
+  .dashboard-stage .map-traffic-legend { top: 120px; }
 }

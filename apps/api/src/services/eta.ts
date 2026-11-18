@@ -19,17 +19,55 @@ export type ScheduleStop = {
   riskColor: RiskColor; tourStatus: TourStatus; preliminary: boolean;
 };
 
+/** The arrival at one stop is already known from elsewhere (the ETA measured from GPS): the stops after it are planned from it. */
+export type ScheduleAnchor = { stopId: string; arrival: Date };
+
+/**
+ * What the main screen says about an open stop: one time in the middle of the earliest and the latest arrival, because
+ * loading and unloading before it take one to two hours each (owner, 18.11). PLAN: the tour has not begun and nothing says
+ * where the truck is, so the times assume it reaches the first stop at its Termin.
+ */
+export type StopEta = { eta: string | null; earliest: string | null; latest: string | null; basis: "ETA" | "PLAN" };
+
 export class EtaService {
   /** The next stops of one truck in order; with the driver's tachograph the drives are planned on the real hours. */
-  calculateVehicleSchedule(tours: TourWithStopsAndLegs[], now = new Date(), driver: DriverEtaInput | null = null): ScheduleStop[] {
+  calculateVehicleSchedule(tours: TourWithStopsAndLegs[], now = new Date(), driver: DriverEtaInput | null = null, anchor: ScheduleAnchor | null = null): ScheduleStop[] {
     const relevant = tours.filter((tour) => ["ACTIVE", "QUEUED"].includes(tour.status))
       .sort((a, b) => Number(a.status === "QUEUED") - Number(b.status === "QUEUED") || compareQueuedItems(a, b));
     const vehicle = relevant[0]?.vehicle;
-    if (driver && !breakdownTiming(vehicle ?? {}, now).blocked) return this.scheduleByTachograph(relevant, now, driver);
-    return this.scheduleByClock(relevant, now);
+    if (driver && !breakdownTiming(vehicle ?? {}, now).blocked) return this.scheduleByTachograph(relevant, now, driver, anchor);
+    return this.scheduleByClock(relevant, now, anchor);
   }
 
-  private scheduleByTachograph(relevant: TourWithStopsAndLegs[], now: Date, driver: DriverEtaInput): ScheduleStop[] {
+  /**
+   * The ETA of every open stop of the active tour. `shownEta` is the ETA the page shows for the stop the truck drives to
+   * (from GPS when it is fresh): the following stops continue from it, with the stay at each stop and the driver's breaks.
+   */
+  stopEtas(tours: TourWithStopsAndLegs[], tourId: string, now = new Date(), driver: DriverEtaInput | null = null, shownEta: Date | null = null): Map<string, StopEta> {
+    const result = new Map<string, StopEta>();
+    const current = tours.find((tour) => tour.id === tourId)?.stops.filter((stop) => !stop.completedAt).sort((a, b) => a.sequence - b.sequence)[0];
+    if (!current) return result;
+    let schedule = this.calculateVehicleSchedule(tours, now, driver, !current.arrivedAt && shownEta ? { stopId: current.id, arrival: shownEta } : null);
+    let basis: StopEta["basis"] = "ETA";
+    if (!current.arrivedAt && !schedule.find((item) => item.stopId === current.id)?.earliestArrival) {
+      const start = current.appointmentAt ?? current.appointmentWindowStartAt ?? current.plannedAt;
+      if (start && start > now) {
+        schedule = this.calculateVehicleSchedule(tours, now, driver, { stopId: current.id, arrival: start });
+        basis = "PLAN";
+      }
+    }
+    for (const item of schedule) {
+      if (item.tourId !== tourId) continue;
+      // The Termin of the first stop is the assumption, not a forecast of the arrival there.
+      const early = basis === "PLAN" && item.stopId === current.id ? null : item.earliestArrival;
+      const late = basis === "PLAN" && item.stopId === current.id ? null : item.latestArrival;
+      const middle = early && late ? new Date((early.getTime() + late.getTime()) / 2) : early ?? late;
+      result.set(item.stopId, { eta: middle?.toISOString() ?? null, earliest: early?.toISOString() ?? null, latest: late?.toISOString() ?? null, basis });
+    }
+    return result;
+  }
+
+  private scheduleByTachograph(relevant: TourWithStopsAndLegs[], now: Date, driver: DriverEtaInput, anchor: ScheduleAnchor | null): ScheduleStop[] {
     const vehicle = relevant[0]?.vehicle;
     const from = driver.startsAt && driver.startsAt > now ? driver.startsAt : now;
     let early: Date | null = from;
@@ -61,6 +99,7 @@ export class EtaService {
           early = null;
           late = null;
         }
+        if (anchor?.stopId === stop.id && !stop.arrivedAt) early = late = anchor.arrival;
         const window = normalizeServiceWindow(stop.serviceMinMinutes, stop.serviceMaxMinutes);
         const serviceStart = stop.appointmentAt ?? stop.appointmentWindowStartAt;
         const earlyService: Date | null = early ? maxDate(early, serviceStart ?? early) : null;
@@ -87,7 +126,7 @@ export class EtaService {
     return result;
   }
 
-  private scheduleByClock(relevant: TourWithStopsAndLegs[], now: Date): ScheduleStop[] {
+  private scheduleByClock(relevant: TourWithStopsAndLegs[], now: Date, anchor: ScheduleAnchor | null): ScheduleStop[] {
     let early: Date | null = now;
     let late: Date | null = now;
     let earlyClock = parseClockState(relevant[0]?.vehicle?.clockState, now);
@@ -147,6 +186,7 @@ export class EtaService {
           early = null;
           late = null;
         }
+        if (anchor?.stopId === stop.id && !stop.arrivedAt && !(breakdown.blocked && !breakdown.resumeAt)) early = late = anchor.arrival;
         const window = normalizeServiceWindow(stop.serviceMinMinutes, stop.serviceMaxMinutes);
         const serviceStart = stop.appointmentAt ?? stop.appointmentWindowStartAt;
         const deadlineAt = stop.appointmentAt ?? stop.appointmentWindowEndAt;

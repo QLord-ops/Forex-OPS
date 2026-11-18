@@ -149,7 +149,8 @@ export function QuickOrderPanel({
       if (event.dataTransfer?.types.includes('Files')) event.preventDefault()
     }
     function onWindowDrop(event: globalThis.DragEvent) {
-      if (!event.dataTransfer?.files.length) return
+      // A drop the page already took (the map of the main screen reads it in its own window) is not read a second time.
+      if (!event.dataTransfer?.files.length || event.defaultPrevented) return
       event.preventDefault()
       setDragging(false)
       setTab('order')
