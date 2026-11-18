@@ -35,7 +35,7 @@ import { RouteDeviationService } from './services/route-deviation.js';
 import { RestAtStopService } from './services/rest-at-stop.js';
 import { AddressRuleService, applyRulesToStop, BUILT_IN_RULES } from './services/address-rules.js';
 import { VEHICLE_CLOCK_LIMITS } from './services/vehicle-clock.js';
-import { bindWebfleetObject, listWebfleetBindings, unbindWebfleetVehicle, WebfleetSyncService, WebfleetTelemetryService, distanceMeters, DEFAULT_ARRIVAL_RADIUS_METERS, type AutoArrivalHandler, type AutoStopEventHandler } from './services/webfleet.js';
+import { bindWebfleetObject, listWebfleetBindings, unbindWebfleetVehicle, WebfleetSyncService, WebfleetTelemetryService, distanceMeters, DEFAULT_ARRIVAL_RADIUS_METERS, type AutoArrivalHandler, type AutoStopEventHandler, type OffsiteVisitHandler } from './services/webfleet.js';
 import { buildVehicleCard, readDriverBudget, readDriverHours, suggestWebfleetBindings, vehicleObjectUid, WebfleetDetailsSync, WebfleetLiveStore, WebfleetTrackService } from './services/webfleet-live.js';
 import { TerminService } from './services/termin-service.js';
 import { withTerminGroups } from './services/termin-groups.js';
@@ -84,6 +84,7 @@ import { storedAnswerOf } from './services/order-documents.js';
 import { KnownPlaces, resolveWithoutGeocoder } from './services/known-places.js';
 import { OwnAddressBook } from './services/own-addresses.js';
 import { StayPlaces } from './services/stay-places.js';
+import { LearnedGates } from './services/learned-gates.js';
 import { lessonsFromEdits } from './services/edit-learning.js';
 import { readingFromStore } from './services/import-reuse.js';
 
@@ -119,7 +120,8 @@ const importHealth = new ImportHealth();
 const knownPlaces = new KnownPlaces(prisma);
 const ownAddresses = new OwnAddressBook(prisma, () => knownPlaces.reset());
 // Where the truck really stood is learned after every BELADEN/ENTLADEN; it never delays or blocks the event itself.
-const stayPlaces = new StayPlaces(prisma, () => knownPlaces.reset());
+// Once two stays agree on a gate, stops already planned at that door move there too (owner, 18.11.2026).
+const stayPlaces = new StayPlaces(prisma, () => knownPlaces.reset(), (place, now) => learnedGates.moveOpenStops(place, now));
 const learnStay = (stopIds: string[]) => { for (const id of stopIds) void stayPlaces.learn(id).catch(() => undefined); };
 const telemetryRetention = new TelemetryRetention(prisma);
 const importLearning = new ImportLearningService(prisma, addressRules);
@@ -282,11 +284,21 @@ const webfleetLive = new WebfleetLiveStore();
 // BELADEN/ENTLADEN by itself once the truck stood at the stop and left the town (real GPS); AUTO_STOP_EVENT_ENABLED=false keeps asking.
 const autoStopEvent: AutoStopEventHandler | undefined = process.env.AUTO_STOP_EVENT_ENABLED === 'false' ? undefined
   : async (input) => { const tour = await tourService.recordAutoStopEvent(input, SYSTEM_WEBFLEET_ACTOR); learnStay(input.chainStopIds ?? [input.stopId]); return tour; };
-const webfleetSync = new WebfleetSyncService(prisma, undefined, undefined, autoArrival, (positions, now) => webfleetLive.setObjects(positions, now), autoStopEvent);
+// The truck stood at the real gate away from a wrong address and drove on (owner, 18.11.2026): arrival and BELADEN/ENTLADEN
+// are recorded from that stay with «Отменить», and the stay teaches the gate. Needs both automatic switches on.
+const offsiteVisit: OffsiteVisitHandler | undefined = !autoArrival || !autoStopEvent ? undefined : {
+  gates: (stopId) => stayPlaces.gatesOf(stopId),
+  record: async (input) => {
+    const tour = await tourService.recordAutoStopEvent(input, SYSTEM_WEBFLEET_ACTOR);
+    await stayPlaces.learnOffsiteVisit(input.chainStopIds ?? [input.stopId], input.meta.offsite, input.arrivedAt, input.now).catch(() => undefined);
+    return tour;
+  }
+};
+const webfleetSync = new WebfleetSyncService(prisma, undefined, undefined, autoArrival, (positions, now) => webfleetLive.setObjects(positions, now), autoStopEvent, offsiteVisit);
 const webfleetDetails = new WebfleetDetailsSync(webfleetLive);
 const addressBook = new AddressBookSync(prisma);
 const webfleetTracks = new WebfleetTrackService();
-const webfleetTelemetry = new WebfleetTelemetryService(prisma, autoArrival, autoStopEvent);
+const webfleetTelemetry = new WebfleetTelemetryService(prisma, autoArrival, autoStopEvent, offsiteVisit);
 // The driver's tachograph for the ETA (memory only); a Webfleet hiccup never breaks the position.
 const driverBudget = (id: string, now: Date) => readDriverBudget(prisma, webfleetLive, id, now).catch(() => null);
 const currentPosition = async (id: string, now = new Date()) => {
@@ -313,6 +325,7 @@ async function enrichTourLive(tour: TourAggregate) {
 const appointmentService = new AppointmentService(prisma, etaService, currentPosition, driverBudget);
 const replanningService = new ReplanningService(prisma, routingService, currentPosition);
 const stopCoordinates = new StopCoordinatesService(prisma, routingService, () => addressRules.all(), replanningService);
+const learnedGates: LearnedGates = new LearnedGates(prisma, async (vehicleId, now, actor): Promise<void> => { await stopCoordinates.rebuildLegs(vehicleId, now, actor); });
 const trafficService = new TrafficOperationsService(prisma, tourService, notificationService, new TrafficRoutingService(trafficProvider, trafficQuota), currentPosition);
 const routeDeviation = new RouteDeviationService(prisma, currentPosition, (input) => notificationService.publish(input),
   (vehicleId, now) => trafficService.rerouteFromGps(vehicleId, now));
@@ -854,7 +867,11 @@ export async function buildApp(options: BuildAppOptions = {}) {
   app.post('/stops/:id/auto-event/revert', { preHandler: requireDispatcherRoles('admin', 'dispatcher') }, async request => {
     const input = z.object({ reason: z.string().trim().max(300).optional() }).parse(request.body ?? {});
     const { id } = idParams.parse(request.params);
+    const auto = await prisma.operationEvent.findFirst({ where: { stopId: id, type: 'STOP_EVENT_AUTO' }, orderBy: { createdAt: 'desc' } });
     const result = await tourService.revertAutoStopEvent(id, new Date(), auditActor(request), input.reason || undefined);
+    // A visit found away from the address also taught the gate: undoing the event takes that lesson back.
+    const meta = auto ? (JSON.parse(auto.payloadJson) as { meta?: { chain?: string[]; offsite?: unknown } }).meta : undefined;
+    if (meta?.offsite) await stayPlaces.forgetVisitOf(meta.chain ?? [id]).catch(() => undefined);
     const stop = await prisma.stop.findUniqueOrThrow({ where: { id }, select: { tour: { select: { vehicleId: true } } } });
     await refreshAlertsForVehicle(stop.tour.vehicleId);
     return result;

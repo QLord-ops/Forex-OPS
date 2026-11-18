@@ -56,45 +56,124 @@ export function placeKey(stop: { company: string | null; address: string; city: 
 }
 
 export type LearnResult = 'LEARNED' | 'CONFIRMED' | 'CANDIDATE' | 'ALREADY_THERE' | 'NO_STAY' | 'NOT_A_PLACE';
+/** How a place looked before a visit taught it, so that undoing the visit puts it back (null: the visit created it). */
+export type PlaceSnapshot = { externalId: string; before: { latitude: number; longitude: number; useCount: number; active: boolean; lastSeenAt: string } | null };
+/** A place that just became trusted: where the trucks stand at the door the key names. */
+export type LearnedPlace = { externalId: string; key: string; name: string; latitude: number; longitude: number };
+
+type PlaceStop = { id: string; company: string | null; address: string; city: string | null; latitude: number; longitude: number; tour: { vehicleId: string } };
+
+export const stayExternalId = (key: string) => `stay:${createHash('sha256').update(key).digest('hex').slice(0, 24)}`;
 
 export class StayPlaces {
-  constructor(private readonly db: PrismaClient, private readonly onChange: () => void = () => undefined) {}
+  constructor(private readonly db: PrismaClient, private readonly onChange: () => void = () => undefined,
+    private readonly onLearned?: (place: LearnedPlace, now: Date) => Promise<unknown>) {}
 
   /** Called after BELADEN/ENTLADEN. Never throws into the caller's way: the event is recorded with or without it. */
   async learn(stopId: string, now = new Date()): Promise<LearnResult> {
     const stop = await this.db.stop.findUnique({ where: { id: stopId }, include: { tour: { select: { vehicleId: true } } } });
     if (!stop?.completedAt || !stop.arrivedAt) return 'NO_STAY';
-    const key = placeKey(stop);
-    if (!key) return 'NOT_A_PLACE';
+    if (!placeKey(stop)) return 'NOT_A_PLACE';
     const radius = Math.min(stop.arrivalRadiusMeters ?? 1000, PLANT_GATE_MAX_METERS);
     const rows = await this.db.vehicleTelemetry.findMany({ where: { vehicleId: stop.tour.vehicleId, provider: 'WEBFLEET', recordedAt: { gte: stop.arrivedAt, lte: stop.completedAt } },
       orderBy: { recordedAt: 'asc' }, take: 2000, select: { latitude: true, longitude: true, speedKmh: true, recordedAt: true, rawJson: true } });
     const point = stayPoint(rows, stop, radius);
     if (!point) return 'NO_STAY';
-    const externalId = `stay:${createHash('sha256').update(key.key).digest('hex').slice(0, 24)}`;
+    return this.teach(stop, point, stop.arrivedAt, now);
+  }
+
+  /**
+   * A visit found away from the stop's address (the truck stood at the real gate): the stay's point teaches the place of
+   * every stop of that visit. Returns how the places looked before, for «Отменить».
+   */
+  async learnVisit(stopIds: string[], point: { latitude: number; longitude: number }, visitAt: Date, now = new Date()): Promise<PlaceSnapshot[]> {
+    const snapshots: PlaceSnapshot[] = [];
+    for (const id of stopIds) {
+      const stop = await this.db.stop.findUnique({ where: { id }, include: { tour: { select: { vehicleId: true } } } });
+      if (stop) await this.teach(stop, point, visitAt, now, snapshots);
+    }
+    return snapshots;
+  }
+
+  /**
+   * A visit found away from the address, recorded automatically: the stay teaches the place, and how the places looked
+   * before is kept with the visit so that «Отменить» on the event can take the lesson back.
+   */
+  async learnOffsiteVisit(stopIds: string[], point: { latitude: number; longitude: number }, visitAt: Date, now = new Date()) {
+    const snapshots = await this.learnVisit(stopIds, point, visitAt, now);
+    const stop = await this.db.stop.findUnique({ where: { id: stopIds[0] }, select: { tourId: true, tour: { select: { vehicleId: true } } } });
+    if (stop && snapshots.length) {
+      await this.db.operationEvent.create({ data: { vehicleId: stop.tour.vehicleId, tourId: stop.tourId, stopId: stopIds[0], type: 'STAY_PLACE_VISIT',
+        payloadJson: JSON.stringify({ stopIds, point, snapshots }), createdAt: now } });
+    }
+    return snapshots;
+  }
+
+  /** The automatic event of these stops was undone: the lesson of its visit is taken back, once. */
+  async forgetVisitOf(stopIds: string[], now = new Date()) {
+    const visit = await this.db.operationEvent.findFirst({ where: { stopId: { in: stopIds }, type: 'STAY_PLACE_VISIT' }, orderBy: { createdAt: 'desc' } });
+    if (!visit) return false;
+    const undone = await this.db.operationEvent.findFirst({ where: { stopId: visit.stopId, type: 'STAY_PLACE_VISIT_FORGOTTEN', createdAt: { gte: visit.createdAt } } });
+    if (undone) return false;
+    const { snapshots } = JSON.parse(visit.payloadJson) as { snapshots: PlaceSnapshot[] };
+    await this.forget(snapshots);
+    await this.db.operationEvent.create({ data: { vehicleId: visit.vehicleId, tourId: visit.tourId, stopId: visit.stopId, type: 'STAY_PLACE_VISIT_FORGOTTEN',
+      payloadJson: JSON.stringify({ visitId: visit.id }), createdAt: now } });
+    await writeAuditLog(this.db, { role: 'system', sessionId: 'stay-places' }, { action: 'STAY_PLACE_VISIT_FORGOTTEN', entityType: 'Stop', entityId: visit.stopId ?? visit.id,
+      vehicleId: visit.vehicleId, tourId: visit.tourId, stopId: visit.stopId, metadata: { places: snapshots.map((item) => item.externalId) }, createdAt: now });
+    return true;
+  }
+
+  /** Undo the visits of an automatic event that was taken back: the places return to how they were before it. */
+  async forget(snapshots: PlaceSnapshot[]) {
+    for (const snapshot of snapshots) {
+      if (!snapshot.before) await this.db.knownAddress.deleteMany({ where: { source: STAY_SOURCE, externalId: snapshot.externalId } });
+      else await this.db.knownAddress.updateMany({ where: { source: STAY_SOURCE, externalId: snapshot.externalId }, data: { latitude: snapshot.before.latitude,
+        longitude: snapshot.before.longitude, useCount: snapshot.before.useCount, active: snapshot.before.active, lastSeenAt: new Date(snapshot.before.lastSeenAt) } });
+    }
+    if (snapshots.length) this.onChange();
+  }
+
+  /** Where trucks stood at this stop's place before: the trusted gate or the single stay that waits for a second one. */
+  async gatesOf(stopId: string): Promise<Array<{ latitude: number; longitude: number }>> {
+    const stop = await this.db.stop.findUnique({ where: { id: stopId }, select: { company: true, address: true, city: true } });
+    const key = stop ? placeKey(stop) : null;
+    if (!key) return [];
+    return this.db.knownAddress.findMany({ where: { source: STAY_SOURCE, externalId: stayExternalId(key.key) }, select: { latitude: true, longitude: true } });
+  }
+
+  private async teach(stop: PlaceStop, point: { latitude: number; longitude: number }, visitAt: Date, now: Date, snapshots?: PlaceSnapshot[]): Promise<LearnResult> {
+    const key = placeKey(stop);
+    if (!key) return 'NOT_A_PLACE';
+    const externalId = stayExternalId(key.key);
     const existing = await this.db.knownAddress.findFirst({ where: { source: STAY_SOURCE, externalId } });
     if (!existing && distanceMeters(point.latitude, point.longitude, stop.latitude, stop.longitude) <= ALREADY_THERE_METERS) return 'ALREADY_THERE';
+    if (snapshots && !snapshots.some((item) => item.externalId === externalId)) {
+      snapshots.push({ externalId, before: existing ? { latitude: existing.latitude, longitude: existing.longitude, useCount: existing.useCount,
+        active: existing.active, lastSeenAt: existing.lastSeenAt.toISOString() } : null });
+    }
 
     const city = (stop.city ?? '').replace(/\b\d{5}\b/g, '').trim() || null;
     const name = (stop.company ?? stop.address).trim().slice(0, 200);
     const base = { name, street: key.street?.slice(0, 200) ?? null, postalCode: key.postalCode, city: city?.slice(0, 200) ?? null,
       searchText: addressSearchText({ name, name2: null, street: key.street, postalCode: key.postalCode, city }, []), lastSeenAt: now };
     let result: LearnResult;
+    let at = point;
     if (!existing) {
       await this.db.knownAddress.create({ data: { ...base, source: STAY_SOURCE, externalId, latitude: point.latitude, longitude: point.longitude, active: false, useCount: 1 } });
       result = 'CANDIDATE';
     } else if (distanceMeters(point.latitude, point.longitude, existing.latitude, existing.longitude) <= AGREE_METERS) {
       // The unloading and the Leergut loading of one visit are one stay, not two that agree.
-      if (existing.lastSeenAt.getTime() >= stop.arrivedAt.getTime() - SAME_VISIT_MS) {
+      if (existing.lastSeenAt.getTime() >= visitAt.getTime() - SAME_VISIT_MS) {
         await this.db.knownAddress.update({ where: { id: existing.id }, data: { lastSeenAt: now } });
         return existing.active ? 'CONFIRMED' : 'CANDIDATE';
       }
       // Stays that agree are averaged: the point settles where the trucks really stand.
       const count = existing.useCount + 1;
       const trusted = count >= STAYS_TO_TRUST;
-      await this.db.knownAddress.update({ where: { id: existing.id }, data: { ...base, useCount: count, active: trusted || existing.active,
-        latitude: Math.round(((existing.latitude * existing.useCount + point.latitude) / count) * 1e6) / 1e6,
-        longitude: Math.round(((existing.longitude * existing.useCount + point.longitude) / count) * 1e6) / 1e6 } });
+      at = { latitude: Math.round(((existing.latitude * existing.useCount + point.latitude) / count) * 1e6) / 1e6,
+        longitude: Math.round(((existing.longitude * existing.useCount + point.longitude) / count) * 1e6) / 1e6 };
+      await this.db.knownAddress.update({ where: { id: existing.id }, data: { ...base, useCount: count, active: trusted || existing.active, ...at } });
       result = existing.active ? 'CONFIRMED' : trusted ? 'LEARNED' : 'CANDIDATE';
     } else if (existing.active) {
       // A place two stays agreed on is not undone by one stay elsewhere (a parking place nearby, a queue on the road).
@@ -109,6 +188,8 @@ export class StayPlaces {
         stopId: stop.id, vehicleId: stop.tour.vehicleId, metadata: { postalCode: key.postalCode, city, metersFromStop: Math.round(distanceMeters(point.latitude, point.longitude, stop.latitude, stop.longitude)) }, createdAt: now });
     }
     if (result === 'LEARNED' || existing?.active) this.onChange();
+    // Stops already planned at this door move to the gate; a failure there never undoes the learning.
+    if (result === 'LEARNED' && this.onLearned) await this.onLearned({ externalId, key: key.key, name, ...at }, now).catch(() => undefined);
     return result;
   }
 }

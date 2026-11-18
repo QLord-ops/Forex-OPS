@@ -137,6 +137,48 @@ test('BELADEN записан сам после выезда из города: �
   await expect(decisions.getByRole('article')).toHaveCount(0)
 })
 
+test('стоянка не у адреса: прибытие и ENTLADEN записаны сами, точка другого тура перенесена на ворота', async ({ page }) => {
+  let reverted = false
+  const base = { createdAt: new Date().toISOString(), priority: 'INFO', urgent: false, resolved: false, resolvedReason: null, stackSize: 1 }
+  let notifications = [
+    { ...base, id: 'n-off', leadId: 'n-off', vehicleId: 'v1', stopId: 'stop-t', type: 'AUTO_STOP_EVENT',
+      message: 'LKW 949 стояла 80 мин в 2 км от адреса Grünheide и уехала дальше — вероятно выгружена там.',
+      payloadJson: JSON.stringify({ stopType: 'UNLOAD', at: '2026-11-18T10:20:00.000Z', enteredAt: '2026-11-18T09:00:00.000Z', stayMinutes: 80, source: 'WEBFLEET_AUTO',
+        offsite: { latitude: 52.41, longitude: 13.79, distanceMeters: 2004 } }) },
+    { ...base, id: 'n-gate', leadId: 'n-gate', vehicleId: 'v2', stopId: 'stop-g', type: 'STOP_MOVED_TO_GATE',
+      message: 'LKW 125, точка Tesla Manufacturing в туре B-1 перенесена на ворота, где машины стояли при прошлых визитах (2 км от адреса). Маршрут и ETA пересчитаны.',
+      payloadJson: JSON.stringify({ stops: ['stop-g'] }) }
+  ]
+  await page.route('**/api/**', async (route) => {
+    const path = new URL(route.request().url()).pathname.replace(/^\/api/, '')
+    if (path === '/auth/session') return json(route, { authenticated: true, role: 'dispatcher', csrfToken: 'e2e' })
+    if (path === '/notifications') return json(route, { notifications })
+    if (path === '/stops/stop-t/auto-event/revert') { reverted = true; notifications = notifications.filter((item) => item.id !== 'n-off'); return json(route, { ok: true }) }
+    if (path === '/dashboard') return json(route, { vehicles: [
+      { vehicle: truck('v1', '949'), statusText: 'MOVING', operationVersion: 1, tour: { id: 't-a', vehicleId: 'v1', orderNumber: 'A-1', status: 'ACTIVE',
+        stops: [stop('stop-t', { city: 'Grünheide', arrivedAt: '2026-11-18T09:00:00Z', completedAt: '2026-11-18T10:20:00Z' }), stop('stop-u', { sequence: 2 })] } },
+      { vehicle: truck('v2', '125'), statusText: 'MOVING', operationVersion: 1, tour: { id: 't-b', vehicleId: 'v2', orderNumber: 'B-1', status: 'ACTIVE', stops: [stop('stop-g', { city: 'Grünheide' })] } }
+    ] })
+    if (path.endsWith('/current-position')) return json(route, { status: 'MOVING' })
+    return json(route, { error: 'not mocked' }, 404)
+  })
+  await page.route('https://tile.openstreetmap.org/**', (route) => route.abort())
+  page.on('dialog', (dialog) => void dialog.accept())
+  await page.goto('/')
+  await expect(page.locator('.operations-toast')).toHaveCount(0)
+  const decisions = page.getByRole('region', { name: 'Требует решения' })
+  await decisions.getByText('Для сведения').click()
+  const visit = decisions.getByRole('article').filter({ hasText: 'не по адресу' })
+  await expect(visit).toContainText('LKW 949 была на точке не по адресу — вероятно выгружена')
+  await expect(visit).toContainText(/Стояла 1 ч 20 мин в 2 км от адреса Grünheide и уехала дальше\. Прибытие 10:00 и ENTLADEN 11:20 записаны автоматически/)
+  await expect(visit).toContainText('Место стоянки запомнено как ворота')
+  const gate = decisions.getByRole('article').filter({ hasText: 'перенесена на ворота' })
+  await expect(gate).toContainText('LKW 125: точка перенесена на ворота завода')
+  await visit.getByRole('button', { name: 'Отменить ENTLADEN' }).click()
+  await expect.poll(() => reverted).toBe(true)
+  await expect(decisions.getByRole('article').filter({ hasText: 'не по адресу' })).toHaveCount(0)
+})
+
 test('отклонение от маршрута: маршрут перестроен сам, уведомление только «для сведения»', async ({ page }) => {
   let acked = false
   const note = (rebuilt: boolean) => ({ id: rebuilt ? 'n-told' : 'n-asked', vehicleId: rebuilt ? 'v1' : 'v2', stopId: null, type: 'ROUTE_DEVIATION', createdAt: new Date().toISOString(),
