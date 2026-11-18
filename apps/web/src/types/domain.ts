@@ -118,7 +118,11 @@ export interface Tour {
   delayMinutes?: number | null
 }
 
+/** «Заказчик уведомлён»: the last delay letter of the active tour, recorded by OPS (the letter itself goes from the dispatcher's mail). */
+export interface CustomerNotice { at: string; by: string; channel: 'EMAIL' | 'COPY'; stopId: string; etaAt: string | null; delayMinutes: number | null }
+
 export interface DashboardVehicle {
+  customerNotice?: CustomerNotice | null
   issues?: Array<{ id: string; kind: string; description: string; expectedResolvedAt: string | null; createdAt: string }>
   vehicle: Vehicle
   /** Customer and line of the truck; null while it is on no line. */

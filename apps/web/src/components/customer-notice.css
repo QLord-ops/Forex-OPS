@@ -1,0 +1,5 @@
+/* «Сообщить заказчику»: the delay letter, opened in the dispatcher's own mail program. */
+.customer-notice-dialog { width: min(560px, 100%); max-height: calc(100dvh - 32px); overflow-y: auto; }
+.customer-notice-body { height: auto; min-height: 240px; padding-top: 8px; padding-bottom: 8px; font: .8125rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; resize: vertical; }
+.customer-notice-hint { display: block; margin-top: 4px; color: var(--t-muted); font-size: .75rem; line-height: 1.4; }
+.customer-notice-line { color: var(--t-muted); font-size: .75rem; }

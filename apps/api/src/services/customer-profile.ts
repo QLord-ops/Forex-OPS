@@ -33,6 +33,11 @@ const statusListSchema = z.object({
   showAppSped: z.boolean().default(false)
 }).default({});
 
+/** «Сообщить заказчику»: who gets the delay letter; the dispatcher sends it from their own mail program. */
+const notifySchema = z.object({
+  emails: z.array(z.string().trim().toLowerCase().email().max(120)).max(10).default([])
+}).default({});
+
 const defaultsSchema = z.object({
   serviceMinMinutes: z.number().int().min(5).max(600).default(60),
   serviceMaxMinutes: z.number().int().min(5).max(900).default(120),
@@ -43,7 +48,8 @@ export const customerProfileSchema = z.object({
   version: z.literal(1).default(1),
   import: importSchema,
   statusList: statusListSchema,
-  defaults: defaultsSchema
+  defaults: defaultsSchema,
+  notify: notifySchema
 });
 
 export type CustomerProfile = z.infer<typeof customerProfileSchema>;
@@ -60,8 +66,8 @@ export function parseProfile(json: string | null | undefined): CustomerProfile {
 /** A profile patch merged section by section, then validated as a whole. */
 export function mergeProfile(current: CustomerProfile, patch: unknown): CustomerProfile {
   const input = (patch && typeof patch === 'object' ? patch : {}) as Partial<Record<keyof CustomerProfile, unknown>>;
-  const section = (key: 'import' | 'statusList' | 'defaults') => ({ ...current[key], ...(input[key] && typeof input[key] === 'object' ? input[key] as object : {}) });
-  return customerProfileSchema.parse({ version: 1, import: section('import'), statusList: section('statusList'), defaults: section('defaults') });
+  const section = (key: 'import' | 'statusList' | 'defaults' | 'notify') => ({ ...current[key], ...(input[key] && typeof input[key] === 'object' ? input[key] as object : {}) });
+  return customerProfileSchema.parse({ version: 1, import: section('import'), statusList: section('statusList'), defaults: section('defaults'), notify: section('notify') });
 }
 
 /**
