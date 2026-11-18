@@ -98,6 +98,10 @@ describe('CustomerService', () => {
     expect(lines.map((row) => [row.line.code, row.isPrimary]).sort()).toEqual([['NORD', false], ['SUED', true]]);
     await expect(service.setDispatcherLines(anna.id, [nord.id], sued.id, admin)).rejects.toMatchObject({ statusCode: 400 });
     expect(await service.linesOf(anna.id)).toHaveLength(2);
+    // The primary line is optional: without one no line is made primary behind the dispatcher's back.
+    const none = await service.setDispatcherLines(anna.id, [nord.id, sued.id], null, admin);
+    expect(none.map((row) => row.isPrimary)).toEqual([false, false]);
+    await service.setDispatcherLines(anna.id, [nord.id, sued.id], sued.id, admin);
     const actor = { role: 'dispatcher' as const, sessionId: 's', dispatcherId: anna.id };
     expect(await service.canEditProfile(actor, a.id)).toBe(true);
     expect(await service.canEditProfile(actor, b.id)).toBe(false);
@@ -217,7 +221,7 @@ describe('customer routes', () => {
     const id = created.json().id;
     const line = (await chef.inject({ method: 'POST', url: `/customers/${id}/lines`, payload: { code: 'NORD', name: 'Nord' } })).json();
     const anna = await db.dispatcher.create({ data: { login: 'anna', displayName: 'Anna', passwordHash: 'x' } });
-    expect((await chef.inject({ method: 'PUT', url: `/dispatchers/${anna.id}/lines`, payload: { lineIds: [line.id] } })).statusCode).toBe(200);
+    expect((await chef.inject({ method: 'PUT', url: `/dispatchers/${anna.id}/lines`, payload: { lineIds: [line.id], primaryLineId: line.id } })).statusCode).toBe(200);
 
     const dispatcher = await build('dispatcher', anna.id);
     expect((await dispatcher.inject({ method: 'POST', url: '/customers', payload: { name: 'Neu' } })).statusCode).toBe(403);
