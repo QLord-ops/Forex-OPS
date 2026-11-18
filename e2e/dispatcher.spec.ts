@@ -546,7 +546,8 @@ test.describe('этап машины в точках маршрута', () => {
     const here = { ...unloadStop, arrivedAt: new Date(Date.now() - 25 * 60_000).toISOString() }
     await openDashboard(page, [done, here], 'ARRIVED', 1)
     const trigger = page.getByRole('button', { name: /Точки маршрута · 2/ })
-    await expect(trigger).toContainText(/Этап 2 из 2 · На выгрузке, Potsdam · 2[45] мин/)
+    // The stop by firm and town (owner, 18.11.2026).
+    await expect(trigger).toContainText(/Этап 2 из 2 · На выгрузке, Werk B Potsdam · 2[45] мин/)
     await trigger.click()
     await expect(page.getByRole('list', { name: 'Этапы маршрута' }).getByRole('listitem').nth(1)).toHaveAttribute('aria-label', /Машина здесь/)
   })

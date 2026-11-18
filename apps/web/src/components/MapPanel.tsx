@@ -68,6 +68,10 @@ export type FleetMapVehicle = {
   standstill: boolean | null
   /** The truck's next stop has an attached slot (Termin). */
   termin?: boolean
+  /** Second line of the map label: «15:05 · опоздание 40 мин», «на точке 1 ч 50 мин». */
+  headline?: string | null
+  /** Third line: «78 км/ч · до Jena 62 км». */
+  detail?: string | null
   tone?: FleetTone
 }
 
@@ -866,10 +870,24 @@ function tomTomMapKey(): string | undefined {
 type Padding = number | { top: number; right: number; bottom: number; left: number }
 
 /** The bottom panel's height changes (strip, open, route stops): it is measured each time the map fits a route. */
+const LEFT_FIT_PADDING = 88
 function fitPadding(container: HTMLElement | null, fill: boolean | undefined): Padding {
   if (!fill) return 64
-  const panel = container?.closest('.dashboard-stage')?.querySelector<HTMLElement>('.vehicle-panel')
-  return { top: 96, right: 80, bottom: panel ? Math.max(96, panel.offsetHeight + 40) : 96, left: 88 }
+  const stage = container?.closest('.dashboard-stage')
+  const panel = stage?.querySelector<HTMLElement>('.vehicle-panel')
+  const box = container?.getBoundingClientRect()
+  // The list and the truck card float over the left of the map (11.2026): the route is fitted to the right of them.
+  const covers = [container?.closest('.dashboard-screen')?.querySelector<HTMLElement>('.fleet-rail'), stage?.querySelector<HTMLElement>('.truck-card')]
+  const coveredLeft = box ? Math.max(0, ...covers.map((element) => {
+    const rect = element?.getBoundingClientRect()
+    return rect && rect.width && rect.left < box.left + box.width / 2 ? rect.right - box.left : 0
+  })) : 0
+  const left = Math.max(LEFT_FIT_PADDING, coveredLeft + 40)
+  // An open «Адрес» / «Маршрут» dock or the questions cover the right of the map: the route is fitted beside them while 200 px are left.
+  const right = Math.max(0, ...[stage?.querySelector<HTMLElement>('.map-action-dock .map-action-content'), stage?.querySelector<HTMLElement>('.decision-stack-panel')]
+    .map((element) => element?.offsetWidth ?? 0))
+  const besideRight = right > 0 && container && container.clientWidth - left - right - 32 >= 200
+  return { top: 96, right: besideRight ? right + 32 : 80, bottom: panel ? Math.max(96, panel.offsetHeight + 40) : 96, left }
 }
 
 function fitRoute(map: Map | null, coordinates: Coordinate[], maxZoom: number, duration: number, padding: Padding = 64) {
@@ -963,11 +981,11 @@ function drawFleetMarker(element: HTMLButtonElement, vehicle: FleetMapVehicle) {
   const tone = vehicle.tone ?? 'idle'
   const sourceText = vehicle.source === 'WEBFLEET' && vehicle.stale ? 'GPS устарел' : FLEET_SOURCE_TEXT[vehicle.source]
   const motion = vehicle.source !== 'WEBFLEET' ? '' : vehicle.standstill === true ? ', стоит' : vehicle.standstill === false ? ', едет' : ''
-  const key = `${source}|${tone}|${vehicle.label}|${vehicle.termin ? 't' : ''}`
+  const key = `${source}|${tone}|${vehicle.label}|${vehicle.termin ? 't' : ''}|${vehicle.headline ?? ''}|${vehicle.detail ?? ''}`
   if (element.dataset.key === key) return
   element.dataset.key = key
   setMarkerClass(element, `fleet-marker fleet-marker-${source} fleet-marker-tone-${tone}${vehicle.termin ? ' fleet-marker-termin' : ''}`)
-  element.setAttribute('aria-label', `LKW ${vehicle.label}: ${TONE_TEXT[tone]}, ${sourceText}${motion}${vehicle.termin ? ', есть Termin' : ''}. Открыть карточку`)
+  element.setAttribute('aria-label', `LKW ${vehicle.label}: ${TONE_TEXT[tone]}${vehicle.headline ? `, ${vehicle.headline}` : ''}, ${sourceText}${motion}${vehicle.termin ? ', есть Termin' : ''}. Открыть карточку`)
   element.title = `LKW ${vehicle.label} · ${TONE_TEXT[tone]} · ${sourceText}${motion}`
   element.replaceChildren()
   const dot = document.createElement('span')
@@ -977,6 +995,20 @@ function drawFleetMarker(element: HTMLButtonElement, vehicle: FleetMapVehicle) {
   label.className = 'fleet-marker-label'
   label.textContent = `LKW ${vehicle.label}`
   element.append(dot, label)
+  // The new design (11.2026): the time against the Termin and the way left, right on the map.
+  if (vehicle.headline || vehicle.detail) {
+    const info = document.createElement('span')
+    info.className = 'fleet-marker-info'
+    info.setAttribute('aria-hidden', 'true')
+    for (const [text, name] of [[vehicle.headline, 'fleet-marker-headline'], [vehicle.detail, 'fleet-marker-detail']] as const) {
+      if (!text) continue
+      const line = document.createElement('span')
+      line.className = name
+      line.textContent = text
+      info.append(line)
+    }
+    element.append(info)
+  }
   if (tone === 'late') {
     const warn = document.createElement('span')
     warn.className = 'fleet-marker-warn'

@@ -1,38 +1,41 @@
-/* OPS FOREX shell and Диспозиция: top bar, fleet list, decisions, map controls and the selected-truck panel.
+/* OPS FOREX shell and Диспозиция: the rail, fleet list, decisions, map controls and the selected-truck panel.
    Colours go through theme variables (see theme-tokens.css), so "Ночная смена" follows automatically. */
 
-.app-shell { min-height: 100dvh; color: rgb(var(--tx-0f172a)); }
+.app-shell { min-height: 100dvh; padding-left: calc(var(--rail-w) + 16px); color: rgb(var(--tx-0f172a)); }
 .app-shell-dashboard { height: 100dvh; overflow: hidden; }
-.page-main { padding: 20px 24px 32px; }
+.page-main { padding: 16px 16px 32px; }
 
-/* ---- Top bar ---- */
-.topbar { position: sticky; top: 0; z-index: 40; display: flex; height: var(--topbar-h); align-items: center; gap: 20px; border-bottom: 1px solid rgb(var(--ln-e3e8ef)); background: rgb(var(--bg-ffffff)); padding: 0 20px; }
-.topbar-brand { display: flex; flex: none; align-items: center; gap: 12px; border-right: 1px solid rgb(var(--ln-e3e8ef)); border-radius: 8px; padding: 6px 24px 6px 4px; }
-.topbar-brand:focus-visible, .topbar-link:focus-visible, .topbar-menu-link:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-.topbar-nav { display: flex; min-width: 0; align-items: center; gap: 4px; }
-.topbar-link, .topbar-menu-link { display: inline-flex; height: 44px; flex: none; align-items: center; gap: 8px; border-radius: 10px; padding: 0 16px; color: rgb(var(--tx-334155)); font-size: .9375rem; font-weight: 500; white-space: nowrap; transition: background-color 120ms ease, color 120ms ease; }
-.topbar-link:hover, .topbar-menu-link:hover { background: rgb(var(--bg-f1f5f9)); color: rgb(var(--tx-0f172a)); }
-.topbar-link-active, .topbar-link-active:hover, .topbar-menu-link-active, .topbar-menu-link-active:hover { background: var(--acc); color: var(--acc-ink); }
-.topbar-link-icon { width: 18px; height: 18px; flex: none; }
-.topbar-count { display: inline-grid; min-width: 20px; height: 20px; place-items: center; border-radius: 999px; background: rgb(var(--bg-dc2626)); padding: 0 6px; color: #fff; font-size: .6875rem; font-weight: 600; font-variant-numeric: tabular-nums; }
-.topbar-tools { display: flex; align-items: center; gap: 8px; margin-left: auto; }
-.topbar-icon-button { position: relative; display: inline-flex; height: 44px; min-width: 44px; align-items: center; justify-content: center; gap: 8px; border-radius: 10px; color: rgb(var(--tx-334155)); }
-.topbar-icon-button:hover { background: rgb(var(--bg-f1f5f9)); color: rgb(var(--tx-0f172a)); }
-.topbar-icon-button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-.topbar-bell-count { position: absolute; top: 4px; right: 4px; display: grid; min-width: 18px; height: 18px; place-items: center; border: 2px solid rgb(var(--ln-ffffff)); border-radius: 999px; background: rgb(var(--bg-dc2626)); padding: 0 4px; color: #fff; font-size: .625rem; font-weight: 600; font-variant-numeric: tabular-nums; }
-.topbar-menu { display: none; }
-.topbar-menu-button { padding: 0 12px; font-size: .9375rem; font-weight: 500; }
-.topbar-popover-anchor { position: relative; }
-.topbar-popover { position: absolute; z-index: 60; top: calc(100% + 8px); right: 0; min-width: 240px; border: 1px solid rgb(var(--ln-e3e8ef)); border-radius: 12px; background: rgb(var(--bg-ffffff)); padding: 6px; box-shadow: 0 16px 40px rgb(var(--shadow-rgb) / 0.16); }
-.topbar-menu-popover { left: 0; right: auto; display: grid; gap: 2px; }
-.topbar-menu-link { height: 40px; }
+/* ---- Rail: the sections down the left edge, the bell and the dispatcher's menu at its foot ---- */
+.app-rail { position: fixed; z-index: 40; top: 16px; bottom: 16px; left: 16px; display: flex; width: var(--rail-w); flex-direction: column; align-items: center; border: 1px solid var(--b-default); border-radius: var(--r-panel); background: var(--s-card); padding: 10px 0 12px; box-shadow: var(--shadow-card); }
+.rail-brand { display: grid; width: 44px; height: 44px; flex: none; place-items: center; border-radius: var(--r-item); margin-bottom: 8px; --brand-hole: var(--s-card); }
+.rail-brand:focus-visible, .rail-link:focus-visible, .rail-round:focus-visible, .account-menu:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+/* A low window (a laptop with the browser's bars) scrolls the sections, never the bell or the menu. */
+.rail-nav { display: flex; width: 100%; min-height: 0; flex: 1; flex-direction: column; align-items: center; gap: 2px; overflow-y: auto; scrollbar-width: none; }
+.rail-nav::-webkit-scrollbar { display: none; }
+.rail-link { position: relative; display: grid; width: 64px; min-height: 52px; flex: none; justify-items: center; align-content: center; gap: 4px; border-radius: var(--r-item); color: var(--t-muted); font-size: .6875rem; font-weight: 500; line-height: 1.1; white-space: nowrap; transition: background-color 120ms ease, color 120ms ease; }
+.rail-link:hover { background: var(--s-hover); color: var(--t-primary); }
+.rail-link-active, .rail-link-active:hover { background: var(--s-card-selected); color: var(--acc); font-weight: 600; }
+.rail-link-icon { width: 20px; height: 20px; flex: none; }
+.rail-count, .rail-bell-count { position: absolute; display: grid; min-width: 18px; height: 18px; place-items: center; border: 2px solid var(--s-card); border-radius: 999px; background: rgb(var(--bg-dc2626)); padding: 0 4px; color: #fff; font-size: .625rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.rail-count { top: 2px; right: 8px; }
+.rail-bell-count { top: -3px; right: -5px; }
+.rail-tools { display: grid; flex: none; justify-items: center; gap: 8px; padding-top: 10px; }
+.rail-round { position: relative; display: grid; width: 44px; height: 44px; place-items: center; border-radius: 999px; background: var(--s-sunken); color: var(--t-primary); transition: background-color 120ms ease; }
+.rail-round:hover, .account-menu:hover .account-menu-avatar { background: var(--s-card-selected); }
+@media (max-height: 700px) {
+  .app-rail { top: 8px; bottom: 8px; padding: 6px 0 8px; }
+  .rail-brand { margin-bottom: 2px; }
+  .rail-link { min-height: 46px; gap: 3px; }
+}
 
-.account-menu { display: inline-flex; height: 44px; align-items: center; gap: 10px; border-radius: 10px; padding: 0 8px 0 4px; color: rgb(var(--tx-0f172a)); font-size: .9375rem; font-weight: 500; }
-.account-menu:hover { background: rgb(var(--bg-f1f5f9)); }
-.account-menu:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.popover-anchor { position: relative; }
+.popover-menu { position: absolute; z-index: 60; top: calc(100% + 8px); right: 0; min-width: 240px; border: 1px solid var(--b-default); border-radius: var(--r-item); background: var(--s-card); padding: 6px; box-shadow: var(--shadow-float); }
+/* From the rail a menu opens beside its button and grows upwards. */
+.popover-menu-side { top: auto; right: auto; bottom: 0; left: calc(100% + 22px); }
+
+.account-menu { display: grid; border-radius: 999px; }
 .account-menu-avatar { display: grid; width: 36px; height: 36px; flex: none; place-items: center; border: 1px solid rgb(var(--ln-e3e8ef)); border-radius: 50%; background: rgb(var(--bg-f8fafc)); color: rgb(var(--tx-334155)); font-size: .8125rem; font-weight: 500; }
-.account-menu-name { max-width: 12rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.account-menu-chevron { width: 16px; height: 16px; color: rgb(var(--tx-64748b)); }
+.account-menu .account-menu-avatar { width: 44px; height: 44px; border-color: var(--b-default); background: var(--s-sunken); color: var(--t-primary); font-size: .75rem; font-weight: 700; transition: background-color 120ms ease; }
 .account-menu-popover { display: grid; gap: 2px; }
 .account-menu-who { display: grid; gap: 2px; border-bottom: 1px solid rgb(var(--ln-eef1f5)); margin-bottom: 4px; padding: 8px 10px 10px; }
 .account-menu-who strong { font-size: .875rem; font-weight: 600; }
@@ -63,7 +66,7 @@
 .brand-wordmark-sub { margin-top: 6px; color: var(--brand-sub); font-size: .625rem; font-weight: 500; letter-spacing: .42em; }
 
 /* ---- Dashboard layout ---- */
-.dashboard-main { height: calc(100dvh - var(--topbar-h)); min-height: 0; overflow: hidden; padding: 16px; }
+.dashboard-main { height: 100dvh; min-height: 0; overflow: hidden; padding: 16px; }
 .dashboard-screen { display: grid; height: 100%; min-height: 0; grid-template-columns: clamp(330px, 27vw, 430px) minmax(0, 1fr); gap: 16px; }
 .fleet-rail { display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; border: 1px solid rgb(var(--ln-e3e8ef)); border-radius: 16px; background: rgb(var(--bg-ffffff)); }
 .fleet-controls { flex: none; border-bottom: 1px solid rgb(var(--ln-eef1f5)); padding: 16px 16px 14px; }
@@ -450,7 +453,7 @@ button.decision-card-title:focus-visible { outline: 2px solid var(--focus); outl
 .settings-dot-ok { background: rgb(var(--bg-16a34a)); }
 .settings-dot-warn { background: rgb(var(--bg-d97706)); }
 .settings-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); align-items: start; gap: 24px; }
-.settings-nav { position: sticky; top: calc(var(--topbar-h) + 16px); display: grid; gap: 16px; }
+.settings-nav { position: sticky; top: 16px; display: grid; gap: 16px; }
 .settings-nav-group { display: grid; gap: 2px; }
 .settings-nav-title { padding: 0 10px 4px; color: var(--text-muted); font-size: .75rem; font-weight: 500; }
 .settings-nav-link { display: flex; min-height: 34px; align-items: center; border-radius: 8px; padding: 0 10px; color: rgb(var(--tx-334155)); font-size: .875rem; }
@@ -462,7 +465,7 @@ button.decision-card-title:focus-visible { outline: 2px solid var(--focus); outl
 .settings-content { display: grid; min-width: 0; max-width: 960px; gap: 28px; }
 .settings-group { display: grid; gap: 12px; }
 .settings-group-title { color: var(--text-muted); font-size: .8125rem; font-weight: 500; }
-.settings-card { scroll-margin-top: calc(var(--topbar-h) + 16px); }
+.settings-card { scroll-margin-top: 16px; }
 .settings-card-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 8px 16px; }
 .settings-card-head > .min-w-0 { flex: 1 1 320px; }
 .settings-scope { display: inline-flex; height: 24px; flex: none; align-items: center; border: 1px solid; border-radius: 999px; padding: 0 10px; font-size: .75rem; font-weight: 500; white-space: nowrap; }
@@ -479,7 +482,7 @@ button.decision-card-title:focus-visible { outline: 2px solid var(--focus); outl
 .settings-chip { display: inline-flex; min-height: 32px; align-items: center; border: 1px solid rgb(var(--ln-dbe2ea)); border-radius: 999px; padding: 0 12px; color: rgb(var(--tx-0f172a)); font-size: .8125rem; font-weight: 500; }
 .settings-chip:hover { background: rgb(var(--bg-f1f5f9)); }
 .settings-chip:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-.settings-links { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; scroll-margin-top: calc(var(--topbar-h) + 16px); }
+.settings-links { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; scroll-margin-top: 16px; }
 @media (max-width: 1023px) {
   .settings-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .settings-layout { grid-template-columns: minmax(0, 1fr); gap: 16px; }
@@ -667,16 +670,6 @@ button.decision-card-title:focus-visible { outline: 2px solid var(--focus); outl
 }
 
 /* ---- Narrower screens ---- */
-@media (max-width: 1360px) {
-  .topbar { gap: 12px; }
-  .topbar-brand { padding-right: 16px; }
-  .topbar-link { padding: 0 12px; }
-  .account-menu-name { display: none; }
-}
-@media (max-width: 1180px) {
-  .topbar-nav { display: none; }
-  .topbar-menu { display: block; }
-}
 @media (max-width: 1280px) {
   .vehicle-panel-bar { gap: 12px 20px; padding: 14px 16px; }
   .vehicle-panel-id strong { font-size: 1.25rem; }
@@ -718,9 +711,6 @@ button.decision-card-title:focus-visible { outline: 2px solid var(--focus); outl
 }
 @media (max-width: 767px) {
   .page-main { padding: 16px; }
-  .topbar { padding: 0 12px; }
-  .topbar-brand { border-right: 0; padding-right: 0; }
-  .topbar-brand .brand-wordmark { display: none; }
   .dashboard-main { padding: 8px; }
   .dashboard-screen { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(220px, 42%) minmax(0, 1fr); gap: 8px; }
   .vehicle-panel { right: 8px; bottom: 8px; left: 8px; }
@@ -814,17 +804,6 @@ button.decision-card-title:focus-visible { outline: 2px solid var(--focus); outl
 .field-stop-doubt { border-color: rgb(var(--ln-dc2626)) !important; }
 .field-gate { margin: 0; color: rgb(var(--tx-9f1239)); font-size: .75rem; }
 
-/* Top bar: nothing may run under the bell. Font widths differ per system, so the bar measures itself
-   (hooks/useTopbarFit.ts) and steps down: 1) only the account's initials, 2) no wordmark and tighter sections,
-   3) sections in «Меню». The 1180 px rule above stays as the first paint before the measurement. */
-.topbar-fit-1 .account-menu-name { display: none; }
-.topbar-fit-2 { gap: 12px; }
-.topbar-fit-2 .topbar-brand .brand-wordmark { display: none; }
-.topbar-fit-2 .topbar-brand { padding-right: 12px; }
-.topbar-fit-2 .topbar-link { padding: 0 10px; }
-.topbar-fit-3 .topbar-nav { display: none; }
-.topbar-fit-3 .topbar-menu { display: block; }
-
 /* The truck list stays put (owner, 08.11): nothing in it scrolls sideways. Filters wrap onto the next line, the
    «Мои / Весь парк / Свободные» switch drops below the title when the panel is narrow, the truck number is never cut. */
 .fleet-chips { flex-wrap: wrap; margin: 12px 0 0; overflow: visible; padding: 0; }
@@ -834,20 +813,6 @@ button.decision-card-title:focus-visible { outline: 2px solid var(--focus); outl
 .fleet-section-name { display: flex; min-width: 0; align-items: baseline; gap: 8px; }
 .fleet-section-name .fleet-sort-label { margin-left: 0; }
 .fleet-scope { max-width: 100%; flex-wrap: wrap; margin-left: auto; }
-
-/* Truck card: the number line spans the whole card; the action buttons and the GPS tag take a fixed column from the
-   second line down (BELADEN, ENTLADEN, «Продолжить» fit), so a long number never slides under a button. */
-.vehicle-card { display: grid; grid-template-columns: minmax(0, 1fr) 148px; grid-template-rows: 26px auto; align-items: start; gap: 0; }
-.vehicle-card > .vehicle-row-main { grid-column: 1 / -1; grid-row: 1 / span 2; }
-.vehicle-card > .vehicle-card-side { z-index: 1; grid-column: 2; grid-row: 2; padding-left: 10px; }
-.vehicle-card > .vehicle-card-activity { grid-column: 1 / -1; grid-row: 3; min-width: 0; margin: 6px 0 0 52px; }
-.vehicle-card > .vehicle-action-popover { grid-column: 1 / -1; grid-row: 4; }
-.vehicle-row-main .vehicle-row-line, .vehicle-row-main .vehicle-row-meta, .vehicle-row-main .vehicle-row-owner { margin-right: 148px; }
-.vehicle-row-title { min-height: 24px; }
-.vehicle-row-title strong { flex: none; }
-.vehicle-row-title .vehicle-row-muted, .vehicle-row-title .vehicle-row-customer { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.vehicle-card-tags { display: flex; align-items: center; gap: 4px; }
-.vehicle-card-tags .icon-button.vehicle-pin-button { width: 26px; height: 26px; border-radius: 6px; }
 
 /* A narrow panel (laptop at 1280 px): chips a little tighter so the filters take fewer lines. */
 .fleet-rail { container: fleet / inline-size; }

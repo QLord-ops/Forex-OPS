@@ -1,5 +1,5 @@
 import { CalendarCheck, CalendarDays, LogOut, MapPinCheck, MessageSquareText, Moon, PackageCheck, Route, TriangleAlert } from 'lucide-react'
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 
 import { autoEventOf, departureOf, useNotifications } from '../context/notifications'
@@ -14,7 +14,7 @@ import { useIsPhone } from '../hooks/useIsPhone'
 type Tone = 'late' | 'termin' | 'arrival' | 'ok' | 'info'
 
 /** One open question for the dispatcher, with its own buttons. Used in «Требует решения», the bell and the toast. */
-export function DecisionCard({ item, stop, onSelect, openLink = false, nested = false }: { item: AlertNotification; stop?: Stop | null; onSelect?: (vehicleId: string) => void; openLink?: boolean; nested?: boolean }) {
+export function DecisionCard({ item, stop, onSelect, openLink = false, nested = false, extra }: { item: AlertNotification; stop?: Stop | null; onSelect?: (vehicleId: string) => void; openLink?: boolean; nested?: boolean; extra?: ReactNode }) {
   const state = useNotifications()
   // Earlier notifications of the same truck fold under its card; «Понятно» closes them too, decisions that wait for an answer stay.
   const stack = nested ? [] : state.stackOf(item)
@@ -124,6 +124,7 @@ export function DecisionCard({ item, stop, onSelect, openLink = false, nested = 
       <div className="decision-card-actions">
         {actions.map((action) => <button key={action.label} type="button" className={action.primary ? 'decision-button decision-button-primary' : 'decision-button'} disabled={busy} onClick={action.run}>{action.label}</button>)}
         {openLink ? <Link className="decision-button" to={`/vehicles/${item.vehicleId}`} onClick={() => state.hide(item.id)}>Открыть грузовик</Link> : null}
+        {extra}
       </div>
       {stack.length ? <details className="decision-stack">
         <summary>Ещё {stack.length} по этой машине{waiting ? <span className="decision-stack-waiting"> · ждут ответа: {waiting}</span> : null}</summary>
@@ -138,14 +139,14 @@ export function DecisionCard({ item, stop, onSelect, openLink = false, nested = 
  * «Требует решения» in priority order: decisions, then risks; information and what no longer applies
  * waits folded in «Для сведения» with one «Прочитать все».
  */
-export function DecisionGroups({ items, stopOf, onSelect, openLink = false }: { items: AlertNotification[]; stopOf?: (item: AlertNotification) => Stop | null | undefined; onSelect?: (vehicleId: string) => void; openLink?: boolean }) {
+export function DecisionGroups({ items, stopOf, onSelect, openLink = false, extraOf }: { items: AlertNotification[]; stopOf?: (item: AlertNotification) => Stop | null | undefined; onSelect?: (vehicleId: string) => void; openLink?: boolean; extraOf?: (item: AlertNotification) => ReactNode }) {
   const state = useNotifications()
   const actions = items.filter((item) => needsAttention(item) && item.priority !== 'RISK')
   const risks = items.filter((item) => needsAttention(item) && item.priority === 'RISK')
   const info = items.filter((item) => !needsAttention(item))
   const night = nightItems(items, state.workHours)
   const nightDecisions = night.filter((item) => needsAttention(item) && item.priority !== 'RISK').length
-  const card = (item: AlertNotification) => <DecisionCard key={item.id} item={item} stop={stopOf?.(item)} onSelect={onSelect} openLink={openLink} />
+  const card = (item: AlertNotification) => <DecisionCard key={item.id} item={item} stop={stopOf?.(item)} onSelect={onSelect} openLink={openLink} extra={extraOf?.(item)} />
   const readAll = () => {
     if (window.confirm(`Отметить прочитанными ${info.length} уведомл. «Для сведения»? Требующие решения останутся.`)) void state.acknowledgeAll(info)
   }

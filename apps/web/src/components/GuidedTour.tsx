@@ -116,11 +116,14 @@ export function GuidedTour() {
   </div>
 }
 
-/** The card sits under the framed element when there is room, above it otherwise, centred when nothing is framed. */
+/** The card sits under the framed element when there is room, above it otherwise, centred when nothing is framed;
+ *  beside a narrow element at the left edge (the rail and its buttons). */
 function cardPosition(box: Box | null): React.CSSProperties {
   if (!box) return { top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }
   const viewportWidth = window.innerWidth, viewportHeight = window.innerHeight
   const width = Math.min(CARD_WIDTH, viewportWidth - 32)
+  const beside = box.left + box.width + 12
+  if (box.width <= 120 && beside + width + 16 <= viewportWidth) return { top: Math.max(16, Math.min(box.top, viewportHeight - 256)), left: beside, width }
   const left = Math.min(Math.max(16, box.left), viewportWidth - width - 16)
   const below = box.top + box.height + 12
   if (below + 240 < viewportHeight) return { top: below, left, width }

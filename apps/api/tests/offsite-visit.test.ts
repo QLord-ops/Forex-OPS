@@ -66,6 +66,9 @@ async function scenario(name: string, options: { day?: number; plannedAt?: Date;
 const stopOf = (id: string) => db.stop.findUniqueOrThrow({ where: { id } });
 const notesOf = (vehicleId: string) => db.notification.findMany({ where: { vehicleId }, orderBy: { createdAt: 'asc' } });
 
+// Scenarios that feed a few hundred GPS rows take 2 s alone and more than the default 5 s when the whole suite runs at once.
+const SLOW = 20_000;
+
 describe('stays of a truck from its GPS', () => {
   const row = (minute: number, point: { latitude: number; longitude: number }, standstill: boolean) =>
     ({ ...point, speedKmh: standstill ? 0 : 60, recordedAt: at(minute), rawJson: JSON.stringify({ standstill }) });
@@ -142,7 +145,7 @@ describe('a stay away from the address (owner, 18.11.2026: Tesla)', () => {
     await near.stand(32, 40, north(3200));
     expect((await stopOf(near.stopId)).arrivedAt).toBeNull();
     expect(await notesOf(near.vehicle.id)).toHaveLength(0);
-  });
+  }, SLOW);
 
   it('takes the long unloading and not the 45-minute break before it', async () => {
     const { stopId, stand, driveOff, feed } = await scenario('OFF-PAUSE');
@@ -151,7 +154,7 @@ describe('a stay away from the address (owner, 18.11.2026: Tesla)', () => {
     await stand(47, 127, GATE);
     await driveOff(128);
     expect(await stopOf(stopId)).toMatchObject({ arrivedAt: at(47), completedAt: at(127) });
-  });
+  }, SLOW);
 
   it('leaves it to the ordinary arrival when the truck drove into the zone after the stay', async () => {
     const { stopId, stand, feed } = await scenario('OFF-ZONE');

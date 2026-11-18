@@ -42,6 +42,7 @@ export function CustomerPage() {
       {tab === 'lines' ? <Lines customer={data} isAdmin={isAdmin} onSaved={() => void refetch()} /> : null}
       {tab === 'auftrag' ? <AuftragProfile customer={data} editable={canEditProfile} onSaved={() => void refetch()} /> : null}
       {tab === 'status' ? <StatusProfile customer={data} editable={canEditProfile} onSaved={() => void refetch()} /> : null}
+      {tab === 'status' ? <NotifyProfile customer={data} editable={canEditProfile} onSaved={() => void refetch()} /> : null}
       {tab === 'documents' ? <Documents overview={data.overview} /> : null}
     </div>
   </div>
@@ -254,6 +255,25 @@ function StatusProfile({ customer, editable, onSaved }: { customer: Detail; edit
       <label className="customer-check"><input type="checkbox" checked={form.showAppSped} onChange={(event) => setForm({ ...form, showAppSped: event.target.checked })} />Колонка AppSped</label>
     </fieldset>
     {editable ? <div className="customer-form-actions"><button type="submit" className="primary-button" disabled={busy}>Сохранить</button></div> : null}
+    {note}
+  </form>
+}
+
+/** «Сообщить заказчику» writes to these addresses; the letter goes from the dispatcher's own mail program. */
+function NotifyProfile({ customer, editable, onSaved }: { customer: Detail; editable: boolean; onSaved: () => void }) {
+  const initial = (profile: CustomerProfile) => (profile.notify?.emails ?? []).join(', ')
+  const [emails, setEmails] = useState(() => initial(customer.profile))
+  const { busy, save, note } = useSave(onSaved)
+  useEffect(() => { setEmails(initial(customer.profile)) }, [customer.profile])
+  return <form className="work-surface customer-form" aria-label="Контакты для уведомлений" onSubmit={(event: FormEvent) => {
+    event.preventDefault()
+    void save(() => customersApi.update(customer.id, { profile: { notify: { emails: emails.split(/[,;\s]+/).map((item) => item.trim()).filter(Boolean) } } }), 'Контакты сохранены.')
+  }}>
+    <p className="page-subtitle customer-form-wide">Кому уходит письмо «Сообщить заказчику» об опоздании к Termin. Письмо открывается в почте диспетчера, он проверяет его и отправляет сам; OPS только отмечает в туре, что заказчик уведомлён.</p>
+    <fieldset className="customer-fieldset" disabled={!editable}>
+      <label className="customer-form-wide"><span className="field-label">Адреса через запятую (до 10)</span><input className="field-input" type="text" inputMode="email" value={emails} placeholder="dispo@kunde.de, leitstand@kunde.de" onChange={(event) => setEmails(event.target.value)} /></label>
+    </fieldset>
+    {editable ? <div className="customer-form-actions"><button type="submit" className="primary-button" disabled={busy}>Сохранить контакты</button></div> : null}
     {note}
   </form>
 }

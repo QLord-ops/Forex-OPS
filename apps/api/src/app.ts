@@ -6,6 +6,7 @@ import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import { z } from "zod";
 import { CALCULATED_POSITION_DISCLAIMER, type CurrentPosition, type GpsFix, withoutPositionGeometry } from "./domain.js";
 import { prisma } from "./lib/prisma.js";
+import { CustomerNoticeError, CustomerNotices, customerNoticeInput } from "./services/customer-notice.js";
 import { AlertService } from "./services/alerts.js";
 import { AppointmentService } from "./services/appointments.js";
 import { EtaService } from "./services/eta.js";
@@ -325,6 +326,7 @@ async function enrichTourLive(tour: TourAggregate) {
 const appointmentService = new AppointmentService(prisma, etaService, currentPosition, driverBudget);
 const replanningService = new ReplanningService(prisma, routingService, currentPosition);
 const stopCoordinates = new StopCoordinatesService(prisma, routingService, () => addressRules.all(), replanningService);
+const customerNotices = new CustomerNotices(prisma);
 const learnedGates: LearnedGates = new LearnedGates(prisma, async (vehicleId, now, actor): Promise<void> => { await stopCoordinates.rebuildLegs(vehicleId, now, actor); });
 const trafficService = new TrafficOperationsService(prisma, tourService, notificationService, new TrafficRoutingService(trafficProvider, trafficQuota), currentPosition);
 const routeDeviation = new RouteDeviationService(prisma, currentPosition, (input) => notificationService.publish(input),
@@ -737,6 +739,19 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const result = await operationsService.manualStop(id, versionInput.parse(request.body).version);
     await audit(request, 'VEHICLE_MANUAL_STOP', 'Vehicle', id, { vehicleId: id });
     return result;
+  });
+  // «Сообщить заказчику»: the letter goes from the dispatcher's own mail program; OPS only records that it was sent.
+  app.post('/vehicles/:id/customer-notice', async (request, reply) => {
+    const id = idParams.parse(request.params).id;
+    const input = customerNoticeInput.parse(request.body);
+    const notice = await customerNotices.record(id, input, auditActor(request)).catch((error: unknown) => {
+      if (error instanceof CustomerNoticeError) throw Object.assign(new Error(error.message), { statusCode: error.statusCode });
+      throw error;
+    });
+    await audit(request, 'CUSTOMER_NOTIFIED', 'Tour', input.tourId, { vehicleId: id, tourId: input.tourId, stopId: input.stopId,
+      metadata: { channel: input.channel, recipients: input.recipients, etaAt: input.etaAt ?? null, delayMinutes: input.delayMinutes ?? null } });
+    reply.code(201);
+    return notice;
   });
   app.post('/vehicles/:id/resume', async request => {
     const id = idParams.parse(request.params).id;
@@ -1610,6 +1625,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
       orderBy: { vehicleNumber: "asc" }
     });
 
+    const notices = await customerNotices.latestByTour(vehicles.flatMap((vehicle) => vehicle.tours.filter((tour) => tour.status === "ACTIVE").map((tour) => tour.id)));
     // Each truck needs a few small queries; running a handful at once keeps the 10 s poll fast as the fleet grows.
     const frontendVehicles = await mapWithConcurrency(vehicles, DASHBOARD_CONCURRENCY, async (vehicle) => {
       const breakdown = vehicle.issues.find(issue => issue.kind === 'BREAKDOWN');
@@ -1725,6 +1741,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
         statusStartedAt: statusStartedAt?.toISOString() ?? null,
         statusDurationSeconds: statusStartedAt ? Math.max(0, Math.floor((generatedAt.getTime() - statusStartedAt.getTime()) / 1000)) : null,
         lastOperation: lastOperation ? toIsoObject(lastOperation) : null,
+        customerNotice: activeTour ? notices.get(activeTour.id) ?? null : null,
         clockSummary,
         telemetry: latestTelemetry ? {
           source: "WEBFLEET",

@@ -1,6 +1,6 @@
 import { AbbreviationQuestion } from './AbbreviationQuestion'
 import { copyIntoMemory, UNREADABLE_FILE_TEXT } from '../lib/file-copy'
-import { AlertTriangle, ArrowDown, ArrowUp, CheckCircle2, FileUp, LoaderCircle, MapPin, Pencil, Plus, RefreshCw, Route, Search, Trash2, X } from 'lucide-react'
+import { AlertTriangle, ArrowDown, ArrowUp, CheckCircle2, FileText, FileUp, LoaderCircle, MapPin, Pencil, Plus, RefreshCw, Route, Search, Trash2, X } from 'lucide-react'
 import type { ChangeEvent, DragEvent } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
@@ -26,6 +26,14 @@ import { currentDispatcherRole } from '../lib/auth'
 import { readStatsLine, waitedMs } from '../lib/import-stats'
 
 type DockTab = 'search' | 'route' | 'order'
+/** What the main screen shows of an Auftrag under review: its stops on the map and «Если взять LKW …». */
+export type AuftragDraftSummary = {
+  orderNumber: string
+  vehicleId: string
+  stops: Array<{ address: string; company: string; city: string; type: 'LOAD' | 'UNLOAD'; coords: { latitude: number; longitude: number } | null; appointmentAt: string | null }>
+}
+/** A file dropped on the map of the main screen goes here (owner, 18.11.2026: Auftrag на главной). */
+export const AUFTRAG_DROP_EVENT = 'ops:auftrag-drop'
 type TerminReview = { document: AppointmentDocument; fingerprint: string; match: AppointmentMatch; pendingId: string | null; alreadyApplied: boolean; fileName: string }
 type DraftStop = ImportedStopDraft & { city: string; company: string; address: string; appointmentLocal: string; loadingMetersText: string; referenceText: string; instructionsText: string; resolution?: AddressResolution | null
   /** What the import recognised, to notice the dispatcher's correction. */
@@ -40,8 +48,10 @@ export function QuickOrderPanel({
   onAddressFound,
   onRoutePreview,
   importOnly = false,
-  onImportActivity
+  onImportActivity,
+  onDraftChange
 }: {
+  onDraftChange?: (draft: AuftragDraftSummary | null) => void
   importOnly?: boolean
   onImportActivity?: () => void
   row?: DashboardVehicle | null
@@ -153,6 +163,31 @@ export function QuickOrderPanel({
       window.removeEventListener('drop', onWindowDrop)
     }
   })
+
+  useEffect(() => {
+    if (importOnly) return
+    const onDropped = (event: Event) => {
+      const files = (event as CustomEvent<File[]>).detail
+      if (!Array.isArray(files) || !files.length) return
+      setTab('order'); setError('')
+      queueFiles(files)
+    }
+    window.addEventListener(AUFTRAG_DROP_EVENT, onDropped)
+    return () => window.removeEventListener(AUFTRAG_DROP_EVENT, onDropped)
+  })
+  const draftChange = useRef(onDraftChange)
+  draftChange.current = onDraftChange
+  useEffect(() => {
+    if (importOnly) return
+    draftChange.current?.(draft ? {
+      orderNumber: orderNumber.trim(),
+      vehicleId,
+      stops: stops.map((stop) => ({ address: [stop.company, stop.address].filter(Boolean).join(', ') || stop.city, company: stop.company, city: stop.city, type: stop.type === 'LOAD' ? 'LOAD' : 'UNLOAD',
+        coords: stop.resolution ? { latitude: stop.resolution.latitude, longitude: stop.resolution.longitude } : null,
+        appointmentAt: stop.appointmentLocal ? berlinLocalToIso(stop.appointmentLocal) ?? null : null }))
+    } : null)
+  }, [draft, importOnly, orderNumber, stops, vehicleId])
+  useEffect(() => () => { draftChange.current?.(null) }, [])
 
   function queueFiles(files: File[]) {
     // Read the bytes now: a file dragged from Outlook may be gone by the time it is uploaded.
@@ -361,6 +396,7 @@ export function QuickOrderPanel({
       {!importOnly ? <div className="map-action-bar">
         <button type="button" className={tab === 'search' ? 'active' : ''} onClick={() => toggleTab('search')} aria-expanded={tab === 'search'}><Search className="h-4 w-4" />Адрес</button>
         <button type="button" className={tab === 'route' ? 'active' : ''} onClick={() => toggleTab('route')} aria-expanded={tab === 'route'}><Route className="h-4 w-4" />Маршрут</button>
+        <button type="button" className={tab === 'order' ? 'active' : ''} onClick={() => toggleTab('order')} aria-expanded={tab === 'order'} title="PDF, Excel или фото Auftrag: можно перетащить прямо на карту"><FileText className="h-4 w-4" />Auftrag</button>
 
       </div> : null}
       {tab ? <div className="map-action-body">

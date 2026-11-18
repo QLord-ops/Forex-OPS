@@ -135,9 +135,29 @@ export function routeTitle(tour?: Tour | null): string {
   return `${shortAddress(first)} → ${shortAddress(last)}`
 }
 
+/** The firm without its legal form: «Schnellecke Transportlogistik GmbH» → «Schnellecke», a long name → its first word. */
+export function firmName(company?: string | null): string {
+  const firm = (company ?? '').replace(/(^|\s)(GmbH|AG|SE|KG|KGaA|mbH|e\.K\.|Co\.?|&\s*Co\.?|Transportlogistik|Logistik)(?=\s|$|,)/gi, '$1').replace(/[&,]\s*$/, '').replace(/\s+/g, ' ').trim()
+  return firm.length > 24 ? firm.split(' ')[0] : firm
+}
+
+/**
+ * A stop as the dispatchers name it (owner, 18.11.2026): the firm and the town, «Musterwerk Jena», «MB Düsseldorf»;
+ * the town alone when the firm already says it («Demo Lager Göttingen») or no firm is known.
+ */
+export function placeName(stop?: { company?: string | null; city?: string | null; address?: string | null } | null, keepPostcode = true): string {
+  if (!stop) return ''
+  const firm = firmName(stop.company)
+  const raw = (stop.city ?? '').trim()
+  const city = keepPostcode ? raw : raw.replace(/^\d{4,5}\s+/, '')
+  const town = raw.replace(/^\d{4,5}\s+/, '')
+  if (!firm) return city
+  return town && !firm.toLowerCase().includes(town.toLowerCase()) ? `${firm} ${city}` : firm
+}
+
 export function shortAddress(stop?: Stop | null): string {
   if (!stop) return '–'
-  return stop.city?.trim() || 'Город неизвестен'
+  return placeName(stop) || 'Город неизвестен'
 }
 
 export function classNames(...values: Array<string | false | null | undefined>): string {

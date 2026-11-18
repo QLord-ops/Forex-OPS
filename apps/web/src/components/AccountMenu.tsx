@@ -1,4 +1,4 @@
-import { Bot, ChevronDown, CircleHelp, GraduationCap, KeyRound, UserRound, X } from 'lucide-react'
+import { Bot, CircleHelp, GraduationCap, KeyRound, UserRound, X } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 
@@ -22,13 +22,11 @@ export function AccountMenu() {
     : role === 'admin' ? 'АД' : 'ДС'
   const menu = usePopover()
   const [passwordOpen, setPasswordOpen] = useState(false)
-  return <div className="topbar-popover-anchor" ref={menu.ref}>
+  return <div className="popover-anchor" ref={menu.ref}>
     <button type="button" className="account-menu" aria-expanded={menu.open} aria-haspopup="true" onClick={menu.toggle} title={name} aria-label={`${name}: меню`}>
       <span className="account-menu-avatar" aria-hidden="true">{initials}</span>
-      <span className="account-menu-name">{name}</span>
-      <ChevronDown className="account-menu-chevron" aria-hidden="true" />
     </button>
-    {menu.open ? <div className="topbar-popover account-menu-popover" aria-label="Меню диспетчера">
+    {menu.open ? <div className="popover-menu popover-menu-side account-menu-popover" aria-label="Меню диспетчера">
       <p className="account-menu-who"><strong>{name}</strong><span>{role === 'admin' ? 'администратор' : 'диспетчер'}{person ? '' : ' · общий вход'}</span></p>
       <ThemeToggle className="account-menu-item" />
       <AlertToggle className="account-menu-item" />

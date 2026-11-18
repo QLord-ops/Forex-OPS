@@ -1,4 +1,5 @@
 import type {
+  CustomerNotice,
   Coordinate,
   Alert,
   AppointmentAnalysis,
@@ -162,6 +163,8 @@ export interface CustomerProfile {
   import: { routeSource: 'TOUR_REMARKS' | 'TABLE' | 'EMAIL_TEXT'; warehouseWords: string[]; carrierNames: string[]; dateOnlyMeansPlannedStart: boolean; zuladungWords: string[]; aiNotes: string }
   statusList: { enabled: boolean; dueLocalTime: string; excludedVehicles: string[]; weColumnLabel: string | null; showASchild: boolean; showAppSped: boolean }
   defaults: { serviceMinMinutes: number; serviceMaxMinutes: number; arrivalRadiusMeters: number }
+  /** Who gets the delay letter of «Сообщить заказчику». Older answers may not carry it yet. */
+  notify?: { emails: string[] }
 }
 export interface CustomerLine {
   id: string; customerId: string; code: string; name: string; active: boolean; sortIndex: number
@@ -180,7 +183,7 @@ export interface CustomerOverview {
   recentDocuments: Array<{ id: string; filename: string; mimeType: string; status: string; tourId: string | null; createdAt: string }>
 }
 export interface CustomerMigrationItem { slug: string; name: string; exists: boolean; statusList: boolean; lines: Array<{ code: string; name: string; vehicles: string[] }> }
-type ProfilePatch = { import?: Partial<CustomerProfile['import']>; statusList?: Partial<CustomerProfile['statusList']>; defaults?: Partial<CustomerProfile['defaults']> }
+type ProfilePatch = { import?: Partial<CustomerProfile['import']>; statusList?: Partial<CustomerProfile['statusList']>; defaults?: Partial<CustomerProfile['defaults']>; notify?: { emails: string[] } }
 
 export const customersApi = {
   list: () => request<{ customers: Customer[] }>('/customers').then((result) => result.customers),
@@ -342,6 +345,9 @@ export const api = {
   savePendingAppointment: (payload: { fingerprint: string; document: AppointmentDocument }) =>
     request<{ id: string; status: string }>('/appointments/pending', { method: 'POST', body: JSON.stringify(payload) }),
   pendingAppointments: () => request<{ items: PendingAppointment[] }>('/appointments/pending'),
+  /** «Сообщить заказчику»: records that the dispatcher sent the delay letter from their own mail program. */
+  recordCustomerNotice: (vehicleId: string, input: { tourId: string; stopId: string; channel: 'EMAIL' | 'COPY'; etaAt: string | null; delayMinutes: number | null; recipients: number }) =>
+    request<CustomerNotice>(`/vehicles/${encodeURIComponent(vehicleId)}/customer-notice`, { method: 'POST', body: JSON.stringify(input) }),
   dismissPendingAppointment: (id: string) => request<{ ok: true }>(`/appointments/pending/${encodeURIComponent(id)}/dismiss`, { method: 'POST', body: '{}' }),
   applyAppointment: (stopId: string, payload: { appointmentAt: string; version: number; scope?: 'PLACE' | 'STOP' }) =>
     request<AppointmentAnalysis>(`/stops/${stopId}/appointment`, {

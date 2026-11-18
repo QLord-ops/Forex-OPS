@@ -17,7 +17,7 @@ describe("OsrmRoutingProvider", () => {
       nominatimMinIntervalMs: 0
     });
 
-    await expect(provider.geocode("Göttingen")).resolves.toMatchObject({ provider: "mock", city: "Гёттинген" });
+    await expect(provider.geocode("Göttingen")).resolves.toMatchObject({ provider: "mock", city: "Göttingen" });
   });
 
   it("caches equal geocode requests and returns real Nominatim coordinates", async () => {
