@@ -39,6 +39,35 @@ npm run dev
 
 Локально состояние хранится в SQLite. Рабочая production-схема Prisma использует PostgreSQL. Подробная схема развёртывания описана в [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
+## Приложение водителя (локально)
+
+`apps/driver` — PWA для служебных Android-телефонов. Нужны Node.js 22 и PostgreSQL (проще всего через Docker).
+
+1. База:
+   ```bash
+   docker run -d --name ops-db -e POSTGRES_USER=ops -e POSTGRES_PASSWORD=ops -e POSTGRES_DB=ops -p 5432:5432 postgres:16
+   ```
+2. Файл `.env.local` в корне репозитория (в git не попадает):
+   ```bash
+   DATABASE_URL=postgresql://ops:ops@127.0.0.1:5432/ops
+   DATABASE_URL_UNPOOLED=postgresql://ops:ops@127.0.0.1:5432/ops
+   SESSION_SECRET=<любые 64 случайных символа: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))">
+   ```
+3. Установка, схема и тестовые машины (936, 728, 414, 563):
+   ```bash
+   npm install
+   npm run db:setup
+   ```
+4. Код смены для тестовой машины (только для локальной базы; рабочие коды выдаёт диспетчер):
+   ```bash
+   npm run driver:code -w @ops/api -- 936
+   ```
+5. Запуск API и приложения:
+   ```bash
+   npm run dev:driver
+   ```
+   Откройте [http://127.0.0.1:5174](http://127.0.0.1:5174) в Chrome, нажмите F12, затем Ctrl+Shift+M — страница станет экраном телефона. Войдите номером машины (`KS-OP 936` или `936`) и кодом из шага 4. Изменения кода появляются сами.
+
 ## Основной рабочий процесс
 
 ### Создание Auftrag
