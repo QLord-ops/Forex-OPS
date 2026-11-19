@@ -402,6 +402,8 @@ model Dispatcher {
   onboardingCompletedAt DateTime?
   /// Interface language: ru | de | en.
   locale String?
+  /// Work phone of the dispatch desk, so a driver can call from the driver app. Never a private number (DSGVO).
+  workPhone String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

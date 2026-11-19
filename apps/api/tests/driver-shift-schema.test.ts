@@ -38,3 +38,9 @@ it('stores who recorded a stop event and leaves older events without a source', 
   expect(await db.event.create({ data: base })).toMatchObject({ source: null });
   expect(await db.event.create({ data: { ...base, source: 'DRIVER' } })).toMatchObject({ source: 'DRIVER' });
 });
+
+it('keeps an optional work phone on a dispatcher account', async () => {
+  const anna = await db.dispatcher.create({ data: { login: 'anna.phone', displayName: 'Anna', passwordHash: 'x' } });
+  expect(anna.workPhone).toBeNull();
+  expect(await db.dispatcher.update({ where: { id: anna.id }, data: { workPhone: '+49 551 123456' } })).toMatchObject({ workPhone: '+49 551 123456' });
+});
