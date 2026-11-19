@@ -49,7 +49,7 @@ type ScheduleStop = { id: string; appointmentAt?: string | Date | null; serviceM
  */
 export function forecastQueue(engine: DriveEngine, now: Date, legs: { toStopId: string; duration: number }[], stops: ScheduleStop[], arrived?: ScheduleStop, startsAt: Date | null = null) {
   let early = engine.clone(), late = engine.clone(), earlyAt = now, lateAt = now;
-  const windows: { stopId: string; earliest: string; latest: string }[] = [];
+  const windows: { stopId: string; earliest: string; latest: string; driveLeftSeconds: number | null; extendedDay: boolean }[] = [];
   const service = (stop?: ScheduleStop) => {
     const elapsed = stop?.arrivedAt ? Math.max(0, (now.getTime() - stop.arrivedAt.getTime()) / 1000) : 0;
     const appointment = stop?.appointmentAt ? new Date(stop.appointmentAt).getTime() : 0;
@@ -65,7 +65,8 @@ export function forecastQueue(engine: DriveEngine, now: Date, legs: { toStopId: 
     const deadline = stop?.appointmentAt ? new Date(stop.appointmentAt) : null;
     const first = forecastEta(early, leg.duration, earlyAt, deadline, startsAt), second = forecastEta(late, leg.duration, lateAt, deadline, startsAt);
     early = first.engine; late = second.engine; earlyAt = first.endAt; lateAt = second.endAt;
-    windows.push({ stopId: leg.toStopId, earliest: earlyAt.toISOString(), latest: lateAt.toISOString() });
+    windows.push({ stopId: leg.toStopId, earliest: earlyAt.toISOString(), latest: lateAt.toISOString(),
+      driveLeftSeconds: early.driveLeftAt(earlyAt), extendedDay: first.plan.extendedDay || second.plan.extendedDay });
     service(stop);
   }
   return windows;

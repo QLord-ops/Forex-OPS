@@ -1,4 +1,5 @@
 import { formatDelay, formatDurationMinutes, formatDateTime, formatTime, shortAddress, statusLabel } from './format'
+import { drivingDayText } from './driving-day'
 import { currentStopOf, terminOf } from './tours'
 import type { DashboardVehicle } from '../types/domain'
 
@@ -223,6 +224,8 @@ export function etaPlanLine(row: Pick<DashboardVehicle, 'eta' | 'etaSource' | 'e
   if (plan.startsAt) parts.push(`выезд не раньше ${at(plan.startsAt)}`)
   if (plan.rest) parts.push(`отдых ${formatDurationMinutes(plan.rest.seconds / 60)}${plan.rest.reduced ? ' (сокращён)' : ''} до ${at(plan.rest.endAt)}`)
   else if (plan.breakSeconds > 0) parts.push(`перерыв ${formatDurationMinutes(plan.breakSeconds / 60)}`)
+  const day = drivingDayText(plan.driveLeftSeconds, plan.extendedDay)
+  if (day) parts.push(`на месте ${day.text}`)
   return { text: parts.join(' · '), source: `${position} · ${plan.hours === 'TACHOGRAPH' ? 'по тахографу' : 'часы предварительно'}` }
 }
 

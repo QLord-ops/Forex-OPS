@@ -30,17 +30,21 @@ const budget = (overrides: Partial<DriverBudget> = {}): DriverBudget => ({
 const iso = (value: Date | string) => new Date(value).toISOString();
 
 describe('ETA on the driver\'s hours (LKW B-CY2853)', () => {
-  it('stops at the end of the shift, rests 11 h and arrives the next morning, not at 20:51', () => {
+  it('stops at 9 h of driving, rests 11 h and arrives the next morning, not at 20:51', () => {
+    // Webfleet counts the day up to 10 h (4 h 22 left after 5 h 27); the plan stops at 9 h, 3 h 33 later (owner, 19.11).
     const result = forecastEta(new WebfleetEngine(budget()), DRIVE, now, null);
     expect(iso(result.endAt)).toBe('2026-11-10T06:51:00.000Z');
-    expect(result.plan).toMatchObject({ hours: 'TACHOGRAPH', preliminary: false, driveSeconds: DRIVE, breakSeconds: 0, startsAt: null,
-      rest: { startAt: '2026-11-09T17:55:00.000Z', endAt: '2026-11-10T04:55:00.000Z', seconds: 11 * H, reduced: false } });
+    expect(result.plan).toMatchObject({ hours: 'TACHOGRAPH', preliminary: false, driveSeconds: DRIVE, breakSeconds: 0, startsAt: null, extendedDay: false,
+      rest: { startAt: '2026-11-09T17:12:00.000Z', endAt: '2026-11-10T04:12:00.000Z', seconds: 11 * H, reduced: false } });
+    // On arrival 2 h 39 of the new 9 h day are driven.
+    expect(result.plan.driveLeftSeconds).toBe(9 * H - (DRIVE - (3 * H + 33 * 60)));
   });
 
   it('shortens the rest to 9 h only when a Termin would otherwise be missed and a reduced rest is still allowed', () => {
     const early = forecastEta(new WebfleetEngine(budget()), DRIVE, now, new Date('2026-11-10T05:00:00Z'));
     expect(iso(early.endAt)).toBe('2026-11-10T04:51:00.000Z');
-    expect(early.plan.rest).toMatchObject({ seconds: 9 * H, reduced: true, endAt: '2026-11-10T02:55:00.000Z' });
+    expect(early.plan.rest).toMatchObject({ seconds: 9 * H, reduced: true, endAt: '2026-11-10T02:12:00.000Z' });
+    expect(early.plan.extendedDay).toBe(false);
 
     const comfortable = forecastEta(new WebfleetEngine(budget()), DRIVE, now, new Date('2026-11-10T08:00:00Z'));
     expect(comfortable.plan.rest).toMatchObject({ seconds: 11 * H, reduced: false });

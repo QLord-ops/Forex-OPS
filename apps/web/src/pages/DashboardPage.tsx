@@ -27,6 +27,7 @@ import { etaText, routeProgress, type StopState } from '../lib/route-progress'
 import { currentStopOf, terminOf } from '../lib/tours'
 import { stopEta, stopTerminLabel } from '../lib/stop-times'
 import { classNames, formatDateTime, formatDurationMinutes, formatTime, placeName, shortAddress, statusLabel, stopTypeLabel } from '../lib/format'
+import { drivingDayText } from '../lib/driving-day'
 import type { Coordinate, CurrentPosition, DashboardVehicle, DrivingTimes, Stop } from '../types/domain'
 import { zuladungState } from '../lib/zuladung'
 import { customerColor } from '../lib/customers'
@@ -459,7 +460,8 @@ function AuftragCheck({ draft, vehicles }: { draft: AuftragDraftSummary; vehicle
           const eta = stop.latestArrival ?? stop.earliestArrival
           const margin = termin && eta ? Math.round((Date.parse(termin) - Date.parse(eta)) / 60_000) : null
           return <li key={index}><b>{index + 1}</b><span>{draft.stops[index] ? placeName(draft.stops[index]) || draft.stops[index].address : stop.address}</span>
-            <span>{eta ? `ETA ${formatDateTime(eta)}` : 'ETA нет'}{margin !== null ? <em className={margin < 0 ? 'timing-late' : 'timing-ok'}>{margin < 0 ? ` · опоздание ${formatDurationMinutes(-margin)}` : ` · запас ${formatDurationMinutes(margin)}`}</em> : null}</span></li>
+            <span>{eta ? `ETA ${formatDateTime(eta)}` : 'ETA нет'}{margin !== null ? <em className={margin < 0 ? 'timing-late' : 'timing-ok'}>{margin < 0 ? ` · опоздание ${formatDurationMinutes(-margin)}` : ` · запас ${formatDurationMinutes(margin)}`}</em> : null}</span>
+            {(() => { const day = drivingDayText(stop.driveLeftSeconds, stop.extendedDay); return day ? <small className={day.extended ? 'auftrag-check-day auftrag-check-day-extended' : 'auftrag-check-day'}>{day.text}</small> : null })()}</li>
         })}
       </ul> : null}
       {scenario ? <p className="auftrag-check-line">{Math.round(scenario.distanceMeters / 1000)} км · старт ≈ {formatDateTime(scenario.startRange.earliest)}{scenario.requiresDailyRest ? ' · нужен суточный отдых' : ''}{scenario.preliminary ? ' · предварительно' : ''}</p> : null}

@@ -408,6 +408,10 @@ export interface DriveEtaPlan {
   rest: { startAt: string; endAt: string; seconds: number; reduced: boolean } | null
   /** Driving starts no earlier than this: the next shift of a driver whose card is out. */
   startsAt: string | null
+  /** The 10th hour of driving is taken on the way: only when the Termin is missed with 9 h. */
+  extendedDay?: boolean
+  /** Driving left in the driver's day on arrival; null when the hours are unknown. */
+  driveLeftSeconds?: number | null
 }
 
 export interface CurrentPosition {

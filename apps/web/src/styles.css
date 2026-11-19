@@ -755,3 +755,6 @@ main a:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .update-notice { position: fixed; z-index: 70; top: 76px; left: 50%; display: flex; max-width: calc(100vw - 24px); align-items: center; gap: 12px; border: 1px solid var(--b-default); border-radius: 999px; background: var(--s-card); padding: 6px 6px 6px 16px; color: var(--t-primary); font-size: .875rem; font-weight: 500; white-space: nowrap; box-shadow: var(--shadow-float); transform: translateX(-50%); }
 .update-notice-button { display: inline-flex; height: 32px; align-items: center; gap: 6px; border-radius: 999px; background: var(--acc); padding: 0 14px; color: var(--acc-ink); font-size: .8125rem; font-weight: 600; }
 .update-notice-button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.route-builder-eta li { flex-wrap: wrap; }
+.route-builder-eta .route-builder-day { flex: 1 0 100%; padding-left: 1.7rem; color: rgb(var(--tx-475569)); font-size: .75rem; font-weight: 500; }
+.route-builder-eta .route-builder-day-extended { color: rgb(var(--tx-b45309)); font-weight: 700; }
