@@ -145,8 +145,10 @@ test('ноутбук с открытой карточкой: вопросы св
   await expect(card).toBeVisible()
   await expect(stack.getByRole('article')).toHaveCount(0)
   const [cardBox, stackBox] = await Promise.all([card.boundingBox(), stack.boundingBox()])
-  // At least 200 px of map between the card and the folded questions (they used to lie over each other).
-  expect({ gap: Math.round((stackBox?.x ?? 0) - ((cardBox?.x ?? 0) + (cardBox?.width ?? 0))) >= 200, folded: (stackBox?.height ?? 999) < 60 }).toEqual({ gap: true, folded: true })
+  // Map stays visible between the card and the folded questions (they used to lie over each other).
+  // The folded heading is as wide as its text, so the gap depends on the font: 235 px with Inter, less with the wider CI fonts.
+  const gap = Math.round((stackBox?.x ?? 0) - ((cardBox?.x ?? 0) + (cardBox?.width ?? 0)))
+  expect({ gap: gap >= 120 ? 'map visible' : `${gap} px`, folded: (stackBox?.height ?? 999) < 60 }).toEqual({ gap: 'map visible', folded: true })
   await stack.getByRole('button', { name: 'Показать' }).click()
   await expect(stack.locator('.decision-card:not(.decision-card-nested)')).toHaveCount(3)
   await stack.getByRole('button', { name: 'Свернуть' }).click()
