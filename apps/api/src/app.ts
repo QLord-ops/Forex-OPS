@@ -51,6 +51,8 @@ import { registerRouteScenarioRoutes } from './routes/route-scenario.js';
 import { AssistantError, DispatcherAssistantService } from './services/dispatcher-assistant.js';
 import { assistantSessionKey, registerDispatcherAssistantRoutes } from './routes/dispatcher-assistant.js';
 import { registerDispatcherRoutes } from './routes/dispatchers.js';
+import { registerDriverShiftRoutes } from './routes/driver-shifts.js';
+import { driverOrigins, registerDriverAuth } from './services/driver-auth.js';
 import { registerVehicleAssignmentRoutes } from './routes/vehicle-assignment.js';
 import { registerVehicleStatusSettingsRoutes } from './routes/vehicle-status-settings.js';
 import { registerDailyStatusRoutes } from './routes/daily-status.js';
@@ -413,6 +415,8 @@ const patchTourSchema = z.union([
 
 export interface BuildAppOptions {
   auth?: DispatcherAuthOptions;
+  /** Sites the driver app is served from; DRIVER_ALLOWED_ORIGINS by default. */
+  driverOrigins?: string[];
   pdfImport?: (buffer: Buffer, filename: string, customer?: ImportCustomerContext | null) => Promise<PdfImportPreview>;
   imageImport?: (buffer: Buffer, filename: string, mimeType: "image/png" | "image/jpeg" | "image/webp", customer?: ImportCustomerContext | null) => Promise<ImageImportPreview>;
   databaseCheck?: () => Promise<unknown>;
@@ -462,7 +466,9 @@ export async function buildApp(options: BuildAppOptions = {}) {
   const isServerless = Boolean(process.env.VERCEL);
   const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? process.env.DISPATCHER_ALLOWED_ORIGINS ?? 'https://ops-disponent-web.vercel.app,http://localhost:5173,http://127.0.0.1:5173')
     .split(',').map(value => value.trim()).filter(Boolean);
-  const allowedOriginSet = new Set(allowedOrigins);
+  // The driver app is its own site: CORS lets it in, but only the /driver gate accepts its requests.
+  const driverAppOrigins = driverOrigins();
+  const allowedOriginSet = new Set([...allowedOrigins, ...driverAppOrigins]);
   await app.register(cors, {
     origin: (origin, callback) => callback(null, !origin || allowedOriginSet.has(origin)),
     credentials: true
@@ -471,12 +477,15 @@ export async function buildApp(options: BuildAppOptions = {}) {
     contentSecurityPolicy: false,
     crossOriginResourcePolicy: { policy: 'same-site' }
   });
-  registerDispatcherAuth(app, prisma, options.auth?.origins ? options.auth : { ...options.auth, origins: allowedOrigins });
+  // The hook comes first so that it also guards the driver routes registered right after it.
+  let driverGate: NonNullable<DispatcherAuthOptions['driverGate']> = async (_request, reply) => reply.code(404).send({ error: 'Не найдено.' });
+  registerDispatcherAuth(app, prisma, { ...options.auth, origins: options.auth?.origins ?? allowedOrigins, driverGate: (request, reply) => driverGate(request, reply) });
+  driverGate = registerDriverAuth(app, prisma, { secret: options.auth?.secret, origins: options.driverOrigins ?? driverAppOrigins, now: options.auth?.now });
   await app.register(rateLimit, {
     global: true,
     max: 300,
     timeWindow: '1 minute',
-    keyGenerator: request => request.dispatcherSession?.sessionId ?? request.ip
+    keyGenerator: request => request.dispatcherSession?.sessionId ?? request.driverSession?.sessionId ?? request.ip
   });
   await app.register(multipart, {
     limits: {
@@ -489,6 +498,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   registerDispatcherAssistantRoutes(app, assistantService);
   registerAppointmentDocumentRoutes(app, { prisma, appointments: appointmentService, pending: pendingAppointments, audit, refreshAlertsForVehicle: (vehicleId) => refreshAlertsForVehicle(vehicleId) });
   registerDispatcherRoutes(app, prisma);
+  registerDriverShiftRoutes(app, prisma);
   registerVehicleAssignmentRoutes(app, prisma);
   registerVehicleStatusSettingsRoutes(app, prisma);
   registerDailyStatusRoutes(app, dailyStatus);

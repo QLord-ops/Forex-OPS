@@ -16,6 +16,7 @@ Fastify не следует считать обычной статической
 - `DATABASE_URL_UNPOOLED` — direct Neon URL для Prisma Migrate и импорта;
 - `API_HOST=0.0.0.0`;
 - `ALLOWED_ORIGINS` — точные HTTPS-домены фронтенда через запятую;
+- `DRIVER_ALLOWED_ORIGINS` — точные HTTPS-домены приложения водителя через запятую (пока приложение не выложено — не задавать);
 - хэши паролей, `SESSION_SECRET` и ключи внешних провайдеров — только в секретах хостинга;
 - `TRUST_PROXY_HOPS` — сколько прокси стоит перед API (по умолчанию в production 2: Vercel → DigitalOcean). По нему API видит настоящий адрес пользователя для лимита неудачных входов.
 
