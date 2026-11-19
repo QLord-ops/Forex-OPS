@@ -271,6 +271,33 @@ describe('driver app: the tour and the driver\'s own marks', () => {
     expect((await db.stop.findUniqueOrThrow({ where: { id: stops[0].id } })).arrivedAt).toEqual(new Date(now));
   });
 
+  it('names the dispatcher the driver calls: who took the truck, the stand-in, or the dispatcher of its line', async () => {
+    const { app, vehicle, headers } = await scenario();
+    closing.push(app);
+    const n = vehicle.vehicleNumber;
+    const view = async () => (await app.inject({ url: '/driver/tour', headers })).json().dispatcher;
+    expect(await view()).toBeNull();
+
+    const customer = await db.customer.create({ data: { name: `Kunde ${n}`, slug: `kunde-${n}` } });
+    const line = await db.customerLine.create({ data: { customerId: customer.id, code: `L${n}`, name: `Linie ${n}` } });
+    const lena = await db.dispatcher.create({ data: { login: `lena.${n}`, displayName: 'Lena', passwordHash: 'x', workPhone: '+49 551 111111' } });
+    const omar = await db.dispatcher.create({ data: { login: `omar.${n}`, displayName: 'Omar', passwordHash: 'x', workPhone: '+49 551 222222' } });
+    const ida = await db.dispatcher.create({ data: { login: `ida.${n}`, displayName: 'Ida', passwordHash: 'x' } });
+    await db.dispatcherLine.create({ data: { dispatcherId: lena.id, lineId: line.id } });
+    await db.vehicle.update({ where: { id: vehicle.id }, data: { customerLineId: line.id } });
+    // A free truck: the only dispatcher of its line.
+    expect(await view()).toEqual({ name: 'Lena', phone: '+49 551 111111' });
+    // Omar took it.
+    await db.vehicle.update({ where: { id: vehicle.id }, data: { assignedDispatcherId: omar.id } });
+    expect(await view()).toEqual({ name: 'Omar', phone: '+49 551 222222' });
+    // Ida stands in for Omar: the driver calls Ida, even without a phone of hers.
+    await db.dispatcherCover.create({ data: { absentDispatcherId: omar.id, coverDispatcherId: ida.id, startsAt: new Date(now - 3_600_000), endsAt: new Date(now + 3_600_000) } });
+    expect(await view()).toEqual({ name: 'Ida', phone: null });
+    // A switched-off account is nobody to call.
+    await db.dispatcher.update({ where: { id: ida.id }, data: { active: false } });
+    expect(await view()).toBeNull();
+  });
+
   it('judges the mark by Webfleet only: zone, away, stale or no position', () => {
     const stop = { ...PLANT, arrivalRadiusMeters: null };
     expect(driverGpsCheck({ ...PLANT, stale: false, ageSeconds: 30 }, stop)).toEqual({ status: 'IN_ZONE', distanceMeters: 0, ageMinutes: 1 });

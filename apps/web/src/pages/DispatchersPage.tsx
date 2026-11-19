@@ -1,4 +1,4 @@
-import { ChevronLeft, KeyRound, Search, UserPlus } from 'lucide-react'
+import { ChevronLeft, KeyRound, Phone, Search, UserPlus } from 'lucide-react'
 import { Fragment, useMemo, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 
@@ -24,6 +24,8 @@ export function DispatchersPage() {
   const [message, setMessage] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null)
   const [resetFor, setResetFor] = useState<string | null>(null)
   const [resetPassword, setResetPassword] = useState('')
+  const [phoneFor, setPhoneFor] = useState<string | null>(null)
+  const [phoneValue, setPhoneValue] = useState('')
   const me = currentDispatcher()
   const lineNames = useMemo(() => new Map(customers.flatMap((customer) => customer.lines.map((line) => [line.id, `${customer.name} · ${line.name}`] as const))), [customers])
 
@@ -68,6 +70,14 @@ export function DispatchersPage() {
       setResetFor(null)
       setResetPassword('')
     }, `Пароль для ${account.displayName} изменён.`)
+  }
+
+  function savePhone(account: DispatcherAccount, event: FormEvent) {
+    event.preventDefault()
+    void run(`phone-${account.id}`, async () => {
+      await accountsApi.update(account.id, { workPhone: phoneValue })
+      setPhoneFor(null)
+    }, phoneValue.trim() ? `Телефон для водителей у ${account.displayName} сохранён.` : `Телефон у ${account.displayName} убран.`)
   }
 
   function toggleActive(account: DispatcherAccount) {
@@ -156,6 +166,7 @@ export function DispatchersPage() {
                             <p className="accounts-sub"><span className="font-mono">{account.login}</span> · {account.active
                               ? <span className={account.onboardingCompletedAt ? undefined : 'accounts-warn'}>{account.onboardingCompletedAt ? 'обучение пройдено' : 'обучение не пройдено'}</span>
                               : 'отключён'}</p>
+                            <p className="accounts-sub"><Phone className="inline h-3.5 w-3.5 align-[-2px]" aria-hidden="true" /> {account.workPhone ?? <span className="accounts-warn">телефон для водителей не указан</span>}</p>
                           </div>
                         </div>
                       </td>
@@ -172,10 +183,25 @@ export function DispatchersPage() {
                         <div className="accounts-actions">
                           {account.active ? <button type="button" className="secondary-button" aria-expanded={resetting} disabled={busy !== null}
                             onClick={() => { setResetFor(resetting ? null : account.id); setResetPassword('') }}><KeyRound className="h-4 w-4" aria-hidden="true" />Сбросить пароль</button> : null}
+                          {account.active ? <button type="button" className="secondary-button" aria-expanded={phoneFor === account.id} disabled={busy !== null}
+                            onClick={() => { setPhoneFor(phoneFor === account.id ? null : account.id); setPhoneValue(account.workPhone ?? '') }}><Phone className="h-4 w-4" aria-hidden="true" />Телефон</button> : null}
                           {!self ? <button type="button" className={account.active ? 'accounts-quiet' : 'secondary-button'} disabled={busy !== null} onClick={() => toggleActive(account)}>{account.active ? 'Отключить' : 'Включить'}</button> : null}
                         </div>
                       </td>
                     </tr>
+                    {phoneFor === account.id ? <tr className="accounts-reset-row">
+                      <td colSpan={5}>
+                        <form className="accounts-reset" onSubmit={(event) => savePhone(account, event)}>
+                          <label className="block text-sm">
+                            <span className="metric-label">Телефон для водителей · {account.displayName}</span>
+                            <input className="field-input" type="tel" inputMode="tel" maxLength={40} value={phoneValue} onChange={(event) => setPhoneValue(event.target.value)} placeholder="+49 551 …" autoFocus />
+                          </label>
+                          <button type="submit" className="primary-button" disabled={busy !== null}>Сохранить</button>
+                          <button type="button" className="secondary-button" onClick={() => setPhoneFor(null)}>Отмена</button>
+                          <p className="accounts-hint">Служебный номер диспетчерской, не личный. Его набирает «Позвонить» в приложении водителя у машин этого диспетчера. Пустое поле — убрать.</p>
+                        </form>
+                      </td>
+                    </tr> : null}
                     {resetting ? <tr className="accounts-reset-row">
                       <td colSpan={5}>
                         <form className="accounts-reset" onSubmit={(event) => reset(account, event)}>

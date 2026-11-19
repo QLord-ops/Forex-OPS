@@ -63,3 +63,11 @@ describe('driver app without network', () => {
     expect(kept.session(Date.parse('2026-11-19T20:00:00Z'))).toBeNull()
   })
 })
+
+describe('driver app tabs', () => {
+  it('dials only digits and a leading plus', async () => {
+    const { telLink } = await import('../src/format')
+    expect(telLink('+49 551 / 123-456')).toBe('tel:+49551123456')
+    expect(telLink('0551 (99) 99 99')).toBe('tel:0551999999')
+  })
+})

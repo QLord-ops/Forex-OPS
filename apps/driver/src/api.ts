@@ -17,6 +17,8 @@ export type DriverTour = { id: string; orderNumber: string; tourRemarks: string 
 export type TourView = {
   serverTime: string
   vehicle: DriverVehicle
+  /** Who the driver calls: the dispatcher running the truck now (with covers), only name and work phone. */
+  dispatcher?: { name: string; phone: string | null } | null
   tour: DriverTour | null
   next: { orderNumber: string; company: string | null; city: string | null; appointmentAt: string | null } | null
   /** The driver's mark that closed the previous tour, while it can still be taken back. */

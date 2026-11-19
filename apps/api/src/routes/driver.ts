@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { writeAuditLog } from '../services/audit-log.js';
 import { driverActor, type DriverSession } from '../services/driver-auth.js';
 import type { OperationsService } from '../services/operations.js';
+import { coverResolver, coveredStatusOwner } from '../services/covers.js';
 import { samePlace } from '../services/termin-groups.js';
 import { DRIVER_UNDO_MS, driverGpsText, offlineText, type DriverGpsCheck, type TourService } from '../services/tours.js';
 import { DEFAULT_ARRIVAL_RADIUS_METERS, distanceMeters } from '../services/webfleet.js';
@@ -60,11 +61,26 @@ export function registerDriverRoutes(app: FastifyInstance, deps: DriverRouteDeps
   };
   const actions = { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } };
 
+  /**
+   * The dispatcher the driver calls: who took the truck, the stand-in while that one is covered, else the dispatcher of
+   * the truck's line (as for the status list). Only the name and the work phone, nothing else of the account.
+   */
+  async function dispatcherOf(vehicleId: string, now: Date) {
+    const vehicle = await prisma.vehicle.findUnique({ where: { id: vehicleId }, select: { assignedDispatcherId: true, customerLineId: true,
+      customerLine: { select: { dispatchers: { select: { dispatcherId: true, isPrimary: true } } } } } });
+    if (!vehicle) return null;
+    const owner = coveredStatusOwner(await coverResolver(prisma, now), vehicle, vehicle.customerLine?.dispatchers ?? []);
+    if (!owner) return null;
+    const person = await prisma.dispatcher.findUnique({ where: { id: owner.id }, select: { displayName: true, workPhone: true, active: true } });
+    return person?.active ? { name: person.displayName, phone: person.workPhone } : null;
+  }
+
   async function tourView(vehicleId: string, now: Date) {
-    const [vehicle, tour, queued] = await Promise.all([
+    const [vehicle, tour, queued, dispatcher] = await Promise.all([
       prisma.vehicle.findUniqueOrThrow({ where: { id: vehicleId }, select: { vehicleNumber: true, licensePlate: true } }),
       prisma.tour.findFirst({ where: { vehicleId, status: 'ACTIVE' }, orderBy: { createdAt: 'asc' }, include: { stops: { orderBy: { sequence: 'asc' } } } }),
-      prisma.tour.findFirst({ where: { vehicleId, status: 'QUEUED' }, orderBy: [{ queueIndex: 'asc' }, { createdAt: 'asc' }], include: { stops: { orderBy: { sequence: 'asc' }, take: 1 } } })
+      prisma.tour.findFirst({ where: { vehicleId, status: 'QUEUED' }, orderBy: [{ queueIndex: 'asc' }, { createdAt: 'asc' }], include: { stops: { orderBy: { sequence: 'asc' }, take: 1 } } }),
+      dispatcherOf(vehicleId, now)
     ]);
     const next = queued ? { orderNumber: queued.orderNumber, company: queued.stops[0]?.company ?? null, city: queued.stops[0]?.city ?? null,
       appointmentAt: (queued.stops[0]?.appointmentAt ?? queued.stops[0]?.appointmentWindowStartAt)?.toISOString() ?? null } : null;
@@ -78,11 +94,11 @@ export function registerDriverRoutes(app: FastifyInstance, deps: DriverRouteDeps
       ? { stopId: closed.id, type: closed.type, company: closed.company, city: closed.city, orderNumber: closed.tour.orderNumber, completedAt: closed.completedAt!.toISOString(),
         undoUntil: new Date(closing.createdAt.getTime() + DRIVER_UNDO_MS).toISOString() }
       : null;
-    if (!tour) return { serverTime: now.toISOString(), vehicle, tour: null, next, lastMark };
+    if (!tour) return { serverTime: now.toISOString(), vehicle, dispatcher, tour: null, next, lastMark };
     const current = tour.stops.find(stop => !stop.completedAt) ?? null;
     const eta = current && !current.arrivedAt ? await deps.eta(vehicleId, now).catch(() => null) : null;
     return {
-      serverTime: now.toISOString(), vehicle, next, lastMark,
+      serverTime: now.toISOString(), vehicle, dispatcher, next, lastMark,
       tour: {
         id: tour.id, orderNumber: tour.orderNumber, tourRemarks: tour.tourRemarks, trailerPlate: tour.trailerPlate, currentStopId: current?.id ?? null, eta,
         stops: tour.stops.map((stop, index) => {

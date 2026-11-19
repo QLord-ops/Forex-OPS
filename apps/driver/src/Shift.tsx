@@ -1,7 +1,8 @@
-import { Check, ChevronRight, CloudOff, LogOut, MapPin, Navigation, RefreshCw, Undo2 } from 'lucide-react'
+import { Check, ChevronRight, CloudOff, FileText, List, LogOut, MapPin, Navigation, Phone, RefreshCw, Undo2 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ApiError, driverApi, hasCsrf, offlineError, type DriverSession, type DriverStop, type TourView } from './api'
 import { InstallHint } from './InstallHint'
+import { DispatcherTab, DocumentsTab } from './Tabs'
 import { kept, serverNow, withPending, type PendingMark } from './offline'
 import { cargoLine, clock, clockWithDay, countdown, dayLabel, doneWord, etaMargin, etaSourceText, navigationLink, terminOf, windowLabel } from './format'
 import { StopScreen } from './StopScreen'
@@ -19,6 +20,7 @@ export function Shift({ session, onSignedOut }: { session: Extract<DriverSession
   const [fromPhone, setFromPhone] = useState(() => Boolean(kept.view()))
   const [error, setError] = useState('')
   const [openStopId, setOpenStopId] = useState<string | null>(null)
+  const [tab, setTab] = useState<'tour' | 'docs' | 'call'>('tour')
   const [refreshing, setRefreshing] = useState(false)
   const alive = useRef(true)
   const sending = useRef(false)
@@ -152,11 +154,22 @@ export function Shift({ session, onSignedOut }: { session: Extract<DriverSession
           <small>{marks.length ? 'Сохранены на телефоне с временем нажатия и уйдут сами, когда появится сеть.' : `Тур на ${clock(new Date(kept.view()?.savedAt ?? Date.now()).toISOString())}. Отметки можно ставить — они сохранятся на телефоне.`}</small>
         </span></p>}
         {!shown && !error && <p className="muted center" role="status">Загружаем тур…</p>}
-        {shown?.lastMark && <LastMark view={shown} onChanged={show} onFailed={failed} />}
-        {shown && !shown.tour && <NoTour view={shown} />}
-        {shown?.tour && <Tour view={shown} onOpen={setOpenStopId} onMark={mark} onFailed={failed} />}
-        <InstallHint />
+        {tab === 'tour' && <>
+          {shown?.lastMark && <LastMark view={shown} onChanged={show} onFailed={failed} />}
+          {shown && !shown.tour && <NoTour view={shown} />}
+          {shown?.tour && <Tour view={shown} onOpen={setOpenStopId} onMark={mark} onFailed={failed} />}
+          <InstallHint />
+        </>}
+        {tab === 'docs' && shown && <DocumentsTab view={shown} />}
+        {tab === 'call' && shown && <DispatcherTab view={shown} />}
       </div>
+
+      <nav className="tabs" aria-label="Разделы">
+        {([['tour', 'Тур', List], ['docs', 'Документы', FileText], ['call', 'Диспетчер', Phone]] as const).map(([id, label, Icon]) =>
+          <button key={id} type="button" className={`tab${tab === id ? ' tab-on' : ''}`} aria-current={tab === id ? 'page' : undefined} onClick={() => setTab(id)}>
+            <Icon aria-hidden="true" /><span>{label}</span>
+          </button>)}
+      </nav>
     </main>
   )
 }

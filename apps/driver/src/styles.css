@@ -212,6 +212,28 @@ svg { flex-shrink: 0; }
 .note { width: 100%; padding: 12px 14px; border: 1.5px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; font-size: 16px; resize: vertical; }
 .note:focus-visible { outline: 3px solid #8bbbff; outline-offset: 1px; }
 
+/* Нижние вкладки (Figma: Tab bar) */
+.tabs { position: sticky; bottom: 0; display: flex; padding: 10px 12px max(14px, env(safe-area-inset-bottom)); border-top: 1px solid #000; background: var(--page); }
+.tab { display: flex; min-height: 48px; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: 4px; border: 0; border-radius: 10px; background: transparent; color: var(--text-muted); font: inherit; font-size: 12px; font-weight: 500; cursor: pointer; }
+.tab svg { width: 24px; height: 24px; }
+.tab-on { color: var(--accent); font-weight: 600; }
+.tab:focus-visible { outline: 3px solid #8bbbff; outline-offset: 2px; }
+.facts-plain { display: flex; flex-direction: column; gap: 8px; margin: 0; }
+.facts-plain > div { display: flex; gap: 12px; }
+.facts-plain dt { width: 76px; flex-shrink: 0; color: var(--text-muted); font-size: 14px; line-height: 20px; }
+.facts-plain dd { margin: 0; font-size: 15px; font-weight: 500; line-height: 20px; overflow-wrap: anywhere; }
+.mono { font-variant-numeric: tabular-nums; letter-spacing: .02em; }
+.doc-stop { gap: 10px; }
+.doc-stop-head { display: flex; align-items: center; gap: 10px; }
+.doc-stop-company { margin: 0; font-size: 18px; font-weight: 700; line-height: 24px; }
+.small-note { font-size: 13px; line-height: 18px; }
+.call { align-items: center; gap: 10px; padding: 24px 18px; text-align: center; background: var(--panel); }
+.call .button { width: 100%; margin-top: 6px; }
+.call-avatar { display: grid; width: 72px; height: 72px; place-items: center; border-radius: 50%; background: var(--accent-subtle); color: var(--accent-text); }
+.call-avatar svg { width: 34px; height: 34px; }
+.call-name { margin: 0; font-size: 24px; font-weight: 700; line-height: 32px; }
+.call-phone { margin: 0; font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
 @keyframes sheet-in { from { transform: translateY(40px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes hero-in { from { opacity: 0; transform: scale(1.1); } to { opacity: 1; transform: scale(1.03); } }

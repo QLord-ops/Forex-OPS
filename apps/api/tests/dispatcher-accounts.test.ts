@@ -126,4 +126,29 @@ describe('personal dispatcher accounts', () => {
       expect((await app.inject({ method: 'POST', url: '/auth/password', headers: admin.headers, payload: { currentPassword: 'x', newPassword: 'shared cannot change' } })).statusCode).toBe(400);
     } finally { await app.close(); }
   });
+
+  it('keeps a work phone the drivers call: the dispatcher sets their own, the admin anyone\'s', async () => {
+    const app = await server();
+    try {
+      const admin = await login(app, { password: 'break glass admin' });
+      const created = await app.inject({ method: 'POST', url: '/dispatchers', headers: admin.headers, payload: { login: 'tel.test', displayName: 'Tel Test', role: 'dispatcher', password: 'tel long password 1' } });
+      const id = created.json().id as string;
+      const own = await login(app, { login: 'tel.test', password: 'tel long password 1' });
+      expect((await app.inject({ url: '/auth/work-phone', headers: own.headers })).json()).toEqual({ personal: true, workPhone: null });
+      for (const bad of ['12', 'call me', '+49 551 12a456', 'x'.repeat(41)]) {
+        expect((await app.inject({ method: 'PUT', url: '/auth/work-phone', headers: own.headers, payload: { workPhone: bad } })).statusCode).toBe(400);
+      }
+      const set = await app.inject({ method: 'PUT', url: '/auth/work-phone', headers: own.headers, payload: { workPhone: ' +49  551 / 123-456 ' } });
+      expect(set.json()).toEqual({ personal: true, workPhone: '+49 551 / 123-456' });
+      expect(await db.auditLog.count({ where: { action: 'DISPATCHER_WORK_PHONE_CHANGED', entityId: id } })).toBe(1);
+      // The shared admin login has no account of its own.
+      expect((await app.inject({ method: 'PUT', url: '/auth/work-phone', headers: admin.headers, payload: { workPhone: '+49 551 1' } })).statusCode).toBe(400);
+      const changed = await app.inject({ method: 'PATCH', url: `/dispatchers/${id}`, headers: admin.headers, payload: { workPhone: '0551 999999' } });
+      expect(changed.json()).toMatchObject({ workPhone: '0551 999999' });
+      expect((await app.inject({ method: 'PATCH', url: `/dispatchers/${id}`, headers: admin.headers, payload: { workPhone: '' } })).json()).toMatchObject({ workPhone: null });
+      expect((await app.inject({ method: 'PATCH', url: `/dispatchers/${id}`, headers: own.headers, payload: { workPhone: '0551 1' } })).statusCode).toBe(403);
+    } finally {
+      await app.close();
+    }
+  });
 });

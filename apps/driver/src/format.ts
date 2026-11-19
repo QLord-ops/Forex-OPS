@@ -46,3 +46,6 @@ export function navigationLink(stop: DriverStop): string {
   const point = `${stop.latitude},${stop.longitude}`
   return /Android/i.test(navigator.userAgent) ? `geo:${point}?q=${point}(${encodeURIComponent(stop.company ?? stop.address)})` : `https://www.google.com/maps/search/?api=1&query=${point}`
 }
+
+/** Only digits and a leading «+» go into the tel: link. */
+export const telLink = (phone: string) => `tel:${phone.trim().startsWith('+') ? '+' : ''}${phone.replace(/\D/g, '')}`
