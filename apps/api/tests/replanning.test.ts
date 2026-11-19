@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PrismaClient } from '../src/generated/sqlite-client/index.js';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { ReplanningService } from '../src/services/replanning.js';
+import { ReplanningService, replanStopsSchema } from '../src/services/replanning.js';
 import { MockRoutingProvider } from '../src/services/routing.js';
 import { asAppDatabase, migrateTestDatabase } from './test-database.js';
 import { createInitialClockState } from '../src/services/vehicle-clock.js';
@@ -112,4 +112,24 @@ it('a changed stop still voids the preview', async () => {
   const preview = await f.service.preview(f.tour.id, { version: 0, futureStops: [replacement] }, now);
   await db.stop.update({ where: { id: f.unload.id }, data: { address: 'Hamburg Hafen' } });
   await expect(f.service.apply(f.tour.id, { previewId: preview.id, version: 0 }, now)).rejects.toMatchObject({ statusCode: 409 });
+});
+
+it('«Изменить тур» accepts the stops as the page sends them: an unloading is added to a running tour whose stop has no company (19.11)', async () => {
+  const f = await fixture();
+  // The stop of the tour comes with the empty fields it has in the base; the new one has no id and no coordinates yet.
+  const sent = [
+    { id: f.unload.id, type: 'UNLOAD', address: 'Hamburg', company: null, city: null, appointmentAt: null, instructions: null, serviceMinMinutes: 60, serviceMaxMinutes: 120, latitude: 53.5, longitude: 10 },
+    { type: 'UNLOAD', address: 'Kassel', company: '', city: '34117 Kassel', appointmentAt: null, latitude: null, longitude: null }
+  ];
+  const futureStops = replanStopsSchema.parse(sent);
+  expect(futureStops[0]).toMatchObject({ id: f.unload.id, company: null, city: null });
+  expect(futureStops[1]).toMatchObject({ company: null, city: '34117 Kassel' });
+  expect(futureStops[1].id).toBeUndefined();
+  expect(futureStops[1].latitude).toBeUndefined();
+  const preview = await f.service.preview(f.tour.id, { version: 0, futureStops: [futureStops[0], { ...futureStops[1], latitude: 51.3, longitude: 9.5 }] }, now);
+  expect(preview.stops).toHaveLength(2);
+  // What the page must never send is still refused.
+  expect(() => replanStopsSchema.parse([{ type: 'UNLOAD', address: ' ' }])).toThrow();
+  expect(() => replanStopsSchema.parse([{ type: 'PARK', address: 'Kassel' }])).toThrow();
+  expect(() => replanStopsSchema.parse([])).toThrow();
 });

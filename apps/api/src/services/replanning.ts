@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Prisma, PrismaClient } from '@prisma/client';
+import { z } from 'zod';
 import type { Coordinate, CurrentPosition, RouteResult } from '../domain.js';
 import type { RoutingProvider } from './routing.js';
 import { resolveAddressWithFallback } from './address-resolution.js';
@@ -11,6 +12,21 @@ import { writeAuditLog, type AuditActor } from './audit-log.js';
 
 export type ReplanStop = { id?: string; type: 'LOAD' | 'UNLOAD'; address: string; instructions?: string | null; company?: string | null; city?: string | null; appointmentAt?: string | null; serviceMinMinutes?: number; serviceMaxMinutes?: number; latitude?: number; longitude?: number };
 export type ReplanInput = { version: number; futureStops: ReplanStop[]; origin?: Coordinate };
+/**
+ * The stops of «Изменить тур» as the page sends them: a stop of the tour comes with the empty fields it has in the base
+ * (company, city, coordinates may be null). A null was refused before, so no unloading could be added to a running
+ * tour whose stop had no company (owner, 19.11). An empty value means «not given».
+ */
+const absent = <T extends z.ZodTypeAny>(schema: T) => schema.nullish().transform((value) => value ?? undefined);
+export const replanStopsSchema = z.array(z.object({
+  id: absent(z.string().min(1)), type: z.enum(['LOAD', 'UNLOAD']), address: z.string().trim().min(1),
+  company: z.string().trim().max(300).nullish().transform((value) => value || null),
+  city: z.string().trim().max(200).nullish().transform((value) => value || null),
+  appointmentAt: z.string().datetime().nullish().transform((value) => value ?? null),
+  instructions: z.string().trim().max(4000).nullable().optional(),
+  latitude: absent(z.number().min(-90).max(90)), longitude: absent(z.number().min(-180).max(180)),
+  serviceMinMinutes: absent(z.number().int().min(0).max(10080)), serviceMaxMinutes: absent(z.number().int().min(0).max(10080))
+})).min(1).max(100);
 type ResolvedStop = ReplanStop & Coordinate & { id: string };
 type PlannedLeg = { tourId: string; fromStopId: string; toStopId: string; route: RouteResult; duration: number; active: boolean };
 type StoredPlan = { context: string; stops: ResolvedStop[]; legs: PlannedLeg[]; affectedTourIds: string[]; position: CurrentPosition; origin: Coordinate | null };
