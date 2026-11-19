@@ -1,8 +1,9 @@
-import { AlertTriangle, Bell, Check, ChevronLeft, ChevronRight, Clock, MapPin, Navigation, Package, Undo2 } from 'lucide-react'
+import { AlertTriangle, Bell, Check, ChevronLeft, ChevronRight, Clock, CloudOff, MapPin, Navigation, Package, Undo2 } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { useServerNow } from './useServerNow'
 import { driverApi, PROBLEMS, type DriverStop, type DriverTour, type ProblemKind, type TourView } from './api'
 import { clock, clockWithDay, countdown, doneWord, minutesText, navigationLink, terminOf, windowLabel } from './format'
+import type { MarkAction, MarkResult } from './Shift'
 
 type Props = {
   tour: DriverTour
@@ -10,11 +11,15 @@ type Props = {
   serverTime: string
   onBack: () => void
   onOpen: (stopId: string) => void
+  /** «Прибыл» / «выполнено»: sent, or kept on the phone without network. */
+  onMark: (stopId: string, action: MarkAction) => Promise<MarkResult>
+  /** Takes back a «выполнено» that is still only on the phone. */
+  onDropKept: (stopId: string) => void
   onChanged: (view: TourView) => void
   onFailed: (cause: unknown) => void
 }
 
-export function StopScreen({ tour, stop, serverTime, onBack, onOpen, onChanged, onFailed }: Props) {
+export function StopScreen({ tour, stop, serverTime, onBack, onOpen, onMark, onDropKept, onChanged, onFailed }: Props) {
   const [sheet, setSheet] = useState<'confirm' | 'problem' | null>(null)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
@@ -26,6 +31,14 @@ export function StopScreen({ tour, stop, serverTime, onBack, onOpen, onChanged, 
   const termin = terminOf(stop)
   const canMark = isCurrent && (Boolean(stop.arrivedAt) || stop.samePlaceAsPrevious)
   const undoLeft = stop.undoUntil ? Date.parse(stop.undoUntil) - now : 0
+
+  const markStop = async (action: MarkAction) => {
+    setBusy(true)
+    try {
+      await onMark(stop.id, action)
+      setSheet(null)
+    } catch (cause) { setSheet(null); onFailed(cause); onBack() } finally { setBusy(false) }
+  }
 
   const run = async (action: () => Promise<TourView>) => {
     setBusy(true)
@@ -41,9 +54,13 @@ export function StopScreen({ tour, stop, serverTime, onBack, onOpen, onChanged, 
         <TopBar onBack={onBack} title={`Точка ${stop.sequence} из ${tour.stops.length}`} />
         <div className="body done">
           <span className="done-mark"><Check aria-hidden="true" /></span>
-          <h1>{word} записан</h1>
+          <h1>{stop.pending ? `${word} сохранён` : `${word} записан`}</h1>
           <p className="muted">{[stop.company, stop.city].filter(Boolean).join(', ')} · {clockWithDay(stop.completedAt, serverTime)}</p>
-          {undoLeft > 0 ? <section className="card">
+          {stop.pending ? <section className="card">
+            <p className="row row-strong row-wait"><CloudOff aria-hidden="true" /><span>Ждёт связи — сохранено на телефоне</span></p>
+            <p className="row muted">Отметка уйдёт диспетчеру сама, когда появится сеть, со временем {clock(stop.completedAt)}. Ошиблись — отмените, пока она не ушла.</p>
+            <button type="button" className="button button-secondary" onClick={() => onDropKept(stop.id)}><Undo2 aria-hidden="true" /><span>Отменить {word}</span></button>
+          </section> : undoLeft > 0 ? <section className="card">
             <p className="row row-strong"><Bell aria-hidden="true" /><span>Диспетчер уведомлён в {clock(stop.completedAt)}</span></p>
             <p className="row muted">Ошиблись? Отметку можно отменить 5 минут — потом только через диспетчера.</p>
             <button type="button" className="button button-secondary" disabled={busy} onClick={() => { void run(() => driverApi.undo(stop.id)) }}><Undo2 aria-hidden="true" /><span>Отменить · {countdown(undoLeft)}</span></button>
@@ -68,7 +85,7 @@ export function StopScreen({ tour, stop, serverTime, onBack, onOpen, onChanged, 
       <TopBar onBack={onBack} title={`Точка ${stop.sequence} из ${tour.stops.length}`} />
       <div className="body">
         {notice && <p className="banner banner-ok" role="status">{notice}</p>}
-        {stop.arrivedAt && <p className="banner banner-orange"><Clock aria-hidden="true" /><span><strong>На точке с {clock(stop.arrivedAt)} · {minutesText((now - Date.parse(stop.arrivedAt)) / 60_000)}</strong><small>Прибытие записано в {clock(stop.arrivedAt)}</small></span></p>}
+        {stop.arrivedAt && <p className="banner banner-orange"><Clock aria-hidden="true" /><span><strong>На точке с {clock(stop.arrivedAt)} · {minutesText((now - Date.parse(stop.arrivedAt)) / 60_000)}</strong><small>{stop.pending ? `Прибытие ${clock(stop.arrivedAt)} сохранено на телефоне, ждёт связи` : `Прибытие записано в ${clock(stop.arrivedAt)}`}</small></span></p>}
         {!isCurrent && <p className="banner banner-quiet">Эта точка ещё впереди: сначала выполните предыдущие.</p>}
         <div className="chips">
           <span className="chip chip-blue">{word}</span>
@@ -88,7 +105,7 @@ export function StopScreen({ tour, stop, serverTime, onBack, onOpen, onChanged, 
       <footer className="foot">
         {canMark ? <button type="button" className="button button-primary" onClick={() => setSheet('confirm')}><Check aria-hidden="true" /><span>{word} выполнено</span></button>
           : isCurrent ? <>
-            <button type="button" className="button button-primary" disabled={busy} onClick={() => { void run(() => driverApi.arrived(stop.id)) }}><MapPin aria-hidden="true" /><span>{busy ? 'Записываем…' : 'Прибыл'}</span></button>
+            <button type="button" className="button button-primary" disabled={busy} onClick={() => { void markStop('arrived') }}><MapPin aria-hidden="true" /><span>{busy ? 'Записываем…' : 'Прибыл'}</span></button>
             <a className="button button-secondary" href={navigationLink(stop)} target="_blank" rel="noreferrer"><Navigation aria-hidden="true" /><span>Навигация</span></a>
           </> : <a className="button button-secondary" href={navigationLink(stop)} target="_blank" rel="noreferrer"><Navigation aria-hidden="true" /><span>Навигация</span></a>}
         {isCurrent && <button type="button" className="button button-secondary" onClick={() => setSheet('problem')}><AlertTriangle aria-hidden="true" /><span>Проблема на точке</span></button>}
@@ -98,7 +115,7 @@ export function StopScreen({ tour, stop, serverTime, onBack, onOpen, onChanged, 
         <p className="muted sheet-lead">{[stop.company, stop.city].filter(Boolean).join(', ')} · точка {stop.sequence} из {tour.stops.length}</p>
         <p className="mark-time"><Clock aria-hidden="true" /><span><small>Время отметки</small><strong>{clock(new Date(now).toISOString())} · сейчас</strong></span></p>
         <p className="row muted"><Bell aria-hidden="true" /><span>Отметка записывается сразу. Диспетчер получит уведомление и сможет её отменить.</span></p>
-        <button type="button" className="button button-primary" disabled={busy} onClick={() => { void run(() => driverApi.done(stop.id)) }}><Check aria-hidden="true" /><span>{busy ? 'Записываем…' : `Подтвердить ${word}`}</span></button>
+        <button type="button" className="button button-primary" disabled={busy} onClick={() => { void markStop('done') }}><Check aria-hidden="true" /><span>{busy ? 'Записываем…' : `Подтвердить ${word}`}</span></button>
         <button type="button" className="button button-quiet" onClick={() => setSheet(null)} disabled={busy}>Отмена</button>
       </Sheet>}
 

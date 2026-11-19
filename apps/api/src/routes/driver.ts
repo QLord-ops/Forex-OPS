@@ -5,7 +5,7 @@ import { writeAuditLog } from '../services/audit-log.js';
 import { driverActor, type DriverSession } from '../services/driver-auth.js';
 import type { OperationsService } from '../services/operations.js';
 import { samePlace } from '../services/termin-groups.js';
-import { DRIVER_UNDO_MS, driverGpsText, type DriverGpsCheck, type TourService } from '../services/tours.js';
+import { DRIVER_UNDO_MS, driverGpsText, offlineText, type DriverGpsCheck, type TourService } from '../services/tours.js';
 import { DEFAULT_ARRIVAL_RADIUS_METERS, distanceMeters } from '../services/webfleet.js';
 
 type Gps = { latitude: number; longitude: number; stale: boolean; ageSeconds: number } | null;
@@ -26,6 +26,10 @@ export interface DriverRouteDeps {
 export const DRIVER_PROBLEMS = { WAITING: 'долгое ожидание', NO_GOODS: 'груз не готов', DAMAGE: 'повреждение груза или машины', ADDRESS: 'не тот адрес или ворота', OTHER: 'другое' } as const;
 
 const idParams = z.object({ id: z.string().trim().min(1).max(64) }).strict();
+/** A mark the phone kept while it had no network carries the moment the driver pressed the button. */
+const markBody = z.object({ at: z.string().datetime().optional() }).strict();
+/** Older marks are no longer the driver's to send: the dispatcher sorts them out. */
+export const OFFLINE_MARK_MAX_MS = 12 * 3_600_000;
 const fail = (message: string, statusCode: number) => Object.assign(new Error(message), { statusCode });
 const berlinClock = (value: Date) => new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit' }).format(value);
 
@@ -112,16 +116,27 @@ export function registerDriverRoutes(app: FastifyInstance, deps: DriverRouteDeps
     return tourView(sessionOf(request).vehicleId, clock());
   });
 
+  /** When the driver pressed the button: now, or the moment kept on the phone while there was no network. */
+  function markTime(body: unknown, now: Date): Date {
+    const { at } = markBody.parse(body ?? {});
+    if (!at) return now;
+    const pressed = new Date(at);
+    if (now.getTime() - pressed.getTime() > OFFLINE_MARK_MAX_MS) throw fail('Отметка без сети старше 12 часов — сообщите диспетчеру, он запишет её сам.', 409);
+    // The phone's clock runs a little ahead: a mark is never in the future.
+    return pressed > now ? now : pressed;
+  }
+
   app.post('/driver/stops/:id/arrived', actions, async request => {
     const { session, stop } = await ownStop(request);
     const now = clock();
-    const gps = driverGpsCheck(await deps.gps(session.vehicleId, now), stop);
-    const result = await deps.operations.confirmArrival(stop.id, now, now, driverActor(session), { source: 'DRIVER', meta: { gps } });
+    const at = markTime(request.body, now);
+    const gps = driverGpsCheck(await deps.gps(session.vehicleId, at), stop);
+    const result = await deps.operations.confirmArrival(stop.id, at, now, driverActor(session), { source: 'DRIVER', meta: { gps, ...(at < now ? { pressedAt: at.toISOString() } : {}) } });
     if (result.applied) {
       const place = [stop.company, stop.city || stop.address].filter(Boolean).join(', ');
       const dedupKey = `driver-arrival:${stop.id}`;
-      const message = `Водитель LKW ${stop.tour.vehicle.vehicleNumber} отметил прибытие ${stop.type === 'LOAD' ? 'на загрузку' : 'на выгрузку'} в ${berlinClock(now)} — ${place}. ${driverGpsText(gps)} Если это ошибка, отмените прибытие.`;
-      const payloadJson = JSON.stringify({ source: 'DRIVER', arrivedAt: now.toISOString(), gps });
+      const message = `Водитель LKW ${stop.tour.vehicle.vehicleNumber} отметил прибытие ${stop.type === 'LOAD' ? 'на загрузку' : 'на выгрузку'} в ${berlinClock(at)}${offlineText(at, now)} — ${place}. ${driverGpsText(gps)} Если это ошибка, отмените прибытие.`;
+      const payloadJson = JSON.stringify({ source: 'DRIVER', arrivedAt: at.toISOString(), gps, ...(at < now ? { receivedAt: now.toISOString() } : {}) });
       await prisma.notificationRead.deleteMany({ where: { notification: { dedupKey } } });
       await prisma.notification.upsert({ where: { dedupKey }, create: { dedupKey, vehicleId: session.vehicleId, stopId: stop.id, type: 'DRIVER_ARRIVAL', message, payloadJson },
         update: { message, payloadJson, acknowledgedAt: null } });
@@ -138,9 +153,10 @@ export function registerDriverRoutes(app: FastifyInstance, deps: DriverRouteDeps
     // Leergut after unloading at the same plant: the truck never moved, the arrival comes with the mark.
     const follower = Boolean(previous?.completedAt && samePlace(previous, stop));
     if (!stop.arrivedAt && !follower) throw fail('Сначала нажмите «Прибыл».', 409);
-    const gps = driverGpsCheck(await deps.gps(session.vehicleId, now), stop);
+    const at = markTime(request.body, now);
+    const gps = driverGpsCheck(await deps.gps(session.vehicleId, at), stop);
     const record = stop.type === 'LOAD' ? deps.tours.recordLoaded : deps.tours.recordUnloaded;
-    await record.call(deps.tours, stop.id, now, undefined, driverActor(session), { arriveWithEvent: !stop.arrivedAt, driver: { gps } });
+    await record.call(deps.tours, stop.id, at, undefined, driverActor(session), { arriveWithEvent: !stop.arrivedAt, driver: { gps, receivedAt: now } });
     await deps.afterEvent(session.vehicleId, [stop.id]);
     return tourView(session.vehicleId, now);
   });

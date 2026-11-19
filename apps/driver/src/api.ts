@@ -9,6 +9,8 @@ export type DriverStop = {
   appointmentAt: string | null; windowStartAt: string | null; windowEndAt: string | null
   loadingMeters: number | null; references: string[]; instructions: string | null
   arrivedAt: string | null; completedAt: string | null; samePlaceAsPrevious: boolean; undoUntil: string | null
+  /** Set on the phone: the mark is kept here and not yet on the server. */
+  pending?: boolean
 }
 export type DriverEta = { at: string | null; source: 'WEBFLEET' | 'WEBFLEET_STALE' | 'CALCULATED' }
 export type DriverTour = { id: string; orderNumber: string; tourRemarks: string | null; trailerPlate: string | null; currentStopId: string | null; eta: DriverEta | null; stops: DriverStop[] }
@@ -30,6 +32,10 @@ export class ApiError extends Error {
     super(message)
   }
 }
+
+/** No answer at all: no network, or the server is not reachable. Status 0 is never an answer of the server. */
+export const offlineError = (cause: unknown) => cause instanceof ApiError && cause.status === 0
+export const hasCsrf = () => csrfToken !== ''
 
 let csrfToken = ''
 
@@ -62,8 +68,8 @@ export const driverApi = {
   login: async (vehicle: string, code: string) => remember(await post<DriverSession>('/driver/auth/login', { vehicle, code })),
   logout: async () => remember(await post<DriverSession>('/driver/auth/logout')),
   tour: () => request<TourView>('/driver/tour'),
-  arrived: (stopId: string) => post<TourView>(`/driver/stops/${stopId}/arrived`),
-  done: (stopId: string) => post<TourView>(`/driver/stops/${stopId}/done`),
+  arrived: (stopId: string, at?: string) => post<TourView>(`/driver/stops/${stopId}/arrived`, at ? { at } : {}),
+  done: (stopId: string, at?: string) => post<TourView>(`/driver/stops/${stopId}/done`, at ? { at } : {}),
   undo: (stopId: string) => post<TourView>(`/driver/stops/${stopId}/undo`),
   problem: (stopId: string, kind: ProblemKind, note: string) => post<{ ok: true }>(`/driver/stops/${stopId}/problem`, { kind, ...(note.trim() ? { note: note.trim() } : {}) })
 }

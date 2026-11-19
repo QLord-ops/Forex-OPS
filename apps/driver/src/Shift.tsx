@@ -1,19 +1,35 @@
-import { Check, ChevronRight, LogOut, MapPin, Navigation, RefreshCw, Undo2 } from 'lucide-react'
+import { Check, ChevronRight, CloudOff, LogOut, MapPin, Navigation, RefreshCw, Undo2 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ApiError, driverApi, type DriverSession, type DriverStop, type TourView } from './api'
+import { ApiError, driverApi, hasCsrf, offlineError, type DriverSession, type DriverStop, type TourView } from './api'
+import { InstallHint } from './InstallHint'
+import { kept, serverNow, withPending, type PendingMark } from './offline'
 import { cargoLine, clock, clockWithDay, countdown, dayLabel, doneWord, etaMargin, etaSourceText, navigationLink, terminOf, windowLabel } from './format'
 import { StopScreen } from './StopScreen'
 import { useServerNow } from './useServerNow'
 
 const REFRESH_MS = 30_000
 
+export type MarkAction = 'arrived' | 'done'
+/** «sent»: the server has it; «kept»: no network, the phone sends it later. */
+export type MarkResult = 'sent' | 'kept'
+
 export function Shift({ session, onSignedOut }: { session: Extract<DriverSession, { authenticated: true }>; onSignedOut: () => void }) {
-  const [view, setView] = useState<TourView | null>(null)
+  const [view, setView] = useState<TourView | null>(() => kept.view()?.view ?? null)
+  const [marks, setMarks] = useState<PendingMark[]>(() => kept.marks(session.vehicle))
+  const [fromPhone, setFromPhone] = useState(() => Boolean(kept.view()))
   const [error, setError] = useState('')
   const [openStopId, setOpenStopId] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const alive = useRef(true)
+  const sending = useRef(false)
   const online = useOnline()
+
+  const show = useCallback((fresh: TourView) => {
+    kept.saveView(fresh)
+    setView(fresh)
+    setFromPhone(false)
+    setError('')
+  }, [])
 
   const failed = useCallback((cause: unknown) => {
     // A new code, the end of the shift or «end shift» at the office: back to the sign-in.
@@ -21,60 +37,125 @@ export function Shift({ session, onSignedOut }: { session: Extract<DriverSession
     setError(cause instanceof Error ? cause.message : 'Не удалось загрузить тур.')
   }, [onSignedOut])
 
+  /** Sends the kept marks in the order they were pressed; stops at the first one that still finds no network. */
+  const sendKept = useCallback(async () => {
+    if (sending.current) return
+    const waiting = kept.marks(session.vehicle)
+    if (!waiting.length) return
+    sending.current = true
+    try {
+      // A session opened without network has no CSRF token yet.
+      if (!hasCsrf()) {
+        const fresh = await driverApi.session()
+        if (!fresh.authenticated) return onSignedOut()
+      }
+      for (const mark of waiting) {
+        try {
+          show(await (mark.action === 'arrived' ? driverApi.arrived(mark.stopId, mark.at) : driverApi.done(mark.stopId, mark.at)))
+          kept.dropMark(mark.id)
+        } catch (cause) {
+          if (offlineError(cause)) break
+          if (cause instanceof ApiError && cause.status === 401) return onSignedOut()
+          // The server said no (the dispatcher changed the tour, too old): the mark cannot be sent any more.
+          kept.dropMark(mark.id)
+          setError(`${mark.action === 'arrived' ? '«Прибыл»' : 'Отметка'} от ${clock(mark.at)} не записана: ${cause instanceof Error ? cause.message : 'ошибка'}`)
+        }
+      }
+    } catch (cause) {
+      if (!offlineError(cause)) failed(cause)
+    } finally {
+      sending.current = false
+      if (alive.current) setMarks(kept.marks(session.vehicle))
+    }
+  }, [failed, onSignedOut, session.vehicle, show])
+
   const load = useCallback(async () => {
     setRefreshing(true)
     try {
+      await sendKept()
       const fresh = await driverApi.tour()
-      if (!alive.current) return
-      setView(fresh)
-      setError('')
+      if (alive.current) show(fresh)
     } catch (cause) {
-      if (alive.current) failed(cause)
+      if (!alive.current) return
+      if (offlineError(cause)) setFromPhone(true)
+      else failed(cause)
     } finally {
       if (alive.current) setRefreshing(false)
     }
-  }, [failed])
+  }, [failed, sendKept, show])
 
   useEffect(() => {
     alive.current = true
     void load()
     const timer = window.setInterval(() => { if (document.visibilityState === 'visible') void load() }, REFRESH_MS)
     const onVisible = () => { if (document.visibilityState === 'visible') void load() }
+    const onOnline = () => { void load() }
     document.addEventListener('visibilitychange', onVisible)
-    return () => { alive.current = false; window.clearInterval(timer); document.removeEventListener('visibilitychange', onVisible) }
+    window.addEventListener('online', onOnline)
+    return () => { alive.current = false; window.clearInterval(timer); document.removeEventListener('visibilitychange', onVisible); window.removeEventListener('online', onOnline) }
   }, [load])
 
+  /** «Прибыл» or «выполнено»: straight to the server, or kept on the phone when there is no network. */
+  const mark = useCallback(async (stopId: string, action: MarkAction): Promise<MarkResult> => {
+    // Marks kept earlier go first: the server needs them in the order they were pressed.
+    if (kept.marks(session.vehicle).length) await sendKept()
+    if (!kept.marks(session.vehicle).length) {
+      try {
+        show(await (action === 'arrived' ? driverApi.arrived(stopId) : driverApi.done(stopId)))
+        return 'sent'
+      } catch (cause) {
+        if (!offlineError(cause)) throw cause
+      }
+    }
+    kept.addMark(session.vehicle, stopId, action, serverNow(kept.view()?.offsetMs ?? 0))
+    setMarks(kept.marks(session.vehicle))
+    setFromPhone(true)
+    return 'kept'
+  }, [sendKept, session.vehicle, show])
+
+  const dropKept = useCallback((stopId: string) => {
+    kept.dropMarksOf(stopId, 'done')
+    setMarks(kept.marks(session.vehicle))
+  }, [session.vehicle])
+
   const logout = async () => {
-    if (!window.confirm('Выйти из смены? Войти снова можно тем же кодом.')) return
+    const waiting = kept.marks(session.vehicle).length
+    if (!window.confirm(waiting ? `Выйти из смены? ${waiting} отметок ещё не отправлены — они уйдут после следующего входа этой машины.` : 'Выйти из смены? Войти снова можно тем же кодом.')) return
     try { await driverApi.logout() } catch { /* The cookie is dropped either way on the next sign-in. */ }
     onSignedOut()
   }
 
-  const openStop = view?.tour?.stops.find(stop => stop.id === openStopId) ?? null
-  if (view?.tour && openStop) {
-    return <StopScreen tour={view.tour} stop={openStop} serverTime={view.serverTime} onBack={() => setOpenStopId(null)} onOpen={setOpenStopId}
-      onChanged={fresh => { setView(fresh); setError('') }} onFailed={failed} />
+  const shown = view ? withPending(view, marks) : null
+  const openStop = shown?.tour?.stops.find(stop => stop.id === openStopId) ?? null
+  if (shown?.tour && openStop) {
+    return <StopScreen tour={shown.tour} stop={openStop} serverTime={shown.serverTime} onBack={() => setOpenStopId(null)} onOpen={setOpenStopId}
+      onMark={mark} onDropKept={dropKept} onChanged={show} onFailed={failed} />
   }
 
-  const vehicle = view?.vehicle ?? session.vehicle
+  const vehicle = shown?.vehicle ?? session.vehicle
   return (
     <main className="screen">
       <header className="bar">
         <div className="bar-title">
           <h1 className="plate">{vehicle.licensePlate ?? vehicle.vehicleNumber}</h1>
-          <p>{view?.tour ? `Тур ${view.tour.orderNumber} · ${dayLabel(view.serverTime)}` : `Машина ${vehicle.vehicleNumber}`}</p>
+          <p>{shown?.tour ? `Тур ${shown.tour.orderNumber} · ${dayLabel(shown.serverTime)}` : `Машина ${vehicle.vehicleNumber}`}</p>
         </div>
-        <span className={`chip ${online ? 'chip-green' : 'chip-red'}`}>{online ? 'Онлайн' : 'Нет сети'}</span>
+        <span className={`chip ${online && !fromPhone ? 'chip-green' : 'chip-red'}`}>{online && !fromPhone ? 'Онлайн' : 'Нет сети'}</span>
         <button type="button" className="icon-button" onClick={() => { void load() }} aria-label="Обновить" disabled={refreshing}><RefreshCw className={refreshing ? 'turning' : ''} aria-hidden="true" /></button>
         <button type="button" className="icon-button" onClick={() => { void logout() }} aria-label="Выйти из смены"><LogOut aria-hidden="true" /></button>
       </header>
 
       <div className="body">
         {error && <p className="banner banner-error" role="alert">{error}</p>}
-        {!view && !error && <p className="muted center" role="status">Загружаем тур…</p>}
-        {view?.lastMark && <LastMark view={view} onChanged={setView} onFailed={failed} />}
-        {view && !view.tour && <NoTour view={view} />}
-        {view?.tour && <Tour view={view} onOpen={setOpenStopId} onChanged={setView} onFailed={failed} />}
+        {(fromPhone || marks.length > 0) && shown && <p className="banner banner-orange" role="status"><CloudOff aria-hidden="true" /><span>
+          <strong>{marks.length ? `${marks.length} ${marks.length === 1 ? 'отметка ждёт' : 'отметки ждут'} связи` : 'Нет связи с сервером'}</strong>
+          <small>{marks.length ? 'Сохранены на телефоне с временем нажатия и уйдут сами, когда появится сеть.' : `Тур на ${clock(new Date(kept.view()?.savedAt ?? Date.now()).toISOString())}. Отметки можно ставить — они сохранятся на телефоне.`}</small>
+        </span></p>}
+        {!shown && !error && <p className="muted center" role="status">Загружаем тур…</p>}
+        {shown?.lastMark && <LastMark view={shown} onChanged={show} onFailed={failed} />}
+        {shown && !shown.tour && <NoTour view={shown} />}
+        {shown?.tour && <Tour view={shown} onOpen={setOpenStopId} onMark={mark} onFailed={failed} />}
+        <InstallHint />
       </div>
     </main>
   )
@@ -122,7 +203,7 @@ function NoTour({ view }: { view: TourView }) {
   )
 }
 
-function Tour({ view, onOpen, onChanged, onFailed }: { view: TourView; onOpen: (id: string) => void; onChanged: (view: TourView) => void; onFailed: (cause: unknown) => void }) {
+function Tour({ view, onOpen, onMark, onFailed }: { view: TourView; onOpen: (id: string) => void; onMark: (stopId: string, action: MarkAction) => Promise<MarkResult>; onFailed: (cause: unknown) => void }) {
   const tour = view.tour!
   const [busy, setBusy] = useState(false)
   const done = tour.stops.filter(stop => stop.completedAt).length
@@ -132,7 +213,7 @@ function Tour({ view, onOpen, onChanged, onFailed }: { view: TourView; onOpen: (
   const arrive = async (stop: DriverStop) => {
     setBusy(true)
     try {
-      onChanged(await driverApi.arrived(stop.id))
+      await onMark(stop.id, 'arrived')
       onOpen(stop.id)
     } catch (cause) { onFailed(cause) } finally { setBusy(false) }
   }
@@ -157,7 +238,7 @@ function Tour({ view, onOpen, onChanged, onFailed }: { view: TourView; onOpen: (
               <span className="stop-row-text">
                 <span className="stop-row-type">{doneWord(stop)}{stop.samePlaceAsPrevious ? ' · то же место' : ''}</span>
                 <span className={`stop-row-company${stop.completedAt ? ' muted' : ''}`}>{stop.company ?? stop.address}</span>
-                <span className="stop-row-meta">{stop.completedAt ? `Выполнено ${clockWithDay(stop.completedAt, view.serverTime)}`
+                <span className="stop-row-meta">{stop.completedAt ? `Выполнено ${clockWithDay(stop.completedAt, view.serverTime)}${stop.pending ? ' · ждёт связи' : ''}`
                   : [stop.city, terminOf(stop) ? `Termin ${clockWithDay(terminOf(stop)!, view.serverTime)}` : 'без Termin'].filter(Boolean).join(' · ')}</span>
               </span>
               <ChevronRight className="stop-row-chevron" aria-hidden="true" />
@@ -184,7 +265,7 @@ function CurrentStop({ stop, view, busy, onArrive, onOpen }: { stop: DriverStop;
     <section className="card current" aria-label="Текущая точка">
       <div className="chips">
         <span className="chip chip-blue">{doneWord(stop)}</span>
-        {stop.arrivedAt ? <span className="chip chip-orange">На точке с {clock(stop.arrivedAt)}</span>
+        {stop.arrivedAt ? <span className="chip chip-orange">На точке с {clock(stop.arrivedAt)}{stop.pending ? ' · ждёт связи' : ''}</span>
           : stop.samePlaceAsPrevious ? <span className="chip chip-orange">Здесь же</span> : <span className="chip chip-green">В пути</span>}
       </div>
       <div>

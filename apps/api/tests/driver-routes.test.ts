@@ -232,6 +232,45 @@ describe('driver app: the tour and the driver\'s own marks', () => {
     expect(prioritize([note], facts, new Date(now))[0]).toMatchObject({ priority: 'RISK', resolved: false });
   });
 
+  it('records marks the phone kept without network at the moment the driver pressed the button', async () => {
+    const { app, post, stops } = await scenario();
+    closing.push(app);
+    const [unload] = stops;
+    now += 60_000;
+    const pressedArrival = new Date(now);
+    now += 25 * 60_000;
+    const pressedDone = new Date(now);
+    // The phone gets network back 40 minutes later and sends both, in order.
+    now += 40 * 60_000;
+    expect((await post(`/driver/stops/${unload.id}/arrived`, { at: pressedArrival.toISOString() })).statusCode).toBe(200);
+    const done = await post(`/driver/stops/${unload.id}/done`, { at: pressedDone.toISOString() });
+    expect(done.statusCode).toBe(200);
+    expect(await db.stop.findUniqueOrThrow({ where: { id: unload.id } })).toMatchObject({ arrivedAt: pressedArrival, completedAt: pressedDone });
+    expect(await db.event.findFirstOrThrow({ where: { stopId: unload.id } })).toMatchObject({ type: 'UNLOADED', source: 'DRIVER', timestamp: pressedDone });
+    const clock = (value: Date) => new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit' }).format(value);
+    const arrival = await db.notification.findUniqueOrThrow({ where: { dedupKey: `driver-arrival:${unload.id}` } });
+    expect(arrival.message).toContain(`отметил прибытие на выгрузку в ${clock(pressedArrival)} (без сети, получено в ${clock(new Date(now))})`);
+    const note = await db.notification.findFirstOrThrow({ where: { stopId: unload.id, type: 'DRIVER_STOP_EVENT' } });
+    expect(note.message).toContain(`отметил ENTLADEN в ${clock(pressedDone)} (без сети, получено в ${clock(new Date(now))})`);
+    // The five minutes to take it back start when the server got the mark.
+    expect(done.json().tour.stops[0]).toMatchObject({ completedAt: pressedDone.toISOString(), undoUntil: new Date(now + DRIVER_UNDO_MS).toISOString() });
+    now += 60_000;
+    expect((await post(`/driver/stops/${unload.id}/undo`)).statusCode).toBe(200);
+  });
+
+  it('refuses a mark kept for more than 12 hours, and never dates a mark into the future', async () => {
+    const { app, post, stops } = await scenario();
+    closing.push(app);
+    now += 60_000;
+    const old = await post(`/driver/stops/${stops[0].id}/arrived`, { at: new Date(now - 13 * 3_600_000).toISOString() });
+    expect(old.statusCode).toBe(409);
+    expect(old.json().error).toContain('старше 12 часов');
+    expect((await post(`/driver/stops/${stops[0].id}/arrived`, { at: 'gestern' })).statusCode).toBe(400);
+    expect((await post(`/driver/stops/${stops[0].id}/arrived`, { at: new Date(now).toISOString(), extra: 1 })).statusCode).toBe(400);
+    expect((await post(`/driver/stops/${stops[0].id}/arrived`, { at: new Date(now + 10 * 60_000).toISOString() })).statusCode).toBe(200);
+    expect((await db.stop.findUniqueOrThrow({ where: { id: stops[0].id } })).arrivedAt).toEqual(new Date(now));
+  });
+
   it('judges the mark by Webfleet only: zone, away, stale or no position', () => {
     const stop = { ...PLANT, arrivalRadiusMeters: null };
     expect(driverGpsCheck({ ...PLANT, stale: false, ageSeconds: 30 }, stop)).toEqual({ status: 'IN_ZONE', distanceMeters: 0, ageMinutes: 1 });

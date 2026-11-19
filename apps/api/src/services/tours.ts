@@ -714,13 +714,15 @@ export class TourService {
       if (options.driver && before) {
         const record: AutoStopEventRecord = { driver: options.driver, eventId: recorded.id, eventType, at: now.toISOString(), before,
           activated: activated ? { tourId: activated.tour.id, transferLeg: activated.transferLeg } : null, meta: { chain: [stop.id] } };
+        const receivedAt = options.driver.receivedAt ?? now;
         await tx.operationEvent.create({ data: { vehicleId: stop.tour.vehicleId, tourId: stop.tourId, stopId: stop.id, type: "STOP_EVENT_DRIVER",
-          reason: "Отмечено водителем в приложении", payloadJson: JSON.stringify(record), createdAt: now } });
+          reason: "Отмечено водителем в приложении", payloadJson: JSON.stringify(record), createdAt: receivedAt } });
         const done = stop.type === "LOAD" ? "BELADEN" : "ENTLADEN";
         const place = [stop.company, stop.city || stop.address].filter(Boolean).join(", ");
         await tx.notification.create({ data: { dedupKey: `driver-stop-event:${stop.id}:${now.toISOString()}`, vehicleId: stop.tour.vehicleId, stopId: stop.id, type: "DRIVER_STOP_EVENT",
-          message: `Водитель LKW ${stop.tour.vehicle.vehicleNumber} отметил ${done} в ${berlinClock(now)} — ${place}. ${driverGpsText(options.driver.gps)} Если это ошибка, отмените.`,
-          payloadJson: JSON.stringify({ stopType: stop.type, at: now.toISOString(), source: "DRIVER", gps: options.driver.gps }) } });
+          message: `Водитель LKW ${stop.tour.vehicle.vehicleNumber} отметил ${done} в ${berlinClock(now)}${offlineText(now, receivedAt)} — ${place}. ${driverGpsText(options.driver.gps)} Если это ошибка, отмените.`,
+          payloadJson: JSON.stringify({ stopType: stop.type, at: now.toISOString(), source: "DRIVER", gps: options.driver.gps,
+            ...(receivedAt.getTime() !== now.getTime() ? { receivedAt: receivedAt.toISOString() } : {}) }) } });
       }
 
       return tx.tour.findUniqueOrThrow({ where: { id: stop.tourId }, include: tourInclude });
@@ -737,10 +739,15 @@ function kilometres(meters: number) {
 export type DriverGpsCheck = { status: "IN_ZONE" | "AWAY" | "STALE" | "NONE"; distanceMeters: number | null; ageMinutes: number | null };
 export type StopEventOptions = { arriveWithEvent?: boolean; /** The arrival time when it differs from the event (a stay away from the address). */ arrivedAt?: Date; auto?: { detectedAt: Date; meta: AutoStopEventInput["meta"] };
   /** The driver pressed BELADEN/ENTLADEN in the driver app (owner, 17.11): a real event, the dispatcher is notified. */
-  driver?: { gps: DriverGpsCheck } };
+  driver?: { gps: DriverGpsCheck; /** A mark made without network reaches the server later: the undo window starts here. */ receivedAt?: Date } };
 /** How long the driver can take back an own mark; afterwards only the dispatcher can. */
 export const DRIVER_UNDO_MS = 5 * 60_000;
 const UNDOABLE_EVENTS = ["STOP_EVENT_AUTO", "STOP_EVENT_DRIVER"];
+
+/** «(без сети, получено в 11:05)» when the phone sent the mark later; nothing when it arrived at once. */
+export function offlineText(at: Date, receivedAt: Date): string {
+  return receivedAt.getTime() - at.getTime() >= 60_000 ? ` (без сети, получено в ${berlinClock(receivedAt)})` : "";
+}
 
 export function driverGpsText(gps: DriverGpsCheck): string {
   const age = gps.ageMinutes === null ? "" : ` (GPS ${gps.ageMinutes} мин)`;
