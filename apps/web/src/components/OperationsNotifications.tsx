@@ -74,7 +74,8 @@ export function DecisionCard({ item, stop, onSelect, openLink = false, nested = 
     const done = (autoEventOf(item.payloadJson)?.stopType ?? stop?.type) === 'LOAD' ? 'BELADEN' : 'ENTLADEN'
     const doubt = driverMarkAway(item.payloadJson)
     tone = doubt ? 'late' : arrival ? 'arrival' : 'ok'; Icon = Smartphone
-    title = `Водитель${vehicle ? ` LKW ${vehicle}` : ''} отметил ${arrival ? 'прибытие' : done}${doubt ? ' — Webfleet видит машину в другом месте' : ''}`
+    const at = /\sв (\d{2}:\d{2}) —/u.exec(item.message)?.[1]
+    title = `Водитель${vehicle ? ` LKW ${vehicle}` : ''} отметил ${arrival ? 'прибытие' : done}${at ? ` в ${at}` : ''}${doubt ? ' — Webfleet видит машину в другом месте' : ''}`
     detail = item.message.replace(/^Водитель LKW \S+ отметил [^—]+—\s*/u, '').replace(/\s*Если это ошибка, отмените( прибытие)?\.$/u, '')
     actions = [{ label: 'Понятно', primary: true, run: () => void state.resolve(item, 'ack') }]
     if (item.stopId && !item.resolved) actions.push(arrival
