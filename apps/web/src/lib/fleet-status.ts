@@ -4,7 +4,7 @@ import type { DashboardVehicle } from '../types/domain'
 
 export type AttentionTone = 'dwell' | 'critical' | 'action' | 'watch' | 'moving' | 'ok' | 'idle'
 export type StatusTone = 'ok' | 'stop' | 'late' | 'plan' | 'idle'
-export type FleetFilter = 'ALL' | 'DECIDE' | 'MOVING' | 'AT_STOP' | 'PLANNED' | 'TERMIN' | 'NO_TERMIN' | 'IDLE'
+export type FleetFilter = 'ALL' | 'DECIDE' | 'LATE' | 'MOVING' | 'AT_STOP' | 'PLANNED' | 'TERMIN' | 'NO_TERMIN' | 'IDLE'
 export type FleetSort = 'URGENCY' | 'NUMBER' | 'TERMIN'
 
 export function getDwellMinutes(row: DashboardVehicle, now = Date.now()) {
@@ -174,8 +174,15 @@ export function terminNeeded(row: DashboardVehicle) {
   return Boolean(stop?.terminRequired && !stop.terminSharedWithStopId && !stop.appointmentAt && !stop.appointmentWindowStartAt)
 }
 
+/** The ETA is past the Termin, or the truck is held up on the way: the «опаздывает» figure of the shift summary. */
+export function runsLate(row: DashboardVehicle, now = Date.now()) {
+  const margin = terminMargin(row)
+  return (margin !== null && margin < 0) || vehicleStatus(row, now).tone === 'late'
+}
+
 export function matchesFleetFilter(row: DashboardVehicle, filter: FleetFilter, notified: ReadonlySet<string> = new Set(), now = Date.now()) {
   if (filter === 'ALL') return true
+  if (filter === 'LATE') return runsLate(row, now)
   if (filter === 'DECIDE') return needsDecision(row, notified, now)
   if (filter === 'MOVING') return row.statusText === 'MOVING'
   if (filter === 'TERMIN') return Boolean(terminOf(row.tour))

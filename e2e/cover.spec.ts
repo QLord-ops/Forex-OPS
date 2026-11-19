@@ -1,5 +1,10 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
 
+// These tests work with the list filters and the cover buttons open; the dispatcher's list starts with them folded.
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => { try { localStorage.setItem('ops-list-filters', '1') } catch { /* no storage */ } })
+})
+
 async function json(route: Route, body: unknown, status = 200) {
   await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
 }
