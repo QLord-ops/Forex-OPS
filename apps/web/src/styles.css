@@ -756,5 +756,6 @@ main a:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .update-notice-button { display: inline-flex; height: 32px; align-items: center; gap: 6px; border-radius: 999px; background: var(--acc); padding: 0 14px; color: var(--acc-ink); font-size: .8125rem; font-weight: 600; }
 .update-notice-button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .route-builder-eta li { flex-wrap: wrap; }
+.route-builder-eta li .route-builder-address { flex-basis: 0; }
 .route-builder-eta .route-builder-day { flex: 1 0 100%; padding-left: 1.7rem; color: rgb(var(--tx-475569)); font-size: .75rem; font-weight: 500; }
 .route-builder-eta .route-builder-day-extended { color: rgb(var(--tx-b45309)); font-weight: 700; }
