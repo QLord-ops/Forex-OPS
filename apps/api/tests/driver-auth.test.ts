@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { PrismaClient } from '../src/generated/sqlite-client/index.js';
 import { registerDriverShiftRoutes } from '../src/routes/driver-shifts.js';
 import { hashDispatcherPassword, registerDispatcherAuth, type DispatcherAuthOptions } from '../src/services/dispatcher-auth.js';
-import { normalizeVehicleInput, registerDriverAuth, SHIFT_CODE_ATTEMPTS } from '../src/services/driver-auth.js';
+import { driverOrigins, normalizeVehicleInput, registerDriverAuth, SHIFT_CODE_ATTEMPTS } from '../src/services/driver-auth.js';
 import { migrateTestDatabase } from './test-database.js';
 
 const OFFICE = 'https://ops.test';
@@ -75,6 +75,12 @@ afterAll(async () => {
 beforeEach(() => { now += 60 * 60_000; });
 
 describe('driver app sign-in with a shift code', () => {
+  it('opens the driver app only on the sites named for it; production names none by default', () => {
+    expect(driverOrigins(undefined, false)).toEqual(['http://localhost:5174', 'http://127.0.0.1:5174']);
+    expect(driverOrigins(undefined, true)).toEqual([]);
+    expect(driverOrigins(' https://ops-fahrer.vercel.app , https://fahrer.forex.de ', true)).toEqual(['https://ops-fahrer.vercel.app', 'https://fahrer.forex.de']);
+  });
+
   it('reads the truck the way a driver types it', () => {
     expect(normalizeVehicleInput('gö-fx 214')).toBe('GÖFX214');
     expect(normalizeVehicleInput(' GÖ FX214 ')).toBe(normalizeVehicleInput('GÖ-FX 214'));

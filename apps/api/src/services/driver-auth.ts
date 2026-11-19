@@ -198,6 +198,7 @@ export function registerDriverAuth(app: FastifyInstance, prisma: PrismaClient, o
   return gate;
 }
 
-export function driverOrigins(value = process.env.DRIVER_ALLOWED_ORIGINS): string[] {
-  return (value ?? 'http://localhost:5174,http://127.0.0.1:5174').split(',').map(item => item.trim()).filter(Boolean);
+/** Sites the driver app runs on. Production opens no site until DRIVER_ALLOWED_ORIGINS names it. */
+export function driverOrigins(value = process.env.DRIVER_ALLOWED_ORIGINS, production = process.env.NODE_ENV === 'production'): string[] {
+  return (value ?? (production ? '' : 'http://localhost:5174,http://127.0.0.1:5174')).split(',').map(item => item.trim()).filter(Boolean);
 }
