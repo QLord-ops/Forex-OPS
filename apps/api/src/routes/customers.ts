@@ -11,9 +11,9 @@ const alias = z.string().trim().min(2).max(120);
 const color = z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Цвет в формате #RRGGBB.').nullable();
 const optionalText = (max: number) => z.string().trim().max(max).nullable().optional();
 const profilePatch = z.object({
-  import: z.record(z.unknown()).optional(),
-  statusList: z.record(z.unknown()).optional(),
-  defaults: z.record(z.unknown()).optional()
+  import: z.record(z.string(), z.unknown()).optional(),
+  statusList: z.record(z.string(), z.unknown()).optional(),
+  defaults: z.record(z.string(), z.unknown()).optional()
 }).strict();
 const customerCreate = z.object({
   name, slug: z.string().trim().min(2).max(40).optional(), category: z.enum(CUSTOMER_CATEGORIES).optional(),

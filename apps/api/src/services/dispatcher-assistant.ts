@@ -34,7 +34,7 @@ export interface AssistantModel { (input: AssistantModelInput): Promise<Dispatch
 export const ANSWER_FALLBACK_SUFFIX = 'Расчёт выполнен, но ИИ не смог составить пояснение: смотрите карточку ниже.';
 export const dispatcherMessageSchema = z.object({
   text: z.string().trim().min(1).max(12000), vehicleId: z.string().max(200).optional(),
-  draft: z.object({ action: actionSchema, input: z.record(z.unknown()) }).strict().optional()
+  draft: z.object({ action: actionSchema, input: z.record(z.string(), z.unknown()) }).strict().optional()
 }).strict();
 type MessageInput = z.infer<typeof dispatcherMessageSchema>;
 const noteSchema = z.object({ description: z.string().trim().min(1).max(4000), expectedResolvedAt: z.string().datetime().nullable().optional() }).strict();
@@ -109,7 +109,7 @@ export class DispatcherAssistantService {
     const prepared: Array<{ action: DispatcherAction; vehicleId?: string; input: Record<string, unknown>; preview: unknown; summary: string; state?: Awaited<ReturnType<typeof snapshot>> }> = [];
     const results: AssistantResult[] = [];
     for (const command of generated.commands) {
-      const payload = z.record(z.unknown()).parse(JSON.parse(command.inputJson));
+      const payload = z.record(z.string(), z.unknown()).parse(JSON.parse(command.inputJson));
       const freeRoute = command.action === 'SCENARIO' && typeof payload.originAddress === 'string' && payload.originAddress.trim().length > 0;
       const vehicleId = freeRoute ? undefined : command.vehicle ? resolveAssistantVehicle(vehicles, command.vehicle).id : input.vehicleId;
       if (command.action !== 'CREATE_VEHICLE' && !vehicleId && !freeRoute) throw new AssistantError(command.action === 'TERMIN' ? 'Укажите машину для расчёта Termin.' : 'Укажите машину для расчёта или изменения.');
