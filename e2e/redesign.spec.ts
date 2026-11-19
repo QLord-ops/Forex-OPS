@@ -98,6 +98,12 @@ test('список без лишнего: машины сразу под пои�
   expect(Math.round((first?.y ?? 999) - ((search?.y ?? 0) + (search?.height ?? 0)))).toBeLessThanOrEqual(40)
   // Nothing in the head is wider than the list (the search gives way to the button).
   expect(await rail.locator('.fleet-controls').evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1)
+  // The search field stays inside its own frame, also while typing: one box, as high as the button beside it (19.11).
+  await rail.getByPlaceholder('LKW, Auftrag, город').focus()
+  const [label, field, button] = await Promise.all([rail.locator('.fleet-search').boundingBox(), rail.locator('.fleet-search-input').boundingBox(), rail.getByRole('button', { name: 'Фильтры и подмена' }).boundingBox()])
+  expect({ field: field && Math.round(field.height), label: label && Math.round(label.height), button: button && Math.round(button.height) }).toEqual({ field: 44, label: 44, button: 44 })
+  expect(field && label && Math.abs(field.y - label.y) <= 1 && Math.abs(field.x - label.x) <= 1 && Math.abs(field.width - label.width) <= 1).toBe(true)
+  expect(await rail.locator('.fleet-search').evaluate((element) => getComputedStyle(element).outlineStyle)).toBe('none')
   await page.getByRole('group', { name: 'Смена: сводка' }).getByRole('button', { name: /опаздывает/ }).click()
   await expect(cards).toHaveCount(1)
   await expect(cards).toContainText('LKW 187')

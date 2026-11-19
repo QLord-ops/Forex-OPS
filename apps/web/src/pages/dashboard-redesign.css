@@ -55,7 +55,10 @@
 .fleet-controls .fleet-scope { width: 100%; border-radius: 10px; background: var(--s-sunken); padding: 3px; }
 .fleet-controls .fleet-scope-button { height: 32px; flex: 1; justify-content: center; border-radius: 8px; }
 .fleet-controls .fleet-scope-button-active { background: var(--s-card); }
-.fleet-controls .fleet-search { display: block; }
+/* The label only holds the field in place: an older page-toolbar rule gave it a 36 px frame of its own, and the 44 px
+   field stuck out of it, with two focus rings (owner, 19.11). */
+.fleet-controls .fleet-search { display: block; width: auto; max-width: none; height: auto; border: 0; border-radius: 0; background: none; padding: 0; }
+.fleet-controls .fleet-search:focus-within { outline: 0; }
 .fleet-controls .fleet-chips { margin: 0; padding: 0; }
 .fleet-controls .fleet-scope-hint { margin: 0; }
 /* The list starts right under the search: status chips, customers and the cover buttons wait behind «Фильтры». */
