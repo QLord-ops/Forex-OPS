@@ -19,7 +19,7 @@ const importSchema = z.object({
   zuladungWords: z.array(word).max(10).default(['Zuladung']),
   /** Free notes for the AI, written by the dispatchers; passed to the model as data, never as instructions. */
   aiNotes: z.string().max(2000).default('')
-}).default({});
+}).prefault({});
 
 /** The daily status list the customer receives (07:00 list of Schnellecke). */
 const statusListSchema = z.object({
@@ -31,18 +31,18 @@ const statusListSchema = z.object({
   weColumnLabel: z.string().trim().min(1).max(40).nullable().default(null),
   showASchild: z.boolean().default(false),
   showAppSped: z.boolean().default(false)
-}).default({});
+}).prefault({});
 
 /** «Сообщить заказчику»: who gets the delay letter; the dispatcher sends it from their own mail program. */
 const notifySchema = z.object({
   emails: z.array(z.string().trim().toLowerCase().email().max(120)).max(10).default([])
-}).default({});
+}).prefault({});
 
 const defaultsSchema = z.object({
   serviceMinMinutes: z.number().int().min(5).max(600).default(60),
   serviceMaxMinutes: z.number().int().min(5).max(900).default(120),
   arrivalRadiusMeters: z.number().int().min(100).max(5000).default(500)
-}).default({});
+}).prefault({});
 
 export const customerProfileSchema = z.object({
   version: z.literal(1).default(1),
