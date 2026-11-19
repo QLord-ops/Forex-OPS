@@ -644,36 +644,51 @@ function VehiclePanel({ row, position, drawerOpen, onToggleDrawer, collapsed, on
   // The last stop done, then the ones ahead: as the design shows the tour, four lines at most.
   const shownFrom = Math.max(0, (firstOpen < 0 ? stops.length : firstOpen) - 1)
   const shown = stops.slice(shownFrom, shownFrom + 4)
-  const hiddenStops = stops.length - shownFrom - shown.length
   const cargo = stops.filter((stop) => stop.type === 'LOAD').reduce((sum, stop) => sum + (stop.loadingMeters ?? 0), 0)
   const notice = noticeLine(row)
   const rebuilt = row.lastOperation?.type === 'ROUTE_REBUILT_AUTO' ? formatTime(row.lastOperation.createdAt) : null
   const meters = driverMeters(driver, row.clockSummary)
   const etaMinutes = row.eta ? Math.max(0, Math.round((new Date(row.eta).getTime() - Date.now()) / 60_000)) : null
   const enough = meters?.todayMinutes !== undefined && meters.todayMinutes !== null && etaMinutes !== null && nextStop ? meters.todayMinutes >= etaMinutes : null
+  const hasHours = Boolean(meters?.rows.length || hours)
+  // Whose hours the ETA was planned on; «без тахографа» already says that the driver's hours are not known.
+  const basis = row.eta && row.etaPlan ? (row.etaPlan.hours === 'TACHOGRAPH' ? 'по тахографу' : 'без тахографа') : null
+  const hoursBrief = hoursBriefOf(meters, enough, nextStop ? shortAddress(nextStop) : null, basis === 'без тахографа')
+  const openStops = stops.filter((stop) => !stop.completedAt)
+  // «Опоздание 11 мин» in one pill: the word and the minutes are not said twice.
+  const lateBy = status.label === 'Опоздание' && margin !== null && margin < 0 && !arrived ? formatDurationMinutes(-margin) : null
+  // Where the position comes from, then where the ETA comes from when that is not the same thing, then whose hours.
+  const etaFrom = !row.eta ? null : row.etaSource === 'GPS' ? (source.kind === 'live' ? null : 'ETA от GPS') : source.kind === 'calculated' ? null : 'ETA по расчёту'
+  const sourceText = [source.kind === 'calculated' ? 'Расчётная позиция' : source.long, etaFrom, basis].filter(Boolean).join(' · ')
+  const sourceTitle = `Позиция: ${source.long}${row.eta ? ` · ETA: ${remaining.source}` : ''}`
   return <section className={classNames('vehicle-panel', drawerOpen && 'vehicle-panel-open')} aria-label={`LKW ${row.vehicle.vehicleNumber}`}>
     {handle}
     <div id="vehicle-panel-body">
     {drawerOpen ? <RouteStopsTrack row={row} position={position} onFocusStop={onFocusStop} /> : null}
-    <div className="vehicle-panel-bar">
+    <div className={classNames('vehicle-panel-bar', !hasHours && 'vehicle-panel-bar-nohours')}>
       <div className="vehicle-panel-id">
         <span className="vehicle-panel-kicker"><strong>LKW {row.vehicle.vehicleNumber}</strong>{plate && plate !== row.vehicle.vehicleNumber ? ` · ${plate}` : ''}</span>
         <span className="vehicle-panel-time" aria-label={big ? `${big.label} ${bigTime}` : 'ETA нет'}>{big && big.label !== 'ETA' ? <small>{big.label}</small> : null}{bigTime}</span>
         <span className="vehicle-panel-chips">
-          <span className={`status-pill status-pill-${status.tone}`}><span className={`status-dot status-dot-${status.tone}`} aria-hidden="true" />{status.label}</span>
-          {margin !== null && !arrived ? <span className={classNames('vehicle-row-chip', margin < 0 ? 'vehicle-row-chip-late' : 'vehicle-row-chip-ok')}>{margin < 0 ? `опоздание ${formatDurationMinutes(-margin)}` : `запас ${formatDurationMinutes(margin)}`}</span> : null}
-          {termin ? <span className="vehicle-row-termin">{termin.label.replace(/^Termin \d{2}\.\d{2} /, 'Termin ')}{terminStop ? ` · ${shortAddress(terminStop)}` : ''}</span> : <span className="vehicle-panel-muted">Termin нет</span>}
+          <span className={`status-pill status-pill-${status.tone}`}><span className={`status-dot status-dot-${status.tone}`} aria-hidden="true" />{lateBy ? `Опоздание ${lateBy}` : status.label}</span>
+          {margin !== null && !arrived && !lateBy ? <span className={classNames('vehicle-row-chip', margin < 0 ? 'vehicle-row-chip-late' : 'vehicle-row-chip-ok')}>{margin < 0 ? `опоздание ${formatDurationMinutes(-margin)}` : `запас ${formatDurationMinutes(margin)}`}</span> : null}
+          {termin ? <span className="vehicle-row-termin" title={terminStop ? shortAddress(terminStop) : undefined}>{terminToday(row) ? termin.label.replace(/^Termin \d{2}\.\d{2} /, 'Termin ') : termin.label}</span>
+            : terminNeeded(row) ? <span className="termin-needed">Termin нужен</span> : <span className="vehicle-panel-muted">Termin нет</span>}
         </span>
       </div>
       <div className="vehicle-panel-position">
-        <span className="vehicle-panel-label">Позиция</span>
+        <span className="vehicle-panel-head">
+          <span className="vehicle-panel-label">Позиция</span>
+          {row.etaSource === 'GPS' ? <button type="button" className="vehicle-panel-link" onClick={onRouteOptions} disabled={optionsBusy} title="Три маршрута от GPS-позиции до точки"><GitFork className="h-3.5 w-3.5" aria-hidden="true" />Варианты</button> : null}
+        </span>
         <span className="vehicle-panel-route" title={here || undefined}>{here || '–'}</span>
         {motion ? <span className="vehicle-panel-line">{motion}</span> : null}
-        {notStarted(row) ? null : <span className="vehicle-panel-line">Осталось {typeof row.remainingKm === 'number' ? `≈ ${Math.round(row.remainingKm)} км` : '–'}{remaining.text ? ` · ${remaining.text}` : ''}</span>}
+        {notStarted(row) ? null : <span className="vehicle-panel-line vehicle-panel-left">Осталось {typeof row.remainingKm === 'number' ? `≈ ${Math.round(row.remainingKm)} км` : '–'}{remaining.text ? ` · ${remaining.text}` : ''}</span>}
         {jam ? <span className="vehicle-panel-jam">{jam}</span> : null}
-        <span className={`vehicle-panel-source vehicle-panel-source-${source.kind}`}>{source.kind === 'calculated' ? 'Расчётная позиция' : source.long}{remaining.source ? ` · ${remaining.source}` : ''}</span>
         {activityNote(row) ? <span className={classNames('rest-at-stop', !row.restAtStop && 'rest-at-stop-pause')}>{activityNote(row)}</span> : null}
-        {row.etaSource === 'GPS' ? <button type="button" className="vehicle-panel-link" onClick={onRouteOptions} disabled={optionsBusy} title="Три маршрута от GPS-позиции до точки"><GitFork className="h-3.5 w-3.5" aria-hidden="true" />Варианты</button> : null}
+        <span className={`vehicle-panel-source vehicle-panel-source-${source.kind}`} title={sourceTitle}>{sourceText}</span>
+        {/* Where the driver hours have no column of their own (a laptop, or no data), they are one line here. */}
+        {hoursBrief ? <span className={classNames('vehicle-panel-hours-brief', hoursBrief.warn && 'vehicle-panel-hours-warn')} title={hoursBrief.title}>{hoursBrief.text}</span> : null}
       </div>
       <div className="vehicle-panel-next">
         <button type="button" className="vehicle-panel-stage route-stops-drawer-trigger" onClick={onToggleDrawer} aria-expanded={drawerOpen} title={drawerOpen ? 'Скрыть точки маршрута' : 'Все точки маршрута'}>
@@ -688,7 +703,9 @@ function VehiclePanel({ row, position, drawerOpen, onToggleDrawer, collapsed, on
             const done = Boolean(stop.completedAt)
             const termin = done ? null : stopTerminLabel(stop, stops, true) ?? (stop.plannedAt ? `план ${formatTime(stop.plannedAt)}` : null)
             const eta = done ? null : stopEta(stop, stops, new Date(), true)
-            return <li key={stop.id} className={classNames(done && 'vehicle-panel-stop-done', stop.id === nextStop?.id && 'vehicle-panel-stop-next')}>
+            // In a narrow column a stop takes two lines: then only the stop ahead and the one after it are shown.
+            const far = !done && openStops.indexOf(stop) >= 2
+            return <li key={stop.id} className={classNames(done && 'vehicle-panel-stop-done', far && 'vehicle-panel-stop-far', stop.id === nextStop?.id && 'vehicle-panel-stop-next')}>
               <span className={`vehicle-panel-stop-dot vehicle-panel-stop-${done ? 'finished' : stop.type === 'LOAD' ? 'load' : 'unload'}`} aria-hidden="true" />
               <b>{stop.type === 'LOAD' ? 'BELADEN' : 'ENTLADEN'}</b><span className="vehicle-panel-stop-name" title={shortAddress(stop)}>{shortAddress(stop)}</span>
               <span className="vehicle-panel-stop-times">
@@ -699,24 +716,27 @@ function VehiclePanel({ row, position, drawerOpen, onToggleDrawer, collapsed, on
             </li>
           })}
         </ol> : <span className="vehicle-panel-route"><MapPin className="h-4 w-4" aria-hidden="true" />{nextText}</span>}
-        {hiddenStops > 0 ? <button type="button" className="vehicle-panel-link" onClick={onToggleDrawer} aria-expanded={drawerOpen}>ещё {hiddenStops} {hiddenStops === 1 ? 'точка' : hiddenStops < 5 ? 'точки' : 'точек'} · все точки</button> : null}
-        <span className="vehicle-panel-line">
-          {cargo ? `Груз: ${cargo.toLocaleString('de-DE')} LDM` : null}
-          {zuladungState(row.tour) === 'OPEN' ? <span className="vehicle-panel-zuladung" title="По Auftrag перед выгрузкой возможна Zuladung, место неизвестно">{cargo ? ' · ' : ''}без учёта Zuladung</span> : null}
-        </span>
-        {rebuilt ? <span className="vehicle-panel-line">Маршрут перестроен сам в {rebuilt}</span> : null}
-        {notice ? <span className="customer-notice-line">{notice}</span> : null}
+        {cargo || zuladungState(row.tour) === 'OPEN' || stops.length > 2 ? <span className="vehicle-panel-foot">
+          <span className="vehicle-panel-line">
+            {cargo ? `Груз: ${cargo.toLocaleString('de-DE')} LDM` : null}
+            {zuladungState(row.tour) === 'OPEN' ? <span className="vehicle-panel-zuladung" title="По Auftrag перед выгрузкой возможна Zuladung, место неизвестно">{cargo ? ' · ' : ''}без учёта Zuladung</span> : null}
+          </span>
+          {stops.length > 2 ? <button type="button" className="vehicle-panel-link" onClick={onToggleDrawer} aria-expanded={drawerOpen}>Все точки · {stops.length}</button> : null}
+        </span> : null}
+        {rebuilt || notice ? <span className="vehicle-panel-meta">
+          {rebuilt ? <span>Маршрут перестроен сам в {rebuilt}</span> : null}
+          {notice ? <span className="customer-notice-line">{notice}</span> : null}
+        </span> : null}
       </div>
-      <div className={classNames('vehicle-panel-hours', hours?.stale && 'vehicle-panel-hours-stale')} aria-label="Часы водителя" role="group">
+      {hasHours ? <div className={classNames('vehicle-panel-hours', hours?.stale && 'vehicle-panel-hours-stale')} aria-label="Часы водителя" role="group">
         <span className="vehicle-panel-label">Часы водителя{meters?.tachograph ? ' · тахограф' : ''}</span>
         {meters?.rows.length ? meters.rows.map((item) => <span key={item.label} className={classNames('vehicle-panel-meter', item.warn && 'vehicle-panel-hours-warn')}>
           <span>{item.label}</span><strong>{item.value}</strong>
           {item.share !== null ? <i aria-hidden="true"><b style={{ width: `${Math.round(Math.min(1, Math.max(0, item.share)) * 100)}%` }} /></i> : null}
-        </span>) : hours ? hours.parts.map((part) => <span key={part.label} className={classNames('vehicle-panel-meter', part.warn && 'vehicle-panel-hours-warn')}><span>{part.label}</span><strong>{part.value}</strong></span>)
-          : <span className="vehicle-panel-line">нет данных тахографа</span>}
+        </span>) : hours ? hours.parts.map((part) => <span key={part.label} className={classNames('vehicle-panel-meter', part.warn && 'vehicle-panel-hours-warn')}><span>{part.label}</span><strong>{part.value}</strong></span>) : null}
         {enough !== null && nextStop ? <span className={enough ? 'vehicle-panel-enough' : 'vehicle-panel-hours-warn'}>{enough ? `Хватает до ${shortAddress(nextStop)}` : `Не хватает до ${shortAddress(nextStop)}: нужен отдых`}</span> : null}
         {hours ? <span className="vehicle-panel-hours-source">{hours.source}{hours.stale ? ' · устарели' : ''}</span> : null}
-      </div>
+      </div> : null}
       <div className="vehicle-panel-actions">
         {action}
         {noticeDue(row) ? <CustomerNoticeButton row={row} /> : null}
@@ -749,6 +769,19 @@ function driverMeters(times: DrivingTimes | null | undefined, clock: DashboardVe
     if (rows.length) return { rows, tachograph: false, todayMinutes: clock.remainingDrivingMinutes ?? null }
   }
   return null
+}
+
+/** The driver's hours in one line, for the panel without room for their column: «До паузы 0:45 · сегодня осталось 1:37». */
+function hoursBriefOf(meters: ReturnType<typeof driverMeters>, enough: boolean | null, place: string | null, said: boolean): { text: string; title: string; warn: boolean } | null {
+  if (!meters?.rows.length) return said ? null : { text: 'Часы водителя: нет данных', title: 'Тахограф Webfleet не прислал часы, расчёта OPS тоже нет', warn: false }
+  const all = meters.rows.map((item) => `${item.label} ${item.value}`)
+  const verdict = enough === false && place ? `не хватает до ${place}` : null
+  const source = meters.tachograph ? 'по тахографу Webfleet' : 'расчёт OPS, предварительно'
+  return {
+    text: [verdict, ...all.slice(0, 2)].filter(Boolean).join(' · ').replace('Сегодня осталось', 'сегодня осталось'),
+    title: `Часы водителя, ${source}: ${all.join(' · ')}`,
+    warn: enough === false || meters.rows.slice(0, 2).some((item) => item.warn)
+  }
 }
 
 /** «пробка: +25 мин» from the open jam notice of the truck, as the position column of the design shows it. */

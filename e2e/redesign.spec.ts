@@ -44,7 +44,7 @@ test('«Сообщить заказчику»: маленькое окно с о
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto('/?vehicleId=v187')
   const panel = page.locator('.vehicle-panel')
-  await expect(panel).toContainText('опоздание 40 мин')
+  await expect(panel).toContainText('Опоздание 40 мин')
   await panel.getByRole('button', { name: 'Сообщить заказчику' }).click()
   const popup = page.getByRole('dialog', { name: 'Сообщить заказчику · LKW 187' })
   // A small window by its button, not a page-wide dialog.
@@ -186,4 +186,28 @@ test('телефон: сводка смены отдельной полосой,
   const layers = await page.locator('.map-layers').boundingBox()
   expect(summary && summary.x >= 0 && summary.x + summary.width <= 393).toBe(true)
   expect(summary && locate && layers && locate.y >= summary.y + summary.height && layers.y >= summary.y + summary.height).toBe(true)
+})
+
+test('нижняя панель: одна строка колонок одной высоты на 1280–1920 px, кнопки и строки целиком', async ({ page }) => {
+  // 18.11: on a laptop the panel took 323 px of the map in two rows; now every width gives the same one row.
+  await mainScreen(page)
+  const heights: number[] = []
+  for (const [width, height] of [[1280, 720], [1366, 768], [1440, 900], [1920, 1080]]) {
+    await page.setViewportSize({ width, height })
+    await page.goto('/?vehicleId=v187')
+    const panel = page.locator('.vehicle-panel')
+    await expect(panel.locator('.vehicle-panel-bar')).toBeVisible()
+    await expect(panel).toContainText('Осталось ≈ 62 км')
+    const shape = await panel.evaluate((element) => {
+      const box = element.getBoundingClientRect()
+      const columns = [...element.querySelectorAll<HTMLElement>('.vehicle-panel-bar > *')].filter((item) => getComputedStyle(item).display !== 'none').map((item) => item.getBoundingClientRect())
+      const buttons = [...element.querySelectorAll<HTMLElement>('.vehicle-panel-actions button')]
+      return { height: Math.round(box.height), oneRow: new Set(columns.map((item) => Math.round(item.top))).size === 1, sameHeight: new Set(columns.map((item) => Math.round(item.height))).size === 1,
+        buttonsInside: buttons.every((button) => button.getBoundingClientRect().right <= box.right - 8 && button.scrollWidth <= button.clientWidth + 1) }
+    })
+    expect(shape, `${width} px`).toMatchObject({ oneRow: true, sameHeight: true, buttonsInside: true })
+    heights.push(shape.height)
+  }
+  expect(Math.max(...heights)).toBeLessThanOrEqual(170)
+  expect(Math.max(...heights) - Math.min(...heights)).toBeLessThanOrEqual(12)
 })

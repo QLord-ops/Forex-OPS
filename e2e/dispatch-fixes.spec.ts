@@ -475,7 +475,8 @@ test('нижняя панель показывает, из чего сложил
   const panel = page.locator('.vehicle-panel')
   await expect(panel.locator('.vehicle-panel-bar')).toBeVisible()
   await expect(panel.getByText(/≈ 6 ч 12 мин езды · отдых 11 ч до /)).toBeVisible()
-  await expect(panel.getByText('от GPS · по тахографу')).toBeVisible()
+  // The source line: where the position comes from and whose hours the ETA was planned on.
+  await expect(panel.locator('.vehicle-panel-source')).toHaveText(/^GPS Webfleet · .+ · по тахографу$/)
   expect(await textClashes(page, '.vehicle-panel'), 'нижняя панель').toEqual([])
 })
 
