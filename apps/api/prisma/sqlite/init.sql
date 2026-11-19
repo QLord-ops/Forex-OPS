@@ -8,6 +8,7 @@ CREATE TABLE "Dispatcher" (
     "lastLoginAt" DATETIME,
     "onboardingCompletedAt" DATETIME,
     "locale" TEXT,
+    "workPhone" TEXT,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" DATETIME NOT NULL
 );
