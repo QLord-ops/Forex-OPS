@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { driverApi, type DriverSession } from './api'
 import { LoginScreen } from './LoginScreen'
-import { ShiftScreen } from './ShiftScreen'
+import { Shift } from './Shift'
 
 type Signed = Extract<DriverSession, { authenticated: true }>
 
@@ -18,5 +18,5 @@ export function App() {
 
   if (checking) return <div className="boot" role="status"><span className="spinner" aria-hidden="true" />Проверяем вход…</div>
   if (!session) return <LoginScreen onSignedIn={setSession} />
-  return <ShiftScreen session={session} onSignedOut={() => setSession(null)} />
+  return <Shift session={session} onSignedOut={() => setSession(null)} />
 }

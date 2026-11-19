@@ -170,6 +170,9 @@ export function alertHeading(type: string) {
   if (type === 'TERMIN_MET') return 'Прибытие к Termin'
   if (type === 'PREVIOUS_TOUR_OPEN') return 'Прошлый тур не закрыт'
   if (type === 'STOP_MOVED_TO_GATE') return 'Точка перенесена на ворота'
+  if (type === 'DRIVER_ARRIVAL') return 'Водитель отметил прибытие'
+  if (type === 'DRIVER_STOP_EVENT') return 'Отметка водителя'
+  if (type === 'DRIVER_PROBLEM') return 'Проблема на точке'
   return 'Уведомление OPS'
 }
 
@@ -223,7 +226,7 @@ export function playAlertSound(type: string) {
   if (!soundEnabled()) return
   unlockSound()
   if (!audio) return
-  const tones = type === 'AUTO_ARRIVAL' || type === 'AUTO_STOP_EVENT' ? [880, 1175] : type === 'STOP_DEPARTED' ? [1175, 880, 1175] : [660, 660, 520]
+  const tones = type === 'AUTO_ARRIVAL' || type === 'AUTO_STOP_EVENT' || type === 'DRIVER_ARRIVAL' || type === 'DRIVER_STOP_EVENT' ? [880, 1175] : type === 'STOP_DEPARTED' || type === 'DRIVER_PROBLEM' ? [1175, 880, 1175] : [660, 660, 520]
   const start = audio.currentTime + 0.02
   tones.forEach((frequency, index) => {
     const oscillator = audio!.createOscillator()

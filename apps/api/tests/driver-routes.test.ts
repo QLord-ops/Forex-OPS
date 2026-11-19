@@ -175,6 +175,34 @@ describe('driver app: the tour and the driver\'s own marks', () => {
     expect(last).toMatchObject({ type: 'UNLOADED_REVERTED', source: 'DISPATCHER', note: 'Отметка водителя отменена диспетчером' });
   });
 
+  it('still lets the driver take back the mark that closed the tour', async () => {
+    const { app, post, stops, tour, vehicle, tours } = await scenario();
+    closing.push(app);
+    const queued = await tours.createTour({ vehicleId: vehicle.id, orderNumber: `${tour.orderNumber}-NEXT`, stops: [
+      { sequence: 1, type: 'LOAD', company: 'Forex Lager', address: 'Mühlenweg 78, 37120 Bovenden', city: '37120 Bovenden', latitude: 51.59, longitude: 9.93 },
+      { sequence: 2, type: 'UNLOAD', company: 'Kunde', address: 'Hafenstraße 1, 20457 Hamburg', city: '20457 Hamburg', latitude: 53.54, longitude: 9.98 }
+    ] });
+    let last = null as null | Awaited<ReturnType<typeof post>>;
+    for (const stop of stops) {
+      now += 60_000;
+      // The Leergut stop at the same plant needs no arrival of its own.
+      if (stop.id !== stops[1].id) await post(`/driver/stops/${stop.id}/arrived`);
+      now += 60_000;
+      last = await post(`/driver/stops/${stop.id}/done`);
+      expect(last.statusCode).toBe(200);
+    }
+    // The phone now shows the next tour, and the mark that closed the old one.
+    expect(last!.json()).toMatchObject({ tour: { orderNumber: queued.orderNumber },
+      lastMark: { stopId: stops[2].id, type: 'UNLOAD', orderNumber: tour.orderNumber, undoUntil: new Date(now + DRIVER_UNDO_MS).toISOString() } });
+    expect(await db.tour.findUniqueOrThrow({ where: { id: tour.id } })).toMatchObject({ status: 'COMPLETED' });
+    expect(await db.tour.findUniqueOrThrow({ where: { id: queued.id } })).toMatchObject({ status: 'ACTIVE' });
+
+    const undone = await post(`/driver/stops/${stops[2].id}/undo`);
+    expect(undone.statusCode).toBe(200);
+    expect(undone.json()).toMatchObject({ lastMark: null, tour: { orderNumber: tour.orderNumber, currentStopId: stops[2].id } });
+    expect(await db.tour.findUniqueOrThrow({ where: { id: queued.id } })).toMatchObject({ status: 'QUEUED' });
+  });
+
   it('never takes back a dispatcher\'s mark from the phone, and marks the dispatcher\'s own events as such', async () => {
     const { app, post, stops, tours } = await scenario();
     closing.push(app);
