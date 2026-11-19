@@ -1,5 +1,5 @@
 import type { DriveEtaPlan } from '../domain.js';
-import { applyStopTime, createUnknownClockState, forecastDrive, type ClockState } from './vehicle-clock.js';
+import { applyStopTime, createUnknownClockState, forecastDrive, reserveCycleExtension, VEHICLE_CLOCK_LIMITS, type ClockState } from './vehicle-clock.js';
 import type { WebfleetDriverActivity, WebfleetDrivingTimes } from './webfleet-live.js';
 
 const MINUTE = 60;
@@ -8,6 +8,8 @@ const HOUR = 3600;
 const CONTINUOUS_DRIVE_SECONDS = 4.5 * HOUR;
 const BREAK_SECONDS = 45 * MINUTE;
 const DAILY_DRIVE_SECONDS = 9 * HOUR;
+/** The 10th hour of driving, twice a week: planned only when a Termin is missed without it (owner, 19.11). */
+const EXTENDED_EXTRA_SECONDS = 1 * HOUR;
 const DUTY_WINDOW_SECONDS = 13 * HOUR;
 export const DAILY_REST_SECONDS = 11 * HOUR;
 export const REDUCED_REST_SECONDS = 9 * HOUR;
@@ -145,6 +147,14 @@ export interface DriveEngine {
   readonly preliminary: boolean;
   /** Whether a 9 h rest may still be taken (unknown counts as yes; the calculated clock never shortens by itself). */
   canReduceRest(): boolean;
+  /** Whether a 10 h day may still be taken (unknown counts as yes, like the 9 h rest). */
+  canExtendDay(): boolean;
+  /** While on, a day that has used its 9 h of driving takes the 10th hour instead of the daily rest. */
+  setExtendedDay(on: boolean): void;
+  /** Days on which this forecast took the 10th hour. */
+  readonly extendedDays: number;
+  /** Driving left in the driver's current day at `at`: the daily driving and the shift window; null when unknown. */
+  driveLeftAt(at: Date): number | null;
   readonly notes: Set<string>;
   readonly warnings: Set<string>;
 }
@@ -157,18 +167,33 @@ export class WebfleetEngine implements DriveEngine {
   readonly warnings = new Set<string>();
   private contLeft: number; private breakLen: number; private dayLeft: number; private shiftEndMs: number | null;
   private weekLeft: number | null; private reducedLeft: number | null; private pendingBreak: number; private rests = 0;
+  private extendedLeft: number | null; private extraLeft: number; private extendOn = false;
+  extendedDays = 0;
   constructor(private readonly budget: DriverBudget, private readonly restSeconds: number = DAILY_REST_SECONDS) {
-    this.contLeft = budget.continuousDriveLeftSeconds; this.breakLen = budget.breakSeconds; this.dayLeft = budget.dailyDriveLeftSeconds;
+    this.contLeft = budget.continuousDriveLeftSeconds; this.breakLen = budget.breakSeconds;
+    // Webfleet counts today up to 10 h while extended days are left. The plan stops at 9 h of driving unless the driver is
+    // already past them; the 10th hour is taken only for a Termin (`setExtendedDay`).
+    const pastNine = budget.drivenTodaySeconds > DAILY_DRIVE_SECONDS;
+    this.dayLeft = pastNine ? budget.dailyDriveLeftSeconds : Math.min(budget.dailyDriveLeftSeconds, Math.max(0, DAILY_DRIVE_SECONDS - budget.drivenTodaySeconds));
+    this.extraLeft = pastNine ? 0 : EXTENDED_EXTRA_SECONDS;
     this.shiftEndMs = budget.shiftEndAt ? Date.parse(budget.shiftEndAt) : null;
     this.weekLeft = budget.weeklyDriveLeftSeconds; this.reducedLeft = budget.reducedRestsLeft; this.pendingBreak = budget.breakRemainingSeconds;
+    this.extendedLeft = budget.extendedShiftsLeft;
   }
   clone(): DriveEngine {
     const copy = new WebfleetEngine(this.budget, this.restSeconds);
-    Object.assign(copy, { contLeft: this.contLeft, breakLen: this.breakLen, dayLeft: this.dayLeft, shiftEndMs: this.shiftEndMs, weekLeft: this.weekLeft, reducedLeft: this.reducedLeft, pendingBreak: this.pendingBreak, rests: this.rests });
+    Object.assign(copy, { contLeft: this.contLeft, breakLen: this.breakLen, dayLeft: this.dayLeft, shiftEndMs: this.shiftEndMs, weekLeft: this.weekLeft, reducedLeft: this.reducedLeft, pendingBreak: this.pendingBreak, rests: this.rests,
+      extendedLeft: this.extendedLeft, extraLeft: this.extraLeft, extendOn: this.extendOn, extendedDays: this.extendedDays });
     this.notes.forEach(note => copy.notes.add(note)); this.warnings.forEach(w => copy.warnings.add(w));
     return copy;
   }
   canReduceRest() { return this.reducedLeft === null || this.reducedLeft > 0; }
+  canExtendDay() { return this.extendedLeft === null || this.extendedLeft > 0; }
+  setExtendedDay(on: boolean) { this.extendOn = on; }
+  driveLeftAt(at: Date) {
+    const shiftLeft = this.shiftEndMs === null ? Infinity : (this.shiftEndMs - at.getTime()) / 1000;
+    return Math.round(Math.max(0, Math.min(this.dayLeft, shiftLeft)));
+  }
   drive(seconds: number, from: Date, restSeconds = this.restSeconds) {
     const pieces: Piece[] = [];
     let cursor = from.getTime();
@@ -186,6 +211,11 @@ export class WebfleetEngine implements DriveEngine {
     let guard = 0;
     while (remaining > 0 && guard++ < 200) {
       const shiftLeft = this.shiftEndMs === null ? Infinity : (this.shiftEndMs - cursor) / 1000;
+      if (this.dayLeft <= 0 && shiftLeft > 0 && this.extendOn && this.extraLeft > 0 && this.canExtendDay()) {
+        this.dayLeft = this.extraLeft; this.extraLeft = 0; this.extendedDays += 1;
+        if (this.extendedLeft !== null) this.extendedLeft -= 1;
+        continue;
+      }
       if (this.dayLeft <= 0 || shiftLeft <= 0) { rest(); continue; }
       if (this.contLeft <= 0) {
         if (this.breakLen > shiftLeft) { rest(); continue; }
@@ -214,7 +244,7 @@ export class WebfleetEngine implements DriveEngine {
   }
   private newDay(atMs: number) {
     this.rests += 1;
-    this.dayLeft = DAILY_DRIVE_SECONDS; this.contLeft = CONTINUOUS_DRIVE_SECONDS; this.breakLen = BREAK_SECONDS; this.pendingBreak = 0;
+    this.dayLeft = DAILY_DRIVE_SECONDS; this.extraLeft = EXTENDED_EXTRA_SECONDS; this.contLeft = CONTINUOUS_DRIVE_SECONDS; this.breakLen = BREAK_SECONDS; this.pendingBreak = 0;
     this.shiftEndMs = atMs + DUTY_WINDOW_SECONDS * 1000;
     const extended = this.budget.extendedShiftsLeft;
     this.notes.add(extended ? `После суточного отдыха взято 9 ч вождения и смена 13 ч; 10 ч возможны, пока остались удлинённые смены: ${extended}.` : 'После суточного отдыха взято 9 ч вождения и смена 13 ч.');
@@ -226,16 +256,40 @@ export class ClockEngine implements DriveEngine {
   readonly source = 'CLOCK' as const;
   readonly notes = new Set<string>();
   readonly warnings = new Set<string>();
+  private extendOn = false;
+  extendedDays = 0;
   constructor(private state: ClockState) {}
   get preliminary() { return this.state.kind !== 'KNOWN'; }
   canReduceRest() { return false; }
-  clone(): DriveEngine { return new ClockEngine(structuredClone(this.state)); }
+  canExtendDay() {
+    return this.state.kind === 'KNOWN' && !this.state.currentCycle.extendedDriveReservationId && this.state.weeklyExtendedDrive.used < VEHICLE_CLOCK_LIMITS.weeklyExtendedDriveLimit;
+  }
+  setExtendedDay(on: boolean) { this.extendOn = on; }
+  clone(): DriveEngine {
+    const copy = new ClockEngine(structuredClone(this.state));
+    copy.extendOn = this.extendOn; copy.extendedDays = this.extendedDays;
+    return copy;
+  }
+  driveLeftAt(at: Date) {
+    if (this.state.kind !== 'KNOWN') return null;
+    const updated = Date.parse(this.state.updatedAt);
+    const state = at.getTime() > updated ? applyStopTime(this.state, (at.getTime() - updated) / 1000, this.state.updatedAt).state : this.state;
+    const cycle = state.currentCycle;
+    const drive = (cycle.extendedDriveReservationId ? VEHICLE_CLOCK_LIMITS.extendedDailyDrivingSeconds : VEHICLE_CLOCK_LIMITS.normalDailyDrivingSeconds) - cycle.drivingSeconds;
+    const duty = (cycle.reducedRestReservationId ? VEHICLE_CLOCK_LIMITS.extendedDutyWindowSeconds : VEHICLE_CLOCK_LIMITS.normalDutyWindowSeconds) - cycle.dutySeconds;
+    return Math.round(Math.max(0, Math.min(drive, duty)));
+  }
   private sync(at: Date) {
     const updated = Date.parse(this.state.updatedAt);
     if (at.getTime() > updated) this.state = applyStopTime(this.state, (at.getTime() - updated) / 1000, this.state.updatedAt).state;
   }
   drive(seconds: number, from: Date) {
     this.sync(from);
+    // The calculated clock takes the 10th hour of today only (its extension is per cycle), and only when the drive needs it.
+    if (this.extendOn && this.canExtendDay() && seconds > VEHICLE_CLOCK_LIMITS.normalDailyDrivingSeconds - this.state.currentCycle.drivingSeconds) {
+      const reserved = reserveCycleExtension(this.state, { type: 'EXTENDED_DRIVE', reservationId: `forecast-${from.toISOString()}`, requestedAt: from });
+      if (reserved.accepted) { this.state = reserved.state; this.extendedDays += 1; }
+    }
     const result = forecastDrive(this.state, seconds, from);
     this.state = result.state;
     const pieces: Piece[] = result.segments.filter(segment => segment.type !== 'WAIT').map(segment => ({
@@ -277,15 +331,36 @@ export function driverBudgetAfterRest(times: WebfleetDrivingTimes, startsAt: Dat
  */
 export function forecastEta(engine: DriveEngine, driveSeconds: number, from: Date, deadlineAt: Date | null, startsAt: Date | null = null): { endAt: Date; plan: DriveEtaPlan; engine: DriveEngine; pieces: Piece[] } {
   const start = startsAt && startsAt > from ? startsAt : from;
-  const run = (restSeconds: number) => { const copy = engine.clone(); return { engine: copy, ...copy.drive(driveSeconds, start, restSeconds) }; };
-  let chosen = run(DAILY_REST_SECONDS);
+  const run = (restSeconds: number, extend: boolean) => {
+    const copy = engine.clone();
+    copy.setExtendedDay(extend);
+    const result = copy.drive(driveSeconds, start, restSeconds);
+    copy.setExtendedDay(false);
+    return { engine: copy, ...result };
+  };
+  const late = (at: Date) => Boolean(deadlineAt && at > deadlineAt);
+  let chosen = run(DAILY_REST_SECONDS, false);
   let reduced = false;
-  const rests = chosen.pieces.some(piece => piece.type === 'DAILY_REST');
-  if (rests && deadlineAt && chosen.endAt > deadlineAt && engine.canReduceRest()) { chosen = run(REDUCED_REST_SECONDS); reduced = true; }
+  if (late(chosen.endAt)) {
+    // Owner, 19.11: a day is 9 h of driving. Only a Termin missed without them gets the 9 h rest, the 10th hour, or both —
+    // the first that keeps it. When none does, the 9 h rest still brings the truck closest without spending a 10 h day.
+    const rests = chosen.pieces.some(piece => piece.type === 'DAILY_REST');
+    const reduce = rests && engine.canReduceRest(), extend = engine.canExtendDay();
+    const options = [reduce ? [REDUCED_REST_SECONDS, false] as const : null, extend ? [DAILY_REST_SECONDS, true] as const : null, reduce && extend ? [REDUCED_REST_SECONDS, true] as const : null];
+    let fallback: ReturnType<typeof run> | null = null, found = false;
+    for (const option of options) {
+      if (!option) continue;
+      const attempt = run(option[0], option[1]);
+      if (!late(attempt.endAt)) { chosen = attempt; reduced = option[0] < DAILY_REST_SECONDS; found = true; break; }
+      if (!option[1] && !fallback) fallback = attempt;
+    }
+    if (!found && fallback) { chosen = fallback; reduced = true; }
+  }
   const rest = chosen.pieces.find(piece => piece.type === 'DAILY_REST') ?? null;
   return {
     endAt: chosen.endAt, engine: chosen.engine, pieces: chosen.pieces,
     plan: {
+      extendedDay: chosen.engine.extendedDays > engine.extendedDays, driveLeftSeconds: chosen.engine.driveLeftAt(chosen.endAt),
       hours: engine.source, preliminary: engine.preliminary, driveSeconds: Math.round(driveSeconds),
       breakSeconds: Math.round(chosen.pieces.filter(piece => piece.type === 'BREAK').reduce((sum, piece) => sum + piece.durationSeconds, 0)),
       rest: rest ? { startAt: rest.startAt.toISOString(), endAt: rest.endAt.toISOString(), seconds: Math.round(rest.durationSeconds), reduced: reduced || rest.durationSeconds < DAILY_REST_SECONDS } : null,
@@ -463,6 +538,7 @@ export function forecastRoute(engine: DriveEngine, legSeconds: number[], staySec
   }
   const rest = pieces.find(piece => piece.type === 'DAILY_REST') ?? null;
   return { endAt: arrivals.at(-1) ?? start, arrivals, plan: {
+    extendedDay: false, driveLeftSeconds: engine.driveLeftAt(arrivals.at(-1) ?? start),
     hours: engine.source, preliminary: engine.preliminary, driveSeconds: Math.round(legSeconds.reduce((sum, seconds) => sum + Math.max(0, seconds), 0)),
     breakSeconds: Math.round(pieces.filter(piece => piece.type === 'BREAK').reduce((sum, piece) => sum + piece.durationSeconds, 0)),
     rest: rest ? { startAt: rest.startAt.toISOString(), endAt: rest.endAt.toISOString(), seconds: Math.round(rest.durationSeconds), reduced: rest.durationSeconds < DAILY_REST_SECONDS } : null,

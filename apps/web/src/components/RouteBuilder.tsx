@@ -7,6 +7,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { suggestionAddress } from '../lib/address-book'
 import { previewRouteScenario, type RouteScenarioRequest } from '../lib/assistant-api'
 import { formatAppointment } from '../lib/format'
+import { drivingDayText } from '../lib/driving-day'
 import type { MapRoutePreview } from '../lib/route-preview'
 import { chosenOption, composeRoute, formatDrive, formatRouteKm } from '../lib/route-variants'
 import { looksLikeVehicleReference, vehicleMatch, type VehicleMatch } from '../lib/vehicle-match'
@@ -221,9 +222,11 @@ export function RouteBuilder({ vehicles, selectedVehicleNumber, onPreview }: {
       <p className="route-builder-source">{live ? 'TomTom · с учётом пробок' : 'Без актуальных пробок'}{result.vehicleNumber ? ` · старт LKW ${result.vehicleNumber}` : ''}</p>
       <ol className="route-builder-eta">{result.stops.map((stop, index) => {
         const leg = legs[index] ? chosenOption(legs[index], choice[index]) : undefined
+        const day = drivingDayText(stop.driveLeftSeconds, stop.extendedDay)
         return <li key={index}><span className="route-point-number">{index + 2}</span><span className="route-builder-address" title={stop.address}>{stop.address}</span>
           {leg ? <span className="route-builder-leg-km" title="Расстояние от предыдущей точки">{formatRouteKm(leg.distanceMeters)}</span> : null}
-          <time>{stop.latestArrival ? formatAppointment(stop.latestArrival) : '—'}</time></li>
+          <time>{stop.latestArrival ? formatAppointment(stop.latestArrival) : '—'}</time>
+          {day ? <span className={day.extended ? 'route-builder-day route-builder-day-extended' : 'route-builder-day'}>{day.text}</span> : null}</li>
       })}</ol>
       {result.warnings.map((warning, index) => <p key={index} className="quick-order-warning">{warning}</p>)}
     </div> : null}

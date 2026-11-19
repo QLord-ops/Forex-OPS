@@ -69,7 +69,7 @@ describe('Termin planner on tachograph budgets', () => {
     expect(result.preliminary).toBe(false);
   });
   it('takes a 30-minute second part of a split break first, then 45 minutes again', () => {
-    const result = plan([stop('A', 7 * H)], budget({ breakSeconds: 30 * 60, dailyDriveLeftSeconds: 9 * H, shiftEndAt: null, restLatestAt: null }));
+    const result = plan([stop('A', 7 * H)], budget({ breakSeconds: 30 * 60, dailyDriveLeftSeconds: 9 * H, drivenTodaySeconds: 0, shiftEndAt: null, restLatestAt: null }));
     expect(types(result)).toEqual(['DRIVE:60', 'BREAK:30', 'DRIVE:270', 'BREAK:45', 'DRIVE:90']);
   });
   it('puts the daily rest before the stop and recommends the morning after it', () => {

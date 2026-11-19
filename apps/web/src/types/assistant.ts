@@ -46,6 +46,10 @@ export interface RouteScenarioStop {
   address: string; type: string; coords: { latitude: number; longitude: number }
   earliestArrival: string | null; latestArrival: string | null; earliestDeparture: string | null; latestDeparture: string | null
   risk: string; serviceMinMinutes: number; serviceMaxMinutes: number
+  /** Driving left in the driver's day on arrival; the day is planned on 9 h. */
+  driveLeftSeconds?: number | null
+  /** The 10th hour of driving is taken to make this stop's Termin. */
+  extendedDay?: boolean
 }
 export interface RouteOption {
   id: string; mainRoads: string[]; distanceMeters: number; durationSeconds: number; trafficDelaySeconds: number; hasRoadClosure: boolean

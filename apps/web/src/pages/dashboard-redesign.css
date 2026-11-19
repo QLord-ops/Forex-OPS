@@ -305,6 +305,8 @@ button.fleet-summary-item:focus-visible { outline: 2px solid var(--focus); outli
 .auftrag-check-stops b { display: inline-grid; width: 18px; height: 18px; place-items: center; border-radius: 50%; background: var(--s-sunken); font-size: .6875rem; }
 .auftrag-check-stops span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .auftrag-check-stops em { font-style: normal; }
+.auftrag-check-stops .auftrag-check-day { grid-column: 2 / -1; color: var(--t-muted); font-size: .75rem; }
+.auftrag-check-stops .auftrag-check-day-extended { color: var(--st-late); font-weight: 600; }
 .auftrag-check .compact-button { justify-self: start; }
 @media (min-width: 768px) {
   /* The review of an Auftrag floats on the right under the map buttons, its own height, scrolling inside (owner, 18.11). */
