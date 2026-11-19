@@ -7,7 +7,7 @@ import { resolveAddressWithFallback } from './address-resolution.js';
 import { calculateSimulatedDuration } from './simulation.js';
 import { shareTerminAtSamePlace } from './termin-groups.js';
 import { TourService, snapshotVehicleClock, rebaseActiveLeg } from './tours.js';
-import { forecastDrive, applyStopTime, type ClockState } from './vehicle-clock.js';
+import { ClockEngine, forecastEta, WebfleetEngine, type DriveEngine, type DriverEtaInput } from './termin-planner.js';
 import { writeAuditLog, type AuditActor } from './audit-log.js';
 
 export type ReplanStop = { id?: string; type: 'LOAD' | 'UNLOAD'; address: string; instructions?: string | null; company?: string | null; city?: string | null; appointmentAt?: string | null; serviceMinMinutes?: number; serviceMaxMinutes?: number; latitude?: number; longitude?: number };
@@ -42,23 +42,31 @@ function storedRoads(value: string | null): string[] {
   try { return roads(JSON.parse(value ?? 'null')); } catch { return []; }
 }
 type ScheduleStop = { id: string; appointmentAt?: string | Date | null; serviceMinMinutes?: number; serviceMaxMinutes?: number; arrivedAt?: Date | null };
-function forecastQueue(clock: ClockState, now: Date, legs: { toStopId: string; duration: number }[], stops: ScheduleStop[], arrived?: ScheduleStop) {
-  let early = clock, late = clock, earlyAt = now, lateAt = now;
+/**
+ * The arrival window at every stop on the same hours as the tour's ETA: the driver's tachograph from Webfleet, the
+ * calculated clock only without it (owner, 19.11). Breaks and the daily rest fall where the law puts them, an hour at a
+ * stop counts as the break, and a rest of 9 h is taken instead of 11 h when only that keeps the Termin.
+ */
+export function forecastQueue(engine: DriveEngine, now: Date, legs: { toStopId: string; duration: number }[], stops: ScheduleStop[], arrived?: ScheduleStop, startsAt: Date | null = null) {
+  let early = engine.clone(), late = engine.clone(), earlyAt = now, lateAt = now;
   const windows: { stopId: string; earliest: string; latest: string }[] = [];
   const service = (stop?: ScheduleStop) => {
     const elapsed = stop?.arrivedAt ? Math.max(0, (now.getTime() - stop.arrivedAt.getTime()) / 1000) : 0;
     const appointment = stop?.appointmentAt ? new Date(stop.appointmentAt).getTime() : 0;
     const min = Math.max(0, (stop?.serviceMinMinutes ?? 60) * 60 - elapsed) + Math.max(0, (appointment - earlyAt.getTime()) / 1000);
     const max = Math.max(0, (stop?.serviceMaxMinutes ?? 120) * 60 - elapsed) + Math.max(0, (appointment - lateAt.getTime()) / 1000);
-    early = applyStopTime(early, min, earlyAt).state; late = applyStopTime(late, max, lateAt).state;
+    if (min > 0) early.idle(min, earlyAt);
+    if (max > 0) late.idle(max, lateAt);
     earlyAt = new Date(earlyAt.getTime() + min * 1000); lateAt = new Date(lateAt.getTime() + max * 1000);
   };
   if (arrived) service(arrived);
   for (const leg of legs) {
-    const first = forecastDrive(early, leg.duration, earlyAt), second = forecastDrive(late, leg.duration, lateAt);
-    earlyAt = new Date(first.endAt); lateAt = new Date(second.endAt); early = first.state; late = second.state;
+    const stop = stops.find(s => s.id === leg.toStopId);
+    const deadline = stop?.appointmentAt ? new Date(stop.appointmentAt) : null;
+    const first = forecastEta(early, leg.duration, earlyAt, deadline, startsAt), second = forecastEta(late, leg.duration, lateAt, deadline, startsAt);
+    early = first.engine; late = second.engine; earlyAt = first.endAt; lateAt = second.endAt;
     windows.push({ stopId: leg.toStopId, earliest: earlyAt.toISOString(), latest: lateAt.toISOString() });
-    service(stops.find(s => s.id === leg.toStopId));
+    service(stop);
   }
   return windows;
 }
@@ -66,7 +74,8 @@ function forecastQueue(clock: ClockState, now: Date, legs: { toStopId: string; d
 export class ReplanningService {
   constructor(private readonly db: PrismaClient, private readonly routing: RoutingProvider,
     private readonly getPosition: (vehicleId: string, now: Date) => Promise<CurrentPosition> = (id, now) => new TourService(db, routing).getCurrentPosition(id, now),
-    private readonly checkpoint?: (tx: Prisma.TransactionClient, vehicleId: string, now: Date) => Promise<void>) {}
+    private readonly checkpoint?: (tx: Prisma.TransactionClient, vehicleId: string, now: Date) => Promise<void>,
+    private readonly getDriver: (vehicleId: string, now: Date) => Promise<DriverEtaInput | null> = async () => null) {}
 
   private async context(db: PrismaClient | Prisma.TransactionClient, tourId: string) {
     const tour = await db.tour.findUniqueOrThrow({ where: { id: tourId }, include });
@@ -135,9 +144,12 @@ export class ReplanningService {
     const preview = await this.db.routePreview.create({ data: { tourId, version: input.version, vehicleVersion: vehicle.operationVersion, inputJson: JSON.stringify(input), planJson: JSON.stringify(plan), expiresAt: new Date(now.getTime() + 10 * 60_000) } });
     const beforeLegs = tours.filter(t => affectedTourIds.includes(t.id)).flatMap(t => t.legs.filter(l => l.status !== 'COMPLETED'));
     const snapshot = snapshotVehicleClock(vehicle, oldActive ?? null, now);
-    const etaWindows = forecastQueue(snapshot.clockState, now, legs, [...stops, ...downstream.flatMap(t => t.stops)], arrived ?? (!oldActive && !completed.length ? stops[0] : undefined));
+    const driver = await this.getDriver(vehicle.id, now).catch(() => null);
+    const engine: DriveEngine = driver ? new WebfleetEngine(driver.budget) : new ClockEngine(snapshot.clockState);
+    const startsAt = driver?.startsAt ?? null;
+    const etaWindows = forecastQueue(engine, now, legs, [...stops, ...downstream.flatMap(t => t.stops)], arrived ?? (!oldActive && !completed.length ? stops[0] : undefined), startsAt);
     const beforeSchedule = beforeLegs.filter(l => l.toStopId !== arrived?.id).map(l => ({ toStopId: l.toStopId, duration: Math.max(0, l.simulatedDurationSeconds - (l.id === oldActive?.id ? snapshot.driveElapsedSeconds : 0)) }));
-    const beforeWindows = forecastQueue(snapshot.clockState, now, beforeSchedule, tours.flatMap(t => t.stops), arrived ?? (!oldActive && !completed.length ? pending[0] : undefined));
+    const beforeWindows = forecastQueue(engine, now, beforeSchedule, tours.flatMap(t => t.stops), arrived ?? (!oldActive && !completed.length ? pending[0] : undefined), startsAt);
     return { id: preview.id, version: preview.version, expiresAt: preview.expiresAt.toISOString(), stops, affectedTourIds,
       etaWindows,
       before: { distanceMeters: Math.max(0, beforeLegs.reduce((n, l) => n + l.distanceMeters, 0) - position.distanceTravelledMeters), durationSeconds: beforeSchedule.reduce((n, l) => n + l.duration, 0), roads: [...new Set(beforeLegs.flatMap(l => storedRoads(l.routeDetails)))], etaWindows: beforeWindows },
