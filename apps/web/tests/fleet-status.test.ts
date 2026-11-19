@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { compareVehicles, getAttention, liveSpeed, manuallyStopped, matchesFleetFilter, needsDecision, notStarted, plannedStart, positionSource, activityNote, restNote, terminMargin, terminNeeded, vehiclePlace, vehicleStatus } from '../src/lib/fleet-status'
+import { compareVehicles, getAttention, liveSpeed, manuallyStopped, matchesFleetFilter, needsDecision, notStarted, plannedStart, positionSource, activityNote, restNote, runsLate, terminMargin, terminNeeded, vehiclePlace, vehicleStatus } from '../src/lib/fleet-status'
 import type { DashboardVehicle, Stop } from '../src/types/domain'
 
 const NOW = new Date('2026-11-03T12:00:00Z').getTime()
@@ -97,6 +97,17 @@ describe('fleet status', () => {
     expect(terminMargin(moving)).toBe(50)
     expect(terminMargin(row({ delayMinutes: 35 }))).toBe(-35)
     expect(terminMargin(row())).toBeNull()
+  })
+
+  it('«опаздывает» of the shift summary is a filter: ETA past the Termin or a delay on the way', () => {
+    const tour = { id: 't1', stops: [stop({ appointmentAt: '2026-11-03T15:00:00Z' })] } as never
+    const pastTermin = row({ eta: '2026-11-03T15:20:00Z', tour })
+    const inTime = row({ eta: '2026-11-03T14:10:00Z', tour })
+    expect(runsLate(pastTermin, NOW)).toBe(true)
+    expect(runsLate(row({ delayMinutes: 35 }), NOW)).toBe(true)
+    expect(runsLate(inTime, NOW)).toBe(false)
+    expect(runsLate(row({ statusText: 'IDLE' }), NOW)).toBe(false)
+    expect([pastTermin, inTime, row({ delayMinutes: 35 })].filter((item) => matchesFleetFilter(item, 'LATE', new Set(), NOW))).toHaveLength(2)
   })
 
   it('always says where the position comes from', () => {

@@ -123,7 +123,7 @@ export function MyCovers({ team, onChanged }: { team: TeamOverview; onChanged: (
 }
 
 /** On the dispatch screen: take a colleague's lines or give mine away without leaving the trucks. */
-export function CoverPanel() {
+export function CoverPanel({ actions = true }: { actions?: boolean }) {
   const me = currentDispatcher()
   const personal = Boolean(me)
   const { data: team, refetch } = usePolling(teamApi.overview, 60_000, personal)
@@ -131,6 +131,11 @@ export function CoverPanel() {
   // An older server answers without the team: the dispatch screen stays as it was.
   if (!personal || !team?.dispatchers) return null
   const done = () => { setMode(null); void refetch() }
+  // Folded with the list filters: a running cover stays in sight, the buttons wait behind «Фильтры».
+  if (!actions) {
+    return team.covers.some((cover) => cover.cover.id === me?.id || cover.absent.id === me?.id)
+      ? <section className="cover-panel" aria-label="Подмена диспетчера"><MyCovers team={team} onChanged={() => void refetch()} /></section> : null
+  }
   return <section className="cover-panel" aria-label="Подмена диспетчера">
     <div className="cover-actions">
       <button type="button" className="cover-button" aria-expanded={mode === 'take'} onClick={() => setMode(mode === 'take' ? null : 'take')}><UserPlus className="h-4 w-4" aria-hidden="true" />Подменить коллегу</button>

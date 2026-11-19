@@ -122,7 +122,7 @@ test('после истечения сессии вход поверх прил�
   })
   await page.route('https://tile.openstreetmap.org/**', route => route.abort())
   await page.goto('/')
-  const search = page.getByPlaceholder('LKW, Auftrag или город')
+  const search = page.getByPlaceholder('LKW, Auftrag, город')
   await search.fill('125')
   expired = true
   await expect(page.getByRole('dialog', { name: 'Сессия истекла, войдите снова' })).toBeVisible({ timeout: 15_000 })
@@ -150,7 +150,8 @@ test('закреплённая машина стоит первой даже б�
   const cards = page.locator('.fleet-list .vehicle-card')
   await expect(cards).toHaveCount(2)
   await expect(cards.first()).toContainText('LKW 125')
-  await expect(page.getByRole('button', { name: 'Все' })).toHaveAttribute('aria-pressed', 'true')
+  // No filter is on: the chips are folded and nothing is named under the search.
+  await expect(page.getByRole('group', { name: 'Включённые фильтры' })).toHaveCount(0)
 })
 
 test('редактирует будущий тур', async ({ page }) => {

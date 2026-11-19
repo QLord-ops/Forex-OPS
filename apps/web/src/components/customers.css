@@ -74,5 +74,5 @@
 .import-customer-name { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .import-customer-name strong { font-weight: 600; }
 .import-customer-name > span:last-child { color: rgb(var(--tx-64748b)); }
-.import-customer-other { margin-left: auto; }
+.import-customer-other { min-width: 0; flex: 1 1 200px; }
 .import-customer-other .field-input { min-height: 32px; padding-block: 4px; font-size: .8125rem; }

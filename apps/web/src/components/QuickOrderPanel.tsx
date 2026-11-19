@@ -34,6 +34,8 @@ export type AuftragDraftSummary = {
 }
 /** A file dropped on the map of the main screen goes here (owner, 18.11.2026: Auftrag на главной). */
 export const AUFTRAG_DROP_EVENT = 'ops:auftrag-drop'
+/** How many Auftrag windows of the main screen are mounted: while there is one, every dropped file is read there. */
+let mapDocks = 0
 type TerminReview = { document: AppointmentDocument; fingerprint: string; match: AppointmentMatch; pendingId: string | null; alreadyApplied: boolean; fileName: string }
 type DraftStop = ImportedStopDraft & { city: string; company: string; address: string; appointmentLocal: string; loadingMetersText: string; referenceText: string; instructionsText: string; resolution?: AddressResolution | null
   /** What the import recognised, to notice the dispatcher's correction. */
@@ -153,6 +155,9 @@ export function QuickOrderPanel({
       if (!event.dataTransfer?.files.length || event.defaultPrevented) return
       event.preventDefault()
       setDragging(false)
+      // On the main screen a file dropped beside the map (list, menu, top bar) goes to the same window as one dropped
+      // on the map: one Auftrag, one window (owner, 19.11).
+      if (mapDocks > 0) { window.dispatchEvent(new CustomEvent(AUFTRAG_DROP_EVENT, { detail: Array.from(event.dataTransfer.files) })); return }
       setTab('order')
       queueFiles(Array.from(event.dataTransfer.files))
     }
@@ -165,6 +170,11 @@ export function QuickOrderPanel({
     }
   })
 
+  useEffect(() => {
+    if (importOnly) return
+    mapDocks += 1
+    return () => { mapDocks -= 1 }
+  }, [importOnly])
   useEffect(() => {
     if (importOnly) return
     const onDropped = (event: Event) => {
