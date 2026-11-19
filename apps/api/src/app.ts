@@ -52,6 +52,7 @@ import { AssistantError, DispatcherAssistantService } from './services/dispatche
 import { assistantSessionKey, registerDispatcherAssistantRoutes } from './routes/dispatcher-assistant.js';
 import { registerDispatcherRoutes } from './routes/dispatchers.js';
 import { registerDriverShiftRoutes } from './routes/driver-shifts.js';
+import { registerDriverRoutes } from './routes/driver.js';
 import { driverOrigins, registerDriverAuth } from './services/driver-auth.js';
 import { registerVehicleAssignmentRoutes } from './routes/vehicle-assignment.js';
 import { registerVehicleStatusSettingsRoutes } from './routes/vehicle-status-settings.js';
@@ -499,6 +500,15 @@ export async function buildApp(options: BuildAppOptions = {}) {
   registerAppointmentDocumentRoutes(app, { prisma, appointments: appointmentService, pending: pendingAppointments, audit, refreshAlertsForVehicle: (vehicleId) => refreshAlertsForVehicle(vehicleId) });
   registerDispatcherRoutes(app, prisma);
   registerDriverShiftRoutes(app, prisma);
+  registerDriverRoutes(app, {
+    prisma, tours: tourService, operations: operationsService,
+    gps: (vehicleId, now) => webfleetTelemetry.latest(vehicleId, now),
+    eta: async (vehicleId, now) => {
+      const position = await currentPosition(vehicleId, now);
+      return { at: position.eta ?? null, source: position.positionSource !== 'WEBFLEET' ? 'CALCULATED' : position.telemetryStale ? 'WEBFLEET_STALE' : 'WEBFLEET' };
+    },
+    afterEvent: async (vehicleId, stopIds) => { learnStay(stopIds); await refreshAlertsForVehicle(vehicleId); }
+  });
   registerVehicleAssignmentRoutes(app, prisma);
   registerVehicleStatusSettingsRoutes(app, prisma);
   registerDailyStatusRoutes(app, dailyStatus);
