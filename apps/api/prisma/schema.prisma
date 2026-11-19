@@ -46,6 +46,7 @@ model Vehicle {
   integrations VehicleIntegration[]
   telemetry VehicleTelemetry[]
   dailyStatusRows DailyStatusRow[]
+  driverShifts DriverShift[]
 
   @@index([assignedDispatcherId])
   @@index([line, statusGroup])
@@ -165,6 +166,8 @@ model Event {
   type      String
   timestamp DateTime
   note      String?
+  /// Who recorded the stop event: DISPATCHER | WEBFLEET_AUTO | DRIVER. Null = recorded before the driver app.
+  source    String?
 
   vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
   tour    Tour    @relation(fields: [tourId], references: [id], onDelete: Cascade)
@@ -717,4 +720,26 @@ model NotificationRead {
 
   @@unique([notificationId, dispatcherId])
   @@index([dispatcherId])
+}
+
+/// A shift code signs the driver app in for one truck until the shift ends. Bound to the truck, never to a person:
+/// no driver name, phone or device data (DSGVO). The code is shown to the dispatcher once; only its hash is stored.
+model DriverShift {
+  id String @id @default(cuid())
+  vehicleId String
+  codeHash String
+  startsAt DateTime @default(now())
+  endsAt DateTime
+  /// Wrong codes since the last correct one; the code locks after too many.
+  failedAttempts Int @default(0)
+  firstUsedAt DateTime?
+  lastUsedAt DateTime?
+  endedAt DateTime?
+  endedByDispatcherId String?
+  createdByDispatcherId String?
+  createdAt DateTime @default(now())
+
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  @@index([vehicleId, endsAt])
 }
