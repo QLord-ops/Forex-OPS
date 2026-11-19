@@ -1,4 +1,4 @@
-import { Check, ChevronDown, ChevronUp, Clock3, GitFork, Loader2, MapPin, PackageCheck, PauseCircle, Pin, PinOff, PlayCircle, Route, Search, Truck, X } from 'lucide-react'
+import { Check, ChevronDown, ChevronUp, Clock3, GitFork, Loader2, MapPin, PackageCheck, PauseCircle, Pin, PinOff, PlayCircle, Route, Search, SlidersHorizontal, Truck, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 
@@ -18,7 +18,7 @@ import { usePolling } from '../hooks/usePolling'
 import { usePopover } from '../hooks/usePopover'
 import { useVehiclePosition } from '../hooks/useVehiclePosition'
 import { api, type RouteOptions } from '../lib/api'
-import { compareVehicles, driverHoursLine, etaPlanLine, getAttention, liveSpeed, manuallyStopped, matchesFleetFilter, notStarted, plannedStart, positionSource, activityNote, terminMargin, terminNeeded, terminToday, vehiclePlace, vehicleStatus, type FleetFilter, type FleetSort } from '../lib/fleet-status'
+import { compareVehicles, driverHoursLine, etaPlanLine, getAttention, liveSpeed, manuallyStopped, matchesFleetFilter, notStarted, plannedStart, positionSource, runsLate, activityNote, terminMargin, terminNeeded, terminToday, vehiclePlace, vehicleStatus, type FleetFilter, type FleetSort } from '../lib/fleet-status'
 import { CustomerNoticeButton } from '../components/CustomerNotice'
 import { noticeDue, noticeLine } from '../lib/customer-notice'
 import type { AlertNotification } from '../lib/alerts'
@@ -36,11 +36,12 @@ import './dashboard-redesign.css'
 
 const PIN_STORAGE_KEY = 'ops-dashboard-pinned-vehicles'
 const SORT_STORAGE_KEY = 'ops-dashboard-sort'
+const FILTERS_STORAGE_KEY = 'ops-list-filters'
 const scopes: Array<{ value: FleetScope; label: string }> = [
   { value: 'MINE', label: 'Мои' }, { value: 'FLEET', label: 'Весь парк' }, { value: 'FREE', label: 'Свободные' }
 ]
 const filters: Array<{ value: FleetFilter; label: string }> = [
-  { value: 'ALL', label: 'Все' }, { value: 'DECIDE', label: 'Решить' }, { value: 'MOVING', label: 'В пути' },
+  { value: 'ALL', label: 'Все' }, { value: 'DECIDE', label: 'Решить' }, { value: 'LATE', label: 'Опаздывают' }, { value: 'MOVING', label: 'В пути' },
   { value: 'AT_STOP', label: 'На точке' }, { value: 'PLANNED', label: 'Запланированы' }, { value: 'TERMIN', label: 'Termin' }, { value: 'NO_TERMIN', label: 'Нет Termin' }, { value: 'IDLE', label: 'Без тура' }
 ]
 const sorts: Array<{ value: FleetSort; label: string }> = [
@@ -54,6 +55,13 @@ export function DashboardPage() {
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<FleetFilter>('ALL')
   const [customerFilter, setCustomerFilter] = useState<string | null>(null)
+  // The chips and the cover buttons are folded behind «Фильтры»: the figures over the map already filter the list
+  // (owner, 19.11: «всё мешает, информация уже есть сверху»). The choice is remembered in this browser.
+  const [filtersOpen, setFiltersOpen] = useState(() => { try { return localStorage.getItem(FILTERS_STORAGE_KEY) === '1' } catch { return false } })
+  const toggleFilters = () => setFiltersOpen((value) => {
+    try { localStorage.setItem(FILTERS_STORAGE_KEY, value ? '0' : '1') } catch { /* convenience only */ }
+    return !value
+  })
   const [sort, setSort] = useState<FleetSort>(() => readSort())
   const { viewer, scope, setScope } = useFleetScope()
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -251,6 +259,10 @@ export function DashboardPage() {
   if (error && !data) return <div className="dashboard-loading"><ErrorState error={error} onRetry={refetch} /></div>
 
   const decisionCount = notifications.open.filter(needsAttention).length
+  const activeFilters = [
+    ...(filter !== 'ALL' ? [{ label: filters.find((item) => item.value === filter)?.label ?? 'Фильтр', clear: () => setFilter('ALL') }] : []),
+    ...(customerFilter ? [{ label: customerChips.find((item) => item.id === customerFilter)?.name ?? 'Заказчик', clear: () => setCustomerFilter(null) }] : [])
+  ]
   const popoverFor = (row: DashboardVehicle, place: 'list' | 'panel') => actionVehicleId === row.vehicle.id && actionPlace === place && row.currentAction
     ? <ActionPopover row={row} value={actionTime} onChange={setActionTime} busy={actingId === row.vehicle.id} error={actionError} onClose={() => setActionVehicleId(null)} onConfirm={() => void handleVehicleAction(row)} />
     : null
@@ -268,25 +280,36 @@ export function DashboardPage() {
               {item.value === 'MINE' && viewer.role === 'admin' ? 'Мои линии' : item.label}<span className="fleet-scope-count">{item.value === 'MINE' ? vehicles.filter((row) => row.mine).length : item.value === 'FREE' ? vehicles.filter((row) => !row.assignedTo).length : vehicles.length}</span>
             </button>)}
           </div> : null}
-          <CoverPanel />
           {me && activeScope === 'MINE' && !hasMine ? <p className="fleet-scope-hint">У вас пока нет машин. Откройте «Весь парк» или «Свободные» и нажмите «Взять себе» в карточке машины.</p> : null}
-          <label className="fleet-search">
-            <Search className="fleet-search-icon" aria-hidden="true" />
-            <span className="sr-only">Найти грузовик</span>
-            <input ref={searchRef} className="fleet-search-input" value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') { setQuery(''); event.currentTarget.blur() } }} placeholder="LKW, Auftrag или город" />
-            <kbd className="fleet-search-key" aria-hidden="true">/</kbd>
-          </label>
-          <div className="fleet-chips" role="group" aria-label="Фильтр автопарка">
-            {filters.filter((item) => item.value === 'ALL' || item.value === filter || counts[item.value] > 0).map((item) => <button key={item.value} type="button" aria-pressed={filter === item.value}
-              className={classNames('filter-chip', filter === item.value && 'filter-chip-active', item.value === 'DECIDE' && counts.DECIDE > 0 && 'filter-chip-alert')}
-              onClick={() => setFilter(item.value)}>{item.label}<span className="filter-chip-count">{counts[item.value]}</span></button>)}
+          <div className="fleet-search-row">
+            <label className="fleet-search">
+              <Search className="fleet-search-icon" aria-hidden="true" />
+              <span className="sr-only">Найти грузовик</span>
+              <input ref={searchRef} className="fleet-search-input" value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') { setQuery(''); event.currentTarget.blur() } }} placeholder="LKW, Auftrag, город" />
+              <kbd className="fleet-search-key" aria-hidden="true">/</kbd>
+            </label>
+            <button type="button" className="fleet-filters-toggle" aria-expanded={filtersOpen} aria-controls="fleet-more" onClick={toggleFilters}
+              aria-label="Фильтры и подмена" title={filtersOpen ? 'Скрыть фильтры и подмену' : 'Фильтры по статусу и заказчику, подмена коллеги'}>
+              <SlidersHorizontal className="h-[18px] w-[18px]" aria-hidden="true" />{activeFilters.length ? <span className="fleet-filters-count" aria-label={`включено: ${activeFilters.length}`}>{activeFilters.length}</span> : null}
+            </button>
           </div>
-          {customerChips.length > 1 ? <div className="fleet-customers" role="group" aria-label="Заказчик">
-            <button type="button" aria-pressed={!customerFilter} className={classNames('filter-chip', !customerFilter && 'filter-chip-active')} onClick={() => setCustomerFilter(null)}>Все заказчики</button>
-            {customerChips.map((item) => <button key={item.id} type="button" aria-pressed={customerFilter === item.id} className={classNames('filter-chip', customerFilter === item.id && 'filter-chip-active')} onClick={() => setCustomerFilter(customerFilter === item.id ? null : item.id)}>
-              <span className="customer-swatch" style={{ background: customerColor(item), width: 8, height: 8 }} aria-hidden="true" />{item.name}<span className="filter-chip-count">{item.count}</span>
-            </button>)}
+          {!filtersOpen && activeFilters.length ? <div className="fleet-active" role="group" aria-label="Включённые фильтры">
+            {activeFilters.map((item) => <button key={item.label} type="button" className="filter-chip filter-chip-active" onClick={item.clear} aria-label={`Снять фильтр «${item.label}»`}>{item.label}<X className="h-3.5 w-3.5" aria-hidden="true" /></button>)}
           </div> : null}
+          <div id="fleet-more" className="fleet-more" hidden={!filtersOpen}>
+            <div className="fleet-chips" role="group" aria-label="Фильтр автопарка">
+              {filters.filter((item) => item.value === 'ALL' || item.value === filter || counts[item.value] > 0).map((item) => <button key={item.value} type="button" aria-pressed={filter === item.value}
+                className={classNames('filter-chip', filter === item.value && 'filter-chip-active', item.value === 'DECIDE' && counts.DECIDE > 0 && 'filter-chip-alert')}
+                onClick={() => setFilter(item.value)}>{item.label}<span className="filter-chip-count">{counts[item.value]}</span></button>)}
+            </div>
+            {customerChips.length > 1 ? <div className="fleet-customers" role="group" aria-label="Заказчик">
+              <button type="button" aria-pressed={!customerFilter} className={classNames('filter-chip', !customerFilter && 'filter-chip-active')} onClick={() => setCustomerFilter(null)}>Все заказчики</button>
+              {customerChips.map((item) => <button key={item.id} type="button" aria-pressed={customerFilter === item.id} className={classNames('filter-chip', customerFilter === item.id && 'filter-chip-active')} onClick={() => setCustomerFilter(customerFilter === item.id ? null : item.id)}>
+                <span className="customer-swatch" style={{ background: customerColor(item), width: 8, height: 8 }} aria-hidden="true" />{item.name}<span className="filter-chip-count">{item.count}</span>
+              </button>)}
+            </div> : null}
+          </div>
+          <CoverPanel actions={filtersOpen} />
         </div>
         <div className="fleet-scroll">
           <div className="fleet-list">
@@ -342,13 +365,13 @@ export function DashboardPage() {
 function FleetSummary({ rows, decisions, filter, onFilter }: { rows: DashboardVehicle[]; decisions: number; filter: FleetFilter; onFilter: (value: FleetFilter) => void }) {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 30_000); return () => window.clearInterval(timer) }, [])
-  const late = rows.filter((row) => { const margin = terminMargin(row); return (margin !== null && margin < 0) || vehicleStatus(row).tone === 'late' }).length
+  const late = rows.filter((row) => runsLate(row)).length
   const atStop = rows.filter((row) => vehicleStatus(row).tone === 'stop').length
   const termin = rows.filter((row) => terminToday(row)).length
   const longest = rows.reduce((max, row) => vehicleStatus(row).tone === 'stop' && row.dwellMinutes ? Math.max(max, row.dwellMinutes) : max, 0)
   const items: Array<{ value: string; label: string; tone?: string; filter?: FleetFilter; title?: string }> = [
     { value: String(rows.length), label: 'машин', filter: 'ALL' },
-    { value: String(late), label: 'опаздывает', tone: late ? 'late' : undefined, title: 'ETA позже Termin или задержка в пути' },
+    { value: String(late), label: 'опаздывает', tone: late ? 'late' : undefined, filter: 'LATE', title: 'ETA позже Termin или задержка в пути' },
     { value: String(atStop), label: 'на точке', tone: atStop ? 'stop' : undefined, filter: 'AT_STOP' },
     { value: String(termin), label: 'Termin сегодня', tone: termin ? 'termin' : undefined, filter: 'TERMIN' },
     { value: String(decisions), label: decisions === 1 ? 'вопрос' : 'вопросов', tone: decisions ? 'late' : undefined, filter: 'DECIDE' },

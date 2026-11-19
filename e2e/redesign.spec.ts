@@ -79,7 +79,58 @@ test('сводка над картой: числа смены и фильтр «
   await summary.getByRole('button', { name: /на точке/ }).click()
   await expect(page.locator('.fleet-list .vehicle-card')).toHaveCount(1)
   await expect(page.locator('.fleet-list .vehicle-card')).toContainText('LKW 231')
-  await expect(page.getByRole('group', { name: 'Фильтр автопарка' }).getByRole('button', { name: /^На точке/ })).toHaveAttribute('aria-pressed', 'true')
+  // The chips are folded: the filter that is on is named under the search and comes off with one click.
+  await expect(page.getByRole('group', { name: 'Фильтр автопарка' })).toBeHidden()
+  await page.getByRole('button', { name: 'Снять фильтр «На точке»' }).click()
+  await expect(page.locator('.fleet-list .vehicle-card')).toHaveCount(2)
+})
+
+test('список без лишнего: машины сразу под поиском, фильтры и подмена за одной кнопкой, «опаздывает» в сводке отбирает', async ({ page }) => {
+  await mainScreen(page)
+  await page.setViewportSize({ width: 1920, height: 950 })
+  await page.goto('/?vehicleId=v187')
+  const rail = page.getByRole('complementary', { name: 'Список грузовиков' })
+  const cards = rail.locator('.vehicle-card')
+  await expect(cards).toHaveCount(2)
+  await expect(rail.getByRole('group', { name: 'Фильтр автопарка' })).toBeHidden()
+  await expect(rail.getByRole('group', { name: 'Заказчик' })).toHaveCount(0)
+  const [search, first] = await Promise.all([rail.locator('.fleet-search-row').boundingBox(), cards.first().boundingBox()])
+  expect(Math.round((first?.y ?? 999) - ((search?.y ?? 0) + (search?.height ?? 0)))).toBeLessThanOrEqual(40)
+  // Nothing in the head is wider than the list (the search gives way to the button).
+  expect(await rail.locator('.fleet-controls').evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1)
+  // The search field stays inside its own frame, also while typing: one box, as high as the button beside it (19.11).
+  await rail.getByPlaceholder('LKW, Auftrag, город').focus()
+  const [label, field, button] = await Promise.all([rail.locator('.fleet-search').boundingBox(), rail.locator('.fleet-search-input').boundingBox(), rail.getByRole('button', { name: 'Фильтры и подмена' }).boundingBox()])
+  expect({ field: field && Math.round(field.height), label: label && Math.round(label.height), button: button && Math.round(button.height) }).toEqual({ field: 44, label: 44, button: 44 })
+  expect(field && label && Math.abs(field.y - label.y) <= 1 && Math.abs(field.x - label.x) <= 1 && Math.abs(field.width - label.width) <= 1).toBe(true)
+  expect(await rail.locator('.fleet-search').evaluate((element) => getComputedStyle(element).outlineStyle)).toBe('none')
+  await page.getByRole('group', { name: 'Смена: сводка' }).getByRole('button', { name: /опаздывает/ }).click()
+  await expect(cards).toHaveCount(1)
+  await expect(cards).toContainText('LKW 187')
+  await rail.getByRole('button', { name: 'Снять фильтр «Опаздывают»' }).click()
+  await expect(cards).toHaveCount(2)
+  const toggle = rail.getByRole('button', { name: 'Фильтры и подмена' })
+  await toggle.click()
+  await expect(rail.getByRole('group', { name: 'Фильтр автопарка' }).getByRole('button', { name: /^Опаздывают/ })).toContainText('1')
+  // The choice stays in this browser.
+  await page.reload()
+  await expect(rail.getByRole('group', { name: 'Фильтр автопарка' })).toBeVisible()
+  await toggle.click()
+  await expect(rail.getByRole('group', { name: 'Фильтр автопарка' })).toBeHidden()
+})
+
+test('вкладка, открытая до выкладки, предлагает обновиться и сама не перезагружается', async ({ page }) => {
+  await mainScreen(page)
+  await page.goto('/?vehicleId=v187')
+  await expect(page.locator('.vehicle-card').first()).toBeVisible()
+  await expect(page.getByText('Вышла новая версия OPS')).toHaveCount(0)
+  // The next look at the site finds another program than the one this tab runs.
+  await page.route((url) => url.pathname === '/', (route) => route.request().resourceType() === 'document' ? route.fallback()
+    : route.fulfill({ status: 200, contentType: 'text/html', body: '<!doctype html><script type="module" crossorigin src="/assets/index-next.js"></script>' }))
+  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')))
+  await expect(page.getByRole('status').filter({ hasText: 'Вышла новая версия OPS' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Обновить' })).toBeVisible()
+  await expect(page.locator('.vehicle-card').first()).toBeVisible()
 })
 
 test('вопросы над картой: два сразу, остальные за «открыть все»; карта и список не перекрыты', async ({ page }) => {
@@ -117,6 +168,12 @@ test('Auftrag на главной: кнопка рядом с «Адрес» и 
   await expect.poll(() => readings).toBe(1)
   await page.waitForTimeout(700)
   expect(readings).toBe(1)
+  // Dropped beside the map (on the list) it is read once too, in the same window: the assistant's window stays shut (19.11).
+  await page.locator('.fleet-rail').dispatchEvent('drop', { dataTransfer: transfer })
+  await expect.poll(() => readings).toBe(2)
+  await page.waitForTimeout(700)
+  expect(readings).toBe(2)
+  await expect(page.locator('.dispatcher-import')).toBeHidden()
 })
 
 test('строка списка не шире карточки: время и кнопки на месте при длинной подписи «ведёт … за …»', async ({ page }) => {

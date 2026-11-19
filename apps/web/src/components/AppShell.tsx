@@ -11,6 +11,7 @@ import { MobileTabBar } from './MobileTabBar'
 import './mobile.css'
 import { DecisionGroups, OperationsNotifications } from './OperationsNotifications'
 import { needsAttention } from '../lib/alerts'
+import { UpdateNotice } from './UpdateNotice'
 
 /** `also` keeps a section lit on the pages that belong to it; `hint` is the tooltip of a label too short to say it all. */
 const navItems: Array<{ to: string; label: string; hint?: string; icon: typeof Truck; also: string[] }> = [
@@ -42,6 +43,7 @@ function Shell() {
       <MobileTabBar />
       <DispatcherAssistant />
       <GuidedTour />
+      <UpdateNotice />
     </div>
   )
 }
