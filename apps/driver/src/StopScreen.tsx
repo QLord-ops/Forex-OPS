@@ -2,7 +2,7 @@ import { AlertTriangle, Bell, Check, ChevronLeft, ChevronRight, Clock, MapPin, N
 import { useEffect, useState, type ReactNode } from 'react'
 import { useServerNow } from './useServerNow'
 import { driverApi, PROBLEMS, type DriverStop, type DriverTour, type ProblemKind, type TourView } from './api'
-import { cargoLine, clock, clockWithDay, doneWord, minutesText, navigationLink, terminOf, windowLabel } from './format'
+import { clock, clockWithDay, countdown, doneWord, minutesText, navigationLink, terminOf, windowLabel } from './format'
 
 type Props = {
   tour: DriverTour
@@ -24,7 +24,6 @@ export function StopScreen({ tour, stop, serverTime, onBack, onOpen, onChanged, 
   const isCurrent = tour.currentStopId === stop.id
   const word = doneWord(stop)
   const termin = terminOf(stop)
-  const cargo = cargoLine(stop)
   const canMark = isCurrent && (Boolean(stop.arrivedAt) || stop.samePlaceAsPrevious)
   const undoLeft = stop.undoUntil ? Date.parse(stop.undoUntil) - now : 0
 
@@ -45,15 +44,16 @@ export function StopScreen({ tour, stop, serverTime, onBack, onOpen, onChanged, 
           <h1>{word} записан</h1>
           <p className="muted">{[stop.company, stop.city].filter(Boolean).join(', ')} · {clockWithDay(stop.completedAt, serverTime)}</p>
           {undoLeft > 0 ? <section className="card">
-            <p className="row"><Bell aria-hidden="true" /><strong>Диспетчер уведомлён</strong></p>
-            <p className="muted">Ошиблись? Отметку можно отменить ещё {minutesText(undoLeft / 60_000 + 0.49)} — потом только через диспетчера.</p>
-            <button type="button" className="button button-secondary" disabled={busy} onClick={() => { void run(() => driverApi.undo(stop.id)) }}><Undo2 aria-hidden="true" /><span>Отменить {word}</span></button>
+            <p className="row row-strong"><Bell aria-hidden="true" /><span>Диспетчер уведомлён в {clock(stop.completedAt)}</span></p>
+            <p className="row muted">Ошиблись? Отметку можно отменить 5 минут — потом только через диспетчера.</p>
+            <button type="button" className="button button-secondary" disabled={busy} onClick={() => { void run(() => driverApi.undo(stop.id)) }}><Undo2 aria-hidden="true" /><span>Отменить · {countdown(undoLeft)}</span></button>
           </section> : stop.undoUntil === null ? null : <p className="muted">Время отмены вышло. Если это ошибка — позвоните диспетчеру.</p>}
           {next && !next.completedAt && <>
             <h2 className="section-title">Следующая точка</h2>
-            <section className="card current">
+            <section className="card card-next">
               <div className="chips"><span className="chip chip-blue">{doneWord(next)}</span>{next.samePlaceAsPrevious && <span className="chip chip-orange">Здесь же</span>}</div>
-              <div><h2 className="company">{next.company ?? next.address}</h2><p className="address"><MapPin aria-hidden="true" /><span>{next.address}</span></p></div>
+              <h2 className="company company-next">{next.company ?? next.address}</h2>
+              <p className="muted">{next.address}</p>
               <button type="button" className="button button-primary" onClick={() => onOpen(next.id)}><span>Открыть точку {next.sequence}</span><ChevronRight aria-hidden="true" /></button>
             </section>
           </>}
@@ -68,7 +68,7 @@ export function StopScreen({ tour, stop, serverTime, onBack, onOpen, onChanged, 
       <TopBar onBack={onBack} title={`Точка ${stop.sequence} из ${tour.stops.length}`} />
       <div className="body">
         {notice && <p className="banner banner-ok" role="status">{notice}</p>}
-        {stop.arrivedAt && <p className="banner banner-orange"><Clock aria-hidden="true" /><span><strong>На точке с {clock(stop.arrivedAt)} · {minutesText((now - Date.parse(stop.arrivedAt)) / 60_000)}</strong></span></p>}
+        {stop.arrivedAt && <p className="banner banner-orange"><Clock aria-hidden="true" /><span><strong>На точке с {clock(stop.arrivedAt)} · {minutesText((now - Date.parse(stop.arrivedAt)) / 60_000)}</strong><small>Прибытие записано в {clock(stop.arrivedAt)}</small></span></p>}
         {!isCurrent && <p className="banner banner-quiet">Эта точка ещё впереди: сначала выполните предыдущие.</p>}
         <div className="chips">
           <span className="chip chip-blue">{word}</span>
@@ -78,10 +78,11 @@ export function StopScreen({ tour, stop, serverTime, onBack, onOpen, onChanged, 
         <h1 className="company company-large">{stop.company ?? stop.address}</h1>
         <dl className="card facts">
           <div><dt>Адрес</dt><dd>{stop.address}</dd></div>
-          {cargo && <div><dt>Груз</dt><dd>{cargo}</dd></div>}
+          {stop.loadingMeters !== null && <div><dt>Груз</dt><dd>{stop.loadingMeters.toLocaleString('de-DE')} LDM</dd></div>}
+          {stop.references.length > 0 && <div><dt>Ref</dt><dd>{stop.references.join(', ')}</dd></div>}
           {stop.instructions && <div><dt>Указания</dt><dd>{stop.instructions}</dd></div>}
         </dl>
-        {tour.tourRemarks && <section className="card"><h2 className="label">Tourbemerkung</h2><p className="remarks">{tour.tourRemarks}</p></section>}
+        {tour.tourRemarks && <section className="card card-remarks"><h2 className="label">Tourbemerkung</h2><p className="remarks">{tour.tourRemarks}</p></section>}
         {next?.samePlaceAsPrevious && <p className="banner banner-quiet"><Package aria-hidden="true" /><span>Следом здесь же: {doneWord(next)} (точка {next.sequence})</span></p>}
       </div>
       <footer className="foot">
@@ -94,8 +95,8 @@ export function StopScreen({ tour, stop, serverTime, onBack, onOpen, onChanged, 
       </footer>
 
       {sheet === 'confirm' && <Sheet title={`Подтвердить ${word}?`} onClose={() => setSheet(null)}>
-        <p className="muted">{[stop.company, stop.city].filter(Boolean).join(', ')} · точка {stop.sequence} из {tour.stops.length}</p>
-        <p className="card row"><Clock aria-hidden="true" /><span>Время отметки: <strong>{clock(new Date(now).toISOString())} · сейчас</strong></span></p>
+        <p className="muted sheet-lead">{[stop.company, stop.city].filter(Boolean).join(', ')} · точка {stop.sequence} из {tour.stops.length}</p>
+        <p className="mark-time"><Clock aria-hidden="true" /><span><small>Время отметки</small><strong>{clock(new Date(now).toISOString())} · сейчас</strong></span></p>
         <p className="row muted"><Bell aria-hidden="true" /><span>Отметка записывается сразу. Диспетчер получит уведомление и сможет её отменить.</span></p>
         <button type="button" className="button button-primary" disabled={busy} onClick={() => { void run(() => driverApi.done(stop.id)) }}><Check aria-hidden="true" /><span>{busy ? 'Записываем…' : `Подтвердить ${word}`}</span></button>
         <button type="button" className="button button-quiet" onClick={() => setSheet(null)} disabled={busy}>Отмена</button>

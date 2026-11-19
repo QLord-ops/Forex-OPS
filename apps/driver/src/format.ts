@@ -20,6 +20,12 @@ export function minutesText(minutes: number): string {
   return whole < 60 ? `${whole} мин` : `${Math.floor(whole / 60)} ч ${String(whole % 60).padStart(2, '0')} мин`
 }
 
+/** «4:58» until the driver's own mark can no longer be taken back. */
+export function countdown(ms: number): string {
+  const seconds = Math.max(0, Math.ceil(ms / 1000))
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
+}
+
 /** How the ETA stands against the latest moment the stop accepts the truck. */
 export function etaMargin(stop: DriverStop, eta: DriverEta | null): { late: boolean; text: string } | null {
   const deadline = stop.windowEndAt ?? stop.appointmentAt
@@ -28,7 +34,7 @@ export function etaMargin(stop: DriverStop, eta: DriverEta | null): { late: bool
   return minutes >= 0 ? { late: false, text: `запас ${minutesText(minutes)}` } : { late: true, text: `опоздание ${minutesText(-minutes)}` }
 }
 
-export const etaSourceText = (eta: DriverEta) => eta.source === 'WEBFLEET' ? 'по GPS Webfleet' : eta.source === 'WEBFLEET_STALE' ? 'GPS Webfleet устарел' : 'расчёт, без GPS'
+export const etaSourceText = (eta: DriverEta) => eta.source === 'WEBFLEET' ? 'GPS Webfleet' : eta.source === 'WEBFLEET_STALE' ? 'GPS устарел' : 'расчёт'
 
 export function cargoLine(stop: DriverStop): string | null {
   const parts = [stop.loadingMeters !== null ? `${stop.loadingMeters.toLocaleString('de-DE')} LDM` : null, stop.references.length ? `Ref ${stop.references.join(', ')}` : null].filter(Boolean)

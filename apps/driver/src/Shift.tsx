@@ -1,7 +1,7 @@
 import { Check, ChevronRight, LogOut, MapPin, Navigation, RefreshCw, Undo2 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ApiError, driverApi, type DriverSession, type DriverStop, type TourView } from './api'
-import { cargoLine, clock, clockWithDay, dayLabel, doneWord, etaMargin, etaSourceText, minutesText, navigationLink, terminOf, windowLabel } from './format'
+import { cargoLine, clock, clockWithDay, countdown, dayLabel, doneWord, etaMargin, etaSourceText, navigationLink, terminOf, windowLabel } from './format'
 import { StopScreen } from './StopScreen'
 import { useServerNow } from './useServerNow'
 
@@ -13,6 +13,7 @@ export function Shift({ session, onSignedOut }: { session: Extract<DriverSession
   const [openStopId, setOpenStopId] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const alive = useRef(true)
+  const online = useOnline()
 
   const failed = useCallback((cause: unknown) => {
     // A new code, the end of the shift or «end shift» at the office: back to the sign-in.
@@ -63,6 +64,7 @@ export function Shift({ session, onSignedOut }: { session: Extract<DriverSession
           <h1 className="plate">{vehicle.licensePlate ?? vehicle.vehicleNumber}</h1>
           <p>{view?.tour ? `Тур ${view.tour.orderNumber} · ${dayLabel(view.serverTime)}` : `Машина ${vehicle.vehicleNumber}`}</p>
         </div>
+        <span className={`chip ${online ? 'chip-green' : 'chip-red'}`}>{online ? 'Онлайн' : 'Нет сети'}</span>
         <button type="button" className="icon-button" onClick={() => { void load() }} aria-label="Обновить" disabled={refreshing}><RefreshCw className={refreshing ? 'turning' : ''} aria-hidden="true" /></button>
         <button type="button" className="icon-button" onClick={() => { void logout() }} aria-label="Выйти из смены"><LogOut aria-hidden="true" /></button>
       </header>
@@ -78,6 +80,17 @@ export function Shift({ session, onSignedOut }: { session: Extract<DriverSession
   )
 }
 
+function useOnline() {
+  const [online, setOnline] = useState(() => navigator.onLine)
+  useEffect(() => {
+    const update = () => setOnline(navigator.onLine)
+    window.addEventListener('online', update)
+    window.addEventListener('offline', update)
+    return () => { window.removeEventListener('online', update); window.removeEventListener('offline', update) }
+  }, [])
+  return online
+}
+
 /** The mark that closed the previous tour: the phone already shows the next tour, the mark can still be taken back. */
 function LastMark({ view, onChanged, onFailed }: { view: TourView; onChanged: (view: TourView) => void; onFailed: (cause: unknown) => void }) {
   const mark = view.lastMark!
@@ -91,8 +104,9 @@ function LastMark({ view, onChanged, onFailed }: { view: TourView; onChanged: (v
   }
   return (
     <section className="card card-ok" aria-label="Последняя отметка">
-      <p className="row"><Check aria-hidden="true" /><span><strong>{word} записан в {clock(mark.completedAt)} — тур {mark.orderNumber} выполнен.</strong> {[mark.company, mark.city].filter(Boolean).join(', ')}. Диспетчер уведомлён.</span></p>
-      <button type="button" className="button button-secondary" onClick={() => { void undo() }} disabled={busy}><Undo2 aria-hidden="true" /><span>Отменить · {minutesText(left / 60_000 + 0.49)}</span></button>
+      <p className="row row-strong"><Check aria-hidden="true" /><span>{word} записан в {clock(mark.completedAt)} — тур {mark.orderNumber} выполнен</span></p>
+      <p className="row muted">{[mark.company, mark.city].filter(Boolean).join(', ')}. Диспетчер уведомлён. Ошиблись? Отметку можно отменить — потом только через диспетчера.</p>
+      <button type="button" className="button button-secondary" onClick={() => { void undo() }} disabled={busy}><Undo2 aria-hidden="true" /><span>Отменить · {countdown(left)}</span></button>
     </section>
   )
 }
@@ -132,10 +146,10 @@ function Tour({ view, onOpen, onChanged, onFailed }: { view: TourView; onOpen: (
 
       {current && <CurrentStop stop={current} view={view} busy={busy} onArrive={() => { void arrive(current) }} onOpen={() => onOpen(current.id)} />}
 
-      {tour.tourRemarks && <section className="card"><h2 className="label">Tourbemerkung</h2><p className="remarks">{tour.tourRemarks}</p></section>}
+      {tour.tourRemarks && <section className="card card-remarks"><h2 className="label">Tourbemerkung</h2><p className="remarks">{tour.tourRemarks}</p></section>}
 
       {rest.length > 0 && <>
-        <h2 className="section-title">{current ? 'Остальные точки' : 'Точки тура'}</h2>
+        <h2 className="section-title">{current ? 'Дальше по туру' : 'Точки тура'}</h2>
         <ul className="stop-list">
           {rest.map(stop => <li key={stop.id}>
             <button type="button" className="stop-row" onClick={() => onOpen(stop.id)}>
