@@ -12,6 +12,11 @@ export function positionSourceText(position?: { positionSource?: 'WEBFLEET' | 'C
   return calculatedPositionLabel
 }
 
+/** Who recorded BELADEN/ENTLADEN: the dispatcher, Webfleet GPS by itself or the driver in the driver app. */
+export function eventSourceLabel(source?: string | null): string | null {
+  return source === 'DRIVER' ? 'водитель' : source === 'WEBFLEET_AUTO' ? 'GPS Webfleet' : source === 'DISPATCHER' ? 'диспетчер' : null
+}
+
 export function formatDateTime(value?: string | null): string {
   if (!value) return '–'
   return new Intl.DateTimeFormat('ru-RU', {

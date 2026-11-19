@@ -5,16 +5,17 @@ import { Link } from 'react-router-dom'
 import { usePolling } from '../hooks/usePolling'
 import { AssignmentBar } from './AssignmentBar'
 import { CopyForDriver } from './CopyForDriver'
+import { DriverShiftCode } from './DriverShiftCode'
 import { CustomerNoticeButton } from './CustomerNotice'
 import { noticeDue, noticeLine } from '../lib/customer-notice'
 import { RouteEditor } from './RouteEditor'
 import { api, documentFileUrl } from '../lib/api'
-import { classNames, formatDateTime, formatDelay, shortAddress, statusLabel, stopTypeLabel } from '../lib/format'
+import { classNames, eventSourceLabel, formatDateTime, formatDelay, shortAddress, statusLabel, stopTypeLabel } from '../lib/format'
 import { currentStopOf, followingTours, sharedTerminOf, sortedStops, terminOf, tourCancellable } from '../lib/tours'
 import { stopEta } from '../lib/stop-times'
 import { ZULADUNG_NOTE, zuladungBeforeStopId, zuladungState } from '../lib/zuladung'
 import { berlinClock, courseText, durationBetween, formatDurationMs, formatFuel, formatWholeKm, share, tripsWithParking, workState } from '../lib/telemetry-format'
-import type { CardFeedStatus, Coordinate, DashboardVehicle, DrivingTimes, Stop, Tour, VehicleCardData } from '../types/domain'
+import type { CardFeedStatus, Coordinate, DashboardVehicle, DrivingTimes, Stop, Tour, TourEvent, VehicleCardData } from '../types/domain'
 import './truck-card.css'
 
 const TACHO_STALE_MS = 15 * 60_000
@@ -332,7 +333,7 @@ function TourTab({ vehicleId, row }: { vehicleId: string; row: DashboardVehicle 
 
   return <>
     {error ? <p className="truck-card-alert" role="alert">{error}</p> : null}
-    {current && row ? <CurrentTour tour={current} row={row} busy={busyId === current.id} onRemove={() => void remove(current)} /> : <Section title="Тур"><p className="truck-card-note">Нет активного тура.</p></Section>}
+    {current && row ? <CurrentTour tour={current} row={row} events={tours.data?.find((tour) => tour.id === current.id)?.events ?? []} busy={busyId === current.id} onRemove={() => void remove(current)} /> : <Section title="Тур"><p className="truck-card-note">Нет активного тура.</p></Section>}
     <Section title={`Следующие туры${next.length ? ` · ${next.length}` : ''}`}>
       {tours.error && !tours.data ? <p className="truck-card-note">Цепочка туров не загрузилась.</p>
         : !tours.data ? <p className="truck-card-note">Загружаем цепочку туров…</p>
@@ -370,6 +371,7 @@ function TourTab({ vehicleId, row }: { vehicleId: string; row: DashboardVehicle 
               })}
             </ol>}
     </Section>
+    <Section title="Приложение водителя"><DriverShiftCode vehicleId={vehicleId} vehicleLabel={row?.vehicle.licensePlate || row?.vehicle.vehicleNumber || 'машины'} /></Section>
   </>
 }
 
@@ -380,7 +382,7 @@ function DocumentLink({ tour }: { tour: Tour }) {
   return <a className="truck-card-link" href={documentFileUrl(tour.document.id)} target="_blank" rel="noreferrer" title={tour.document.filename}>Auftrag ({kind})</a>
 }
 
-function CurrentTour({ tour, row, busy, onRemove }: { tour: Tour; row: DashboardVehicle; busy: boolean; onRemove: () => void }) {
+function CurrentTour({ tour, row, events, busy, onRemove }: { tour: Tour; row: DashboardVehicle; events: TourEvent[]; busy: boolean; onRemove: () => void }) {
   // The forecast of each stop comes with the main screen's row; the tour chain itself carries none.
   const forecast = new Map((row.tour?.id === tour.id ? row.tour.stops ?? [] : []).map((stop) => [stop.id, stop]))
   const stops = sortedStops(tour).map((stop) => { const known = forecast.get(stop.id); return known ? { ...stop, predictedEta: known.predictedEta, etaEarliest: known.etaEarliest, etaLatest: known.etaLatest, etaBasis: known.etaBasis } : stop })
@@ -429,7 +431,7 @@ function CurrentTour({ tour, row, busy, onRemove }: { tour: Tour; row: Dashboard
       <ol className="truck-card-stops">
         {stops.map((stop) => <li key={stop.id} className={classNames(stop.completedAt && 'truck-card-stop-done', stop.id === target?.id && 'truck-card-stop-current')}>
           <span className="truck-card-stop-seq">{stop.sequence}</span>
-          <span className="min-w-0"><strong>{stopTypeLabel(stop.type)} · {shortAddress(stop)}</strong><span className="truck-card-muted">{stopState(stop, stops)}{stop.type === 'LOAD' && /zuladung/i.test(stop.instructions ?? '') ? ' · Zuladung' : ''}</span>
+          <span className="min-w-0"><strong>{stopTypeLabel(stop.type)} · {shortAddress(stop)}</strong><span className="truck-card-muted">{stopState(stop, stops, events)}{stop.type === 'LOAD' && /zuladung/i.test(stop.instructions ?? '') ? ' · Zuladung' : ''}</span>
             {stop.id === zuladungBefore ? <span className="truck-card-zuladung-tag">перед ней возможна Zuladung</span> : null}
             {stop.id === target?.id && marking?.stopId === stop.id ? <form className="truck-card-mark" onSubmit={(event) => { event.preventDefault(); void markStop(stop) }}>
               <label className="truck-card-muted">Фактическое время<input className="field-input h-8" type="datetime-local" value={marking.time} required onChange={(event) => setMarking({ ...marking, time: event.target.value })} /></label>
@@ -452,9 +454,12 @@ function localDateTimeNow(date = new Date()) {
   return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16)
 }
 
-function stopState(stop: Stop, stops: Stop[]) {
+function stopState(stop: Stop, stops: Stop[], events: TourEvent[] = []) {
   const done = stop.type === 'LOAD' ? 'BELADEN' : 'ENTLADEN'
-  if (stop.completedAt) return `${done} ${formatDateTime(stop.completedAt)}`
+  if (stop.completedAt) {
+    const source = eventSourceLabel(events.filter((event) => event.stopId === stop.id && !event.type.endsWith('_REVERTED')).at(-1)?.source)
+    return `${done} ${formatDateTime(stop.completedAt)}${source ? ` · ${source}` : ''}`
+  }
   if (stop.arrivedAt) return `прибыл ${formatDateTime(stop.arrivedAt)} · ждёт ${done}`
   const eta = stop.predictedEta ? ` · ${stopEta(stop, stops).text}` : ''
   if (stop.appointmentAt) return `впереди · срок ${formatDateTime(stop.appointmentAt)}${eta}`

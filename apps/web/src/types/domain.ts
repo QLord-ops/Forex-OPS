@@ -114,7 +114,7 @@ export interface Tour {
   vehicle?: Vehicle
   stops?: Stop[]
   legs?: Leg[]
-  events?: unknown[]
+  events?: TourEvent[]
   predictedEta?: string | null
   currentEta?: string | null
   eta?: string | null
@@ -330,6 +330,10 @@ export interface Alert {
   stop?: Stop
 }
 
+/** Who recorded a stop event; null on events recorded before the driver app. */
+export type EventSource = 'DISPATCHER' | 'WEBFLEET_AUTO' | 'DRIVER'
+export interface TourEvent { id: string; stopId: string; type: string; timestamp: string; note?: string | null; source?: EventSource | null }
+
 export interface EventRecord {
   id: string
   vehicleId: string
@@ -339,6 +343,7 @@ export interface EventRecord {
   type: 'LOADED' | 'UNLOADED' | 'LOADED_REVERTED' | 'UNLOADED_REVERTED'
   timestamp: string
   note?: string | null
+  source?: EventSource | null
   vehicle?: Vehicle
   tour?: Tour
   stop?: Stop

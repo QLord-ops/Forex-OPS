@@ -4,6 +4,7 @@ import { useParams } from 'react-router-dom'
 
 import { LazyMapPanel } from '../components/LazyMapPanel'
 import { AppointmentPlanner } from '../components/AppointmentPlanner'
+import { DriverShiftCode } from '../components/DriverShiftCode'
 import { localDateTime, VehicleOperationsPanel } from '../components/VehicleOperationsPanel'
 import { RouteEditor } from '../components/RouteEditor'
 import { ErrorState, LoadingState } from '../components/States'
@@ -140,6 +141,7 @@ export function VehicleDetailPage() {
           <TourSummary tour={activeTour} position={position.data} />
           {activeTour && ['ACTIVE', 'QUEUED'].includes(activeTour.status) ? <AppointmentPlanner key={`appointment-${activeTour.id}`} tour={activeTour} onChange={refreshOperations} /> : null}
           <VehicleOperationsPanel key={id} vehicleId={id} onChange={refreshOperations} />
+          <section className="work-surface min-w-0 space-y-3 p-4" aria-labelledby="driver-app-title"><h2 id="driver-app-title" className="font-semibold">Приложение водителя</h2><DriverShiftCode vehicleId={id} vehicleLabel={vehicle.data?.licensePlate || vehicle.data?.vehicleNumber || 'машины'} /></section>
           {activeTour && ['ACTIVE', 'QUEUED'].includes(activeTour.status) && <RouteEditor key={activeTour.id} tour={activeTour} onChange={refreshOperations} />}
           {actionError ? <ErrorState error={actionError} /> : null}
           {position.error ? <ErrorState error={position.error} onRetry={position.refetch} /> : null}
