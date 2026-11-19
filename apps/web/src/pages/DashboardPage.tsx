@@ -18,14 +18,15 @@ import { usePolling } from '../hooks/usePolling'
 import { usePopover } from '../hooks/usePopover'
 import { useVehiclePosition } from '../hooks/useVehiclePosition'
 import { api, type RouteOptions } from '../lib/api'
-import { compareVehicles, driverHoursLine, etaPlanLine, getAttention, matchesFleetFilter, positionSource, activityNote, terminMargin, terminNeeded, terminToday, vehiclePlace, vehicleStatus, type FleetFilter, type FleetSort } from '../lib/fleet-status'
+import { compareVehicles, driverHoursLine, etaPlanLine, getAttention, liveSpeed, manuallyStopped, matchesFleetFilter, notStarted, plannedStart, positionSource, activityNote, terminMargin, terminNeeded, terminToday, vehiclePlace, vehicleStatus, type FleetFilter, type FleetSort } from '../lib/fleet-status'
 import { CustomerNoticeButton } from '../components/CustomerNotice'
 import { noticeDue, noticeLine } from '../lib/customer-notice'
 import type { AlertNotification } from '../lib/alerts'
 import { getRoutePreview, setRoutePreview, subscribeRoutePreview } from '../lib/route-preview'
 import { etaText, routeProgress, type StopState } from '../lib/route-progress'
 import { currentStopOf, terminOf } from '../lib/tours'
-import { classNames, formatAppointment, formatDateTime, formatDurationMinutes, formatTime, placeName, shortAddress, statusLabel, stopTypeLabel } from '../lib/format'
+import { stopEta, stopTerminLabel } from '../lib/stop-times'
+import { classNames, formatDateTime, formatDurationMinutes, formatTime, placeName, shortAddress, statusLabel, stopTypeLabel } from '../lib/format'
 import type { Coordinate, CurrentPosition, DashboardVehicle, DrivingTimes, Stop } from '../types/domain'
 import { zuladungState } from '../lib/zuladung'
 import { customerColor } from '../lib/customers'
@@ -40,7 +41,7 @@ const scopes: Array<{ value: FleetScope; label: string }> = [
 ]
 const filters: Array<{ value: FleetFilter; label: string }> = [
   { value: 'ALL', label: 'Все' }, { value: 'DECIDE', label: 'Решить' }, { value: 'MOVING', label: 'В пути' },
-  { value: 'AT_STOP', label: 'На точке' }, { value: 'TERMIN', label: 'Termin' }, { value: 'NO_TERMIN', label: 'Нет Termin' }, { value: 'IDLE', label: 'Без тура' }
+  { value: 'AT_STOP', label: 'На точке' }, { value: 'PLANNED', label: 'Запланированы' }, { value: 'TERMIN', label: 'Termin' }, { value: 'NO_TERMIN', label: 'Нет Termin' }, { value: 'IDLE', label: 'Без тура' }
 ]
 const sorts: Array<{ value: FleetSort; label: string }> = [
   { value: 'URGENCY', label: 'по срочности' }, { value: 'TERMIN', label: 'по Termin' }, { value: 'NUMBER', label: 'по номеру' }
@@ -371,7 +372,9 @@ function DecisionStack({ items, stopOf, onSelect, rowOf }: { items: AlertNotific
   const compact = !expanded && hidden > 0
   return <section className={classNames('decision-stack-panel', expanded && 'decision-stack-panel-open')} aria-label="Требует решения">
     <h2 className="decision-stack-head">Требует решения<span>{decisions.length}</span>
-      {expanded ? <button type="button" className="decision-stack-toggle" onClick={() => setExpanded(false)}>Свернуть</button> : null}
+      {expanded ? <button type="button" className="decision-stack-toggle" onClick={() => setExpanded(false)}>Свернуть</button>
+        // Shown only where the stack is folded to its heading: a laptop with the truck card open.
+        : <button type="button" className="decision-stack-toggle decision-stack-show" onClick={() => setExpanded(true)}>Показать</button>}
     </h2>
     <DecisionGroups items={compact ? decisions.slice(0, DECISIONS_SHOWN) : items} stopOf={stopOf} onSelect={onSelect} extraOf={(item) => {
       // A jam that makes the truck late or a long wait at the gate: the letter to the customer is one click from the notice.
@@ -406,7 +409,10 @@ function AuftragCheck({ draft, vehicles }: { draft: AuftragDraftSummary; vehicle
   const scenario = result?.key === key ? result.scenario : null
   useEffect(() => () => { setRoutePreview(null) }, [])
   const ready = Boolean(row) && draft.stops.length > 0 && draft.stops.every((stop) => stop.address.trim())
-  const busyUntil = row?.tour ? (row.tour.stops ?? []).filter((stop) => !stop.completedAt).at(-1)?.predictedEta ?? null : null
+  // Free after the last stop: its latest arrival and the stay there (an hour and a half between one and two).
+  const lastStop = row?.tour ? (row.tour.stops ?? []).filter((stop) => !stop.completedAt).at(-1) : null
+  const lastEta = lastStop?.arrivedAt ?? lastStop?.predictedEta ?? null
+  const busyUntil = lastEta ? new Date(Math.max(Date.now(), new Date(lastEta).getTime() + 90 * 60_000)).toISOString() : null
   async function check() {
     if (!row || !ready) return
     setState({ busy: true, error: '' })
@@ -469,7 +475,7 @@ function VehicleRow({ row, selected, open, pinned, owner, busy, unread, onOpen, 
   const calm = attention.tone === 'ok' || attention.tone === 'moving' || attention.tone === 'idle' || attention.tone === 'watch'
   const number = `LKW ${row.vehicle.vehicleNumber}`
   const clock = cardClock(row, status.tone, dwell)
-  const speed = status.tone === 'ok' && row.telemetry?.source === 'WEBFLEET' && typeof row.telemetry.speedKmh === 'number' ? `${Math.round(row.telemetry.speedKmh)} км/ч` : null
+  const speed = status.tone !== 'stop' && liveSpeed(row) !== null ? `${liveSpeed(row)} км/ч` : null
   const driving = typeof row.clockSummary?.remainingDrivingMinutes === 'number' ? `вождение ещё ${formatClock(row.clockSummary.remainingDrivingMinutes)}` : null
   const km = row.tour && typeof row.remainingKm === 'number' && row.remainingKm >= 1 && status.tone !== 'stop' ? `осталось ${Math.round(row.remainingKm)} км` : null
   return (
@@ -486,6 +492,7 @@ function VehicleRow({ row, selected, open, pinned, owner, busy, unread, onOpen, 
           {termin ? <span className="vehicle-row-termin">{termin.label}</span> : terminNeeded(row) ? <span className="termin-needed">Termin нужен</span> : null}
           {!termin && plannedAt ? <span className="vehicle-row-chip">план {formatDateTime(plannedAt)}</span> : null}
           {row.customer ? <span className="vehicle-row-customer"><span className="customer-swatch" style={{ background: customerColor(row.customer) }} aria-hidden="true" />{row.customer.name}{row.line ? ` · ${row.line.name}` : ''}</span> : null}
+          {owner ? <span className="vehicle-row-owner" title={owner}>{owner}</span> : null}
         </span>
         {/* The way left sits here so the line above keeps room for firm and town (owner, 18.11). */}
         {speed || driving || km ? <span className="vehicle-row-info">{[km, speed, driving].filter(Boolean).join(' · ')}</span> : null}
@@ -496,7 +503,6 @@ function VehicleRow({ row, selected, open, pinned, owner, busy, unread, onOpen, 
       <div className="vehicle-card-side">
         <span className="vehicle-card-tags">
           <span className={`source-tag source-tag-${source.kind}`} title={source.long}>{source.short}</span>
-          {owner ? <span className="vehicle-row-owner">{owner}</span> : null}
         </span>
         <div className="vehicle-card-actions">
           <VehicleActionButton row={row} busy={busy} onClick={onAction} />
@@ -512,11 +518,13 @@ function VehicleRow({ row, selected, open, pinned, owner, busy, unread, onOpen, 
 /** The big time of a card: ETA on the road, since when at the stop, the planned start before the tour. */
 function cardClock(row: DashboardVehicle, tone: string, dwell: number | null): { label: string; value: string } | null {
   if (tone === 'stop') {
-    const since = row.currentStop?.arrivedAt ?? (dwell ? new Date(Date.now() - dwell * 60_000).toISOString() : null)
+    const since = manuallyStopped(row) ? row.statusStartedAt ?? null : row.currentStop?.arrivedAt ?? (dwell ? new Date(Date.now() - dwell * 60_000).toISOString() : null)
     return since ? { label: 'с', value: formatTime(since) } : null
   }
+  // A tour that has not begun has no arrival to forecast: its first stop's time is what the dispatcher plans by.
+  const start = tone === 'plan' ? plannedStart(row) : null
+  if (start) return { label: 'начало', value: etaText(start).replace(',', '') }
   if (row.eta) return { label: 'ETA', value: formatTime(row.eta) }
-  if (tone === 'plan' && row.tour?.plannedStartAt) return { label: 'выезд', value: formatTime(row.tour.plannedStartAt) }
   return null
 }
 
@@ -591,7 +599,7 @@ function VehiclePanel({ row, position, drawerOpen, onToggleDrawer, collapsed, on
   const termin = terminOf(row.tour)
   const terminStop = termin ? progress.stops.find(({ stop }) => !stop.completedAt)?.stop ?? null : null
   const margin = terminMargin(row)
-  const speed = status.tone === 'ok' && row.telemetry?.source === 'WEBFLEET' && typeof row.telemetry.speedKmh === 'number' ? ` · ${Math.round(row.telemetry.speedKmh)} км/ч` : ''
+  const speed = status.tone !== 'stop' && liveSpeed(row) !== null ? ` · ${liveSpeed(row)} км/ч` : ''
   const remaining = etaPlanLine(row)
   const nextStop = progress.currentIndex >= 0 ? progress.stops[progress.currentIndex]?.stop ?? null : row.to ?? null
   // Tachograph figures come from server memory (no Webfleet call); only while the panel is open.
@@ -625,43 +633,62 @@ function VehiclePanel({ row, position, drawerOpen, onToggleDrawer, collapsed, on
 
   const plate = row.telemetry?.objectNo ?? row.vehicle.licensePlate
   const arrived = status.tone === 'stop'
-  const bigTime = arrived ? (row.currentStop?.arrivedAt ? formatTime(row.currentStop.arrivedAt) : '–') : row.eta ? formatTime(row.eta) : '–'
+  const big = cardClock(row, status.tone, status.tone === 'stop' && row.dwellMinutes ? Math.round(row.dwellMinutes) : null)
+  const bigTime = big?.value ?? '–'
   const here = row.telemetry?.source === 'WEBFLEET' && row.telemetry.address ? row.telemetry.address : vehiclePlace(row)
-  const course = typeof row.telemetry?.courseDeg === 'number' && status.tone === 'ok' ? courseWord(row.telemetry.courseDeg) : null
+  // A course only while the truck moves: standing, the last heading says nothing.
+  const course = typeof row.telemetry?.courseDeg === 'number' && speed && (liveSpeed(row) ?? 0) >= 5 ? courseWord(row.telemetry.courseDeg) : null
   const motion = [speed ? speed.replace(/^ · /, '') : null, course ? `курс на ${course}` : null].filter(Boolean).join(' · ')
   const stops = row.tour?.stops ?? []
   const firstOpen = stops.findIndex((stop) => !stop.completedAt)
   // The last stop done, then the ones ahead: as the design shows the tour, four lines at most.
-  const shown = stops.slice(Math.max(0, (firstOpen < 0 ? stops.length : firstOpen) - 1)).slice(0, 4)
+  const shownFrom = Math.max(0, (firstOpen < 0 ? stops.length : firstOpen) - 1)
+  const shown = stops.slice(shownFrom, shownFrom + 4)
   const cargo = stops.filter((stop) => stop.type === 'LOAD').reduce((sum, stop) => sum + (stop.loadingMeters ?? 0), 0)
   const notice = noticeLine(row)
   const rebuilt = row.lastOperation?.type === 'ROUTE_REBUILT_AUTO' ? formatTime(row.lastOperation.createdAt) : null
   const meters = driverMeters(driver, row.clockSummary)
   const etaMinutes = row.eta ? Math.max(0, Math.round((new Date(row.eta).getTime() - Date.now()) / 60_000)) : null
   const enough = meters?.todayMinutes !== undefined && meters.todayMinutes !== null && etaMinutes !== null && nextStop ? meters.todayMinutes >= etaMinutes : null
+  const hasHours = Boolean(meters?.rows.length || hours)
+  // Whose hours the ETA was planned on; «без тахографа» already says that the driver's hours are not known.
+  const basis = row.eta && row.etaPlan ? (row.etaPlan.hours === 'TACHOGRAPH' ? 'по тахографу' : 'без тахографа') : null
+  const hoursBrief = hoursBriefOf(meters, enough, nextStop ? shortAddress(nextStop) : null, basis === 'без тахографа')
+  const openStops = stops.filter((stop) => !stop.completedAt)
+  // «Опоздание 11 мин» in one pill: the word and the minutes are not said twice.
+  const lateBy = status.label === 'Опоздание' && margin !== null && margin < 0 && !arrived ? formatDurationMinutes(-margin) : null
+  // Where the position comes from, then where the ETA comes from when that is not the same thing, then whose hours.
+  const etaFrom = !row.eta ? null : row.etaSource === 'GPS' ? (source.kind === 'live' ? null : 'ETA от GPS') : source.kind === 'calculated' ? null : 'ETA по расчёту'
+  const sourceText = [source.kind === 'calculated' ? 'Расчётная позиция' : source.long, etaFrom, basis].filter(Boolean).join(' · ')
+  const sourceTitle = `Позиция: ${source.long}${row.eta ? ` · ETA: ${remaining.source}` : ''}`
   return <section className={classNames('vehicle-panel', drawerOpen && 'vehicle-panel-open')} aria-label={`LKW ${row.vehicle.vehicleNumber}`}>
     {handle}
     <div id="vehicle-panel-body">
     {drawerOpen ? <RouteStopsTrack row={row} position={position} onFocusStop={onFocusStop} /> : null}
-    <div className="vehicle-panel-bar">
+    <div className={classNames('vehicle-panel-bar', !hasHours && 'vehicle-panel-bar-nohours')}>
       <div className="vehicle-panel-id">
         <span className="vehicle-panel-kicker"><strong>LKW {row.vehicle.vehicleNumber}</strong>{plate && plate !== row.vehicle.vehicleNumber ? ` · ${plate}` : ''}</span>
-        <span className="vehicle-panel-time" aria-label={arrived ? `на точке с ${bigTime}` : `ETA ${bigTime}`}>{arrived ? <small>с</small> : null}{bigTime}</span>
+        <span className="vehicle-panel-time" aria-label={big ? `${big.label} ${bigTime}` : 'ETA нет'}>{big && big.label !== 'ETA' ? <small>{big.label}</small> : null}{bigTime}</span>
         <span className="vehicle-panel-chips">
-          <span className={`status-pill status-pill-${status.tone}`}><span className={`status-dot status-dot-${status.tone}`} aria-hidden="true" />{status.label}</span>
-          {margin !== null && !arrived ? <span className={classNames('vehicle-row-chip', margin < 0 ? 'vehicle-row-chip-late' : 'vehicle-row-chip-ok')}>{margin < 0 ? `опоздание ${formatDurationMinutes(-margin)}` : `запас ${formatDurationMinutes(margin)}`}</span> : null}
-          {termin ? <span className="vehicle-row-termin">{termin.label.replace(/^Termin \d{2}\.\d{2} /, 'Termin ')}{terminStop ? ` · ${shortAddress(terminStop)}` : ''}</span> : <span className="vehicle-panel-muted">Termin нет</span>}
+          <span className={`status-pill status-pill-${status.tone}`}><span className={`status-dot status-dot-${status.tone}`} aria-hidden="true" />{lateBy ? `Опоздание ${lateBy}` : status.label}</span>
+          {margin !== null && !arrived && !lateBy ? <span className={classNames('vehicle-row-chip', margin < 0 ? 'vehicle-row-chip-late' : 'vehicle-row-chip-ok')}>{margin < 0 ? `опоздание ${formatDurationMinutes(-margin)}` : `запас ${formatDurationMinutes(margin)}`}</span> : null}
+          {termin ? <span className="vehicle-row-termin" title={terminStop ? shortAddress(terminStop) : undefined}>{terminToday(row) ? termin.label.replace(/^Termin \d{2}\.\d{2} /, 'Termin ') : termin.label}</span>
+            : terminNeeded(row) ? <span className="termin-needed">Termin нужен</span> : <span className="vehicle-panel-muted">Termin нет</span>}
         </span>
       </div>
       <div className="vehicle-panel-position">
-        <span className="vehicle-panel-label">Позиция</span>
+        <span className="vehicle-panel-head">
+          <span className="vehicle-panel-label">Позиция</span>
+          {row.etaSource === 'GPS' ? <button type="button" className="vehicle-panel-link" onClick={onRouteOptions} disabled={optionsBusy} title="Три маршрута от GPS-позиции до точки"><GitFork className="h-3.5 w-3.5" aria-hidden="true" />Варианты</button> : null}
+        </span>
         <span className="vehicle-panel-route" title={here || undefined}>{here || '–'}</span>
         {motion ? <span className="vehicle-panel-line">{motion}</span> : null}
-        <span className="vehicle-panel-line">Осталось {typeof row.remainingKm === 'number' ? `≈ ${Math.round(row.remainingKm)} км` : '–'}{remaining.text ? ` · ${remaining.text}` : ''}</span>
+        {notStarted(row) ? null : <span className="vehicle-panel-line vehicle-panel-left">Осталось {typeof row.remainingKm === 'number' ? `≈ ${Math.round(row.remainingKm)} км` : '–'}{remaining.text ? ` · ${remaining.text}` : ''}</span>}
         {jam ? <span className="vehicle-panel-jam">{jam}</span> : null}
-        <span className={`vehicle-panel-source vehicle-panel-source-${source.kind}`}>{source.kind === 'calculated' ? 'Расчётная позиция' : source.long}{remaining.source ? ` · ${remaining.source}` : ''}</span>
         {activityNote(row) ? <span className={classNames('rest-at-stop', !row.restAtStop && 'rest-at-stop-pause')}>{activityNote(row)}</span> : null}
-        {row.etaSource === 'GPS' ? <button type="button" className="vehicle-panel-link" onClick={onRouteOptions} disabled={optionsBusy} title="Три маршрута от GPS-позиции до точки"><GitFork className="h-3.5 w-3.5" aria-hidden="true" />Варианты</button> : null}
+        <span className={`vehicle-panel-source vehicle-panel-source-${source.kind}`} title={sourceTitle}>{sourceText}</span>
+        {/* Where the driver hours have no column of their own (a laptop, or no data), they are one line here. */}
+        {hoursBrief ? <span className={classNames('vehicle-panel-hours-brief', hoursBrief.warn && 'vehicle-panel-hours-warn')} title={hoursBrief.title}>{hoursBrief.text}</span> : null}
       </div>
       <div className="vehicle-panel-next">
         <button type="button" className="vehicle-panel-stage route-stops-drawer-trigger" onClick={onToggleDrawer} aria-expanded={drawerOpen} title={drawerOpen ? 'Скрыть точки маршрута' : 'Все точки маршрута'}>
@@ -674,31 +701,42 @@ function VehiclePanel({ row, position, drawerOpen, onToggleDrawer, collapsed, on
         {shown.length ? <ol className="vehicle-panel-stops" aria-label="Точки тура">
           {shown.map((stop) => {
             const done = Boolean(stop.completedAt)
-            const time = done ? formatTime(stop.completedAt!) : stop.appointmentAt ? `Termin ${formatTime(stop.appointmentAt)}` : stop.plannedAt ? `план ${formatTime(stop.plannedAt)}` : stop.predictedEta ? `ETA ${formatTime(stop.predictedEta)}` : ''
-            return <li key={stop.id} className={classNames(done && 'vehicle-panel-stop-done', stop.id === nextStop?.id && 'vehicle-panel-stop-next')}>
+            const termin = done ? null : stopTerminLabel(stop, stops, true) ?? (stop.plannedAt ? `план ${formatTime(stop.plannedAt)}` : null)
+            const eta = done ? null : stopEta(stop, stops, new Date(), true)
+            // In a narrow column a stop takes two lines: then only the stop ahead and the one after it are shown.
+            const far = !done && openStops.indexOf(stop) >= 2
+            return <li key={stop.id} className={classNames(done && 'vehicle-panel-stop-done', far && 'vehicle-panel-stop-far', stop.id === nextStop?.id && 'vehicle-panel-stop-next')}>
               <span className={`vehicle-panel-stop-dot vehicle-panel-stop-${done ? 'finished' : stop.type === 'LOAD' ? 'load' : 'unload'}`} aria-hidden="true" />
-              <b>{stop.type === 'LOAD' ? 'BELADEN' : 'ENTLADEN'}</b><span title={shortAddress(stop)}>{shortAddress(stop)}</span>
-              <time className={stop.appointmentAt && !done ? 'vehicle-panel-stop-termin' : undefined}>{time}</time>
+              <b>{stop.type === 'LOAD' ? 'BELADEN' : 'ENTLADEN'}</b><span className="vehicle-panel-stop-name" title={shortAddress(stop)}>{shortAddress(stop)}</span>
+              <span className="vehicle-panel-stop-times">
+                {done ? <time>{formatTime(stop.completedAt!)}</time> : null}
+                {termin ? <span className={stop.plannedAt && !stopTerminLabel(stop, stops) ? undefined : 'vehicle-panel-stop-termin'}>{termin}</span> : null}
+                {eta ? <span className={classNames('vehicle-panel-stop-eta', eta.late && 'timing-late')} title={eta.title}>{eta.text}</span> : null}
+              </span>
             </li>
           })}
         </ol> : <span className="vehicle-panel-route"><MapPin className="h-4 w-4" aria-hidden="true" />{nextText}</span>}
-        <span className="vehicle-panel-line">
-          {cargo ? `Груз: ${cargo.toLocaleString('de-DE')} LDM` : null}
-          {zuladungState(row.tour) === 'OPEN' ? <span className="vehicle-panel-zuladung" title="По Auftrag перед выгрузкой возможна Zuladung, место неизвестно">{cargo ? ' · ' : ''}без учёта Zuladung</span> : null}
-        </span>
-        {rebuilt ? <span className="vehicle-panel-line">Маршрут перестроен сам в {rebuilt}</span> : null}
-        {notice ? <span className="customer-notice-line">{notice}</span> : null}
+        {cargo || zuladungState(row.tour) === 'OPEN' || stops.length > 2 ? <span className="vehicle-panel-foot">
+          <span className="vehicle-panel-line">
+            {cargo ? `Груз: ${cargo.toLocaleString('de-DE')} LDM` : null}
+            {zuladungState(row.tour) === 'OPEN' ? <span className="vehicle-panel-zuladung" title="По Auftrag перед выгрузкой возможна Zuladung, место неизвестно">{cargo ? ' · ' : ''}без учёта Zuladung</span> : null}
+          </span>
+          {stops.length > 2 ? <button type="button" className="vehicle-panel-link" onClick={onToggleDrawer} aria-expanded={drawerOpen}>Все точки · {stops.length}</button> : null}
+        </span> : null}
+        {rebuilt || notice ? <span className="vehicle-panel-meta">
+          {rebuilt ? <span>Маршрут перестроен сам в {rebuilt}</span> : null}
+          {notice ? <span className="customer-notice-line">{notice}</span> : null}
+        </span> : null}
       </div>
-      <div className={classNames('vehicle-panel-hours', hours?.stale && 'vehicle-panel-hours-stale')} aria-label="Часы водителя" role="group">
+      {hasHours ? <div className={classNames('vehicle-panel-hours', hours?.stale && 'vehicle-panel-hours-stale')} aria-label="Часы водителя" role="group">
         <span className="vehicle-panel-label">Часы водителя{meters?.tachograph ? ' · тахограф' : ''}</span>
         {meters?.rows.length ? meters.rows.map((item) => <span key={item.label} className={classNames('vehicle-panel-meter', item.warn && 'vehicle-panel-hours-warn')}>
           <span>{item.label}</span><strong>{item.value}</strong>
           {item.share !== null ? <i aria-hidden="true"><b style={{ width: `${Math.round(Math.min(1, Math.max(0, item.share)) * 100)}%` }} /></i> : null}
-        </span>) : hours ? hours.parts.map((part) => <span key={part.label} className={classNames('vehicle-panel-meter', part.warn && 'vehicle-panel-hours-warn')}><span>{part.label}</span><strong>{part.value}</strong></span>)
-          : <span className="vehicle-panel-line">нет данных тахографа</span>}
+        </span>) : hours ? hours.parts.map((part) => <span key={part.label} className={classNames('vehicle-panel-meter', part.warn && 'vehicle-panel-hours-warn')}><span>{part.label}</span><strong>{part.value}</strong></span>) : null}
         {enough !== null && nextStop ? <span className={enough ? 'vehicle-panel-enough' : 'vehicle-panel-hours-warn'}>{enough ? `Хватает до ${shortAddress(nextStop)}` : `Не хватает до ${shortAddress(nextStop)}: нужен отдых`}</span> : null}
         {hours ? <span className="vehicle-panel-hours-source">{hours.source}{hours.stale ? ' · устарели' : ''}</span> : null}
-      </div>
+      </div> : null}
       <div className="vehicle-panel-actions">
         {action}
         {noticeDue(row) ? <CustomerNoticeButton row={row} /> : null}
@@ -733,6 +771,19 @@ function driverMeters(times: DrivingTimes | null | undefined, clock: DashboardVe
   return null
 }
 
+/** The driver's hours in one line, for the panel without room for their column: «До паузы 0:45 · сегодня осталось 1:37». */
+function hoursBriefOf(meters: ReturnType<typeof driverMeters>, enough: boolean | null, place: string | null, said: boolean): { text: string; title: string; warn: boolean } | null {
+  if (!meters?.rows.length) return said ? null : { text: 'Часы водителя: нет данных', title: 'Тахограф Webfleet не прислал часы, расчёта OPS тоже нет', warn: false }
+  const all = meters.rows.map((item) => `${item.label} ${item.value}`)
+  const verdict = enough === false && place ? `не хватает до ${place}` : null
+  const source = meters.tachograph ? 'по тахографу Webfleet' : 'расчёт OPS, предварительно'
+  return {
+    text: [verdict, ...all.slice(0, 2)].filter(Boolean).join(' · ').replace('Сегодня осталось', 'сегодня осталось'),
+    title: `Часы водителя, ${source}: ${all.join(' · ')}`,
+    warn: enough === false || meters.rows.slice(0, 2).some((item) => item.warn)
+  }
+}
+
 /** «пробка: +25 мин» from the open jam notice of the truck, as the position column of the design shows it. */
 function jamOf(items: AlertNotification[], vehicleId: string): string | null {
   const jam = items.find((item) => item.vehicleId === vehicleId && item.type === 'TRAFFIC_DELAY' && !item.resolved)
@@ -754,7 +805,7 @@ function mapLabel(row: DashboardVehicle): { headline: string | null; detail: str
   if (!row.eta) return { headline: null, detail: source.kind === 'stale' ? source.long : null }
   const margin = terminMargin(row)
   const headline = `${formatTime(row.eta)}${margin !== null ? margin < 0 ? ` · опоздание ${formatDurationMinutes(-margin)}` : ` · запас ${formatDurationMinutes(margin)}` : ''}`
-  const speed = row.telemetry?.source === 'WEBFLEET' && typeof row.telemetry.speedKmh === 'number' && status.tone === 'ok' ? `${Math.round(row.telemetry.speedKmh)} км/ч` : null
+  const speed = liveSpeed(row) !== null ? `${liveSpeed(row)} км/ч` : null
   const way = typeof row.remainingKm === 'number' ? `до ${shortAddress(row.to)} ${Math.round(row.remainingKm)} км` : null
   return { headline, detail: source.kind === 'stale' ? source.long : [speed, way].filter(Boolean).join(' · ') || null }
 }
@@ -783,7 +834,7 @@ function RouteStopsTrack({ row, position, onFocusStop }: { row: DashboardVehicle
           {index < last ? <span className="route-stage-line"><span className="route-stage-line-fill" style={{ width: `${fill * 100}%` }} />{truckOnLine ? <span className="route-stage-truck" style={{ left: `${fill * 100}%` }}><Truck className="h-3.5 w-3.5" /></span> : null}</span> : null}
         </div>
         <p className="route-stage-state">{stopStateText(stop, state, progress.stage, row)}</p>
-        <StopCard stop={stop} current={index === progress.currentIndex} onFocus={() => onFocusStop(stop)} />
+        <StopCard stop={stop} stops={row.tour?.stops ?? []} current={index === progress.currentIndex} onFocus={() => onFocusStop(stop)} />
       </li>
     })}
   </ol> : <EmptyState label="У машины нет активного маршрута." />}</div>
@@ -795,17 +846,17 @@ function stopStateText(stop: Stop, state: StopState, stage: string, row: Dashboa
     const minutes = stop.arrivedAt ? Math.max(0, Math.floor((Date.now() - new Date(stop.arrivedAt).getTime()) / 60_000)) : null
     return `Машина здесь${minutes !== null ? ` · ${formatDurationMinutes(minutes)}` : ''}`
   }
-  if (state === 'HEADING') return stage === 'ARRIVING' ? 'Прибывает · ждём GPS' : stage === 'WAITING' ? 'Первая точка' : `Едем сюда · ETA ${etaText(row.eta ?? stop.predictedEta)}`
-  if (state === 'NEXT') return `Следующая${stop.predictedEta ? ` · ETA ${etaText(stop.predictedEta)}` : ''}`
-  return 'Впереди'
+  if (state === 'HEADING') return stage === 'ARRIVING' ? 'Прибывает · ждём GPS' : stage === 'WAITING' ? 'Первая точка' : manuallyStopped(row) ? 'Остановлена на пути сюда' : `Едем сюда · ETA ${etaText(row.eta ?? stop.predictedEta)}`
+  return state === 'NEXT' ? 'Следующая' : 'Впереди'
 }
 
-function StopCard({ stop, current = false, onFocus }: { stop: Stop; current?: boolean; onFocus?: () => void }) {
+function StopCard({ stop, stops, current = false, onFocus }: { stop: Stop; stops: Stop[]; current?: boolean; onFocus?: () => void }) {
   const references = stop.referenceNumbers ?? parseStopReferences(stop.referenceNumbersJson)
+  const eta = stop.completedAt ? null : stopEta(stop, stops)
   // The whole card shows the stop on the map.
   return <article className={classNames('route-stop-card', current && 'route-stop-card-current', onFocus && 'route-stop-card-clickable')} onClick={onFocus}
     role={onFocus ? 'button' : undefined} tabIndex={onFocus ? 0 : undefined} aria-label={onFocus ? `Показать на карте: ${stop.sequence} · ${stopTypeLabel(stop.type)}, ${shortAddress(stop)}` : undefined}
-    onKeyDown={onFocus ? (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onFocus() } } : undefined}><div className="flex items-center justify-between gap-2"><span className="badge border-slate-200 bg-slate-50 text-slate-700">{stop.sequence} · {stopTypeLabel(stop.type)}</span><span className="text-xs font-medium text-slate-500">{stop.status ? statusLabel(stop.status) : ''}</span></div><p className="mt-2 truncate font-semibold" title={stop.city || stop.address}>{shortAddress(stop)}</p><p className="mt-1 line-clamp-2 text-xs text-slate-500" title={stop.address}>{stop.address}</p><div className="mt-3 grid gap-1 text-xs text-slate-600"><span className="inline-flex items-center gap-1"><Clock3 className="h-3.5 w-3.5" /> {formatAppointment(stop.appointmentAt)}</span><span className="inline-flex items-center gap-1"><MapPin className="h-3.5 w-3.5" /> ETA {formatDateTime(stop.predictedEta)}</span>{stop.loadingMeters ? <span>{stop.loadingMeters} LDM</span> : null}{references.length ? <span>Ref: {references.join(', ')}</span> : null}{stop.instructions ? <span className="line-clamp-2">{stop.instructions}</span> : null}</div></article>
+    onKeyDown={onFocus ? (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onFocus() } } : undefined}><div className="flex items-center justify-between gap-2"><span className="badge border-slate-200 bg-slate-50 text-slate-700">{stop.sequence} · {stopTypeLabel(stop.type)}</span><span className="text-xs font-medium text-slate-500">{stop.status ? statusLabel(stop.status) : ''}</span></div><p className="mt-2 truncate font-semibold" title={stop.city || stop.address}>{shortAddress(stop)}</p><p className="mt-1 line-clamp-2 text-xs text-slate-500" title={stop.address}>{stop.address}</p><div className="mt-3 grid gap-1 text-xs text-slate-600"><span className="inline-flex items-center gap-1"><Clock3 className="h-3.5 w-3.5" /> {stopTerminLabel(stop, stops) ?? 'Termin нет'}</span>{eta ? <span className={classNames('inline-flex items-center gap-1', eta.late && 'timing-late')} title={eta.title}><MapPin className="h-3.5 w-3.5" /> {eta.text}</span> : null}{stop.loadingMeters ? <span>{stop.loadingMeters} LDM</span> : null}{references.length ? <span>Ref: {references.join(', ')}</span> : null}{stop.instructions ? <span className="line-clamp-2">{stop.instructions}</span> : null}</div></article>
 }
 
 function parseStopReferences(value?: string | null): string[] { if (!value) return []; try { const parsed = JSON.parse(value) as unknown; return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [] } catch { return [] } }

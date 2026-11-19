@@ -32,13 +32,20 @@ export function noticeLine(row: DashboardVehicle): string | null {
   return `Заказчик уведомлён ${formatTime(notice.at)}, ${notice.by}${notice.channel === 'COPY' ? ' (текст скопирован)' : ''}`
 }
 
-const berlinParts = (iso: string) => {
-  const parts = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(iso))
-  return { hour: Number(parts.find((part) => part.type === 'hour')?.value ?? 0), minute: parts.find((part) => part.type === 'minute')?.value ?? '00' }
+const berlinParts = (iso: string | number) => {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+    .formatToParts(new Date(iso)).map((part) => [part.type, part.value]))
+  return { hour: Number(parts.hour ?? 0), minute: parts.minute ?? '00', day: `${parts.day}.${parts.month}.`, date: `${parts.year}-${parts.month}-${parts.day}` }
 }
-/** «12 Uhr» on the hour, «11:55» otherwise — as the dispatchers write the Termin. */
-const terminClock = (iso: string) => { const { hour, minute } = berlinParts(iso); return minute === '00' ? `${hour} Uhr` : `${hour}:${minute}` }
-const clock = (iso: string) => { const { hour, minute } = berlinParts(iso); return `${String(hour).padStart(2, '0')}:${minute}` }
+/** «12 Uhr» on the hour, «11:55 Uhr» otherwise — as the dispatchers write the Termin. */
+const terminClock = (iso: string) => { const { hour, minute } = berlinParts(iso); return minute === '00' ? `${hour} Uhr` : `${hour}:${minute} Uhr` }
+const clock = (iso: string) => { const { hour, minute } = berlinParts(iso); return `${String(hour).padStart(2, '0')}:${minute} Uhr` }
+/** Nothing for today, «morgen », «am 19.11. » for a later day: a time after midnight is not read as today's. */
+function dayWord(iso: string, now: number) {
+  const day = berlinParts(iso)
+  if (day.date === berlinParts(now).date) return ''
+  return day.date === berlinParts(now + 86_400_000).date ? 'morgen ' : `am ${day.day} `
+}
 
 /** «40 Minuten», «1 Stunde», «2,5 Stunden». */
 export function waitText(minutes: number) {
@@ -52,24 +59,33 @@ export function placeText(stop: { company?: string | null; city?: string | null;
   return placeName(stop, false) || stop.address || ''
 }
 
+/** «Ждёт на точке» is true only for a truck that stands at its stop; a letter about a truck on the road never says it. */
+export function waitsAtStop(row: DashboardVehicle): boolean {
+  const stop = row.tour ? currentStopOf(row.tour) : null
+  return Boolean(stop && !stop.completedAt && (stop.arrivedAt || vehicleStatus(row).tone === 'stop'))
+}
+
 /**
- * The letter as the dispatchers write it (owner's Outlook, 18.11): the truck number as the subject and one plain
- * German line; Outlook adds the signature.
+ * The letter as the dispatchers write it (owner's Outlook, 18.11): the truck number as the subject and one plain line;
+ * Outlook adds the signature. Whole sentences in German (owner, 18.11): «wartet seit … auf die Entladung», the day with a
+ * time that is not today, and the wait only as long as it was really measured.
  */
-export function draftNotice(row: DashboardVehicle, kind: NoticeKind, jam = false) {
+export function draftNotice(row: DashboardVehicle, kind: NoticeKind, jam = false, now = Date.now()) {
   const stop = row.tour ? currentStopOf(row.tour) : null
   const subject = row.vehicle.vehicleNumber
-  const action = stop?.type === 'LOAD' ? 'Beladung' : 'Entladung'
-  if (kind === 'WAITING') return { subject, body: `Der Fahrer erwartet auf ${action} seit ${waitText(getDwellMinutes(row) || NOTICE_WAIT_MINUTES)}` }
+  const place = stop ? placeText(stop) : ''
+  const where = place ? ` bei ${place}` : ''
+  if (kind === 'WAITING') {
+    const minutes = waitsAtStop(row) ? getDwellMinutes(row, now) : 0
+    return { subject, body: `Hallo, der Fahrer wartet${minutes ? ` seit ${waitText(minutes)}` : ''} auf die ${stop?.type === 'LOAD' ? 'Beladung' : 'Entladung'}${where}` }
+  }
   const termin = terminOf(row.tour)
   const margin = terminMargin(row)
-  const place = stop ? placeText(stop) : ''
-  const at = termin ? ` um ${terminClock(termin.at)}` : ''
-  const where = place ? ` bei ${place}` : ''
-  const eta = row.eta ? `, er wird gegen ${clock(row.eta)} Uhr da` : ''
-  const cause = jam ? ', er steht im Stau' : ''
+  const at = termin ? ` ${dayWord(termin.at, now)}um ${terminClock(termin.at)}` : ''
+  const eta = row.eta ? `wird voraussichtlich ${dayWord(row.eta, now)}gegen ${clock(row.eta)} da sein` : ''
+  const rest = [jam ? 'steht im Stau' : '', eta].filter(Boolean).join(' und ')
   const body = margin !== null && margin < 0
-    ? `Hi, der Fahrer hat Verspätung zum Termin${at}${where}${eta}${cause}`
-    : `Hi, der Fahrer schafft den Termin${at}${where} knapp${eta}${cause}`
-  return { subject, body }
+    ? `Hallo, der Fahrer verspätet sich zum Termin${at}${where}`
+    : `Hallo, der Fahrer schafft den Termin${at}${where} nur knapp`
+  return { subject, body: rest ? `${body}, er ${rest}` : body }
 }

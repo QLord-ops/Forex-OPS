@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom'
 import { useNotifications } from '../context/notifications'
 import { api, customersApi } from '../lib/api'
 import { terminMargin } from '../lib/fleet-status'
-import { draftNotice, noticeKind, type NoticeKind } from '../lib/customer-notice'
+import { draftNotice, noticeKind, waitsAtStop, type NoticeKind } from '../lib/customer-notice'
 import { formatTime } from '../lib/format'
 import { currentStopOf } from '../lib/tours'
 import type { DashboardVehicle } from '../types/domain'
@@ -109,7 +109,7 @@ function CustomerNoticePopup({ row, anchor, onClose }: { row: DashboardVehicle; 
     </header>
     <div className="customer-notice-kinds" role="group" aria-label="О чём письмо">
       <button type="button" aria-pressed={kind === 'LATE'} onClick={() => pick('LATE')}>Опоздание</button>
-      <button type="button" aria-pressed={kind === 'WAITING'} onClick={() => pick('WAITING')}>Ждёт на точке</button>
+      <button type="button" aria-pressed={kind === 'WAITING'} onClick={() => pick('WAITING')} disabled={!waitsAtStop(row)} title={waitsAtStop(row) ? undefined : 'Машина ещё не на точке'}>Ждёт на точке</button>
     </div>
     <label className="customer-notice-field"><span>Кому</span><input type="text" inputMode="email" value={to} onChange={(event) => setTo(event.target.value)} placeholder="dispo@kunde.de" /></label>
     {contacts === 'none' ? <p className="customer-notice-hint">Адресов в профиле заказчика нет: впишите здесь или в «Заказчики» → «Статус».</p> : null}

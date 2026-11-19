@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { compareVehicles, getAttention, matchesFleetFilter, needsDecision, positionSource, activityNote, restNote, terminMargin, terminNeeded, vehiclePlace, vehicleStatus } from '../src/lib/fleet-status'
+import { compareVehicles, getAttention, liveSpeed, manuallyStopped, matchesFleetFilter, needsDecision, notStarted, plannedStart, positionSource, activityNote, restNote, terminMargin, terminNeeded, vehiclePlace, vehicleStatus } from '../src/lib/fleet-status'
 import type { DashboardVehicle, Stop } from '../src/types/domain'
 
 const NOW = new Date('2026-11-03T12:00:00Z').getTime()
@@ -23,6 +23,41 @@ describe('fleet status', () => {
     expect(needsDecision(row({ statusText: 'ARRIVED', predictedArrival: true }), new Set(), NOW)).toBe(false)
     expect(vehicleStatus(row({ statusText: 'WAITING_FOR_START', tour: { id: 't1', stops: [stop()] } as never }), NOW)).toEqual({ label: 'Запланирован', tone: 'plan' })
     expect(vehicleStatus(row({ statusText: 'IDLE' }), NOW)).toEqual({ label: 'Без тура', tone: 'idle' })
+  })
+
+  it('a tour that has not begun is a plan, a truck stopped by hand is stopped, a planned break stays a break (owner, 18.11)', () => {
+    const first = stop({ id: 's1', sequence: 1, type: 'LOAD', company: 'Demo Lager', city: 'Göttingen', appointmentAt: '2026-11-03T18:00:00Z' })
+    const tour = { id: 't1', plannedStartAt: '2026-11-03T18:00:00Z', stops: [first, stop({ id: 's2', sequence: 2 })] } as never
+    // No leg is driven and nothing is recorded: the server says WAITING, the page said «Пауза» in green.
+    const planned = row({ statusText: 'WAITING', tour, currentStop: first, currentAction: { type: 'MARK_LOADED', label: 'BELADEN', stopId: 's1', manual: true, withoutGpsArrival: true } })
+    expect(notStarted(planned)).toBe(true)
+    expect(vehicleStatus(planned, NOW)).toEqual({ label: 'Запланирован', tone: 'plan' })
+    expect(vehiclePlace(planned)).toBe('→ Demo Lager Göttingen')
+    expect(plannedStart(planned)).toBe('2026-11-03T18:00:00Z')
+    expect(matchesFleetFilter(planned, 'PLANNED', new Set(), NOW)).toBe(true)
+    expect(matchesFleetFilter(planned, 'AT_STOP', new Set(), NOW)).toBe(false)
+    // Fresh GPS shows it already rolling to the first stop.
+    const rolling = row({ ...planned, telemetry: { source: 'WEBFLEET', stale: false, speedKmh: 72, address: 'A7, Northeim' } })
+    expect(vehicleStatus(rolling, NOW)).toEqual({ label: 'В пути', tone: 'ok' })
+    expect(vehiclePlace(rolling)).toBe('A7 → Demo Lager Göttingen')
+    expect(matchesFleetFilter(rolling, 'PLANNED', new Set(), NOW)).toBe(false)
+    // «Стоп» on the road: stopped, with the stop still ahead — not standing at it.
+    const onLeg = { statusText: 'WAITING', tour, from: first, to: stop({ id: 's2', sequence: 2, city: 'Zwickau' }), currentStop: stop({ id: 's2', sequence: 2, city: 'Zwickau' }) } as const
+    const halted = row({ ...onLeg, currentAction: { type: 'RESUME', label: 'Продолжить', stopId: null } })
+    expect(manuallyStopped(halted)).toBe(true)
+    expect(notStarted(halted)).toBe(false)
+    expect(vehicleStatus(halted, NOW)).toEqual({ label: 'Остановлена', tone: 'stop' })
+    expect(vehiclePlace(halted)).toBe('Demo Lager Göttingen → Zwickau')
+    // A break of the calculated plan on the way is still a break.
+    expect(vehicleStatus(row({ ...onLeg, currentAction: { type: 'MARK_UNLOADED', label: 'ENTLADEN', stopId: 's2', manual: true } }), NOW)).toEqual({ label: 'Пауза', tone: 'ok' })
+  })
+
+  it('shows the speed of every truck with fresh GPS, the late one too; a stale reading is no speed', () => {
+    const lateTruck = row({ delayMinutes: 25, risk: 'RED', telemetry: { source: 'WEBFLEET', stale: false, speedKmh: 78.4 } })
+    expect(vehicleStatus(lateTruck, NOW).tone).toBe('late')
+    expect(liveSpeed(lateTruck)).toBe(78)
+    expect(liveSpeed(row({ telemetry: { source: 'WEBFLEET', stale: true, speedKmh: 80 } }))).toBeNull()
+    expect(liveSpeed(row({ telemetry: { source: 'CALCULATED', stale: false } }))).toBeNull()
   })
 
   it('marks daily rest at the stop as a known state: no long-stop alarm, the work goes on after the rest', () => {

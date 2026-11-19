@@ -9,7 +9,7 @@ import { prisma } from "./lib/prisma.js";
 import { CustomerNoticeError, CustomerNotices, customerNoticeInput } from "./services/customer-notice.js";
 import { AlertService } from "./services/alerts.js";
 import { AppointmentService } from "./services/appointments.js";
-import { EtaService } from "./services/eta.js";
+import { EtaService, type StopEta } from "./services/eta.js";
 import { importExcelPreview } from "./services/excel-order-import.js";
 import {
   importImagePreview,
@@ -1642,6 +1642,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
       const position = withWebfleetPosition(calculatedPosition, latestTelemetry);
       const currentStop = activeTour?.stops.find((stop) => !stop.completedAt) ?? null;
       const scheduledStop = currentStop ? etaService.calculateVehicleSchedule(vehicle.tours, generatedAt, driver).find((stop) => stop.stopId === currentStop.id) : null;
+      // Every open stop gets its ETA, continued from the one shown for the stop the truck drives to.
+      const stopEtas = activeTour ? etaService.stopEtas(vehicle.tours, activeTour.id, generatedAt, driver, position.eta ? new Date(position.eta) : null) : new Map<string, StopEta>();
       // With fresh GPS the ETA is measured from the truck; the saved plan only fills in when there is no GPS.
       const gpsEta = position.etaSource === "GPS";
       // At the stop the truck is no longer late: the arrival settled it (TERMIN_MET says on time or how late).
@@ -1716,7 +1718,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
         })(),
         customer: vehicle.customerLine ? { id: vehicle.customerLine.customer.id, name: vehicle.customerLine.customer.name, slug: vehicle.customerLine.customer.slug, color: vehicle.customerLine.customer.color } : null,
         line: vehicle.customerLine ? { id: vehicle.customerLine.id, code: vehicle.customerLine.code, name: vehicle.customerLine.name } : null,
-        tour: activeTour ? toDashboardTourSummary(activeTour) : null,
+        tour: activeTour ? withStopEtas(toDashboardTourSummary(activeTour), stopEtas) : null,
         statusText: position.status,
         etaSource: position.etaSource ?? "CALCULATED",
         etaPlan: position.etaPlan ?? null,
@@ -1982,6 +1984,14 @@ function feedStatus(feed: WebfleetLiveStore['drivingFeed']) {
 function gpsFixOf(telemetry: Awaited<ReturnType<WebfleetTelemetryService['latest']>>): GpsFix | null {
   if (!telemetry || !telemetry.usable) return null;
   return { latitude: telemetry.latitude, longitude: telemetry.longitude, fresh: !telemetry.stale };
+}
+
+/** The stops of the main screen with their forecast: `predictedEta` in the middle, the range and what it rests on. */
+function withStopEtas<T extends { stops: Array<{ id: string }> }>(tour: T, etas: Map<string, StopEta>) {
+  return { ...tour, stops: tour.stops.map((stop) => {
+    const item = etas.get(stop.id);
+    return { ...stop, predictedEta: item?.eta ?? null, etaEarliest: item?.earliest ?? null, etaLatest: item?.latest ?? null, etaBasis: item?.basis ?? null };
+  }) };
 }
 
 function withWebfleetPosition(

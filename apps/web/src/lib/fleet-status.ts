@@ -4,7 +4,7 @@ import type { DashboardVehicle } from '../types/domain'
 
 export type AttentionTone = 'dwell' | 'critical' | 'action' | 'watch' | 'moving' | 'ok' | 'idle'
 export type StatusTone = 'ok' | 'stop' | 'late' | 'plan' | 'idle'
-export type FleetFilter = 'ALL' | 'DECIDE' | 'MOVING' | 'AT_STOP' | 'TERMIN' | 'NO_TERMIN' | 'IDLE'
+export type FleetFilter = 'ALL' | 'DECIDE' | 'MOVING' | 'AT_STOP' | 'PLANNED' | 'TERMIN' | 'NO_TERMIN' | 'IDLE'
 export type FleetSort = 'URGENCY' | 'NUMBER' | 'TERMIN'
 
 export function getDwellMinutes(row: DashboardVehicle, now = Date.now()) {
@@ -44,9 +44,27 @@ export function terminToday(row: DashboardVehicle, now = Date.now()) {
   return Boolean(termin && berlinDay(new Date(termin.at).getTime()) === berlinDay(now))
 }
 
+/** The dispatcher pressed «Стоп»: the only action left is «Продолжить». */
+export function manuallyStopped(row: DashboardVehicle) {
+  return row.currentAction?.type === 'RESUME'
+}
+
+/** The tour is the truck's current one, but it has not reached the first stop yet: no leg is driven, no arrival recorded. */
+export function notStarted(row: DashboardVehicle) {
+  if (!row.tour || row.to || row.statusText !== 'WAITING') return false
+  const stop = row.currentStop ?? currentStopOf(row.tour)
+  return Boolean(stop && !stop.arrivedAt && !(row.tour.stops ?? []).some((item) => item.completedAt))
+}
+
+/** Speed from fresh GPS, rounded; a reading that went stale is not the speed the truck has now. */
+export function liveSpeed(row: DashboardVehicle): number | null {
+  const telemetry = row.telemetry
+  return telemetry?.source === 'WEBFLEET' && !telemetry.stale && typeof telemetry.speedKmh === 'number' ? Math.round(telemetry.speedKmh) : null
+}
+
 /** At the stop only when an arrival is recorded, the truck is stopped by hand, or (without Webfleet) the dispatcher can confirm it. */
 function atStop(row: DashboardVehicle, now: number) {
-  if (row.statusText === 'MANUAL_STOP' || getDwellMinutes(row, now) > 0) return true
+  if (manuallyStopped(row) || row.currentStop?.arrivedAt || getDwellMinutes(row, now) > 0) return true
   return row.statusText === 'ARRIVED' && Boolean(row.currentAction?.withoutGpsArrival)
 }
 
@@ -56,16 +74,26 @@ export function vehicleStatus(row: DashboardVehicle, now = Date.now()): { label:
   if (row.risk === 'RED' || (row.delayMinutes ?? 0) > 0) return { label: 'Опоздание', tone: 'late' }
   const stop = row.currentStop ?? (row.tour ? currentStopOf(row.tour) : null)
   if (atStop(row, now)) {
-    if (row.statusText === 'MANUAL_STOP') return { label: 'Стоянка', tone: 'stop' }
+    if (manuallyStopped(row)) return { label: 'Остановлена', tone: 'stop' }
     if (row.restAtStop) return { label: 'Суточный отдых', tone: 'stop' }
     // Resting with driving time left is a break: the truck goes on after it, not tomorrow.
     if (row.stopActivity?.kind === 'BREAK') return { label: 'Пауза', tone: 'stop' }
     return { label: stop?.type === 'UNLOAD' ? 'Выгрузка' : stop?.type === 'LOAD' ? 'Загрузка' : 'На точке', tone: 'stop' }
   }
+  // Before the first stop the tour is a plan, not a break — unless fresh GPS shows the truck already driving to it.
+  if (notStarted(row)) return (liveSpeed(row) ?? 0) >= MOVING_KMH ? { label: 'В пути', tone: 'ok' } : { label: 'Запланирован', tone: 'plan' }
   if (row.statusText === 'WAITING') return { label: 'Пауза', tone: 'ok' }
   if (row.statusText === 'MOVING' || row.predictedArrival || row.statusText === 'ARRIVED') return { label: 'В пути', tone: 'ok' }
   if (row.tour && !['IDLE', 'NO_ACTIVE_ROUTE'].includes(row.statusText)) return { label: 'Запланирован', tone: 'plan' }
   return { label: 'Без тура', tone: 'idle' }
+}
+
+const MOVING_KMH = 10
+
+/** When the tour that has not begun starts: the Termin of its first stop, its window or its planned time. */
+export function plannedStart(row: DashboardVehicle): string | null {
+  const stop = row.tour ? currentStopOf(row.tour) : null
+  return stop?.appointmentAt ?? stop?.appointmentWindowStartAt ?? stop?.plannedAt ?? row.tour?.plannedStartAt ?? null
 }
 
 /** «Суточный отдых до 23:46 · потом загрузка»: when the driver may work again and what goes on then. */
@@ -96,11 +124,14 @@ export function activityNote(row: DashboardVehicle, now = Date.now()) {
 
 /** Where the truck is or goes: "A38 → Zwickau", "Magdeburg", "Bovenden → Chemnitz". */
 export function vehiclePlace(row: DashboardVehicle) {
-  const target = row.to ? shortAddress(row.to) : null
+  const first = notStarted(row) && row.tour ? currentStopOf(row.tour) : null
+  const target = row.to ? shortAddress(row.to) : first ? shortAddress(first) : null
   const here = row.telemetry?.source === 'WEBFLEET' && row.telemetry.address ? row.telemetry.address.split(',')[0]?.trim() : null
-  if (vehicleStatus(row).tone === 'stop') return row.currentStop ? shortAddress(row.currentStop) : here ?? target ?? ''
+  // Stopped by hand on the road the truck is not at its stop: the stop stays the place it drives to.
+  if (vehicleStatus(row).tone === 'stop' && !manuallyStopped(row)) return row.currentStop ? shortAddress(row.currentStop) : here ?? target ?? ''
   const from = here || (row.from ? shortAddress(row.from) : null)
   if (from && target && from !== target) return `${from} → ${target}`
+  if (!from && first && target) return `→ ${target}`
   return from ?? target ?? ''
 }
 
@@ -150,6 +181,7 @@ export function matchesFleetFilter(row: DashboardVehicle, filter: FleetFilter, n
   if (filter === 'TERMIN') return Boolean(terminOf(row.tour))
   if (filter === 'NO_TERMIN') return terminNeeded(row)
   if (filter === 'AT_STOP') return atStop(row, now)
+  if (filter === 'PLANNED') return notStarted(row) && vehicleStatus(row, now).tone === 'plan'
   return !row.tour || ['IDLE', 'NO_ACTIVE_ROUTE'].includes(row.statusText)
 }
 

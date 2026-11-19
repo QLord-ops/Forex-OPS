@@ -16,6 +16,7 @@ import type { MapRouteAlternative, MapRouteStop } from '../lib/route-preview'
 import { roadShieldLabel, roadShields, visibleShields } from '../lib/road-shields'
 import { THEME_EVENT, currentTheme, type Theme } from '../lib/theme'
 import type { Coordinate, CurrentPosition, RoadSegment, TrafficSegment, Tour } from '../types/domain'
+import { centreOffset, type Padding } from '../lib/map-padding'
 
 setWorkerUrl(mapLibreWorkerUrl)
 
@@ -553,7 +554,7 @@ export function MapPanel({
 
   useEffect(() => {
     const map = mapRef.current
-    if (map && focusCoordinate) map.easeTo({ center: focusCoordinate, zoom: Math.max(map.getZoom(), 14), duration: 350 })
+    if (map && focusCoordinate) map.easeTo({ center: focusCoordinate, zoom: Math.max(map.getZoom(), 14), duration: 350, offset: freeCentre(containerRef.current, fillRef.current) })
   }, [focusCoordinate])
 
   // Fit once per route search: picking another variant must not move the camera.
@@ -568,7 +569,7 @@ export function MapPanel({
     const map = mapRef.current
     if (!map || !cameraRequest) return
     if (cameraRequest === 'vehicle' && position?.coordinate) {
-      map.easeTo({ center: position.coordinate, zoom: Math.max(map.getZoom(), 14), duration: 260 })
+      map.easeTo({ center: position.coordinate, zoom: Math.max(map.getZoom(), 14), duration: 260, offset: freeCentre(containerRef.current, fillRef.current) })
       setCameraRequest(null)
       return
     }
@@ -867,7 +868,6 @@ function tomTomMapKey(): string | undefined {
   return (import.meta.env.VITE_TOMTOM_MAPS_KEY || import.meta.env.VITE_TOMTOM_MAP_KEY) as string | undefined
 }
 
-type Padding = number | { top: number; right: number; bottom: number; left: number }
 
 /** The bottom panel's height changes (strip, open, route stops): it is measured each time the map fits a route. */
 const LEFT_FIT_PADDING = 88
@@ -888,6 +888,11 @@ function fitPadding(container: HTMLElement | null, fill: boolean | undefined): P
     .map((element) => element?.offsetWidth ?? 0))
   const besideRight = right > 0 && container && container.clientWidth - left - right - 32 >= 200
   return { top: 96, right: besideRight ? right + 32 : 80, bottom: panel ? Math.max(96, panel.offsetHeight + 40) : 96, left }
+}
+
+/** A truck or a stop is centred in the map the floating panels leave free, not under the truck card. */
+function freeCentre(container: HTMLElement | null, fill: boolean | undefined): [number, number] {
+  return centreOffset(fitPadding(container, fill), container?.clientWidth ?? 0, container?.clientHeight ?? 0)
 }
 
 function fitRoute(map: Map | null, coordinates: Coordinate[], maxZoom: number, duration: number, padding: Padding = 64) {

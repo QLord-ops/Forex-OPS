@@ -69,6 +69,11 @@ export interface Stop {
   completedAt?: string | null
   createdAt?: string
   predictedEta?: string | null
+  /** Main screen: the earliest and latest arrival behind `predictedEta` (one to two hours at each stop before this one). */
+  etaEarliest?: string | null
+  etaLatest?: string | null
+  /** PLAN: the tour has not begun, the times assume the first stop is reached at its Termin. */
+  etaBasis?: 'ETA' | 'PLAN' | null
   predictedDelayMinutes?: number | null
   status?: 'DONE' | 'CURRENT' | 'NEXT' | 'QUEUED'
 }

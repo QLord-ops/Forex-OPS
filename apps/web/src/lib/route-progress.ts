@@ -18,7 +18,7 @@ export interface RouteProgress {
   stageLabel: string
 }
 
-type RowLike = Pick<DashboardVehicle, 'remainingKm' | 'eta' | 'dwellMinutes' | 'statusText'>
+type RowLike = Pick<DashboardVehicle, 'remainingKm' | 'eta' | 'dwellMinutes' | 'statusText'> & Partial<Pick<DashboardVehicle, 'currentAction'>>
 type PositionLike = Pick<CurrentPosition, 'status' | 'progress'> | null | undefined
 
 const isLoad = (stop: Stop) => stop.type === 'LOAD'
@@ -56,6 +56,8 @@ export function routeProgress(input: Stop[] | undefined | null, row?: RowLike | 
   const stageLabel = stage === 'AT_STOP' ? `${isLoad(current) ? 'На загрузке' : 'На выгрузке'}, ${place}${dwell !== null ? ` · ${formatDurationMinutes(dwell)}` : ''}`
     : stage === 'ARRIVING' ? `У точки ${place} по расчёту · ждём прибытие по GPS`
       : stage === 'WAITING' ? `Ожидает начала · первая точка ${place}`
+        // Stopped by the dispatcher on the way: it is not driving, whatever the timer says.
+        : row?.currentAction?.type === 'RESUME' ? `Остановлена на пути ${isLoad(current) ? 'на загрузку' : 'на выгрузку'}, ${place}${row.remainingKm != null ? ` · ${formatKm(row.remainingKm)}` : ''}`
         : `В пути ${isLoad(current) ? 'на загрузку' : 'на выгрузку'}, ${place}${row?.remainingKm != null ? ` · ${formatKm(row.remainingKm)}` : ''}${row?.eta || current.predictedEta ? ` · ETA ${etaText(row?.eta ?? current.predictedEta, now)}` : ''}`
 
   return { stops, stage, currentIndex, legProgress, tourProgress, stageLabel, summary: `Этап ${currentIndex + 1} из ${ordered.length} · ${stageLabel}` }

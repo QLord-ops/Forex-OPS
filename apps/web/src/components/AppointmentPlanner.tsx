@@ -51,9 +51,10 @@ export function AppointmentPlanner({ tour, onChange }: { tour: Tour; onChange: (
   }, [appointmentLocal, scope, selectedStop])
 
   useEffect(() => {
-    if (!selectedStop || !open || analysis || busy || !appointmentLocal) return
+    // After a failed calculation nothing is asked again by itself: each try builds a route (30 requests in 9 s, 18.11).
+    if (!selectedStop || !open || analysis || busy || error || !appointmentLocal) return
     void calculate()
-  }, [analysis, appointmentLocal, busy, calculate, open, selectedStop])
+  }, [analysis, appointmentLocal, busy, calculate, error, open, selectedStop])
 
   if (!pendingStops.length) return null
 
@@ -143,6 +144,7 @@ export function AppointmentPlanner({ tour, onChange }: { tour: Tour; onChange: (
                 onChange={(event) => {
                   setOnlyThisStop(event.target.checked)
                   setAnalysis(null)
+                  setError('')
                   setSuccess('')
                 }}
               />
@@ -158,6 +160,7 @@ export function AppointmentPlanner({ tour, onChange }: { tour: Tour; onChange: (
               onChange={(event) => {
                 setAppointmentLocal(event.target.value)
                 setAnalysis(null)
+                setError('')
                 setSuccess('')
               }}
               disabled={busy}
