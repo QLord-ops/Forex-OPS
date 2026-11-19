@@ -61,6 +61,10 @@ export type ScenarioStopResult = {
   earliestDeparture: string | null; latestDeparture: string | null;
   serviceMinMinutes: number; serviceMaxMinutes: number;
   risk: Risk; segments: { earliest: VehicleClockSegment[]; latest: VehicleClockSegment[] };
+  /** Driving left in the driver's day on arrival; null when the hours are unknown. */
+  driveLeftSeconds: number | null;
+  /** The 10th hour of driving is taken to make this stop's Termin. */
+  extendedDay: boolean;
 };
 
 /** Forecast only. The only allowed writes are those inside the shared routing quota store. */
@@ -101,7 +105,7 @@ export class RouteScenarioService {
     const stopCoords = await geocodeStops(this.routing, input.stops);
     const truck: TruckRouteProfile = { maxSpeedKmh: vehicle.maxSpeedKmh };
     if (vehicle.truckProfile) { try { Object.assign(truck, JSON.parse(vehicle.truckProfile)); } catch { warnings.add('Параметры грузовика недоступны.'); } }
-    let early: Cursor = { at: now, clock: snapshot.clockState, engine: driver ? new WebfleetEngine(driver.budget) : null };
+    let early: Cursor = { at: now, clock: snapshot.clockState, engine: driver ? new WebfleetEngine(driver.budget) : new ClockEngine(snapshot.clockState) };
     early = wait(early, availableAt);
     let late = cloneCursor(early);
     let origin = position.position;
@@ -120,6 +124,7 @@ export class RouteScenarioService {
     const advance = async (stop: PlannedStop, options: { seconds?: number; showGeometry?: boolean; leg?: { from: string; to: string } } = {}): Promise<ScenarioStopResult> => {
       let seconds = options.seconds;
       let earlySegments: VehicleClockSegment[] = [], lateSegments: VehicleClockSegment[] = [];
+      let extendedDay = false;
       if (!stop.arrivedAt) {
         if (seconds === undefined && origin) {
           const route = await this.routing.calculateRoute(origin, stop.coords, { departureTime: early.at, traffic: true, source: 'manual', truck, includeInstructions: false,
@@ -137,11 +142,13 @@ export class RouteScenarioService {
           const a = drive(early, seconds, deadline), b = drive(late, seconds, deadline);
           early = a.cursor; late = b.cursor;
           earlySegments = a.segments; lateSegments = b.segments;
+          extendedDay = a.extendedDay || b.extendedDay;
           requiresDailyRest ||= [...a.segments, ...b.segments].some(segment => segment.type === 'DAILY_REST');
           [...a.warnings, ...b.warnings].forEach(code => { const text = clockWarningText(code); if (text) collect.add(text); });
         }
       }
       const arrivalEarly = stop.arrivedAt ?? early.at, arrivalLate = stop.arrivedAt ?? late.at;
+      const driveLeftSeconds = hadMissingRoute ? null : early.engine?.driveLeftAt(arrivalEarly) ?? null;
       const serviceStart = stop.appointmentAt ?? stop.appointmentWindowStartAt;
       const deadline = stop.appointmentAt ?? stop.appointmentWindowEndAt;
       const serviceEarly = new Date(Math.max(arrivalEarly.getTime(), serviceStart?.getTime() ?? 0));
@@ -158,7 +165,7 @@ export class RouteScenarioService {
         earliestDeparture: hadMissingRoute ? null : early.at.toISOString(), latestDeparture: hadMissingRoute ? null : late.at.toISOString(),
         serviceMinMinutes: stop.serviceMinMinutes, serviceMaxMinutes: stop.serviceMaxMinutes,
         risk: preliminary || hadMissingRoute ? 'UNKNOWN' : deadline ? classify(arrivalEarly, arrivalLate, deadline) : 'ON_TIME',
-        segments: { earliest: earlySegments, latest: lateSegments } };
+        segments: { earliest: earlySegments, latest: lateSegments }, driveLeftSeconds, extendedDay };
     };
     for (const tour of prefix) {
       if (tour.plannedStartAt && tour.status !== 'ACTIVE') { early = wait(early, tour.plannedStartAt); late = wait(late, tour.plannedStartAt); }
@@ -236,8 +243,8 @@ export class RouteScenarioService {
     const stops: ScenarioStopResult[] = [];
     const warnings = new Set(['Свободный маршрут: часы конкретной машины не учитываются. Паузы 45 мин и суточный отдых посчитаны как у водителя, который начинает смену.']);
     // A driver starting a fresh day: the 45-minute break after 4 h 30 and the daily rest still apply on a long route.
-    const earlyEngine = new ClockEngine(createInitialClockState({ effectiveAt: early }));
-    const lateEngine = new ClockEngine(createInitialClockState({ effectiveAt: late }));
+    let earlyEngine: DriveEngine = new ClockEngine(createInitialClockState({ effectiveAt: early }));
+    let lateEngine: DriveEngine = new ClockEngine(createInitialClockState({ effectiveAt: late }));
     let rests = false;
     const sources = new Set<string>();
     let distanceMeters = 0;
@@ -259,9 +266,13 @@ export class RouteScenarioService {
         seconds = route.durationSeconds;
         legs.push({ from: index ? input.stops[index - 1].address : input.originAddress!, to: stop.address, options: routeOptions(index, route, option => option.durationSeconds) });
       }
-      const driveEarly = earlyEngine.drive(seconds, early);
-      const driveLate = lateEngine.drive(seconds, late);
+      const deadline = stop.appointmentAt ? new Date(stop.appointmentAt) : stop.appointmentWindowEndAt ? new Date(stop.appointmentWindowEndAt) : null;
+      const driveEarly = forecastEta(earlyEngine, seconds, early, deadline);
+      const driveLate = forecastEta(lateEngine, seconds, late, deadline);
+      earlyEngine = driveEarly.engine; lateEngine = driveLate.engine;
       rests ||= [...driveEarly.pieces, ...driveLate.pieces].some(piece => piece.type === 'DAILY_REST');
+      const driveLeftSeconds = earlyEngine.driveLeftAt(driveEarly.endAt);
+      const extendedDay = driveEarly.plan.extendedDay || driveLate.plan.extendedDay;
       const arrivalEarly = driveEarly.endAt;
       const arrivalLate = driveLate.endAt;
       const serviceAt = stop.appointmentAt ?? stop.appointmentWindowStartAt;
@@ -278,7 +289,7 @@ export class RouteScenarioService {
         earliestServiceStart: serviceEarly.toISOString(), latestServiceStart: serviceLate.toISOString(),
         waitingMinutes: { earliest: Math.round((+serviceEarly - +arrivalEarly) / 60000), latest: Math.round((+serviceLate - +arrivalLate) / 60000) },
         earliestDeparture: early.toISOString(), latestDeparture: late.toISOString(), serviceMinMinutes, serviceMaxMinutes,
-        risk: 'UNKNOWN', segments: { earliest: [], latest: [] } });
+        risk: 'UNKNOWN', segments: { earliest: [], latest: [] }, driveLeftSeconds, extendedDay });
       origin = coords;
     }
     return { vehicleId: null, vehicleNumber: null, originAddress: input.originAddress, startMode: 'NOW',
@@ -303,15 +314,19 @@ function cloneCursor(cursor: Cursor): Cursor {
   return { at: new Date(cursor.at), clock: structuredClone(cursor.clock), engine: cursor.engine?.clone() ?? null };
 }
 /** One drive on the driver's hours; on the tachograph a 9 h rest is taken instead of 11 h when that saves the Termin. */
-function drive(cursor: Cursor, seconds: number, deadline: Date | null): { cursor: Cursor; segments: VehicleClockSegment[]; warnings: string[] } {
+/**
+ * One drive on the driver's hours: 9 h of driving a day; a 9 h rest or the 10th hour only when the Termin is missed
+ * without them (owner, 19.11).
+ */
+function drive(cursor: Cursor, seconds: number, deadline: Date | null): { cursor: Cursor; segments: VehicleClockSegment[]; warnings: string[]; extendedDay: boolean } {
   if (cursor.engine) {
     const result = forecastEta(cursor.engine, seconds, cursor.at, deadline);
     const segments = result.pieces.filter(piece => piece.type !== 'SERVICE').map(piece => ({ type: piece.type as VehicleClockSegment['type'],
       startAt: piece.startAt.toISOString(), endAt: piece.endAt.toISOString(), durationSeconds: Math.round(piece.durationSeconds) }));
-    return { cursor: { at: result.endAt, clock: cursor.clock, engine: result.engine }, segments, warnings: [...result.engine.warnings] };
+    return { cursor: { at: result.endAt, clock: cursor.clock, engine: result.engine }, segments, warnings: [...result.engine.warnings], extendedDay: result.plan.extendedDay };
   }
   const result = forecastDrive(cursor.clock, seconds, cursor.at);
-  return { cursor: { at: new Date(result.endAt), clock: result.state, engine: null }, segments: result.segments, warnings: result.warnings };
+  return { cursor: { at: new Date(result.endAt), clock: result.state, engine: null }, segments: result.segments, warnings: result.warnings, extendedDay: false };
 }
 function classify(early: Date, late: Date, deadline: Date): Risk { return early > deadline ? 'LATE' : late > deadline ? 'RISK' : 'ON_TIME'; }
 export function berlinDayEnd(now: Date): Date {

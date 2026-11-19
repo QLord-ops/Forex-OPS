@@ -327,7 +327,7 @@ async function enrichTourLive(tour: TourAggregate) {
   return enrichTour(tour, now, await driverBudget(tour.vehicleId, now));
 }
 const appointmentService = new AppointmentService(prisma, etaService, currentPosition, driverBudget);
-const replanningService = new ReplanningService(prisma, routingService, currentPosition);
+const replanningService = new ReplanningService(prisma, routingService, currentPosition, undefined, driverBudget);
 const stopCoordinates = new StopCoordinatesService(prisma, routingService, () => addressRules.all(), replanningService);
 const customerNotices = new CustomerNotices(prisma);
 const learnedGates: LearnedGates = new LearnedGates(prisma, async (vehicleId, now, actor): Promise<void> => { await stopCoordinates.rebuildLegs(vehicleId, now, actor); });

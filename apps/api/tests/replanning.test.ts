@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PrismaClient } from '../src/generated/sqlite-client/index.js';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { ReplanningService, replanStopsSchema } from '../src/services/replanning.js';
+import { forecastQueue, ReplanningService, replanStopsSchema } from '../src/services/replanning.js';
+import { ClockEngine, forecastEta, WebfleetEngine, type DriverBudget } from '../src/services/termin-planner.js';
 import { MockRoutingProvider } from '../src/services/routing.js';
 import { asAppDatabase, migrateTestDatabase } from './test-database.js';
 import { createInitialClockState } from '../src/services/vehicle-clock.js';
@@ -132,4 +133,37 @@ it('«Изменить тур» accepts the stops as the page sends them: an unl
   expect(() => replanStopsSchema.parse([{ type: 'UNLOAD', address: ' ' }])).toThrow();
   expect(() => replanStopsSchema.parse([{ type: 'PARK', address: 'Kassel' }])).toThrow();
   expect(() => replanStopsSchema.parse([])).toThrow();
+});
+
+const H = 3600;
+const budget = (continuousLeftSeconds: number): DriverBudget => ({
+  referenceTime: now.toISOString(), workState: 3, activitySince: now.toISOString(),
+  continuousDriveLeftSeconds: continuousLeftSeconds, breakSeconds: 45 * 60, dailyDriveLeftSeconds: 9 * H, drivenTodaySeconds: 0, maxDailyDriveSeconds: 9 * H,
+  shiftEndAt: new Date(now.getTime() + 13 * H * 1000).toISOString(), restLatestAt: null, restSeconds: 11 * H,
+  weeklyDriveLeftSeconds: 50 * H, extendedShiftsLeft: 2, reducedRestsLeft: 3, earliestNextShiftAt: null, breakRemainingSeconds: 0
+});
+
+it('«Изменить тур» times the stops on the driver\'s tachograph, as the tour\'s ETA does (owner, 19.11)', async () => {
+  // Two hours to the stop: a rested clock drives straight through; a driver with 30 min left before the break stops for 45 min.
+  const legs = [{ toStopId: 'a', duration: 2 * H }, { toStopId: 'b', duration: H }];
+  const stops = [{ id: 'a', serviceMinMinutes: 60, serviceMaxMinutes: 120 }, { id: 'b' }];
+  const rested = forecastQueue(new ClockEngine(createInitialClockState({ effectiveAt: now })), now, legs, stops);
+  expect(rested[0].earliest).toBe(new Date(now.getTime() + 2 * H * 1000).toISOString());
+  const tired = forecastQueue(new WebfleetEngine(budget(30 * 60)), now, legs, stops);
+  expect(tired[0].earliest).toBe(new Date(now.getTime() + (2 * H + 45 * 60) * 1000).toISOString());
+  // The hour at the stop counts as the break, so the next leg needs none; the late side stays two hours.
+  expect(tired[1].earliest).toBe(new Date(now.getTime() + (2 * H + 45 * 60 + H + H) * 1000).toISOString());
+  expect(tired[1].latest).toBe(new Date(now.getTime() + (2 * H + 45 * 60 + 2 * H + H) * 1000).toISOString());
+  // A driver whose card is out starts with the next shift.
+  const later = new Date(now.getTime() + 8 * H * 1000);
+  expect(forecastQueue(new WebfleetEngine(budget(4.5 * H)), now, legs, stops, undefined, later)[0].earliest).toBe(new Date(later.getTime() + 2 * H * 1000).toISOString());
+
+  const f = await fixture();
+  const withDriver = new ReplanningService(asAppDatabase(db), new MockRoutingProvider(), undefined, undefined, async () => ({ budget: budget(10 * 60), startsAt: null }));
+  const preview = await withDriver.preview(f.tour.id, { version: 0, futureStops: [replacement] }, now);
+  const drive = preview.after.durationSeconds;
+  expect(drive).toBeGreaterThan(10 * 60);
+  // Ten minutes before the break and about 7 h 30 of driving: two breaks of 45 min on the way.
+  expect(preview.etaWindows[0].earliest).toBe(forecastEta(new WebfleetEngine(budget(10 * 60)), drive, now, null).endAt.toISOString());
+  expect(Date.parse(preview.etaWindows[0].earliest) - now.getTime()).toBeGreaterThanOrEqual((drive + 45 * 60) * 1000);
 });
