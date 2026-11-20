@@ -81,7 +81,8 @@ export function draftNotice(row: DashboardVehicle, kind: NoticeKind, jam = false
   }
   const termin = terminOf(row.tour)
   const margin = terminMargin(row)
-  const at = termin ? ` ${dayWord(termin.at, now)}um ${terminClock(termin.at)}` : ''
+  const at = !termin ? '' : termin.deadline === termin.at ? ` ${dayWord(termin.at, now)}um ${terminClock(termin.at)}`
+    : ` ${dayWord(termin.at, now)}zwischen ${terminClock(termin.at)} und ${terminClock(termin.deadline)}`
   const eta = row.eta ? `wird voraussichtlich ${dayWord(row.eta, now)}gegen ${clock(row.eta)} da sein` : ''
   const rest = [jam ? 'steht im Stau' : '', eta].filter(Boolean).join(' und ')
   const body = margin !== null && margin < 0

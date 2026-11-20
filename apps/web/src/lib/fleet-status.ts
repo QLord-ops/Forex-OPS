@@ -136,12 +136,12 @@ export function vehiclePlace(row: DashboardVehicle) {
   return from ?? target ?? ''
 }
 
-/** Minutes between ETA and Termin: positive is a reserve, negative is a delay. Null without both. */
+/** Minutes between ETA and the Termin (the end of its window): positive is a reserve, negative is a delay. Null without both. */
 export function terminMargin(row: DashboardVehicle) {
   const termin = terminOf(row.tour)
   if ((row.delayMinutes ?? 0) > 0) return -Math.round(row.delayMinutes ?? 0)
   if (!termin || !row.eta) return null
-  return Math.round((new Date(termin.at).getTime() - new Date(row.eta).getTime()) / 60_000)
+  return Math.round((new Date(termin.deadline).getTime() - new Date(row.eta).getTime()) / 60_000)
 }
 
 /** "GPS 1 мин" fresh, "GPS 12 мин" stale, "расчёт" without Webfleet. */

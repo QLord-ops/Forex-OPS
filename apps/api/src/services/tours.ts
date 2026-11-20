@@ -474,7 +474,8 @@ export class TourService {
     const split = projection ? splitAtProjection(geometry, projection) : splitGeometryAtProgress(geometry, progress);
     const shownEta = projection ? gpsEta : eta;
     const etaPlan = shownEta ? (projection ? gpsForecast : timerForecast)?.plan ?? null : null;
-    const delayMinutes = activeLeg.toStop.appointmentAt ? calculateLateMinutes(shownEta, activeLeg.toStop.appointmentAt) : 0;
+    // A window «08:00–16:00» is missed only after its end; inside it the truck is on time (owner, 20.11.2026).
+    const delayMinutes = calculateLateMinutes(shownEta, activeLeg.toStop.appointmentAt ?? activeLeg.toStop.appointmentWindowEndAt);
     const shownProgress = gpsProgress ?? progress;
     let travelledPrefix: Coordinate[] = [];
     let routeBreaks: number[] = [];
@@ -1186,7 +1187,7 @@ export function enrichTour(tour: TourAggregate, now = new Date(), driver: Driver
   const deadlineOf = (leg: { toStopId: string }) => { const stop = tour.stops.find((item) => item.id === leg.toStopId); return stop?.appointmentAt ?? stop?.appointmentWindowEndAt ?? null; };
   const eta = activeLeg ? positionEta(tour.vehicle, activeLeg, now, driver, deadlineOf(activeLeg)) : null;
 
-  const currentDelayMinutes = nextStop ? calculateLateMinutes(eta, nextStop.appointmentAt) : 0;
+  const currentDelayMinutes = nextStop ? calculateLateMinutes(eta, nextStop.appointmentAt ?? nextStop.appointmentWindowEndAt) : 0;
   return {
     ...toIsoObject(tour),
     stops: withTerminGroups(tour.stops).map(toIsoObject),
