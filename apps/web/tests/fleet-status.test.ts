@@ -99,6 +99,20 @@ describe('fleet status', () => {
     expect(terminMargin(row())).toBeNull()
   })
 
+  it('a truck that arrives inside the Termin window is on time; late only after the window ends (owner, 20.11)', () => {
+    const windowed = (eta: string) => row({ eta, delayMinutes: 0, to: stop({ city: 'Ketzür' }),
+      tour: { id: 't1', stops: [stop({ type: 'LOAD', appointmentWindowStartAt: '2026-11-20T07:00:00Z', appointmentWindowEndAt: '2026-11-20T15:00:00Z' })] } as never })
+    // B CY 7446: Termin 08:00–16:00, ETA 12:16 was shown as «опоздание 4 ч 17 мин».
+    const inside = windowed('2026-11-20T11:16:00Z')
+    expect(terminMargin(inside)).toBe(224)
+    expect(runsLate(inside, NOW)).toBe(false)
+    expect(vehicleStatus(inside, NOW)).toEqual({ label: 'В пути', tone: 'ok' })
+    const after = windowed('2026-11-20T15:40:00Z')
+    expect(terminMargin(after)).toBe(-40)
+    expect(runsLate(after, NOW)).toBe(true)
+    expect(terminMargin(windowed('2026-11-20T06:30:00Z'))).toBe(510)
+  })
+
   it('«опаздывает» of the shift summary is a filter: ETA past the Termin or a delay on the way', () => {
     const tour = { id: 't1', stops: [stop({ appointmentAt: '2026-11-03T15:00:00Z' })] } as never
     const pastTermin = row({ eta: '2026-11-03T15:20:00Z', tour })

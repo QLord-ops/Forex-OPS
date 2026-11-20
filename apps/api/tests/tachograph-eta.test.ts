@@ -104,12 +104,13 @@ describe('positions, schedules and the tachograph', () => {
   });
 
   const line = [{ latitude: 52.26, longitude: 8.62 }, { latitude: 52.45, longitude: 11.0 }, { latitude: 52.42, longitude: 13.7 }];
-  async function tourFor(number: string, appointmentAt: Date | null) {
+  async function tourFor(number: string, appointmentAt: Date | null, window?: [string, string]) {
     const service = new TourService(asAppDatabase(db), new MockRoutingProvider());
     const vehicle = await db.vehicle.create({ data: { vehicleNumber: number } });
     await service.createTour({ vehicleId: vehicle.id, orderNumber: `SHP-${number}`, stops: [
       { sequence: 1, type: 'LOAD', address: 'Espelkamp', latitude: 52.26, longitude: 8.62 },
-      { sequence: 2, type: 'UNLOAD', address: 'Grünheide (Mark)', latitude: 52.42, longitude: 13.7, appointmentAt: appointmentAt?.toISOString() ?? undefined }
+      { sequence: 2, type: 'UNLOAD', address: 'Grünheide (Mark)', latitude: 52.42, longitude: 13.7, appointmentAt: appointmentAt?.toISOString() ?? undefined,
+        appointmentWindowStartAt: window?.[0], appointmentWindowEndAt: window?.[1] }
     ] });
     const leg = await db.leg.findFirstOrThrow({ where: { tour: { vehicleId: vehicle.id } } });
     await db.leg.update({ where: { id: leg.id }, data: { status: 'ACTIVE', startedAt: new Date(now.getTime() - 60_000), routeGeometry: JSON.stringify(line), distanceMeters: 423_000, simulatedDurationSeconds: DRIVE } });
@@ -141,6 +142,19 @@ describe('positions, schedules and the tachograph', () => {
     expect(position.etaPlan?.rest).toMatchObject({ seconds: 9 * H, reduced: true });
     expect(position.delayMinutes).toBeGreaterThan(40);
     expect(position.delayMinutes).toBeLessThan(60);
+  });
+
+  it('a Termin window is missed only after its end: arriving inside it is no delay (owner, 20.11.2026)', async () => {
+    const gps = { latitude: 52.26, longitude: 8.62, fresh: true };
+    const inside = await tourFor('B-CY7446-W', null, ['2026-11-10T04:00:00Z', '2026-11-10T12:00:00Z']);
+    const onTime = await inside.service.getCurrentPosition(inside.vehicle.id, now, gps, { budget: budget(), startsAt: null });
+    expect(Date.parse(onTime.eta!)).toBeGreaterThan(Date.parse('2026-11-10T04:00:00Z'));
+    expect(onTime.delayMinutes).toBe(0);
+
+    const closed = await tourFor('B-CY7446-L', null, ['2026-11-10T02:00:00Z', '2026-11-10T04:00:00Z']);
+    const late = await closed.service.getCurrentPosition(closed.vehicle.id, now, gps, { budget: budget(), startsAt: null });
+    expect(late.delayMinutes).toBeGreaterThan(40);
+    expect(late.delayMinutes).toBeLessThan(60);
   });
 
   it('the schedule of the next stops runs on the tachograph too and is no longer preliminary', () => {

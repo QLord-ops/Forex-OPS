@@ -11,7 +11,7 @@ import { noticeDue, noticeLine } from '../lib/customer-notice'
 import { RouteEditor } from './RouteEditor'
 import { api, documentFileUrl } from '../lib/api'
 import { classNames, eventSourceLabel, formatDateTime, formatDelay, shortAddress, statusLabel, stopTypeLabel } from '../lib/format'
-import { currentStopOf, followingTours, sharedTerminOf, sortedStops, terminOf, tourCancellable } from '../lib/tours'
+import { currentStopOf, followingTours, sharedTerminOf, sortedStops, terminOf, terminText, tourCancellable } from '../lib/tours'
 import { stopEta } from '../lib/stop-times'
 import { ZULADUNG_NOTE, zuladungBeforeStopId, zuladungState } from '../lib/zuladung'
 import { berlinClock, courseText, durationBetween, formatDurationMs, formatFuel, formatWholeKm, share, tripsWithParking, workState } from '../lib/telemetry-format'
@@ -415,7 +415,7 @@ function CurrentTour({ tour, row, events, busy, onRemove }: { tour: Tour; row: D
       <div className="truck-card-grid">
         <Cell label="Следующая точка" value={target ? `${stopTypeLabel(target.type)} · ${shortAddress(target)}` : '–'} />
         <Cell label="ETA" value={target?.arrivedAt ? `на месте с ${formatDateTime(target.arrivedAt)}` : formatDateTime(row.eta)} />
-        <Cell label="Срок" value={target?.appointmentAt ? formatDateTime(target.appointmentAt) : (target && sharedTerminOf(stops, target)?.label) || 'без срока'} />
+        <Cell label="Срок" value={(target && terminText({ appointmentAt: target.appointmentAt, windowStartAt: target.appointmentWindowStartAt, windowEndAt: target.appointmentWindowEndAt })) || (target && sharedTerminOf(stops, target)?.label) || 'без срока'} />
         <Cell label="Отклонение" value={formatDelay(row.delayMinutes)} warn={(row.delayMinutes ?? 0) > 0} />
       </div>
       {tour.status === 'ACTIVE' && (noticeDue(row) || noticeLine(row)) ? <div className="truck-card-notice">
