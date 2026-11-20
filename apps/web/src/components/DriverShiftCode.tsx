@@ -1,7 +1,7 @@
 import { Copy, KeyRound, Loader2, LogOut, Smartphone } from 'lucide-react'
 import { useState } from 'react'
 import { usePolling } from '../hooks/usePolling'
-import { SHIFT_LENGTHS, shiftSummary, spacedCode, untilText, type DriverShift } from '../lib/driver-shift'
+import { SHIFT_LENGTHS, shiftOf, shiftSummary, spacedCode, untilText, type DriverShift } from '../lib/driver-shift'
 import { operationsRequest } from './VehicleOperationsPanel'
 import './truck-card.css'
 
@@ -10,13 +10,13 @@ import './truck-card.css'
  * only its hash. A new code or «Завершить смену» signs the phone out at once.
  */
 export function DriverShiftCode({ vehicleId, vehicleLabel }: { vehicleId: string; vehicleLabel: string }) {
-  const state = usePolling(() => operationsRequest<{ shift: DriverShift | null }>(`/vehicles/${vehicleId}/driver-shift`), 30_000, Boolean(vehicleId), vehicleId)
+  const state = usePolling(() => operationsRequest<unknown>(`/vehicles/${vehicleId}/driver-shift`), 30_000, Boolean(vehicleId), vehicleId)
   const [hours, setHours] = useState<number>(SHIFT_LENGTHS[0].hours)
   const [issued, setIssued] = useState<{ code: string; endsAt: string } | null>(null)
   const [copied, setCopied] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const shift = state.data?.shift ?? null
+  const shift = shiftOf(state.data)
   const summary = shiftSummary(shift)
 
   async function act(work: () => Promise<void>) {

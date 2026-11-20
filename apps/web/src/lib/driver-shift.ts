@@ -1,5 +1,11 @@
 export type DriverShift = { id: string; startsAt: string; endsAt: string; firstUsedAt: string | null; lastUsedAt: string | null; locked: boolean }
 
+/** The shift from the answer, or none: an answer of another shape (an old API, a proxy page) never breaks the truck card. */
+export function shiftOf(data: unknown): DriverShift | null {
+  const shift = data && typeof data === 'object' && !Array.isArray(data) ? (data as { shift?: unknown }).shift : null
+  return shift && typeof shift === 'object' && typeof (shift as DriverShift).endsAt === 'string' && Number.isFinite(Date.parse((shift as DriverShift).endsAt)) ? shift as DriverShift : null
+}
+
 /** How long a new code works; 15 h is one working day with the break, a week covers a long tour away from the yard. */
 export const SHIFT_LENGTHS = [
   { hours: 15, label: '15 ч — смена' },

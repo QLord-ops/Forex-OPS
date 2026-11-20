@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { shiftSummary, spacedCode, untilText, type DriverShift } from '../src/lib/driver-shift'
+import { shiftOf, shiftSummary, spacedCode, untilText, type DriverShift } from '../src/lib/driver-shift'
 
 const now = new Date('2026-11-19T09:00:00Z')
 const shift = (patch: Partial<DriverShift> = {}): DriverShift => ({ id: 's1', startsAt: '2026-11-19T06:00:00Z', endsAt: '2026-11-19T21:00:00Z', firstUsedAt: null, lastUsedAt: null, locked: false, ...patch })
@@ -23,5 +23,15 @@ describe('driver shift code in OPS Disponent', () => {
   it('splits the code for reading it out over the phone', () => {
     expect(spacedCode('482915')).toBe('482 915')
     expect(spacedCode('12345')).toBe('12345')
+  })
+
+  it('reads only a real shift from the answer, so another answer never breaks the truck card', () => {
+    expect(shiftOf({ shift: shift() })).toMatchObject({ id: 's1' })
+    expect(shiftOf({ shift: null })).toBeNull()
+    // An array answer has a «shift» method: it must not pass for a shift.
+    expect(shiftOf([])).toBeNull()
+    expect(shiftOf({ shift: { endsAt: 'soon' } })).toBeNull()
+    expect(shiftOf('<html>')).toBeNull()
+    expect(shiftOf(undefined)).toBeNull()
   })
 })
