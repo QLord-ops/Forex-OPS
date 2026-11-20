@@ -34,10 +34,12 @@ test('на одну машину — одна карточка: старые с�
 
   await page.goto('/')
   const decisions = page.getByRole('region', { name: 'Требует решения' })
-  await expect(decisions.locator('.decision-card:not(.decision-card-nested)')).toHaveCount(1)
+  await expect(decisions.locator('.decision-row')).toHaveCount(1)
   await expect(decisions.locator('h2')).toContainText('Требует решения1')
   await expect(decisions).toContainText('Stau auf der A7, +19 min')
-  await decisions.getByText('Ещё 19 по этой машине').click()
+  await expect(decisions.locator('.decision-row-sub')).toContainText('ещё 19 по этой машине')
+  await decisions.getByRole('button', { name: 'Подробности и все кнопки' }).click()
+  await decisions.locator('summary').click()
   await expect(decisions.locator('.decision-card-nested')).toHaveCount(19)
   await decisions.getByRole('button', { name: 'Прочитано · все 20' }).click()
   await expect.poll(() => closed.length).toBe(20)
@@ -47,13 +49,14 @@ test('на одну машину — одна карточка: старые с�
   withDecision = true
   closed = []
   await page.reload()
-  const card = page.getByRole('region', { name: 'Требует решения' }).locator('.decision-card:not(.decision-card-nested)')
+  const card = page.getByRole('region', { name: 'Требует решения' }).locator('.decision-row')
   await expect(card).toHaveCount(1)
-  await expect(card).toContainText('уехала с загрузки без BELADEN')
-  await expect(card).toContainText('Ещё 20 по этой машине')
+  await expect(card).toContainText('Уехала без BELADEN')
+  await expect(card).toContainText('ещё 20 по этой машине')
   // Under a decision the folded notifications close in one go; the decision itself stays open.
   page.on('dialog', (dialog) => void dialog.accept())
-  await card.getByText('Ещё 20 по этой машине').click()
+  await card.getByRole('button', { name: 'Подробности и все кнопки' }).click()
+  await card.locator('summary').click()
   await card.getByRole('button', { name: 'Прочитать эти 20' }).click()
   await expect.poll(() => closed.length).toBe(20)
   expect(closed).not.toContain('left')

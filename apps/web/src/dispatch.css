@@ -19,6 +19,8 @@
 .rail-count, .rail-bell-count { position: absolute; display: grid; min-width: 18px; height: 18px; place-items: center; border: 2px solid var(--s-card); border-radius: 999px; background: rgb(var(--bg-dc2626)); padding: 0 4px; color: #fff; font-size: .625rem; font-weight: 600; font-variant-numeric: tabular-nums; }
 .rail-count { top: 2px; right: 8px; }
 .rail-bell-count { top: -3px; right: -5px; }
+.rail-bell-count-info { background: var(--st-idle); }
+[data-theme="dark"] .rail-bell-count-info { color: #1a1f2b; }
 .rail-tools { display: grid; flex: none; justify-items: center; gap: 8px; padding-top: 10px; }
 .rail-round { position: relative; display: grid; width: 44px; height: 44px; place-items: center; border-radius: 999px; background: var(--s-sunken); color: var(--t-primary); transition: background-color 120ms ease; }
 .rail-round:hover, .account-menu:hover .account-menu-avatar { background: var(--s-card-selected); }
@@ -840,3 +842,32 @@ button.decision-card-title:focus-visible { outline: 2px solid var(--focus); outl
 .decision-card-nested .decision-card-detail { font-size: .75rem; }
 .decision-card-nested .decision-card-actions { margin-top: 4px; gap: 4px; }
 .decision-card-nested .decision-button { height: 28px; padding: 0 8px; font-size: .75rem; }
+
+/* «Требует решения» as one line of 48 px (owner, 19.11, Figma «Было / стало: уведомления»). */
+.decision-row { --row-tone: var(--st-idle); position: relative; overflow: hidden; border: 1px solid var(--border-soft); border-radius: 12px; background: var(--s-card); box-shadow: 0 8px 24px rgb(15 23 41 / 0.2); }
+.decision-row::before { position: absolute; inset: 0 auto 0 0; width: 4px; background: var(--row-tone); content: ""; }
+.decision-row-late { --row-tone: var(--st-late); }
+.decision-row-termin { --row-tone: var(--st-termin); }
+.decision-row-arrival { --row-tone: var(--st-plan); }
+.decision-row-ok { --row-tone: var(--st-go); }
+.decision-row-risk { --row-tone: var(--st-stop); }
+.decision-row-line { display: flex; min-height: 46px; align-items: center; gap: 10px; padding: 8px 8px 8px 14px; }
+.decision-row-summary { display: flex; min-width: 0; flex: 1 1 0; align-items: center; gap: 10px; border-radius: 8px; text-align: left; }
+.decision-row-summary:focus-visible, .decision-row-action:focus-visible, .decision-row-more:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.decision-row-badge { display: inline-grid; min-width: 38px; height: 26px; flex: 0 0 auto; place-items: center; border-radius: 8px; background: var(--row-tone); padding: 0 6px; color: #fff; font-size: .75rem; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+[data-theme="dark"] .decision-row-badge { color: #1a1f2b; }
+.decision-row-text { display: grid; min-width: 0; flex: 1 1 auto; gap: 1px; line-height: 1.2; }
+.decision-row-title, .decision-row-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.decision-row-title { color: var(--t-primary); font-size: .8125rem; font-weight: 600; }
+.decision-row-sub { color: var(--t-muted); font-size: .6875rem; }
+.decision-row-summary:hover .decision-row-title { text-decoration: underline; text-underline-offset: 3px; }
+.decision-row-action { flex: 0 0 auto; border-radius: 8px; background: var(--acc); padding: 6px 10px; color: var(--acc-ink); font-size: .75rem; font-weight: 600; white-space: nowrap; }
+.decision-row-action:hover { background: var(--acc-hover); }
+.decision-row-action:disabled { cursor: wait; opacity: .6; }
+.decision-row-more { display: inline-grid; width: 28px; height: 28px; flex: 0 0 auto; place-items: center; border-radius: 8px; background: var(--s-sunken); color: var(--t-muted); }
+.decision-row-more:hover, .decision-row-open .decision-row-more { color: var(--t-primary); }
+.decision-row-details { display: grid; gap: 2px; border-top: 1px solid var(--border-soft); padding: 8px 12px 12px 14px; }
+.decision-row-details .decision-card-actions { margin-top: 8px; }
+.decision-row-details .decision-card-actions:empty { display: none; }
+.decision-row-error { padding: 0 12px 8px 14px; margin-top: 0; }
+.operations-toast > .decision-row { width: min(440px, calc(100vw - 32px)); }

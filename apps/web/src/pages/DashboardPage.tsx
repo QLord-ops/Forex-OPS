@@ -342,7 +342,7 @@ export function DashboardPage() {
         <LazyMapPanel tour={selected?.tour} position={position.data} vehicleNumber={selected?.vehicle.vehicleNumber} fleet={fleet} selectedVehicleId={selected?.vehicle.id} onSelectFleetVehicle={openCard} track={cardId ? track : null} focusCoordinate={mapFocus} previewRoute={draftRoute?.geometry} previewStops={draftRoute?.stops ?? auftragStops(auftrag)} previewTraffic={draftRoute?.trafficSegments} previewRoads={draftRoute?.roadSegments} previewAlternatives={draftRoute?.alternatives ?? optionAlternatives} onSelectPreviewAlternative={draftRoute?.onSelectAlternative ?? (routeOptions ? (id) => void selectRouteOption(id) : undefined)} previewKey={draftRoute?.key} fitRouteRequest={fitRoute} sourceNote height="100%" fill />
         <FleetSummary rows={scoped} decisions={decisionCount} filter={filter} onFilter={setFilter} />
         {auftrag && !phone ? <AuftragCheck draft={auftrag} vehicles={vehicles} /> : null}
-        {notifications.open.length && !phone && !auftrag ? <DecisionStack items={notifications.open} stopOf={(item) => item.stopId ? stopsById.get(item.stopId) : null} onSelect={focusVehicle} rowOf={(vehicleId) => vehicles.find((row) => row.vehicle.id === vehicleId)} /> : null}
+        {notifications.open.some(needsAttention) && !phone && !auftrag ? <DecisionStack items={notifications.open} stopOf={(item) => item.stopId ? stopsById.get(item.stopId) : null} onSelect={focusVehicle} rowOf={(vehicleId) => vehicles.find((row) => row.vehicle.id === vehicleId)} /> : null}
         <MapLegend />
         {!draftRoute && (routeOptions || optionsBusy || optionsError) ? <div className="map-draft-banner" role="status">
           <span>{optionsBusy ? 'Строим варианты от GPS…' : optionsError || `Варианты от GPS · ${optionAlternatives?.length ?? 0} серых · нажмите время на сером маршруте, чтобы выбрать`}</span>
@@ -386,13 +386,14 @@ function FleetSummary({ rows, decisions, filter, onFilter }: { rows: DashboardVe
   </div>
 }
 
-/** «Требует решения» over the map: two questions at once, the rest behind «открыть все». */
+/**
+ * «Требует решения» over the map: decisions and risks only, one line each, two at once and the rest behind «открыть все»
+ * (owner, 19.11). «Для сведения» comes up only as the count on the bell.
+ */
 function DecisionStack({ items, stopOf, onSelect, rowOf }: { items: AlertNotification[]; stopOf: (item: AlertNotification) => Stop | null | undefined; onSelect: (vehicleId: string) => void; rowOf: (vehicleId: string) => DashboardVehicle | undefined }) {
   const [expanded, setExpanded] = useState(false)
   const decisions = items.filter(needsAttention)
-  const info = items.length - decisions.length
   const hidden = Math.max(0, decisions.length - DECISIONS_SHOWN)
-  // «Для сведения» is folded anyway; the stack shortens only when more than two questions wait.
   const compact = !expanded && hidden > 0
   return <section className={classNames('decision-stack-panel', expanded && 'decision-stack-panel-open')} aria-label="Требует решения">
     <h2 className="decision-stack-head">Требует решения<span>{decisions.length}</span>
@@ -400,13 +401,13 @@ function DecisionStack({ items, stopOf, onSelect, rowOf }: { items: AlertNotific
         // Shown only where the stack is folded to its heading: a laptop with the truck card open.
         : <button type="button" className="decision-stack-toggle decision-stack-show" onClick={() => setExpanded(true)}>Показать</button>}
     </h2>
-    <DecisionGroups items={compact ? decisions.slice(0, DECISIONS_SHOWN) : items} stopOf={stopOf} onSelect={onSelect} extraOf={(item) => {
+    <DecisionGroups rows items={compact ? decisions.slice(0, DECISIONS_SHOWN) : decisions} stopOf={stopOf} onSelect={onSelect} extraOf={(item) => {
       // A jam that makes the truck late or a long wait at the gate: the letter to the customer is one click from the notice.
       const row = (item.type === 'TRAFFIC_DELAY' || item.type === 'LONG_DWELL') && !item.resolved ? rowOf(item.vehicleId) : undefined
       return row && noticeDue(row) ? <CustomerNoticeButton row={row} className="decision-button" /> : null
     }} />
     {compact ? <button type="button" className="decision-stack-more" onClick={() => setExpanded(true)}>
-      {[hidden ? `ещё ${hidden} ${hidden === 1 ? 'вопрос' : 'вопроса'}` : null, info ? `${info} для сведения` : null].filter(Boolean).join(' · ')}<span>открыть все</span>
+      ещё {hidden}<span>открыть все</span>
     </button> : null}
   </section>
 }

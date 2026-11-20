@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { alertHeading, cardLink, pickNewAlerts, titleWithCount } from '../src/lib/alerts'
+import { alertHeading, cardLink, pickNewAlerts, titleWithCount, withoutVehicle } from '../src/lib/alerts'
 import { currentStopOf, followingTours, tourCancellable } from '../src/lib/tours'
 import type { Tour } from '../src/types/domain'
 
@@ -52,5 +52,15 @@ describe('termin label', () => {
     expect(terminOf({ stops: [stop({ appointmentWindowStartAt: '2026-11-04T08:00:00Z', appointmentWindowEndAt: '2026-11-04T08:30:00Z' })] })?.label).toBe('Termin 04.11 09:00–09:30')
     expect(terminOf({ stops: [stop({ appointmentAt: '2026-11-04T10:00:00Z', completedAt: '2026-11-04T10:30:00Z' }), stop({ id: 's2', sequence: 2 })] })).toBeNull()
     expect(terminOf(null)).toBeNull()
+  })
+})
+
+describe('the line over the map', () => {
+  it('drops the truck from the title: it stands in the badge', () => {
+    expect(withoutVehicle('LKW 231 прибыла на выгрузку')).toBe('Прибыла на выгрузку')
+    expect(withoutVehicle('Грузовик GÖFX322: задержка из-за трафика 67 мин')).toBe('Задержка из-за трафика 67 мин')
+    expect(withoutVehicle('LKW 231: точка перенесена на ворота завода')).toBe('Точка перенесена на ворота завода')
+    expect(withoutVehicle('Машина прибыла на загрузку')).toBe('Машина прибыла на загрузку')
+    expect(withoutVehicle('Termin на проверку')).toBe('Termin на проверку')
   })
 })

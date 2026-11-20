@@ -356,6 +356,7 @@ test('уведомление об автоприбытии по GPS позвол
   const toast = page.getByRole('dialog')
   await expect(toast).toContainText('автоматически по GPS')
   await expect(toast.getByRole('button', { name: 'Подтвердить прибытие' })).toHaveCount(0)
+  await toast.getByRole('button', { name: 'Подробности и все кнопки' }).click()
   await toast.getByRole('button', { name: 'Отменить прибытие' }).click()
   await expect.poll(() => reverted).toMatchObject({ reason: 'Отменено из уведомления об автоприбытии' })
   await expect(page.getByRole('dialog')).toHaveCount(0)
