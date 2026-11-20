@@ -47,6 +47,7 @@ model Vehicle {
   telemetry VehicleTelemetry[]
   dailyStatusRows DailyStatusRow[]
   driverShifts DriverShift[]
+  baseVisits BaseVisit[]
 
   @@index([assignedDispatcherId])
   @@index([line, statusGroup])
@@ -748,4 +749,39 @@ model DriverShift {
   vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
 
   @@index([vehicleId, endsAt])
+}
+
+/// A truck that comes home to the base in a given week (owner, 20.11: every other week, by the owner's own list;
+/// the trucks change from week to week). One row per truck and week; the row stays as history.
+model BaseVisit {
+  id String @id @default(cuid())
+  vehicleId String
+  /// Monday of the week, the Berlin calendar date at 00:00 UTC.
+  weekStart DateTime
+  /// The latest moment the truck should stand at the base.
+  dueAt DateTime
+  /// From here the truck works again (Monday morning).
+  freeAt DateTime
+  arrivedAt DateTime?
+  /// WEBFLEET_AUTO | DISPATCHER; null until the truck is at the base.
+  arrivedSource String?
+  arrivedByDispatcherId String?
+  /// Taken off the list; the row is kept.
+  cancelledAt DateTime?
+  cancelledByDispatcherId String?
+  createdByDispatcherId String?
+  createdAt DateTime @default(now())
+
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  @@unique([vehicleId, weekStart])
+  @@index([weekStart])
+}
+
+/// A setting an admin changes on the page, one row per key (the base: address and coordinates).
+model AppSetting {
+  key String @id
+  valueJson String
+  updatedByDispatcherId String?
+  updatedAt DateTime @updatedAt
 }

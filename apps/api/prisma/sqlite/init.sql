@@ -567,3 +567,28 @@ CREATE TABLE "DriverShift" (
     CONSTRAINT "DriverShift_vehicleId_fkey" FOREIGN KEY ("vehicleId") REFERENCES "Vehicle" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 CREATE INDEX "DriverShift_vehicleId_endsAt_idx" ON "DriverShift"("vehicleId", "endsAt");
+
+CREATE TABLE "BaseVisit" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "vehicleId" TEXT NOT NULL,
+    "weekStart" DATETIME NOT NULL,
+    "dueAt" DATETIME NOT NULL,
+    "freeAt" DATETIME NOT NULL,
+    "arrivedAt" DATETIME,
+    "arrivedSource" TEXT,
+    "arrivedByDispatcherId" TEXT,
+    "cancelledAt" DATETIME,
+    "cancelledByDispatcherId" TEXT,
+    "createdByDispatcherId" TEXT,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "BaseVisit_vehicleId_fkey" FOREIGN KEY ("vehicleId") REFERENCES "Vehicle" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+CREATE UNIQUE INDEX "BaseVisit_vehicleId_weekStart_key" ON "BaseVisit"("vehicleId", "weekStart");
+CREATE INDEX "BaseVisit_weekStart_idx" ON "BaseVisit"("weekStart");
+
+CREATE TABLE "AppSetting" (
+    "key" TEXT NOT NULL PRIMARY KEY,
+    "valueJson" TEXT NOT NULL,
+    "updatedByDispatcherId" TEXT,
+    "updatedAt" DATETIME NOT NULL
+);
