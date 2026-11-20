@@ -7,6 +7,8 @@ test-results/
 *.tsbuildinfo
 apps/web/vite.config.js
 apps/web/vite.config.d.ts
+apps/driver/vite.config.js
+apps/driver/vite.config.d.ts
 
 # Secrets and local environment configuration
 .env

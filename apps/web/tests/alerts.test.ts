@@ -22,6 +22,8 @@ describe('alerts', () => {
     expect(titleWithCount(140)).toBe('(99+) OPS FOREX')
     expect(cardLink('veh 1')).toBe('/?vehicleId=veh%201&card=veh%201')
     expect(alertHeading('TRAFFIC_DELAY')).toBe('Пробка на маршруте')
+    expect(alertHeading('DRIVER_STOP_EVENT')).toBe('Отметка водителя')
+    expect(alertHeading('DRIVER_PROBLEM')).toBe('Проблема на точке')
   })
 })
 

@@ -93,6 +93,8 @@ export interface DispatcherAccount {
   lines?: Array<{ lineId: string; isPrimary: boolean }>
   role: 'admin' | 'dispatcher'
   active: boolean
+  /** Work number of the dispatch desk the driver app calls; never a private one. */
+  workPhone?: string | null
   lastLoginAt: string | null
   createdAt: string
 }
@@ -226,8 +228,10 @@ export const accountsApi = {
   list: () => request<DispatcherAccount[]>('/dispatchers'),
   directory: () => request<Array<{ id: string; displayName: string }>>('/dispatchers/directory'),
   create: (input: { login: string; displayName: string; role: 'admin' | 'dispatcher'; password: string }) => request<DispatcherAccount>('/dispatchers', json('POST', input)),
-  update: (id: string, input: Partial<Pick<DispatcherAccount, 'displayName' | 'role' | 'active'>>) => request<DispatcherAccount>(`/dispatchers/${encodeURIComponent(id)}`, json('PATCH', input)),
+  update: (id: string, input: Partial<Pick<DispatcherAccount, 'displayName' | 'role' | 'active'>> & { workPhone?: string }) => request<DispatcherAccount>(`/dispatchers/${encodeURIComponent(id)}`, json('PATCH', input)),
   resetPassword: (id: string, password: string) => request<{ ok: true }>(`/dispatchers/${encodeURIComponent(id)}/password`, json('POST', { password })),
+  ownWorkPhone: () => request<{ personal: boolean; workPhone: string | null }>('/auth/work-phone'),
+  setOwnWorkPhone: (workPhone: string) => request<{ personal: boolean; workPhone: string | null }>('/auth/work-phone', json('PUT', { workPhone })),
   changeOwnPassword: (currentPassword: string, newPassword: string) => request<{ ok: true }>('/auth/password', json('POST', { currentPassword, newPassword })),
   onboarding: (completed: boolean) => request<{ ok: true; stored: boolean; onboardingCompletedAt?: string | null }>('/auth/onboarding', json('POST', { completed }))
 }

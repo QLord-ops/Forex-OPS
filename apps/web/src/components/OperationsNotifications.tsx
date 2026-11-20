@@ -1,4 +1,4 @@
-import { CalendarCheck, CalendarDays, LogOut, MapPinCheck, MessageSquareText, Moon, PackageCheck, Route, TriangleAlert } from 'lucide-react'
+import { CalendarCheck, CalendarDays, LogOut, MapPinCheck, MessageSquareText, Moon, PackageCheck, Route, Smartphone, TriangleAlert } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 
@@ -68,6 +68,24 @@ export function DecisionCard({ item, stop, onSelect, openLink = false, nested = 
     }
     actions = [{ label: 'Понятно', primary: true, run: () => void state.resolve(item, 'ack') }]
     if (item.stopId && !item.resolved) actions.push({ label: `Отменить ${done}`, run: () => void state.resolve(item, 'revert-event') })
+  } else if (item.type === 'DRIVER_ARRIVAL' || item.type === 'DRIVER_STOP_EVENT') {
+    // The driver's own mark from the driver app: recorded already, the dispatcher only looks and can undo it.
+    const arrival = item.type === 'DRIVER_ARRIVAL'
+    const done = (autoEventOf(item.payloadJson)?.stopType ?? stop?.type) === 'LOAD' ? 'BELADEN' : 'ENTLADEN'
+    const doubt = driverMarkAway(item.payloadJson)
+    tone = doubt ? 'late' : arrival ? 'arrival' : 'ok'; Icon = Smartphone
+    const at = /\sв (\d{2}:\d{2}) —/u.exec(item.message)?.[1]
+    title = `Водитель${vehicle ? ` LKW ${vehicle}` : ''} отметил ${arrival ? 'прибытие' : done}${at ? ` в ${at}` : ''}${doubt ? ' — Webfleet видит машину в другом месте' : ''}`
+    detail = item.message.replace(/^Водитель LKW \S+ отметил [^—]+—\s*/u, '').replace(/\s*Если это ошибка, отмените( прибытие)?\.$/u, '')
+    actions = [{ label: 'Понятно', primary: true, run: () => void state.resolve(item, 'ack') }]
+    if (item.stopId && !item.resolved) actions.push(arrival
+      ? { label: 'Отменить прибытие', run: () => void state.resolve(item, 'revert') }
+      : { label: `Отменить ${done}`, run: () => void state.resolve(item, 'revert-event') })
+  } else if (item.type === 'DRIVER_PROBLEM') {
+    tone = 'late'; Icon = TriangleAlert
+    title = `Водитель${vehicle ? ` LKW ${vehicle}` : ''} сообщает о проблеме на точке`
+    detail = item.message.replace(/^Водитель LKW \S+ сообщает о проблеме на точке\s*/u, '')
+    actions = [{ label: 'Понятно', primary: true, run: () => void state.resolve(item, 'ack') }]
   } else if (item.type === 'STOP_MOVED_TO_GATE') {
     tone = 'info'; Icon = MapPinCheck
     title = `${vehicle ? `LKW ${vehicle}` : 'Машина'}: точка перенесена на ворота завода`
@@ -211,4 +229,9 @@ export function OperationsNotifications() {
     </div> : null}
     {current ? <DecisionCard item={current} openLink /> : null}
   </aside>
+}
+
+/** Webfleet's fresh GPS puts the truck outside the stop's zone although the driver marked it. */
+function driverMarkAway(payloadJson?: string | null) {
+  try { return (JSON.parse(payloadJson ?? '{}') as { gps?: { status?: string } }).gps?.status === 'AWAY' } catch { return false }
 }

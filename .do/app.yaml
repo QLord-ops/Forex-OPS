@@ -52,6 +52,10 @@ services:
         value: https://ops-disponent-web.vercel.app
       - key: DISPATCHER_ALLOWED_ORIGINS
         value: https://ops-disponent-web.vercel.app
+      # Приложение водителя (apps/driver): раскомментировать с точным адресом его проекта Vercel — см. docs/DEPLOYMENT.md.
+      # Пока не задано, API в production не принимает запросы приложения водителя.
+      # - key: DRIVER_ALLOWED_ORIGINS
+      #   value: https://<проект-водителя>.vercel.app
       - key: SESSION_SECRET
         scope: RUN_TIME
         type: SECRET

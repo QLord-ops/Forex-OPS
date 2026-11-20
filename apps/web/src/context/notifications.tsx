@@ -147,20 +147,22 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
   }, [changed, run])
 
   const resolve = useCallback(async (item: AlertNotification, action: 'ack' | 'revert' | 'revert-event') => {
-    if (action === 'revert' && (!item.stopId || !window.confirm('Отменить автоматическое прибытие? Точка снова станет «в пути».'))) return
+    // A mark the driver made in the driver app is undone the same way as an automatic one.
+    const byDriver = item.type === 'DRIVER_ARRIVAL' || item.type === 'DRIVER_STOP_EVENT'
+    if (action === 'revert' && (!item.stopId || !window.confirm(`Отменить ${byDriver ? 'прибытие, отмеченное водителем' : 'автоматическое прибытие'}? Точка снова станет «в пути».`))) return
     if (action === 'revert-event') {
       const event = autoEventOf(item.payloadJson)
       const label = (event?.stopTypes ?? [event?.stopType ?? 'LOAD']).map((type) => type === 'UNLOAD' ? 'ENTLADEN' : 'BELADEN').join(' и ')
-      if (!item.stopId || !window.confirm(`Отменить автоматический ${label}? Машина снова будет стоять на точке, в истории останутся все записи.`)) return
+      if (!item.stopId || !window.confirm(`Отменить ${byDriver ? `${label}, отмеченный водителем` : `автоматический ${label}`}? Машина снова будет стоять на точке, в истории останутся все записи.`)) return
     }
     await run(item, async () => {
       if (action === 'revert') {
-        await operationsRequest(`/stops/${item.stopId}/arrival/revert`, 'POST', { reason: 'Отменено из уведомления об автоприбытии' })
+        await operationsRequest(`/stops/${item.stopId}/arrival/revert`, 'POST', { reason: byDriver ? 'Отменено диспетчером: водитель отметил прибытие по ошибке' : 'Отменено из уведомления об автоприбытии' })
         await changed()
         return
       }
       if (action === 'revert-event') {
-        await operationsRequest(`/stops/${item.stopId}/auto-event/revert`, 'POST', { reason: 'Отменено из уведомления: машина не загружена или не выгружена' })
+        await operationsRequest(`/stops/${item.stopId}/auto-event/revert`, 'POST', { reason: byDriver ? 'Отметка водителя отменена диспетчером' : 'Отменено из уведомления: машина не загружена или не выгружена' })
         await changed()
         return
       }

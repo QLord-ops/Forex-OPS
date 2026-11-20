@@ -50,6 +50,8 @@ export interface DispatcherAuthOptions {
   secret?: string;
   origins?: string[];
   now?: () => number;
+  /** Authenticates `/driver/*` with the driver app's own session (driver-auth.ts). Without it those paths do not exist. */
+  driverGate?: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
 }
 
 export const LOGIN_PATTERN = /^[a-z0-9._-]{3,40}$/;
@@ -152,6 +154,10 @@ export function registerDispatcherAuth(app: FastifyInstance, prisma: QuotaStore,
 
   app.addHook('onRequest', async (request, reply) => {
     const path = request.url.split('?')[0];
+    // The driver app is a separate door: a dispatcher session opens nothing behind it, and its session opens nothing here.
+    if (path === '/driver' || path.startsWith('/driver/')) {
+      return options.driverGate ? options.driverGate(request, reply) : reply.code(404).send({ error: 'Не найдено.' });
+    }
     if (options.disabled) {
       request.dispatcherSession = { token: 'disabled', expiresAt: Number.MAX_SAFE_INTEGER, role: 'admin', sessionId: 'disabled-test-session', dispatcherId: null, displayName: null };
       return;

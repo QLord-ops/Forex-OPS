@@ -4,7 +4,11 @@ import { z } from 'zod';
 import { hashDispatcherPassword, LOGIN_PATTERN, MIN_PASSWORD_LENGTH, requireDispatcherRoles, verifyDispatcherPassword } from '../services/dispatcher-auth.js';
 import { writeAuditLog } from '../services/audit-log.js';
 
-const publicFields = { id: true, login: true, displayName: true, role: true, active: true, lastLoginAt: true, onboardingCompletedAt: true, createdAt: true } as const;
+const publicFields = { id: true, login: true, displayName: true, role: true, active: true, workPhone: true, lastLoginAt: true, onboardingCompletedAt: true, createdAt: true } as const;
+/** The work number of the dispatch desk the driver app calls; empty clears it. Digits, spaces, «+», «/», «-», «(», «)». */
+export const workPhone = z.string().trim().max(40).transform(value => value.replace(/\s+/g, ' '))
+  .refine(value => value === '' || (/^\+?[0-9][0-9 ()/.-]{4,30}$/.test(value) && value.replace(/\D/g, '').length >= 6), 'Служебный телефон: цифры, пробелы и «+», не меньше 6 цифр.')
+  .transform(value => value || null);
 const password = z.string().min(MIN_PASSWORD_LENGTH, `Пароль — не меньше ${MIN_PASSWORD_LENGTH} символов.`).max(1024);
 const displayName = z.string().trim().min(2).max(80);
 const role = z.enum(['admin', 'dispatcher']);
@@ -49,7 +53,7 @@ export function registerDispatcherRoutes(app: FastifyInstance, prisma: PrismaCli
 
   app.patch('/dispatchers/:id', admin, async (request) => {
     const { id } = idParams.parse(request.params);
-    const body = z.object({ displayName: displayName.optional(), role: role.optional(), active: z.boolean().optional() }).strict().parse(request.body);
+    const body = z.object({ displayName: displayName.optional(), role: role.optional(), active: z.boolean().optional(), workPhone: workPhone.optional() }).strict().parse(request.body);
     // An admin cannot lock themselves out by accident.
     if (id === request.dispatcherSession?.dispatcherId && (body.active === false || body.role === 'dispatcher')) throw badRequest('Свой аккаунт нельзя отключить или лишить прав администратора.');
     const existing = await prisma.dispatcher.findUnique({ where: { id }, select: publicFields });
@@ -80,6 +84,23 @@ export function registerDispatcherRoutes(app: FastifyInstance, prisma: PrismaCli
     await prisma.dispatcher.update({ where: { id: dispatcherId }, data: { onboardingCompletedAt: completedAt } });
     await writeAuditLog(prisma, actor(request), { action: body.completed ? 'ONBOARDING_COMPLETED' : 'ONBOARDING_RESET', entityType: 'Dispatcher', entityId: dispatcherId });
     return { ok: true, stored: true, onboardingCompletedAt: completedAt?.toISOString() ?? null };
+  });
+
+  /** A dispatcher's own work phone: the drivers of their trucks call it from the driver app. */
+  app.get('/auth/work-phone', async (request) => {
+    const dispatcherId = request.dispatcherSession?.dispatcherId;
+    if (!dispatcherId) return { personal: false, workPhone: null };
+    const account = await prisma.dispatcher.findUnique({ where: { id: dispatcherId }, select: { workPhone: true } });
+    return { personal: true, workPhone: account?.workPhone ?? null };
+  });
+
+  app.put('/auth/work-phone', async (request) => {
+    const dispatcherId = request.dispatcherSession?.dispatcherId;
+    if (!dispatcherId) throw badRequest('Телефон задаётся только у личного аккаунта.');
+    const body = z.object({ workPhone }).strict().parse(request.body);
+    await prisma.dispatcher.update({ where: { id: dispatcherId }, data: { workPhone: body.workPhone } });
+    await writeAuditLog(prisma, actor(request), { action: 'DISPATCHER_WORK_PHONE_CHANGED', entityType: 'Dispatcher', entityId: dispatcherId, metadata: { set: body.workPhone !== null } });
+    return { personal: true, workPhone: body.workPhone };
   });
 
   app.post('/auth/password', async (request) => {

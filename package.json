@@ -14,7 +14,8 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "test:e2e": "playwright test",
-    "build": "npm run build --workspaces --if-present"
+    "build": "npm run build --workspaces --if-present",
+    "dev:driver": "concurrently -n API,DRIVER -c blue,magenta \"npm run dev -w @ops/api\" \"npm run dev -w @ops/driver\""
   },
   "devDependencies": {
     "@playwright/test": "^1.56.1",

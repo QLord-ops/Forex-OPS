@@ -173,3 +173,19 @@
 /* Possible Zuladung: an open question on the tour, amber like other import warnings, with the text next to the colour. */
 .truck-card-zuladung { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-top: 10px; padding: 8px 12px; border: 1px solid rgb(var(--ln-fde68a)); border-radius: 8px; background: rgb(var(--bg-fffbeb)); color: rgb(var(--tx-92400e)); font-size: .8125rem; line-height: 1.4; }
 .truck-card-zuladung-tag { display: block; margin-top: 2px; color: rgb(var(--tx-92400e)); font-size: .75rem; font-weight: 500; }
+
+/* Приложение водителя: код смены */
+.driver-shift { display: flex; flex-direction: column; gap: 10px; }
+.driver-shift-state { display: flex; align-items: flex-start; gap: 8px; font-size: .8125rem; line-height: 1.4; }
+.driver-shift-state > svg { margin-top: 2px; flex-shrink: 0; }
+.driver-shift-state strong { display: block; font-weight: 600; }
+.driver-shift-state-none > svg, .driver-shift-state-waiting > svg { color: rgb(var(--tx-64748b)); }
+.driver-shift-state-active > svg { color: rgb(var(--tx-15803d)); }
+.driver-shift-state-active strong { color: rgb(var(--tx-15803d)); }
+.driver-shift-state-locked > svg, .driver-shift-state-locked strong { color: rgb(var(--tx-b91c1c)); }
+.driver-shift-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.driver-shift-hours select { height: 32px; border: 1px solid rgb(var(--ln-cbd5e1)); border-radius: 8px; background: rgb(var(--bg-ffffff)); padding: 0 8px; color: rgb(var(--tx-0f172a)); font-size: .8125rem; }
+.driver-shift-hours select:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.driver-shift-code { display: flex; flex-direction: column; gap: 6px; border: 1px solid rgb(var(--ln-c9d8f7)); border-radius: 10px; background: rgb(var(--bg-f3f7ff)); padding: 12px; }
+.driver-shift-code-label { color: rgb(var(--tx-1d4ed8)); font-size: .75rem; font-weight: 600; }
+.driver-shift-code-value { color: rgb(var(--tx-0f172a)); font-size: 2rem; font-weight: 700; letter-spacing: .08em; font-variant-numeric: tabular-nums; line-height: 1.1; }
