@@ -18,7 +18,7 @@
     "dev:driver": "concurrently -n API,DRIVER -c blue,magenta \"npm run dev -w @ops/api\" \"npm run dev -w @ops/driver\""
   },
   "devDependencies": {
-    "@playwright/test": "^1.56.1",
+    "@playwright/test": "^1.65.1",
     "concurrently": "^9.2.5",
     "fast-uri": "^3.1.9",
     "postcss-selector-parser": "^6.1.5",
