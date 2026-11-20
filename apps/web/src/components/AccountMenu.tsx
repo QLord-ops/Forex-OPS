@@ -1,4 +1,4 @@
-import { Bot, CircleHelp, GraduationCap, KeyRound, UserRound, X } from 'lucide-react'
+import { Bot, CircleHelp, GraduationCap, KeyRound, Phone, UserRound, X } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 
@@ -22,6 +22,7 @@ export function AccountMenu() {
     : role === 'admin' ? 'АД' : 'ДС'
   const menu = usePopover()
   const [passwordOpen, setPasswordOpen] = useState(false)
+  const [phoneOpen, setPhoneOpen] = useState(false)
   return <div className="popover-anchor" ref={menu.ref}>
     <button type="button" className="account-menu" aria-expanded={menu.open} aria-haspopup="true" onClick={menu.toggle} title={name} aria-label={`${name}: меню`}>
       <span className="account-menu-avatar" aria-hidden="true">{initials}</span>
@@ -33,10 +34,12 @@ export function AccountMenu() {
       <button type="button" className="account-menu-item" onClick={() => { menu.close(); window.dispatchEvent(new CustomEvent('ops:assistant-context', { detail: { open: true } })) }}><Bot className="h-5 w-5" aria-hidden="true" /><span>ИИ-диспетчер</span></button>
       <button type="button" className="account-menu-item" onClick={() => { menu.close(); window.dispatchEvent(new CustomEvent(ONBOARDING_EVENT, { detail: { start: 0 } })) }}><GraduationCap className="h-5 w-5" aria-hidden="true" /><span>Обучение</span></button>
       <Link to="/help" className="account-menu-item" onClick={menu.close}><CircleHelp className="h-5 w-5" aria-hidden="true" /><span>Справка</span></Link>
+      {person ? <button type="button" className="account-menu-item" onClick={() => { menu.close(); setPhoneOpen(true) }}><Phone className="h-5 w-5" aria-hidden="true" /><span>Телефон для водителей</span></button> : null}
       {person ? <button type="button" className="account-menu-item" onClick={() => { menu.close(); setPasswordOpen(true) }}><KeyRound className="h-5 w-5" aria-hidden="true" /><span>Сменить пароль</span></button> : null}
       <DispatcherLogout className="account-menu-item account-menu-logout" />
     </div> : null}
     {passwordOpen ? <PasswordDialog name={name} onClose={() => setPasswordOpen(false)} /> : null}
+    {phoneOpen ? <WorkPhoneDialog name={name} onClose={() => setPhoneOpen(false)} /> : null}
   </div>
 }
 
@@ -91,6 +94,61 @@ function PasswordDialog({ name, onClose }: { name: string; onClose: () => void }
         <div className="flex justify-end gap-2">
           <button type="button" className="secondary-button" onClick={onClose}>Закрыть</button>
           <button type="submit" className="primary-button" disabled={busy || !current || next.length < MIN_PASSWORD}><KeyRound className="h-4 w-4" aria-hidden="true" />{busy ? 'Сохраняем…' : 'Сменить пароль'}</button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
+/** The work number the drivers of one's trucks call from the driver app («Диспетчер» tab). */
+function WorkPhoneDialog({ name, onClose }: { name: string; onClose: () => void }) {
+  const [phone, setPhone] = useState('')
+  const [loaded, setLoaded] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null)
+  const field = useRef<HTMLInputElement | null>(null)
+  useEffect(() => {
+    accountsApi.ownWorkPhone().then((result) => { setPhone(result.workPhone ?? ''); setLoaded(true); window.setTimeout(() => field.current?.focus(), 0) })
+      .catch(() => { setLoaded(true); setMessage({ ok: false, text: 'Телефон не загрузился. Повторите позже.' }) })
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  async function submit(event: FormEvent) {
+    event.preventDefault()
+    setBusy(true)
+    setMessage(null)
+    try {
+      const saved = await accountsApi.setOwnWorkPhone(phone)
+      setPhone(saved.workPhone ?? '')
+      setMessage({ ok: true, text: saved.workPhone ? 'Сохранено. Водители ваших машин звонят по этому номеру.' : 'Номер убран.' })
+    } catch (cause) {
+      setMessage({ ok: false, text: cause instanceof Error ? cause.message : 'Не удалось сохранить.' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="account-dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
+      <form className="account-dialog" role="dialog" aria-modal="true" aria-labelledby="phone-dialog-title" onSubmit={(event) => void submit(event)}>
+        <header className="flex items-start justify-between gap-3">
+          <div>
+            <h2 id="phone-dialog-title" className="flex items-center gap-2 font-semibold"><Phone className="h-4 w-4" aria-hidden="true" />{name}</h2>
+            <p className="text-sm text-slate-500">Телефон для водителей</p>
+          </div>
+          <button type="button" className="icon-button icon-button-compact" onClick={onClose} aria-label="Закрыть"><X className="h-4 w-4" /></button>
+        </header>
+        <label className="block text-sm">
+          <span className="metric-label">Служебный номер диспетчерской</span>
+          <input ref={field} className="field-input" type="tel" inputMode="tel" autoComplete="off" maxLength={40} placeholder="+49 551 …" disabled={!loaded} value={phone} onChange={(event) => setPhone(event.target.value)} />
+        </label>
+        <p className="text-sm text-slate-500">Кнопка «Позвонить» в приложении водителя набирает этот номер у машин, которые вы ведёте (и у тех, где вы подменяете коллегу). Только служебный номер, не личный. Пустое поле — убрать номер.</p>
+        {message ? <p role={message.ok ? 'status' : 'alert'} className={message.ok ? 'text-sm text-emerald-800' : 'text-sm text-red-700'}>{message.text}</p> : null}
+        <div className="flex justify-end gap-2">
+          <button type="button" className="secondary-button" onClick={onClose}>Закрыть</button>
+          <button type="submit" className="primary-button" disabled={busy || !loaded}><Phone className="h-4 w-4" aria-hidden="true" />{busy ? 'Сохраняем…' : 'Сохранить'}</button>
         </div>
       </form>
     </div>

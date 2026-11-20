@@ -24,7 +24,8 @@
     "db:seed": "tsx prisma/seed.ts",
     "auth:secrets": "tsx src/cli/auth-secrets.ts",
     "webfleet:check": "tsx src/cli/webfleet-check.ts",
-    "webfleet:addresses": "tsx src/cli/webfleet-address-check.ts"
+    "webfleet:addresses": "tsx src/cli/webfleet-address-check.ts",
+    "driver:code": "tsx src/cli/driver-code.ts"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",

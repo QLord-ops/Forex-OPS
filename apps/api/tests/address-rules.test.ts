@@ -71,3 +71,21 @@ describe("address rules", () => {
     expect(resolved).toMatchObject({ latitude: 53.11, precision: "POSTCODE_CITY" });
   });
 });
+
+describe("a learned place and the printed postcode (owner, 20.11.2026)", () => {
+  const minden = { pattern: "hl corporation berlin petershagen", kind: "SITE" as const, company: "HL Corporation", street: "Mindener Straße 1", postalCode: "32469", city: "Petershagen",
+    latitude: 52.38, longitude: 8.97, requiresTermin: false };
+
+  it("a place learned for the namesake town in another postal zone does not rewrite the stop", () => {
+    const stop = applyRulesToStop({ company: "HL Corporation Berlin", address: "15370 Petershagen", city: "15370 Petershagen", appointmentLocal: null }, [minden]);
+    expect(stop).toMatchObject({ address: "15370 Petershagen", city: "15370 Petershagen", company: "HL Corporation Berlin", ruleApplied: false });
+  });
+
+  it("the same town with the same or no printed postcode still gets the learned address", () => {
+    expect(applyRulesToStop({ company: "HL Corporation Berlin", address: "Petershagen", city: "32469 Petershagen", appointmentLocal: null }, [minden]))
+      .toMatchObject({ address: "Mindener Straße 1, 32469 Petershagen", ruleApplied: true });
+    expect(applyRulesToStop({ company: "HL Corporation Berlin", address: "Petershagen", city: "Petershagen", appointmentLocal: null }, [minden]).ruleApplied).toBe(true);
+    // Another district of the same town keeps the rule: 32457 and 32469 are one postal zone.
+    expect(applyRulesToStop({ company: "HL Corporation Berlin", address: "Petershagen", city: "32457 Petershagen", appointmentLocal: null }, [minden]).ruleApplied).toBe(true);
+  });
+});

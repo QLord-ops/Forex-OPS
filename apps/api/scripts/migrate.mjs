@@ -1,5 +1,12 @@
 import { spawn } from "node:child_process";
+import { resolve } from "node:path";
 import { PrismaClient } from "@prisma/client";
+import { config } from "dotenv";
+
+// Locally the database URL lives in .env.local (as for the API); hosted variables always win.
+for (const path of [resolve(process.cwd(), ".env.local"), resolve(process.cwd(), "../../.env.local"), resolve(process.cwd(), ".env")]) {
+  config({ path, override: false });
+}
 
 const databaseUrl = process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL;
 

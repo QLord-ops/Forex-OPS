@@ -5,7 +5,7 @@ import { DataTable } from '../components/DataTable'
 import { EmptyState, ErrorState, LoadingState } from '../components/States'
 import { usePolling } from '../hooks/usePolling'
 import { api } from '../lib/api'
-import { formatAppointment, formatDateTime, formatDelay, formatElapsedMinutes, operationEventLabel, statusLabel, stopTypeLabel } from '../lib/format'
+import { eventSourceLabel, formatAppointment, formatDateTime, formatDelay, formatElapsedMinutes, operationEventLabel, statusLabel, stopTypeLabel } from '../lib/format'
 import type { Stop, Tour } from '../types/domain'
 
 const EVENT_LABEL: Record<string, string> = {
@@ -126,13 +126,14 @@ export function HistoryPage() {
           <p className="text-sm text-slate-600">Неизменяемые события загрузки и выгрузки.</p>
         </div>
         {events.length ? (
-          <DataTable columns={['Время', 'Грузовик', 'Заказ', 'Событие', 'Точка', 'Срок', 'Время на точке', 'Примечание']}>
+          <DataTable columns={['Время', 'Грузовик', 'Заказ', 'Событие', 'Кто отметил', 'Точка', 'Срок', 'Время на точке', 'Примечание']}>
             {events.map((event) => (
               <tr key={event.id} className="hover:bg-slate-50">
                 <td className="px-3 py-3 text-sm tabular-nums">{formatDateTime(event.timestamp)}</td>
                 <td className="px-3 py-3 text-lg font-bold tabular-nums">{event.vehicle?.vehicleNumber ?? event.vehicleId}</td>
                 <td className="px-3 py-3 text-sm">{event.tour?.orderNumber ?? event.tourId}</td>
                 <td className="px-3 py-3 text-sm font-semibold">{EVENT_LABEL[event.type] ?? event.type}</td>
+                <td className="px-3 py-3 text-sm">{eventSourceLabel(event.source) ?? '–'}</td>
                 <td className="px-3 py-3 text-sm">
                   {event.stop ? `${stopTypeLabel(event.stop.type)} · ${event.stop.address}` : event.stopId ?? '–'}
                 </td>

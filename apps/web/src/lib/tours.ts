@@ -24,13 +24,15 @@ export function currentStopOf(tour: Pick<Tour, 'stops'>): Stop | null {
 /**
  * The slot attached to the stop the truck is heading to or standing at, as a short label.
  * Null when that stop has no exact time and no window.
+ * `at` is when the slot begins (the order of the list, «Termin сегодня»); `deadline` is the latest moment the stop
+ * takes the truck: a truck that arrives inside the window «08:00–16:00» is on time (owner, 20.11.2026).
  */
-export function terminOf(tour: Pick<Tour, 'stops'> | null | undefined): { label: string; at: string } | null {
+export function terminOf(tour: Pick<Tour, 'stops'> | null | undefined): { label: string; at: string; deadline: string } | null {
   const stop = tour ? currentStopOf(tour) : null
   if (!stop) return null
-  if (stop.appointmentAt) return { label: `Termin ${clock(stop.appointmentAt, true)}`, at: stop.appointmentAt }
+  if (stop.appointmentAt) return { label: `Termin ${clock(stop.appointmentAt, true)}`, at: stop.appointmentAt, deadline: stop.appointmentAt }
   if (stop.appointmentWindowStartAt && stop.appointmentWindowEndAt) {
-    return { label: `Termin ${clock(stop.appointmentWindowStartAt, true)}–${clock(stop.appointmentWindowEndAt, false)}`, at: stop.appointmentWindowStartAt }
+    return { label: `Termin ${clock(stop.appointmentWindowStartAt, true)}–${clock(stop.appointmentWindowEndAt, false)}`, at: stop.appointmentWindowStartAt, deadline: stop.appointmentWindowEndAt }
   }
   return null
 }

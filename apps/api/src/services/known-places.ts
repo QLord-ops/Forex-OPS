@@ -51,6 +51,33 @@ export function findKnownPlace(stop: StopPlace, places: KnownPlace[]): KnownPlac
   return same.length === 1 ? same[0] : null;
 }
 
+/** A stored point farther than this from the other known places of its postcode region is not of that region. */
+const REGION_KM = 150;
+const REGION_WITNESSES = 3;
+
+function kmApart(a: { latitude: number; longitude: number }, b: { latitude: number; longitude: number }): number {
+  const rad = Math.PI / 180;
+  const dLat = (b.latitude - a.latitude) * rad, dLon = (b.longitude - a.longitude) * rad;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.latitude * rad) * Math.cos(b.latitude * rad) * Math.sin(dLon / 2) ** 2;
+  return 2 * 6371 * Math.asin(Math.sqrt(h));
+}
+
+/**
+ * Whether a stored point can belong to a printed postcode, judged without the geocoder: the first two digits are one
+ * region of Germany, and the address book knows where that region lies. A learned place saved in the namesake town
+ * («15370 Petershagen» at Berlin drawn at Minden, owner 20.11.2026) lies hundreds of km from it. Null when the book
+ * has too few places of that region to tell: then the geocoder path measures the point against the postcode itself.
+ */
+export function fitsPostcodeRegion(point: { latitude: number; longitude: number }, postcode: string, places: KnownPlace[]): boolean | null {
+  const region = postcode.slice(0, 2);
+  const witnesses = places.filter((place) => place.postalCode?.startsWith(region)
+    && (Math.abs(place.latitude - point.latitude) > 0.0005 || Math.abs(place.longitude - point.longitude) > 0.0005));
+  if (witnesses.length < REGION_WITNESSES) return null;
+  const middle = (values: number[]) => { const sorted = [...values].sort((a, b) => a - b); return sorted[Math.floor(sorted.length / 2)]; };
+  const centre = { latitude: middle(witnesses.map((place) => place.latitude)), longitude: middle(witnesses.map((place) => place.longitude)) };
+  return kmApart(centre, point) <= REGION_KM;
+}
+
 function label(place: KnownPlace): string {
   return [place.name, place.street, [place.postalCode, place.city].filter(Boolean).join(' ')].filter(Boolean).join(', ');
 }
@@ -72,15 +99,21 @@ export function resolveWithoutGeocoder(stop: StopPlace, rules: AddressRuleRecord
   // A rule may be used without the distance check only when it names the stop's own town or postcode; the same town
   // name with another printed postcode may be a namesake ("Petershagen"), so the geocoder path measures it instead.
   const stopPostcode = postcodeOf(sourceAddress) ?? postcodeOf(stop.city);
+  // With a printed postcode the stored point itself must lie in that postcode's region: its label is not proof.
+  const inRegion = (point: { latitude: number; longitude: number }) => !stopPostcode || fitsPostcodeRegion(point, stopPostcode, places) === true;
   const siteFits = site && site.latitude !== null && site.longitude !== null
-    && (site.postalCode && stopPostcode ? site.postalCode === stopPostcode : Boolean(site.city && city && fold(site.city) === fold(city)));
+    && (site.postalCode && stopPostcode ? site.postalCode === stopPostcode : Boolean(site.city && city && fold(site.city) === fold(city)))
+    && inRegion({ latitude: site.latitude, longitude: site.longitude });
   if (site && siteFits) {
     const text = [site.company, site.street, [site.postalCode, site.city].filter(Boolean).join(' ')].filter(Boolean).join(', ');
     return { latitude: site.latitude!, longitude: site.longitude!, city: site.city ?? undefined, label: text, provider: 'address-rule',
       sourceAddress, resolvedAddress: text, precision: 'EXACT', attempts: [`правило: ${site.pattern}`] } as AddressResolution;
   }
   const place = findKnownPlace({ ...stop, city }, places);
-  return place ? knownPlaceResolution(place, sourceAddress) : null;
+  if (!place) return null;
+  // A gate was learned from trucks that stood at the stop itself: only evidence against it drops it.
+  const trusted = place.provider === STAY_PROVIDER ? !stopPostcode || fitsPostcodeRegion(place, stopPostcode, places) !== false : inRegion(place);
+  return trusted ? knownPlaceResolution(place, sourceAddress) : null;
 }
 
 /** The address book in memory for a minute: every stop of every preview asks it. */

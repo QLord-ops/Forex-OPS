@@ -26,6 +26,12 @@ describe('«Сообщить заказчику» (owner, 18.11.2026)', () => {
     expect(noticeDue(row({ delayMinutes: 0, eta: '2026-11-18T10:30:00.000Z' }))).toBe(false)
     expect(noticeDue(row({ customer: null }))).toBe(false)
     expect(noticeDue(row({}, { appointmentAt: null }))).toBe(false)
+    // A window 08:00–16:00 with ETA 12:16 is no reason to write; after the window ends it is.
+    const window = { appointmentAt: null, appointmentWindowStartAt: '2026-11-18T07:00:00.000Z', appointmentWindowEndAt: '2026-11-18T15:00:00.000Z' }
+    expect(noticeDue(row({ delayMinutes: 0, risk: 'GREEN', eta: '2026-11-18T11:16:00.000Z' }, window))).toBe(false)
+    expect(noticeKind(row({ delayMinutes: 0, eta: '2026-11-18T15:30:00.000Z' }, window))).toBe('LATE')
+    expect(draftNotice(row({ delayMinutes: 0, eta: '2026-11-18T15:30:00.000Z' }, window), 'LATE', false, Date.parse('2026-11-18T11:00:00Z')).body)
+      .toBe('Hallo, der Fahrer verspätet sich zum Termin zwischen 8 Uhr und 16 Uhr bei MB Düsseldorf, er wird voraussichtlich gegen 16:30 Uhr da sein')
     expect(noticeKind(waiting(65))).toBe('WAITING')
     expect(noticeDue(waiting(30))).toBe(false)
   })

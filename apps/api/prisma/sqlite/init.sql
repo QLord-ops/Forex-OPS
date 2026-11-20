@@ -8,6 +8,7 @@ CREATE TABLE "Dispatcher" (
     "lastLoginAt" DATETIME,
     "onboardingCompletedAt" DATETIME,
     "locale" TEXT,
+    "workPhone" TEXT,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" DATETIME NOT NULL
 );
@@ -124,6 +125,7 @@ CREATE TABLE "Event" (
     "type" TEXT NOT NULL,
     "timestamp" DATETIME NOT NULL,
     "note" TEXT,
+    "source" TEXT,
     CONSTRAINT "Event_vehicleId_fkey" FOREIGN KEY ("vehicleId") REFERENCES "Vehicle" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
     CONSTRAINT "Event_tourId_fkey" FOREIGN KEY ("tourId") REFERENCES "Tour" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
     CONSTRAINT "Event_stopId_fkey" FOREIGN KEY ("stopId") REFERENCES "Stop" ("id") ON DELETE CASCADE ON UPDATE CASCADE
@@ -548,3 +550,20 @@ CREATE TABLE "NotificationRead" (
 );
 CREATE UNIQUE INDEX "NotificationRead_notificationId_dispatcherId_key" ON "NotificationRead"("notificationId", "dispatcherId");
 CREATE INDEX "NotificationRead_dispatcherId_idx" ON "NotificationRead"("dispatcherId");
+
+CREATE TABLE "DriverShift" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "vehicleId" TEXT NOT NULL,
+    "codeHash" TEXT NOT NULL,
+    "startsAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "endsAt" DATETIME NOT NULL,
+    "failedAttempts" INTEGER NOT NULL DEFAULT 0,
+    "firstUsedAt" DATETIME,
+    "lastUsedAt" DATETIME,
+    "endedAt" DATETIME,
+    "endedByDispatcherId" TEXT,
+    "createdByDispatcherId" TEXT,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "DriverShift_vehicleId_fkey" FOREIGN KEY ("vehicleId") REFERENCES "Vehicle" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+CREATE INDEX "DriverShift_vehicleId_endsAt_idx" ON "DriverShift"("vehicleId", "endsAt");

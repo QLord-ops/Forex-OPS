@@ -93,6 +93,17 @@ function classify(item: PriorityInput, facts: PriorityFacts, superseded: Set<str
       return { priority: "INFO" as const, urgent: false, reason: null };
     case "AUTO_STOP_EVENT":
       return { priority: "INFO" as const, urgent: false, reason: stop && !stop.completedAt ? "отметка отменена" : null };
+    // The driver's own marks (driver app): recorded already; a mark Webfleet does not confirm is worth a look.
+    case "DRIVER_STOP_EVENT": {
+      const gps = payload.gps as { status?: unknown } | undefined;
+      return { priority: gps?.status === "AWAY" ? "RISK" as const : "INFO" as const, urgent: false, reason: stop && !stop.completedAt ? "отметка отменена" : null };
+    }
+    case "DRIVER_ARRIVAL": {
+      const gps = payload.gps as { status?: unknown } | undefined;
+      return { priority: gps?.status === "AWAY" ? "RISK" as const : "INFO" as const, urgent: false, reason: completed ?? (stop && !stop.arrivedAt ? "прибытие отменено" : null) };
+    }
+    case "DRIVER_PROBLEM":
+      return { priority: "ACTION" as const, urgent: true, reason: null };
     case "DAILY_REST_AT_STOP": {
       const ended = typeof payload.until === "string" && Date.parse(payload.until) <= now.getTime();
       return { priority: "INFO" as const, urgent: false, reason: completed ?? (ended ? "отдых закончился" : null) };

@@ -358,10 +358,12 @@ export class TourService {
    * Undo an automatic BELADEN/ENTLADEN while nothing has happened since: the stop, its legs and the tours go back to how they
    * were. History stays: the event remains and a compensating «…_REVERTED» event is written.
    */
-  async revertAutoStopEvent(stopId: string, now = new Date(), actor?: AuditActor, reason?: string) {
+  async revertAutoStopEvent(stopId: string, now = new Date(), actor?: AuditActor, reason?: string, driverUndo?: { vehicleId: string }) {
     await this.db.$transaction(async (tx) => {
-      const asked = await tx.operationEvent.findFirst({ where: { stopId, type: "STOP_EVENT_AUTO" }, orderBy: { createdAt: "desc" } });
+      const asked = await tx.operationEvent.findFirst({ where: { stopId, type: { in: UNDOABLE_EVENTS } }, orderBy: { createdAt: "desc" } });
       if (!asked) throw new TourPlanConflictError("Эту отметку поставил диспетчер, здесь её отменить нельзя.");
+      if (driverUndo && (asked.type !== "STOP_EVENT_DRIVER" || asked.vehicleId !== driverUndo.vehicleId)) throw new TourPlanConflictError("Эту отметку поставили не вы. Позвоните диспетчеру.");
+      if (driverUndo && now.getTime() - asked.createdAt.getTime() > DRIVER_UNDO_MS) throw new TourPlanConflictError("Отменить отметку можно в течение 5 минут. Позвоните диспетчеру.");
       // Stops of one place were recorded together and are undone together, the last one first.
       const chain = (JSON.parse(asked.payloadJson) as AutoStopEventRecord).meta.chain ?? [stopId];
       const done = await tx.stop.findMany({ where: { id: { in: chain }, completedAt: { not: null } }, orderBy: { sequence: "desc" }, select: { id: true } });
@@ -372,7 +374,7 @@ export class TourService {
   }
 
   private async revertAutoStopEventOf(tx: Prisma.TransactionClient, stopId: string, chain: string[], now: Date, actor?: AuditActor, reason?: string) {
-    const auto = await tx.operationEvent.findFirst({ where: { stopId, type: "STOP_EVENT_AUTO" }, orderBy: { createdAt: "desc" } });
+    const auto = await tx.operationEvent.findFirst({ where: { stopId, type: { in: UNDOABLE_EVENTS } }, orderBy: { createdAt: "desc" } });
     if (!auto) throw new TourPlanConflictError("Эту отметку поставил диспетчер, здесь её отменить нельзя.");
     const record = JSON.parse(auto.payloadJson) as AutoStopEventRecord;
     const at = new Date(record.at);
@@ -406,9 +408,10 @@ export class TourService {
       completedAt: record.before.tour.completedAt ? new Date(record.before.tour.completedAt) : null,
       actualStartAt: record.before.tour.actualStartAt ? new Date(record.before.tour.actualStartAt) : null } });
     await tx.vehicle.update({ where: { id: vehicleId }, data: { clockState: record.before.clockState, currentTrailerPlate: record.before.trailerPlate, operationVersion: { increment: 1 } } });
-    const note = reason?.trim() || "Автоматическая отметка отменена диспетчером";
-    await tx.event.create({ data: { vehicleId, tourId: stop.tourId, stopId, type: `${record.eventType}_REVERTED`, timestamp: now, note } });
-    await tx.notification.updateMany({ where: { stopId, type: "AUTO_STOP_EVENT", acknowledgedAt: null }, data: { acknowledgedAt: now } });
+    const byDriver = actor?.role === "driver";
+    const note = reason?.trim() || (byDriver ? "Отметка отменена водителем в приложении" : record.driver ? "Отметка водителя отменена диспетчером" : "Автоматическая отметка отменена диспетчером");
+    await tx.event.create({ data: { vehicleId, tourId: stop.tourId, stopId, type: `${record.eventType}_REVERTED`, timestamp: now, note, source: byDriver ? "DRIVER" : "DISPATCHER" } });
+    await tx.notification.updateMany({ where: { stopId, type: { in: ["AUTO_STOP_EVENT", "DRIVER_STOP_EVENT"] }, acknowledgedAt: null }, data: { acknowledgedAt: now } });
     await tx.operationEvent.create({ data: { vehicleId, tourId: stop.tourId, stopId, type: "STOP_EVENT_REVERTED", reason: note,
       payloadJson: JSON.stringify({ autoEventId: auto.id, eventType: record.eventType, at: record.at }), createdAt: now } });
     await writeAuditLog(tx, actor, { action: "STOP_EVENT_REVERTED", entityType: "Stop", entityId: stopId, vehicleId, tourId: stop.tourId, stopId,
@@ -471,7 +474,8 @@ export class TourService {
     const split = projection ? splitAtProjection(geometry, projection) : splitGeometryAtProgress(geometry, progress);
     const shownEta = projection ? gpsEta : eta;
     const etaPlan = shownEta ? (projection ? gpsForecast : timerForecast)?.plan ?? null : null;
-    const delayMinutes = activeLeg.toStop.appointmentAt ? calculateLateMinutes(shownEta, activeLeg.toStop.appointmentAt) : 0;
+    // A window «08:00–16:00» is missed only after its end; inside it the truck is on time (owner, 20.11.2026).
+    const delayMinutes = calculateLateMinutes(shownEta, activeLeg.toStop.appointmentAt ?? activeLeg.toStop.appointmentWindowEndAt);
     const shownProgress = gpsProgress ?? progress;
     let travelledPrefix: Coordinate[] = [];
     let routeBreaks: number[] = [];
@@ -605,7 +609,7 @@ export class TourService {
         throw new TourPlanConflictError("Сначала необходимо завершить предыдущие точки.");
       }
       // What the automatic event changes, so that «Отменить» can put it back exactly.
-      const before: AutoStopEventRecord["before"] | null = options.auto ? {
+      const before: AutoStopEventRecord["before"] | null = options.auto || options.driver ? {
         clockState: stop.tour.vehicle.clockState, trailerPlate: stop.tour.vehicle.currentTrailerPlate,
         tour: { status: stop.tour.status, completedAt: stop.tour.completedAt?.toISOString() ?? null, actualStartAt: stop.tour.actualStartAt?.toISOString() ?? null },
         legs: stop.tour.legs.filter((leg) => leg.toStopId === stop.id || leg.fromStopId === stop.id).map(legState),
@@ -613,7 +617,7 @@ export class TourService {
       } : null;
       if (arriveNow) {
         const offsite = options.auto?.meta.offsite && arrivalAt < now ? options.auto.meta.offsite : null;
-        const source = offsite ? "WEBFLEET_AUTO" : "WITH_STOP_EVENT";
+        const source = offsite ? "WEBFLEET_AUTO" : options.driver ? "DRIVER" : "WITH_STOP_EVENT";
         const leg = stop.tour.legs.find((item) => item.toStopId === stop.id);
         if (leg?.startedAt && arrivalAt < leg.startedAt) throw new TourPlanConflictError("Прибытие не может быть раньше начала движения.");
         const arrived = await tx.stop.updateMany({ where: { id: stop.id, arrivedAt: null }, data: { arrivedAt: arrivalAt } });
@@ -647,12 +651,13 @@ export class TourService {
           stopId: stop.id,
           type: eventType,
           timestamp: now,
-          note: options.auto ? (options.auto.meta.offsite ? `Автоматически по GPS Webfleet: стоянка в ${kilometres(options.auto.meta.offsite.distanceMeters)} от адреса точки, затем машина уехала дальше` : options.auto.meta.nextStop ? "Автоматически по GPS Webfleet: машина приехала на следующую точку" : options.auto.meta.awayMinutes ? "Автоматически по GPS Webfleet: машина без диспетчера уехала с точки и не вернулась" : "Автоматически по GPS Webfleet: машина выехала из города") : note
+          source: options.auto ? "WEBFLEET_AUTO" : options.driver ? "DRIVER" : "DISPATCHER",
+          note: options.driver ? "Отмечено водителем в приложении" : options.auto ? (options.auto.meta.offsite ? `Автоматически по GPS Webfleet: стоянка в ${kilometres(options.auto.meta.offsite.distanceMeters)} от адреса точки, затем машина уехала дальше` : options.auto.meta.nextStop ? "Автоматически по GPS Webfleet: машина приехала на следующую точку" : options.auto.meta.awayMinutes ? "Автоматически по GPS Webfleet: машина без диспетчера уехала с точки и не вернулась" : "Автоматически по GPS Webfleet: машина выехала из города") : note
         }
       });
       await writeAuditLog(tx, actor, { action: eventType, entityType: "Stop", entityId: stop.id,
         vehicleId: stop.tour.vehicleId, tourId: stop.tourId, stopId: stop.id,
-        metadata: options.auto ? { source: "WEBFLEET_AUTO", ...options.auto.meta } : note ? { note } : undefined, createdAt: now });
+        metadata: options.auto ? { source: "WEBFLEET_AUTO", ...options.auto.meta } : options.driver ? { source: "DRIVER", gps: options.driver.gps } : note ? { note } : undefined, createdAt: now });
 
       if (eventType === "LOADED" && !stop.tour.actualStartAt) {
         await tx.tour.update({ where: { id: stop.tourId }, data: { actualStartAt: now } });
@@ -707,6 +712,20 @@ export class TourService {
           update: { stopId: stop.id, message, payloadJson, acknowledgedAt: null } });
       }
 
+      if (options.driver && before) {
+        const record: AutoStopEventRecord = { driver: options.driver, eventId: recorded.id, eventType, at: now.toISOString(), before,
+          activated: activated ? { tourId: activated.tour.id, transferLeg: activated.transferLeg } : null, meta: { chain: [stop.id] } };
+        const receivedAt = options.driver.receivedAt ?? now;
+        await tx.operationEvent.create({ data: { vehicleId: stop.tour.vehicleId, tourId: stop.tourId, stopId: stop.id, type: "STOP_EVENT_DRIVER",
+          reason: "Отмечено водителем в приложении", payloadJson: JSON.stringify(record), createdAt: receivedAt } });
+        const done = stop.type === "LOAD" ? "BELADEN" : "ENTLADEN";
+        const place = [stop.company, stop.city || stop.address].filter(Boolean).join(", ");
+        await tx.notification.create({ data: { dedupKey: `driver-stop-event:${stop.id}:${now.toISOString()}`, vehicleId: stop.tour.vehicleId, stopId: stop.id, type: "DRIVER_STOP_EVENT",
+          message: `Водитель LKW ${stop.tour.vehicle.vehicleNumber} отметил ${done} в ${berlinClock(now)}${offlineText(now, receivedAt)} — ${place}. ${driverGpsText(options.driver.gps)} Если это ошибка, отмените.`,
+          payloadJson: JSON.stringify({ stopType: stop.type, at: now.toISOString(), source: "DRIVER", gps: options.driver.gps,
+            ...(receivedAt.getTime() !== now.getTime() ? { receivedAt: receivedAt.toISOString() } : {}) }) } });
+      }
+
       return tx.tour.findUniqueOrThrow({ where: { id: stop.tourId }, include: tourInclude });
     });
   }
@@ -717,17 +736,38 @@ function kilometres(meters: number) {
   return meters >= 1000 ? `${(Math.round(meters / 100) / 10).toLocaleString("de-DE")} км` : `${Math.round(meters / 10) * 10} м`;
 }
 
-export type StopEventOptions = { arriveWithEvent?: boolean; /** The arrival time when it differs from the event (a stay away from the address). */ arrivedAt?: Date; auto?: { detectedAt: Date; meta: AutoStopEventInput["meta"] } };
+/** What fresh Webfleet GPS says about a mark the driver made in the app; the mark is recorded either way. */
+export type DriverGpsCheck = { status: "IN_ZONE" | "AWAY" | "STALE" | "NONE"; distanceMeters: number | null; ageMinutes: number | null };
+export type StopEventOptions = { arriveWithEvent?: boolean; /** The arrival time when it differs from the event (a stay away from the address). */ arrivedAt?: Date; auto?: { detectedAt: Date; meta: AutoStopEventInput["meta"] };
+  /** The driver pressed BELADEN/ENTLADEN in the driver app (owner, 17.11): a real event, the dispatcher is notified. */
+  driver?: { gps: DriverGpsCheck; /** A mark made without network reaches the server later: the undo window starts here. */ receivedAt?: Date } };
+/** How long the driver can take back an own mark; afterwards only the dispatcher can. */
+export const DRIVER_UNDO_MS = 5 * 60_000;
+const UNDOABLE_EVENTS = ["STOP_EVENT_AUTO", "STOP_EVENT_DRIVER"];
+
+/** «(без сети, получено в 11:05)» when the phone sent the mark later; nothing when it arrived at once. */
+export function offlineText(at: Date, receivedAt: Date): string {
+  return receivedAt.getTime() - at.getTime() >= 60_000 ? ` (без сети, получено в ${berlinClock(receivedAt)})` : "";
+}
+
+export function driverGpsText(gps: DriverGpsCheck): string {
+  const age = gps.ageMinutes === null ? "" : ` (GPS ${gps.ageMinutes} мин)`;
+  if (gps.status === "IN_ZONE") return `Webfleet: машина в зоне точки${age}.`;
+  if (gps.status === "AWAY") return `Webfleet: машина в ${kilometres(gps.distanceMeters ?? 0)} от точки${age} — проверьте.`;
+  return gps.status === "STALE" ? "Webfleet: GPS устарел, сверить нельзя." : "Webfleet: позиции машины нет, сверить нельзя.";
+}
 
 type LegState = { id: string; status: string; startedAt: string | null; finishedAt: string | null; drivePlan: string | null };
 type AutoStopEventRecord = {
+  /** Present on a mark the driver made; absent on an automatic one. */
+  driver?: { gps: DriverGpsCheck };
   eventId: string;
   eventType: "LOADED" | "UNLOADED";
   at: string;
   /** `arrivedAt`: null when the stop had no arrival before the event (absent in records written before 15.11.2026). */
   before: { clockState: string | null; trailerPlate: string | null; tour: { status: string; completedAt: string | null; actualStartAt: string | null }; legs: LegState[]; arrivedAt?: string | null };
   activated: { tourId: string; transferLeg: LegState | null } | null;
-  meta: AutoStopEventInput["meta"];
+  meta: AutoStopEventInput["meta"] | { chain: string[] };
 };
 
 function legState(leg: { id: string; status: string; startedAt: Date | null; finishedAt: Date | null; drivePlan: string | null }): LegState {
@@ -1147,7 +1187,7 @@ export function enrichTour(tour: TourAggregate, now = new Date(), driver: Driver
   const deadlineOf = (leg: { toStopId: string }) => { const stop = tour.stops.find((item) => item.id === leg.toStopId); return stop?.appointmentAt ?? stop?.appointmentWindowEndAt ?? null; };
   const eta = activeLeg ? positionEta(tour.vehicle, activeLeg, now, driver, deadlineOf(activeLeg)) : null;
 
-  const currentDelayMinutes = nextStop ? calculateLateMinutes(eta, nextStop.appointmentAt) : 0;
+  const currentDelayMinutes = nextStop ? calculateLateMinutes(eta, nextStop.appointmentAt ?? nextStop.appointmentWindowEndAt) : 0;
   return {
     ...toIsoObject(tour),
     stops: withTerminGroups(tour.stops).map(toIsoObject),
