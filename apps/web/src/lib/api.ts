@@ -12,6 +12,8 @@ import type {
   DashboardResponse,
   OrderImportPreview,
   ImportSpeedSummary,
+  BasePlace,
+  BaseWeek,
   GeocodeResult,
   HistoryResponse,
   Tour,
@@ -373,6 +375,11 @@ export const api = {
   /** "SZ" → Salzgitter, remembered for every later Auftrag. */
   learnCityCode: (code: string, city: string) => request<{ id: string }>('/address-rules/city-codes', { method: 'POST', body: JSON.stringify({ code, city }) }),
   geocode: (address: string) => request<GeocodeResult>(`/geocode?address=${encodeURIComponent(address)}`),
+  base: (week?: string) => request<{ place: BasePlace | null; week: BaseWeek }>(`/base${week ? `?week=${week}` : ''}`),
+  saveBase: (place: BasePlace) => request<BasePlace>('/base', { method: 'PUT', body: JSON.stringify(place) }),
+  saveBaseWeek: (week: string, payload: { trucks: string; dueAt?: string | null }) => request<BaseWeek>(`/base/weeks/${week}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  markAtBase: (visitId: string) => request<unknown>(`/base/visits/${encodeURIComponent(visitId)}/arrived`, { method: 'POST', body: '{}' }),
+  revertAtBase: (visitId: string) => request<unknown>(`/base/visits/${encodeURIComponent(visitId)}/arrived/revert`, { method: 'POST', body: '{}' }),
   reverseGeocode: (latitude: number, longitude: number) => request<{ address: string | null }>(`/geocode/reverse?lat=${latitude.toFixed(5)}&lon=${longitude.toFixed(5)}`),
   resolveAddress: (payload: { address: string; city?: string | null; company?: string | null }) =>
     request<AddressResolution>('/geocode/resolve', { method: 'POST', body: JSON.stringify(payload) }),

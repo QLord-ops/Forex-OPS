@@ -5,7 +5,7 @@ import type { DashboardVehicle } from '../types/domain'
 
 export type AttentionTone = 'dwell' | 'critical' | 'action' | 'watch' | 'moving' | 'ok' | 'idle'
 export type StatusTone = 'ok' | 'stop' | 'late' | 'plan' | 'idle'
-export type FleetFilter = 'ALL' | 'DECIDE' | 'LATE' | 'MOVING' | 'AT_STOP' | 'PLANNED' | 'TERMIN' | 'NO_TERMIN' | 'IDLE'
+export type FleetFilter = 'ALL' | 'DECIDE' | 'LATE' | 'MOVING' | 'AT_STOP' | 'PLANNED' | 'TERMIN' | 'NO_TERMIN' | 'BASE' | 'IDLE'
 export type FleetSort = 'URGENCY' | 'NUMBER' | 'TERMIN'
 
 export function getDwellMinutes(row: DashboardVehicle, now = Date.now()) {
@@ -188,6 +188,7 @@ export function matchesFleetFilter(row: DashboardVehicle, filter: FleetFilter, n
   if (filter === 'MOVING') return row.statusText === 'MOVING'
   if (filter === 'TERMIN') return Boolean(terminOf(row.tour))
   if (filter === 'NO_TERMIN') return terminNeeded(row)
+  if (filter === 'BASE') return Boolean(row.baseVisit)
   if (filter === 'AT_STOP') return atStop(row, now)
   if (filter === 'PLANNED') return notStarted(row) && vehicleStatus(row, now).tone === 'plan'
   return !row.tour || ['IDLE', 'NO_ACTIVE_ROUTE'].includes(row.statusText)

@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 
 import { usePolling } from '../hooks/usePolling'
 import { AssignmentBar } from './AssignmentBar'
+import { BaseVisitBar } from './BaseVisitBar'
 import { CopyForDriver } from './CopyForDriver'
 import { DriverShiftCode } from './DriverShiftCode'
 import { CustomerNoticeButton } from './CustomerNotice'
@@ -125,6 +126,7 @@ export function TruckCard({ vehicleId, row, onClose, onTrack, sheet = false }: P
         <button type="button" className="icon-button icon-button-compact" onClick={onClose} aria-label="Закрыть карточку"><X className="h-4 w-4" /></button>
       </header>
       {row ? <AssignmentBar row={row} /> : null}
+      {row?.baseVisit ? <BaseVisitBar visit={row.baseVisit} /> : null}
 
       <div className="truck-card-tabbar">
         <div className="truck-card-tabs" role="tablist" aria-label="Разделы карточки" onKeyDown={onTabKey}>

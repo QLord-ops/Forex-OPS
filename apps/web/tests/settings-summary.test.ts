@@ -35,7 +35,7 @@ describe('settings summary', () => {
 
   it('leaves the admin blocks out of the navigation of a dispatcher', () => {
     const ids = (admin: boolean) => settingsNav(admin).flatMap((group) => group.items.map((item) => item.id))
-    expect(ids(true)).toEqual(['theme', 'notifications', 'workday', 'address-rules', 'own-addresses', 'stop-coordinates', 'import-rules', 'import-speed', 'access'])
+    expect(ids(true)).toEqual(['theme', 'notifications', 'workday', 'address-rules', 'own-addresses', 'stop-coordinates', 'base', 'import-rules', 'import-speed', 'access'])
     expect(ids(false)).toEqual(['theme', 'notifications', 'workday', 'address-rules', 'own-addresses', 'import-rules', 'access'])
   })
 })

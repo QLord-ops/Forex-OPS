@@ -9,6 +9,7 @@ import { ImportSpeed } from '../components/ImportSpeed'
 import { OwnAddresses } from '../components/OwnAddresses'
 import { PushToggle } from '../components/PushToggle'
 import { ScopeBadge, SettingsSection } from '../components/SettingsSection'
+import { BaseSettings } from '../components/BaseSettings'
 import { StopCoordinatesCheck } from '../components/StopCoordinatesCheck'
 import { WorkHoursSettings } from '../components/WorkHoursSettings'
 import { alertPermission, soundEnabled } from '../lib/alerts'
@@ -141,6 +142,7 @@ export function SettingsPage() {
             <AddressRules onLoaded={setRules} />
             <OwnAddresses />
             {admin ? <StopCoordinatesCheck /> : null}
+            {admin ? <BaseSettings /> : null}
           </div>
 
           <div className="settings-group" role="group" aria-labelledby="settings-group-import">

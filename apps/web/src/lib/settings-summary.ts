@@ -63,7 +63,7 @@ export function settingsNav(admin: boolean): SettingsNavGroup[] {
   return [
     { name: 'Личные', items: [{ id: 'theme', label: 'Тема' }, { id: 'notifications', label: 'Уведомления' }, { id: 'workday', label: 'Рабочий день' }] },
     { name: 'Адреса', items: [{ id: 'address-rules', label: 'Правила адресов' }, { id: 'own-addresses', label: 'Адреса из Auftrag' },
-      ...(admin ? [{ id: 'stop-coordinates', label: 'Координаты точек' }] : [])] },
+      ...(admin ? [{ id: 'stop-coordinates', label: 'Координаты точек' }, { id: 'base', label: 'База и заезды' }] : [])] },
     { name: 'Импорт Auftrag', items: [{ id: 'import-rules', label: 'Правила импорта' }, ...(admin ? [{ id: 'import-speed', label: 'Скорость распознавания' }] : [])] },
     { name: 'Доступ и подключения', items: [{ id: 'access', label: admin ? 'Диспетчеры, команда, Webfleet' : 'Команда, Webfleet' }] }
   ]

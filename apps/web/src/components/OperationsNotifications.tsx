@@ -4,12 +4,22 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 
 import { autoEventOf, departureOf, useNotifications } from '../context/notifications'
 import { alertPermission, answerRequired, withoutVehicle, bannerDismissed, dismissBanner, needsAttention, nightItems, requestAlertPermission, type AlertNotification, type AlertPermission } from '../lib/alerts'
+import { api } from '../lib/api'
 import { pendingToDocument } from '../lib/appointments'
+import { weekdayClock } from '../lib/base-visit'
 import { formatDurationMinutes, formatTime } from '../lib/format'
 import { terminText } from '../lib/tours'
 import type { Stop } from '../types/domain'
 import { AppointmentReview } from './AppointmentReview'
 import { useIsPhone } from '../hooks/useIsPhone'
+
+/** The payload of «машина на базе»: which week it closes and until when the truck stands. */
+function baseArrivalOf(payloadJson?: string | null): { baseVisitId: string; arrivedAt: string; freeAt: string } | null {
+  try {
+    const value = JSON.parse(payloadJson ?? '') as Record<string, unknown>
+    return typeof value.baseVisitId === 'string' && typeof value.arrivedAt === 'string' && typeof value.freeAt === 'string' ? { baseVisitId: value.baseVisitId, arrivedAt: value.arrivedAt, freeAt: value.freeAt } : null
+  } catch { return null }
+}
 
 type Tone = 'late' | 'termin' | 'arrival' | 'ok' | 'info'
 
@@ -57,6 +67,13 @@ function useDecision(item: AlertNotification, stop: Stop | null | undefined, nes
     detail = place ? `${place}${stop?.arrivedAt ? `, ${formatTime(stop.arrivedAt)}` : ''} · GPS Webfleet, автоматически. BELADEN/ENTLADEN запишется сам, когда машина уедет из города` : item.message
     actions = [{ label: 'Понятно', primary: true, run: () => void state.resolve(item, 'ack') }]
     if (item.stopId) actions.push({ label: 'Отменить прибытие', run: () => void state.resolve(item, 'revert') })
+  } else if (item.type === 'BASE_ARRIVAL') {
+    const home = baseArrivalOf(item.payloadJson)
+    tone = 'arrival'; Icon = MapPinCheck
+    title = `${vehicle ? `LKW ${vehicle}` : 'Машина'} на базе`
+    detail = home ? `С ${weekdayClock(home.arrivedAt)} · GPS Webfleet, автоматически. Снова работает с ${weekdayClock(home.freeAt)}` : item.message
+    actions = [{ label: 'Понятно', primary: true, run: () => void state.resolve(item, 'ack') }]
+    if (home) actions.push({ label: 'Отменить заезд', run: () => void api.revertAtBase(home.baseVisitId).then(() => state.resolve(item, 'ack')).catch(() => undefined) })
   } else if (item.type === 'AUTO_STOP_EVENT') {
     const event = autoEventOf(item.payloadJson)
     const types = event?.stopTypes ?? [(event?.stopType ?? stop?.type) === 'LOAD' ? 'LOAD' : 'UNLOAD']

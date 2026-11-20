@@ -24,7 +24,7 @@ test('админ: группы, сводка и пометка «где хран
   await signedIn(page, 'admin')
   await page.goto('/settings')
   const nav = page.getByRole('navigation', { name: 'Разделы настроек' })
-  await expect(nav.getByRole('link')).toHaveText(['Тема', 'Уведомления', 'Рабочий день', 'Правила адресов', 'Адреса из Auftrag', 'Координаты точек',
+  await expect(nav.getByRole('link')).toHaveText(['Тема', 'Уведомления', 'Рабочий день', 'Правила адресов', 'Адреса из Auftrag', 'Координаты точек', 'База и заезды',
     'Правила импорта', 'Скорость распознавания', 'Диспетчеры, команда, Webfleet'])
 
   const scopeOf = (name: string | RegExp) => page.getByRole('region', { name }).locator('.settings-scope')
@@ -35,6 +35,7 @@ test('админ: группы, сводка и пометка «где хран
   await expect(scopeOf(/Адреса из Auftrag/)).toHaveText('Общее для всех')
   await expect(scopeOf('Правила импорта')).toHaveText('Общее для всех')
   await expect(scopeOf('Координаты точек')).toHaveText('Только админ')
+  await expect(scopeOf('База и заезды')).toHaveText('Только админ')
   await expect(scopeOf('Скорость распознавания')).toHaveText('Только админ')
 
   const summary = page.getByLabel('Сводка настроек')

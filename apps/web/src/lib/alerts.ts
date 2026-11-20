@@ -161,6 +161,7 @@ export function titleWithCount(count: number) {
 
 export function alertHeading(type: string) {
   if (type === 'AUTO_ARRIVAL') return 'Прибытие по GPS'
+  if (type === 'BASE_ARRIVAL') return 'Машина на базе'
   if (type === 'AUTO_STOP_EVENT') return 'Выехала из города, отметка записана'
   if (type === 'TRAFFIC_DELAY') return 'Пробка на маршруте'
   if (type === 'LONG_DWELL') return 'Долгая стоянка'
