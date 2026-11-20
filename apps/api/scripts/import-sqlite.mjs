@@ -43,12 +43,15 @@ const modelOrder = [
   "vehicle",
   // A shift code belongs to its truck.
   "driverShift",
+  // A week at the base belongs to its truck.
+  "baseVisit",
   "tour",
   "stop",
   "leg",
   "event",
   "alert",
   "apiQuota",
+  "appSetting",
   "operationEvent",
   "notification",
   // A personal «set aside» mark references its notification and its dispatcher.
@@ -148,7 +151,7 @@ function assertRelations(data) {
       requireId(stopIds.has(row.stopId), `${model} ${row.id} has missing stop ${row.stopId}`);
     }
   }
-  for (const model of ["vehicleIntegration", "vehicleTelemetry", "vehicleIssue", "driverShift"]) {
+  for (const model of ["vehicleIntegration", "vehicleTelemetry", "vehicleIssue", "driverShift", "baseVisit"]) {
     for (const row of data[model]) {
       requireId(vehicleIds.has(row.vehicleId), `${model} ${row.id} has missing vehicle ${row.vehicleId}`);
     }
