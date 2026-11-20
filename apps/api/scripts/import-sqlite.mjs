@@ -41,6 +41,8 @@ const modelOrder = [
   "pushSubscription",
   "dispatcherCover",
   "vehicle",
+  // A shift code belongs to its truck.
+  "driverShift",
   "tour",
   "stop",
   "leg",
@@ -146,7 +148,7 @@ function assertRelations(data) {
       requireId(stopIds.has(row.stopId), `${model} ${row.id} has missing stop ${row.stopId}`);
     }
   }
-  for (const model of ["vehicleIntegration", "vehicleTelemetry", "vehicleIssue"]) {
+  for (const model of ["vehicleIntegration", "vehicleTelemetry", "vehicleIssue", "driverShift"]) {
     for (const row of data[model]) {
       requireId(vehicleIds.has(row.vehicleId), `${model} ${row.id} has missing vehicle ${row.vehicleId}`);
     }
