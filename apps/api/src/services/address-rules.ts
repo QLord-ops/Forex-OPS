@@ -202,7 +202,11 @@ type DraftStopLike = { company: string | null; address: string | null; city?: st
 export function applyRulesToStop<T extends DraftStopLike>(stop: T, rules: AddressRuleRecord[]): T & { sourceLabel: string; terminRequired: boolean; ruleApplied: boolean } {
   const city = expandCity(stop.city ?? null, rules);
   const sourceLabel = [stop.company, city].filter(Boolean).join(" ");
-  const site = findSiteRule(stop.company, city, rules);
+  // The printed postcode decides the town (owner, 20.11.2026): a place learned for «Petershagen» in 32469 is not the
+  // stop «15370 Petershagen». The first digit is the postal zone; districts of one town never differ in it.
+  const printed = `${stop.address ?? ""} ${stop.city ?? ""}`.match(/\b\d{5}\b/)?.[0];
+  const found = findSiteRule(stop.company, city, rules);
+  const site = found && printed && found.postalCode && found.postalCode[0] !== printed[0] ? null : found;
   const shortCompany = (stop.company ?? "").trim().split(/\s+/).length <= 2;
   const companyName = site?.company ?? (shortCompany ? expandCompany(stop.company, rules) : stop.company);
   const address = site?.street ? [site.street, [site.postalCode, site.city ?? city].filter(Boolean).join(" ")].filter(Boolean).join(", ") : stop.address;

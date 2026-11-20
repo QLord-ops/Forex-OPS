@@ -3,7 +3,7 @@ import type { AddressResearchCandidate, AddressResearcher } from "./address-rese
 import type { RoutingProvider } from "./routing.js";
 import { RoutingError } from "./routing.js";
 import { expandCity, findSiteRule, type AddressRuleRecord } from "./address-rules.js";
-import { findKnownPlace, knownPlaceResolution, type KnownPlace } from "./known-places.js";
+import { findKnownPlace, fitsPostcodeRegion, knownPlaceResolution, type KnownPlace } from "./known-places.js";
 import { addressParts, type AddressCheck, type AddressChecker, type PlaceSearch } from "./address-check.js";
 
 export const geocodePrecisions = ["EXACT", "STREET", "POSTCODE_CITY", "CITY"] as const;
@@ -127,12 +127,27 @@ async function resolveCore(
     const km = distanceKm(town, point);
     return km > MAX_DISTANCE_FROM_CITY_KM ? km : null;
   };
+  /**
+   * A place the fleet stored (a learned rule, the address book, a gate) for a stop with a printed postcode: its own
+   * label is not proof, the point is measured against that postcode's area. A rule learned while the stop stood in the
+   * namesake town kept sending «15370 Petershagen» to Minden (owner, 20.11.2026).
+   */
+  const storedFar = async (point: { latitude: number; longitude: number }, storedCity?: string | null, storedPostalCode?: string | null): Promise<number | typeof UNCHECKED | null> => {
+    if (!anchor?.postalCode) return farFromCity(point, storedCity, storedPostalCode);
+    // The address book knows where the postcode's region lies: no request when it vouches for the point.
+    const inRegion = fitsPostcodeRegion(point, anchor.postalCode, places);
+    if (inRegion === true) return null;
+    const town = await anchored();
+    if (!town) return inRegion === false ? UNCHECKED : farFromCity(point, storedCity, storedPostalCode);
+    const km = distanceKm(town, point);
+    return km > MAX_DISTANCE_FROM_CITY_KM ? km : null;
+  };
   const away = (km: number | typeof UNCHECKED) => km === UNCHECKED ? `не индекс ${anchor!.postalCode}, город не проверить` : `${Math.round(km)} км от ${anchor!.query}`;
 
   const site = findSiteRule(input.company, city, rules);
   if (site && site.latitude !== null && site.longitude !== null) {
     const label = [site.company, site.street, [site.postalCode, site.city].filter(Boolean).join(" ")].filter(Boolean).join(", ");
-    const km = await farFromCity({ latitude: site.latitude, longitude: site.longitude }, site.city, site.postalCode);
+    const km = await storedFar({ latitude: site.latitude, longitude: site.longitude }, site.city, site.postalCode);
     if (km === null) {
       return { latitude: site.latitude, longitude: site.longitude, city: site.city, label, provider: "address-rule",
         sourceAddress, resolvedAddress: label, precision: "EXACT", attempts: [`правило: ${site.pattern}`] };
@@ -142,7 +157,11 @@ async function resolveCore(
 
   // The same door (street, house number, postcode) is in the address book: its coordinates need no geocoder.
   const place = findKnownPlace({ ...input, city }, places);
-  if (place) return knownPlaceResolution(place, sourceAddress);
+  if (place) {
+    const km = await storedFar(place, place.city, place.postalCode);
+    if (km === null) return knownPlaceResolution(place, sourceAddress);
+    attempts.push(`адресная книга «${place.name}» отброшена: ${away(km)}`);
+  }
 
   // No street with a house number, only a company in a town ("BLG, Bremen"): a business directory knows the plant better.
   if (companySearch && input.company?.trim() && anchor && !addressParts(sourceAddress, city).street) {
