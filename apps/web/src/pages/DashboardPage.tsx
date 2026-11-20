@@ -18,6 +18,7 @@ import { usePolling } from '../hooks/usePolling'
 import { usePopover } from '../hooks/usePopover'
 import { useVehiclePosition } from '../hooks/useVehiclePosition'
 import { api, type RouteOptions } from '../lib/api'
+import { baseChip, headsToBase } from '../lib/base-visit'
 import { compareVehicles, driverHoursLine, etaPlanLine, getAttention, liveSpeed, manuallyStopped, matchesFleetFilter, notStarted, plannedStart, positionSource, runsLate, activityNote, terminMargin, terminNeeded, terminToday, vehiclePlace, vehicleStatus, type FleetFilter, type FleetSort } from '../lib/fleet-status'
 import { CustomerNoticeButton } from '../components/CustomerNotice'
 import { noticeDue, noticeLine } from '../lib/customer-notice'
@@ -43,7 +44,7 @@ const scopes: Array<{ value: FleetScope; label: string }> = [
 ]
 const filters: Array<{ value: FleetFilter; label: string }> = [
   { value: 'ALL', label: 'Все' }, { value: 'DECIDE', label: 'Решить' }, { value: 'LATE', label: 'Опаздывают' }, { value: 'MOVING', label: 'В пути' },
-  { value: 'AT_STOP', label: 'На точке' }, { value: 'PLANNED', label: 'Запланированы' }, { value: 'TERMIN', label: 'Termin' }, { value: 'NO_TERMIN', label: 'Нет Termin' }, { value: 'IDLE', label: 'Без тура' }
+  { value: 'AT_STOP', label: 'На точке' }, { value: 'PLANNED', label: 'Запланированы' }, { value: 'TERMIN', label: 'Termin' }, { value: 'NO_TERMIN', label: 'Нет Termin' }, { value: 'BASE', label: 'На базу' }, { value: 'IDLE', label: 'Без тура' }
 ]
 const sorts: Array<{ value: FleetSort; label: string }> = [
   { value: 'URGENCY', label: 'по срочности' }, { value: 'TERMIN', label: 'по Termin' }, { value: 'NUMBER', label: 'по номеру' }
@@ -369,12 +370,17 @@ function FleetSummary({ rows, decisions, filter, onFilter }: { rows: DashboardVe
   const late = rows.filter((row) => runsLate(row)).length
   const atStop = rows.filter((row) => vehicleStatus(row).tone === 'stop').length
   const termin = rows.filter((row) => terminToday(row)).length
+  const home = rows.filter((row) => row.baseVisit)
+  const homeOpen = home.filter(headsToBase)
+  const homeRisk = homeOpen.some((row) => row.baseVisit!.state !== 'DUE')
   const longest = rows.reduce((max, row) => vehicleStatus(row).tone === 'stop' && row.dwellMinutes ? Math.max(max, row.dwellMinutes) : max, 0)
   const items: Array<{ value: string; label: string; tone?: string; filter?: FleetFilter; title?: string }> = [
     { value: String(rows.length), label: 'машин', filter: 'ALL' },
     { value: String(late), label: 'опаздывает', tone: late ? 'late' : undefined, filter: 'LATE', title: 'ETA позже Termin или задержка в пути' },
     { value: String(atStop), label: 'на точке', tone: atStop ? 'stop' : undefined, filter: 'AT_STOP' },
     { value: String(termin), label: 'Termin сегодня', tone: termin ? 'termin' : undefined, filter: 'TERMIN' },
+    ...(home.length ? [{ value: `${home.length - homeOpen.length}/${home.length}`, label: 'на базе', tone: homeRisk ? 'late' : undefined, filter: 'BASE' as const,
+      title: `На этой неделе на базу: ${home.length}, уже на базе: ${home.length - homeOpen.length}${homeRisk ? '. Есть машины, которые не успевают' : ''}` }] : []),
     { value: String(decisions), label: decisions === 1 ? 'вопрос' : 'вопросов', tone: decisions ? 'late' : undefined, filter: 'DECIDE' },
     { value: longest ? formatDurationMinutes(Math.round(longest)) : '–', label: 'дольше всех на точке', tone: longest >= 120 ? 'late' : longest ? 'stop' : undefined }
   ]
@@ -501,6 +507,7 @@ function VehicleRow({ row, selected, open, pinned, owner, busy, unread, onOpen, 
   const calm = attention.tone === 'ok' || attention.tone === 'moving' || attention.tone === 'idle' || attention.tone === 'watch'
   const number = `LKW ${row.vehicle.vehicleNumber}`
   const clock = cardClock(row, status.tone, dwell)
+  const home = baseChip(row.baseVisit)
   const speed = status.tone !== 'stop' && liveSpeed(row) !== null ? `${liveSpeed(row)} км/ч` : null
   const driving = typeof row.clockSummary?.remainingDrivingMinutes === 'number' ? `вождение ещё ${formatClock(row.clockSummary.remainingDrivingMinutes)}` : null
   const km = row.tour && typeof row.remainingKm === 'number' && row.remainingKm >= 1 && status.tone !== 'stop' ? `осталось ${Math.round(row.remainingKm)} км` : null
@@ -514,6 +521,7 @@ function VehicleRow({ row, selected, open, pinned, owner, busy, unread, onOpen, 
         <span className="vehicle-row-line"><span className={`status-dot status-dot-${status.tone}`} aria-hidden="true" /><span className={`vehicle-row-status status-text-${status.tone}`}>{status.label}</span>{place ? <span className="truncate" title={place}>· {place}</span> : null}</span>
         <span className="vehicle-row-meta">
           {margin !== null && row.eta && status.tone !== 'stop' ? <span className={classNames('vehicle-row-chip', margin < 0 ? 'vehicle-row-chip-late' : 'vehicle-row-chip-ok')}>{margin < 0 ? `опоздание ${formatDurationMinutes(-margin)}` : `запас ${formatDurationMinutes(margin)}`}</span> : null}
+          {home ? <span className={classNames('vehicle-row-chip', home.tone === 'late' && 'vehicle-row-chip-late', home.tone === 'ok' && 'vehicle-row-chip-ok')} title={home.title}>{home.label}</span> : null}
           {dwell ? <span className="vehicle-row-chip vehicle-row-chip-stop">на точке {formatDurationMinutes(dwell)}</span> : null}
           {termin ? <span className="vehicle-row-termin">{termin.label}</span> : terminNeeded(row) ? <span className="termin-needed">Termin нужен</span> : null}
           {!termin && plannedAt ? <span className="vehicle-row-chip">план {formatDateTime(plannedAt)}</span> : null}

@@ -87,6 +87,8 @@ function classify(item: PriorityInput, facts: PriorityFacts, superseded: Set<str
       return { priority: "RISK" as const, urgent: false, reason: superseded.has(item.id) ? "есть новее" : stop?.arrivedAt ? "машина уже на точке" : null };
     case "TERMIN_MET":
       return { priority: payload.onTime === false ? "RISK" as const : "INFO" as const, urgent: false, reason: null };
+    case "BASE_ARRIVAL":
+      return { priority: "INFO" as const, urgent: false, reason: null };
     case "AUTO_ARRIVAL":
       return { priority: "INFO" as const, urgent: false, reason: completed };
     case "STOP_MOVED_TO_GATE":

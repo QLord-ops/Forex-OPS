@@ -126,8 +126,23 @@ export interface Tour {
 /** «Заказчик уведомлён»: the last delay letter of the active tour, recorded by OPS (the letter itself goes from the dispatcher's mail). */
 export interface CustomerNotice { at: string; by: string; channel: 'EMAIL' | 'COPY'; stopId: string; etaAt: string | null; delayMinutes: number | null }
 
+/** The truck is on this week's list for the base (owner, 20.11): due, at the base, or free again on Monday morning. */
+export interface BaseVisit {
+  id: string; weekStart: string; dueAt: string; freeAt: string; arrivedAt: string | null; arrivedSource: string | null
+  /** After the last planned stop, by distance: an estimate, not an ETA. */
+  expectedAt: string | null
+  state: 'AT_BASE' | 'DUE' | 'TIGHT' | 'OVERDUE'
+}
+export interface BasePlace { address: string; latitude: number; longitude: number; radiusMeters: number }
+export interface BaseWeek {
+  weekStart: string; dueAt: string; freeAt: string
+  trucks: Array<{ id: string; vehicleId: string; vehicleNumber: string; licensePlate: string | null; arrivedAt: string | null; arrivedSource: string | null }>
+  added?: string[]; removed?: string[]; unknown?: string[]
+}
+
 export interface DashboardVehicle {
   customerNotice?: CustomerNotice | null
+  baseVisit?: BaseVisit | null
   issues?: Array<{ id: string; kind: string; description: string; expectedResolvedAt: string | null; createdAt: string }>
   vehicle: Vehicle
   /** Customer and line of the truck; null while it is on no line. */

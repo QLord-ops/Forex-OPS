@@ -21,6 +21,8 @@ import {
 } from "./services/pdf-order-import.js";
 import { OsrmRoutingProvider, RoutingError, RoutingService } from "./services/routing.js";
 import { geocodePrecisions, resolveAddressWithFallback } from "./services/address-resolution.js";
+import { BaseVisits } from "./services/base-visits.js";
+import { registerBaseVisitRoutes } from "./routes/base-visits.js";
 import { OpenPlzChecker, TomTomPlaceSearch } from "./services/address-check.js";
 import { BudgetedAddressResearcher } from "./services/address-research.js";
 import { validateXlsxArchive } from "./services/xlsx-validation.js";
@@ -303,6 +305,7 @@ const webfleetDetails = new WebfleetDetailsSync(webfleetLive);
 const addressBook = new AddressBookSync(prisma);
 const webfleetTracks = new WebfleetTrackService();
 const webfleetTelemetry = new WebfleetTelemetryService(prisma, autoArrival, autoStopEvent, offsiteVisit);
+const baseVisits = new BaseVisits(prisma);
 // The driver's tachograph for the ETA (memory only); a Webfleet hiccup never breaks the position.
 const driverBudget = (id: string, now: Date) => readDriverBudget(prisma, webfleetLive, id, now).catch(() => null);
 const currentPosition = async (id: string, now = new Date()) => {
@@ -500,6 +503,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   registerAppointmentDocumentRoutes(app, { prisma, appointments: appointmentService, pending: pendingAppointments, audit, refreshAlertsForVehicle: (vehicleId) => refreshAlertsForVehicle(vehicleId) });
   registerDispatcherRoutes(app, prisma);
   registerDriverShiftRoutes(app, prisma);
+  registerBaseVisitRoutes(app, baseVisits);
   registerDriverRoutes(app, {
     prisma, tours: tourService, operations: operationsService,
     gps: (vehicleId, now) => webfleetTelemetry.latest(vehicleId, now),
@@ -586,6 +590,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
       await addressBook.refreshIfDue(new Date(), webfleetLive.objectsAt).catch((error) => app.log.error(error));
       await routeDeviation.check().catch((error) => app.log.error(error));
       await restAtStop.check().catch((error) => app.log.error(error));
+      await baseVisits.detect().catch((error) => app.log.error(error));
       await notificationService.refresh();
       await pendingAppointments.scan((input) => notificationService.publish(input)).catch((error) => app.log.error(error));
       await refreshAllAlerts();
@@ -1639,6 +1644,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
       orderBy: { vehicleNumber: "asc" }
     });
 
+    const [basePlace, baseWeeks] = await Promise.all([baseVisits.base(), baseVisits.current(vehicles.map((vehicle) => vehicle.id), generatedAt)]);
     const notices = await customerNotices.latestByTour(vehicles.flatMap((vehicle) => vehicle.tours.filter((tour) => tour.status === "ACTIVE").map((tour) => tour.id)));
     // Each truck needs a few small queries; running a handful at once keeps the 10 s poll fast as the fleet grows.
     const frontendVehicles = await mapWithConcurrency(vehicles, DASHBOARD_CONCURRENCY, async (vehicle) => {
@@ -1655,7 +1661,15 @@ export async function buildApp(options: BuildAppOptions = {}) {
       const calculatedPosition = await tourService.getCurrentPosition(vehicle.id, generatedAt, await gpsFixWithDriving(vehicle.id, latestTelemetry, driver, generatedAt), driver);
       const position = withWebfleetPosition(calculatedPosition, latestTelemetry);
       const currentStop = activeTour?.stops.find((stop) => !stop.completedAt) ?? null;
-      const scheduledStop = currentStop ? etaService.calculateVehicleSchedule(vehicle.tours, generatedAt, driver).find((stop) => stop.stopId === currentStop.id) : null;
+      const schedule = etaService.calculateVehicleSchedule(vehicle.tours, generatedAt, driver);
+      const scheduledStop = currentStop ? schedule.find((stop) => stop.stopId === currentStop.id) ?? null : null;
+      // Home to the base after the last planned stop; a truck without a tour drives from where it is.
+      const baseWeek = baseWeeks.get(vehicle.id);
+      const lastPlanned = schedule.at(-1);
+      const lastStop = lastPlanned ? vehicle.tours.flatMap((tour) => tour.stops).find((stop) => stop.id === lastPlanned.stopId) : undefined;
+      const freeAfter = lastPlanned?.latestDeparture ?? lastPlanned?.earliestDeparture ?? null;
+      const homeFrom = lastStop ? (freeAfter ? { latitude: lastStop.latitude, longitude: lastStop.longitude, at: freeAfter } : null)
+        : position.coordinate ? { latitude: position.coordinate[1], longitude: position.coordinate[0], at: generatedAt } : null;
       // Every open stop gets its ETA, continued from the one shown for the stop the truck drives to.
       const stopEtas = activeTour ? etaService.stopEtas(vehicle.tours, activeTour.id, generatedAt, driver, position.eta ? new Date(position.eta) : null) : new Map<string, StopEta>();
       // With fresh GPS the ETA is measured from the truck; the saved plan only fills in when there is no GPS.
@@ -1758,6 +1772,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
         statusDurationSeconds: statusStartedAt ? Math.max(0, Math.floor((generatedAt.getTime() - statusStartedAt.getTime()) / 1000)) : null,
         lastOperation: lastOperation ? toIsoObject(lastOperation) : null,
         customerNotice: activeTour ? notices.get(activeTour.id) ?? null : null,
+        baseVisit: baseWeek ? baseVisits.view(baseWeek, baseVisits.expectedAt(basePlace, homeFrom), generatedAt) : null,
         clockSummary,
         telemetry: latestTelemetry ? {
           source: "WEBFLEET",
