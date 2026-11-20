@@ -242,3 +242,9 @@ export function playAlertSound(type: string) {
     oscillator.stop(at + 0.2)
   })
 }
+
+/** «LKW 231 прибыла на выгрузку» → «Прибыла на выгрузку»: on the line over the map the truck stands in its badge. */
+export function withoutVehicle(title: string): string {
+  const rest = title.replace(/^(?:LKW|Грузовик)\s+[^\s:,]+\s*:?\s*/u, '')
+  return rest ? rest.charAt(0).toLocaleUpperCase('ru-RU') + rest.slice(1) : title
+}

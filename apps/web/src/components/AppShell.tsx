@@ -78,15 +78,21 @@ function Rail() {
   )
 }
 
-/** The bell counts the open questions; the list itself sits on the dashboard, the bell shows it on every page. */
+/**
+ * The bell counts the open questions; the list itself sits on the dashboard, the bell shows it on every page.
+ * «Для сведения» no longer comes up over the map (owner, 19.11): it is a quiet count here when nothing waits for a decision.
+ */
 function BellMenu() {
   const { open } = useNotifications()
   const popover = usePopover()
   const count = open.filter(needsAttention).length
+  const info = open.length - count
+  const label = [count ? `Требует решения: ${count}` : null, info ? `для сведения: ${info}` : null].filter(Boolean).join(' · ')
   return <div className="popover-anchor" ref={popover.ref}>
-    <button type="button" className="rail-round rail-bell" aria-expanded={popover.open} onClick={popover.toggle} aria-label={count ? `Требует решения: ${count}` : 'Уведомления'} title={count ? `Требует решения: ${count}` : 'Нет открытых вопросов'}>
+    <button type="button" className="rail-round rail-bell" aria-expanded={popover.open} onClick={popover.toggle} aria-label={label || 'Уведомления'} title={label || 'Нет открытых вопросов'}>
       <Bell className="h-5 w-5" aria-hidden="true" />
-      {count ? <span className="rail-bell-count" aria-hidden="true">{count > 99 ? '99+' : count}</span> : null}
+      {count ? <span className="rail-bell-count" aria-hidden="true">{count > 99 ? '99+' : count}</span>
+        : info ? <span className="rail-bell-count rail-bell-count-info" aria-hidden="true">{info > 99 ? '99+' : info}</span> : null}
     </button>
     {popover.open ? <div className="popover-menu popover-menu-side bell-popover" aria-label="Требует решения">
       <p className="bell-popover-title">Требует решения <span>{count}</span></p>

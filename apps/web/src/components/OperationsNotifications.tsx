@@ -1,9 +1,9 @@
-import { CalendarCheck, CalendarDays, LogOut, MapPinCheck, MessageSquareText, Moon, PackageCheck, Route, Smartphone, TriangleAlert } from 'lucide-react'
+import { CalendarCheck, CalendarDays, LogOut, MapPinCheck, MessageSquareText, Moon, MoreHorizontal, PackageCheck, Route, Smartphone, TriangleAlert } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 
 import { autoEventOf, departureOf, useNotifications } from '../context/notifications'
-import { alertPermission, answerRequired, bannerDismissed, dismissBanner, needsAttention, nightItems, requestAlertPermission, type AlertNotification, type AlertPermission } from '../lib/alerts'
+import { alertPermission, answerRequired, withoutVehicle, bannerDismissed, dismissBanner, needsAttention, nightItems, requestAlertPermission, type AlertNotification, type AlertPermission } from '../lib/alerts'
 import { pendingToDocument } from '../lib/appointments'
 import { formatDurationMinutes, formatTime } from '../lib/format'
 import { terminText } from '../lib/tours'
@@ -13,8 +13,10 @@ import { useIsPhone } from '../hooks/useIsPhone'
 
 type Tone = 'late' | 'termin' | 'arrival' | 'ok' | 'info'
 
-/** One open question for the dispatcher, with its own buttons. Used in «Требует решения», the bell and the toast. */
-export function DecisionCard({ item, stop, onSelect, openLink = false, nested = false, extra }: { item: AlertNotification; stop?: Stop | null; onSelect?: (vehicleId: string) => void; openLink?: boolean; nested?: boolean; extra?: ReactNode }) {
+type DecisionAction = { label: string; primary?: boolean; run: () => void }
+
+/** What one notification says and offers: the full title and detail, and the short line for the row on the map. */
+function useDecision(item: AlertNotification, stop: Stop | null | undefined, nested: boolean) {
   const state = useNotifications()
   // Earlier notifications of the same truck fold under its card; «Понятно» closes them too, decisions that wait for an answer stay.
   const stack = nested ? [] : state.stackOf(item)
@@ -33,13 +35,17 @@ export function DecisionCard({ item, stop, onSelect, openLink = false, nested = 
   let Icon = MessageSquareText
   let title = item.message
   let detail: string | null = null
-  let actions: Array<{ label: string; primary?: boolean; run: () => void }> = [{ label: 'Прочитано', run: () => void state.resolve(item, 'ack') }]
+  let short: string | null = null
+  let sub: string | null = null
+  let actions: DecisionAction[] = [{ label: 'Прочитано', run: () => void state.resolve(item, 'ack') }]
   if (departure) {
     const load = departure.stopType === 'LOAD'
     tone = 'late'; Icon = LogOut
     const missing = departure.chain ? departure.chain.map((stop) => stop.stopType === 'LOAD' ? 'BELADEN' : 'ENTLADEN').join(' и ') : load ? 'BELADEN' : 'ENTLADEN'
     title = `${vehicle ? `LKW ${vehicle} уехала` : 'Машина уехала'} ${load ? 'с загрузки' : 'с выгрузки'} без ${missing}`
     detail = place ? `${place}, выезд ${departure.time} · GPS Webfleet` : item.message
+    short = `Уехала без ${missing}`
+    sub = [`${load ? 'с загрузки' : 'с выгрузки'}${place ? ` ${place}` : ''}`, departure.time, 'GPS Webfleet'].join(' · ')
     actions = [
       { label: `${departure.chain ? departure.chain.map((stop) => stop.stopType === 'LOAD' ? 'BELADEN' : 'ENTLADEN').join(' + ') : load ? 'BELADEN' : 'ENTLADEN'} ${departure.time}`, primary: true, run: () => void state.answerDeparture(item, 'done') },
       { label: departure.chain ? 'Ещё не готова' : load ? 'Не загружена' : 'Не выгружена', run: () => void state.answerDeparture(item, 'keep') },
@@ -123,6 +129,7 @@ export function DecisionCard({ item, stop, onSelect, openLink = false, nested = 
     detail = candidate && pending
       ? [`LKW ${candidate.vehicleNumber}`, `Auftrag ${candidate.orderNumber}`, [candidate.city ?? pending.city, terminText(pending)].filter(Boolean).join(' ')].join(' · ')
       : item.message
+    if (candidate && pending) sub = [`Auftrag ${candidate.orderNumber}`, [candidate.city ?? pending.city, terminText(pending)].filter(Boolean).join(' ')].join(' · ')
     actions = [
       { label: 'Принять', primary: true, run: () => void state.acceptTermin(item) },
       { label: 'Исправить', run: () => void state.reviewTermin(item) }
@@ -130,7 +137,18 @@ export function DecisionCard({ item, stop, onSelect, openLink = false, nested = 
   }
 
   if (closes > 1) actions = actions.map((action) => action.label === 'Понятно' || action.label === 'Прочитано' ? { ...action, label: `${action.label} · все ${closes}` } : action)
+  const badge = vehicle ?? candidate?.vehicleNumber ?? /Грузовик\s+([^\s:,]+)/u.exec(item.message)?.[1] ?? null
+  const line = rowLine(short ?? withoutVehicle(title), sub ?? (detail && detail !== title ? detail : null))
+  const more = stack.length ? `ещё ${stack.length} по этой машине${waiting ? `, ждут ответа: ${waiting}` : ''}` : null
+  // A notice without its own colour takes the colour of its group: a decision is red, a risk amber.
+  const rowTone: Tone | 'risk' = tone !== 'info' || item.resolved ? tone : item.priority === 'ACTION' ? 'late' : item.priority === 'RISK' ? 'risk' : 'info'
+  return { state, stack, waiting, busy, error, tone, rowTone, Icon, title, detail, actions, badge,
+    short: line.short, sub: [line.sub, more].filter(Boolean).join(' · ') || null }
+}
 
+/** One open question for the dispatcher, with its own buttons. Used in the bell, on «Решения» and in the toast. */
+export function DecisionCard({ item, stop, onSelect, openLink = false, nested = false, extra }: { item: AlertNotification; stop?: Stop | null; onSelect?: (vehicleId: string) => void; openLink?: boolean; nested?: boolean; extra?: ReactNode }) {
+  const { state, stack, waiting, busy, error, tone, Icon, title, detail, actions } = useDecision(item, stop, nested)
   const headingId = `decision-${item.id}`
   return <article className={`decision-card decision-card-${item.resolved ? 'info' : tone}${nested ? ' decision-card-nested' : ''}`} aria-labelledby={headingId}>
     <Icon className="decision-card-icon" aria-hidden="true" />
@@ -154,17 +172,71 @@ export function DecisionCard({ item, stop, onSelect, openLink = false, nested = 
 }
 
 /**
- * «Требует решения» in priority order: decisions, then risks; information and what no longer applies
- * waits folded in «Для сведения» with one «Прочитать все».
+ * The same question as one line of 48 px over the map (owner, 19.11, Figma «Было / стало: уведомления»): the truck, the
+ * essence, its main button and «⋯». A click on the line opens the detail and every button in place.
  */
-export function DecisionGroups({ items, stopOf, onSelect, openLink = false, extraOf }: { items: AlertNotification[]; stopOf?: (item: AlertNotification) => Stop | null | undefined; onSelect?: (vehicleId: string) => void; openLink?: boolean; extraOf?: (item: AlertNotification) => ReactNode }) {
+export function DecisionRow({ item, stop, onSelect, openLink = false, extra }: { item: AlertNotification; stop?: Stop | null; onSelect?: (vehicleId: string) => void; openLink?: boolean; extra?: ReactNode }) {
+  const { state, stack, waiting, busy, error, rowTone, Icon, title, detail, actions, badge, short, sub } = useDecision(item, stop, false)
+  const [open, setOpen] = useState(false)
+  const main = actions.find((action) => action.primary) ?? actions[0]
+  const headingId = `decision-${item.id}`
+  const panelId = `decision-more-${item.id}`
+  return <article className={`decision-row decision-row-${item.resolved ? 'info' : rowTone}${open ? ' decision-row-open' : ''}`} aria-labelledby={headingId}>
+    <div className="decision-row-line">
+      <button type="button" className="decision-row-summary" aria-expanded={open} aria-controls={panelId} onClick={() => setOpen(!open)}>
+        <span className="decision-row-badge" aria-hidden="true">{badge ?? <Icon className="h-4 w-4" />}</span>
+        <span className="decision-row-text">
+          <span id={headingId} className="decision-row-title">{badge ? <span className="sr-only">LKW {badge}: </span> : null}{short}</span>
+          {sub ? <span className="decision-row-sub">{sub}</span> : null}
+        </span>
+      </button>
+      {main ? <button type="button" className="decision-row-action" disabled={busy} onClick={main.run}>{main.label}</button> : null}
+      <button type="button" className="decision-row-more" aria-expanded={open} aria-controls={panelId} aria-label={open ? 'Скрыть подробности' : 'Подробности и все кнопки'} title={open ? 'Скрыть подробности' : 'Подробности и все кнопки'} onClick={() => setOpen(!open)}>
+        <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+      </button>
+    </div>
+    {error ? <p role="alert" className="decision-card-error decision-row-error">{error}</p> : null}
+    {open ? <div id={panelId} className="decision-row-details">
+      {onSelect ? <button type="button" className="decision-card-title" onClick={() => onSelect(item.vehicleId)}>{title}</button> : <p className="decision-card-title">{title}</p>}
+      {item.resolved ? <p className="decision-card-stale">Уже не актуально{item.resolvedReason ? `: ${item.resolvedReason}` : ''}</p> : null}
+      {detail ? <p className="decision-card-detail">{detail}</p> : null}
+      <div className="decision-card-actions">
+        {actions.filter((action) => action !== main).map((action) => <button key={action.label} type="button" className="decision-button" disabled={busy} onClick={action.run}>{action.label}</button>)}
+        {openLink ? <Link className="decision-button" to={`/vehicles/${item.vehicleId}`} onClick={() => state.hide(item.id)}>Открыть грузовик</Link> : null}
+        {extra}
+      </div>
+      {stack.length ? <details className="decision-stack">
+        <summary>Ещё {stack.length} по этой машине{waiting ? <span className="decision-stack-waiting"> · ждут ответа: {waiting}</span> : null}</summary>
+        {stack.length - waiting > 1 ? <button type="button" className="decision-button decision-stack-close" disabled={state.busyId === 'all'} onClick={() => void state.acknowledgeAll(stack.filter((older) => !answerRequired(older)))}>Прочитать эти {stack.length - waiting}</button> : null}
+        <div className="decision-stack-list">{stack.map((older) => <DecisionCard key={older.id} item={older} nested />)}</div>
+      </details> : null}
+    </div> : null}
+  </article>
+}
+
+/** «Критическая стоянка в Kassel — более 120 минут.» → the essence on the first line, the rest under it, no full stop. */
+function rowLine(short: string, sub: string | null) {
+  const trim = (text: string) => text.trim().replace(/\.$/u, '')
+  if (sub) return { short: trim(short), sub: trim(sub) }
+  const [head, ...rest] = short.split(' — ')
+  return rest.length ? { short: trim(head), sub: trim(rest.join(' — ')) } : { short: trim(short), sub: null }
+}
+
+/**
+ * «Требует решения» in priority order: decisions, then risks; information and what no longer applies
+ * waits folded in «Для сведения» with one «Прочитать все». Over the map (`rows`) only decisions and risks come up,
+ * one line each; «Для сведения» is counted on the bell.
+ */
+export function DecisionGroups({ items, stopOf, onSelect, openLink = false, extraOf, rows = false }: { items: AlertNotification[]; stopOf?: (item: AlertNotification) => Stop | null | undefined; onSelect?: (vehicleId: string) => void; openLink?: boolean; extraOf?: (item: AlertNotification) => ReactNode; rows?: boolean }) {
   const state = useNotifications()
   const actions = items.filter((item) => needsAttention(item) && item.priority !== 'RISK')
   const risks = items.filter((item) => needsAttention(item) && item.priority === 'RISK')
-  const info = items.filter((item) => !needsAttention(item))
+  const info = rows ? [] : items.filter((item) => !needsAttention(item))
   const night = nightItems(items, state.workHours)
   const nightDecisions = night.filter((item) => needsAttention(item) && item.priority !== 'RISK').length
-  const card = (item: AlertNotification) => <DecisionCard key={item.id} item={item} stop={stopOf?.(item)} onSelect={onSelect} openLink={openLink} extra={extraOf?.(item)} />
+  const card = (item: AlertNotification) => rows
+    ? <DecisionRow key={item.id} item={item} stop={stopOf?.(item)} onSelect={onSelect} openLink={openLink} extra={extraOf?.(item)} />
+    : <DecisionCard key={item.id} item={item} stop={stopOf?.(item)} onSelect={onSelect} openLink={openLink} extra={extraOf?.(item)} />
   const readAll = () => {
     if (window.confirm(`Отметить прочитанными ${info.length} уведомл. «Для сведения»? Требующие решения останутся.`)) void state.acknowledgeAll(info)
   }
@@ -227,7 +299,7 @@ export function OperationsNotifications() {
         <button type="button" className="secondary-button" onClick={() => { dismissBanner(); setBanner(false) }}>Не сейчас</button>
       </div>
     </div> : null}
-    {current ? <DecisionCard item={current} openLink /> : null}
+    {current ? <DecisionRow item={current} openLink /> : null}
   </aside>
 }
 
