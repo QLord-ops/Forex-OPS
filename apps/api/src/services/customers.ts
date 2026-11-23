@@ -34,11 +34,14 @@ export const LEGACY_CUSTOMERS: LegacyCustomer[] = [
     profile: OEM_TOUR_REMARKS_TEMPLATE, lines: {}, fallbackLine: ['TESLA', 'Tesla'] }
 ];
 
-/** «Мои»: a truck I took, or one on my lines that no colleague has taken. */
-export function isMine(me: string | null, vehicle: { assignedDispatcherId: string | null; customerLineId: string | null }, myLines: ReadonlySet<string>): boolean {
+/**
+ * «Мои»: a truck I took, or one on my lines that no colleague has taken. `takenOnly` is the admin (owner, 23.11):
+ * a free truck is nobody's until somebody takes it, so the admin's own are only the trucks they took.
+ */
+export function isMine(me: string | null, vehicle: { assignedDispatcherId: string | null; customerLineId: string | null }, myLines: ReadonlySet<string>, takenOnly = false): boolean {
   if (!me) return false;
   if (vehicle.assignedDispatcherId) return vehicle.assignedDispatcherId === me;
-  return Boolean(vehicle.customerLineId && myLines.has(vehicle.customerLineId));
+  return Boolean(!takenOnly && vehicle.customerLineId && myLines.has(vehicle.customerLineId));
 }
 
 /** `coverFor`: the absent dispatcher whose truck or line this owner looks after for now. */

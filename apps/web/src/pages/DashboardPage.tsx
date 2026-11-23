@@ -278,7 +278,7 @@ export function DashboardPage() {
           {me ? <div className="fleet-scope" role="group" aria-label="Чьи машины показать">
             {scopes.map((item) => <button key={item.value} type="button" aria-pressed={activeScope === item.value} className={classNames('fleet-scope-button', activeScope === item.value && 'fleet-scope-button-active')} onClick={() => setScope(item.value)}
               title={item.value === 'MINE' && viewer.role === 'admin' ? 'Скрыть все линии, кроме своих: на карте, в списке и в уведомлениях' : undefined}>
-              {item.value === 'MINE' && viewer.role === 'admin' ? 'Мои линии' : item.label}<span className="fleet-scope-count">{item.value === 'MINE' ? vehicles.filter((row) => row.mine).length : item.value === 'FREE' ? vehicles.filter((row) => !row.assignedTo).length : vehicles.length}</span>
+              {item.value === 'MINE' && viewer.role === 'admin' ? 'Мои машины' : item.label}<span className="fleet-scope-count">{item.value === 'MINE' ? vehicles.filter((row) => row.mine).length : item.value === 'FREE' ? vehicles.filter((row) => !row.assignedTo).length : vehicles.length}</span>
             </button>)}
           </div> : null}
           {me && activeScope === 'MINE' && !hasMine ? <p className="fleet-scope-hint">У вас пока нет машин. Откройте «Весь парк» или «Свободные» и нажмите «Взять себе» в карточке машины.</p> : null}

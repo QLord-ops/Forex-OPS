@@ -1724,7 +1724,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
         operationVersion: vehicle.operationVersion,
         assignedTo: vehicle.assignedDispatcher ? { id: vehicle.assignedDispatcher.id, name: vehicle.assignedDispatcher.displayName } : null,
         // «Мои»: taken by me, or on one of my lines and not taken by a colleague — or by a colleague I stand in for.
-        mine: isMine(me, covers.vehicle(vehicle), myLines),
+        mine: isMine(me, covers.vehicle(vehicle), myLines, request.dispatcherSession?.role === 'admin'),
         cover: (() => {
           const owner = vehicle.assignedDispatcherId ?? lineStaff.find((item) => item.lineId === vehicle.customerLineId && covers.coverOf(item.dispatcherId, item.lineId))?.dispatcherId;
           const cover = owner ? covers.coverOf(owner, vehicle.customerLineId) : null;

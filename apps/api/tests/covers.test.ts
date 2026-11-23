@@ -134,11 +134,28 @@ describe('what follows the cover', () => {
     expect(await seen('cem', now, 'ALL')).toEqual(['301']);
     expect(await seen('chef')).toEqual(['101', '201', '202', '203', '301', '401']);
     expect(await seen(null)).toEqual(['101', '201', '202', '203', '301', '401']);
-    // «Мои линии»: the admin has no line and took nothing, until a truck is theirs.
+    // «Мои машины»: the admin took nothing, until a truck is theirs.
     expect(await seen('chef', now, 'MINE')).toEqual([]);
     await sqlite.vehicle.update({ where: { id: ids['401'] }, data: { assignedDispatcherId: ids.chef } });
     try { expect(await seen('chef', now, 'MINE')).toEqual(['401']); }
     finally { await sqlite.vehicle.update({ where: { id: ids['401'] }, data: { assignedDispatcherId: null } }); }
+  });
+
+  it('an admin with a line of their own: the free trucks of that line are not theirs, only the taken ones (owner, 23.11)', async () => {
+    await sqlite.dispatcherLine.create({ data: { dispatcherId: ids.chef!, lineId: ids.SUED!, isPrimary: true } });
+    try {
+      // 201 is free on the admin's line, 202 on it is Ben's.
+      expect(await seen('chef', now, 'MINE')).toEqual([]);
+      await sqlite.vehicle.update({ where: { id: ids['201'] }, data: { assignedDispatcherId: ids.chef } });
+      expect(await seen('chef', now, 'MINE')).toEqual(['201']);
+      expect(await seen('chef')).toEqual(['101', '201', '202', '203', '301', '401']);
+      // A dispatcher of the same line still follows its free trucks.
+      await sqlite.vehicle.update({ where: { id: ids['201'] }, data: { assignedDispatcherId: null } });
+      expect(await seen('ben')).toContain('201');
+    } finally {
+      await sqlite.vehicle.update({ where: { id: ids['201'] }, data: { assignedDispatcherId: null } });
+      await sqlite.dispatcherLine.deleteMany({ where: { dispatcherId: ids.chef! } });
+    }
   });
 
   it('knows the trucks a colleague looks after: taken by them or free on their line, covers included', async () => {

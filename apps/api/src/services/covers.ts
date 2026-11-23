@@ -100,14 +100,15 @@ export function coveredStatusOwner(resolver: CoverResolver, vehicle: OwnedVehicl
   return coverFor ? { ...owner, coverFor } : owner;
 }
 
-/** `MINE`: an admin who hid every line but their own. A dispatcher is always `MINE`. */
+/** `MINE`: an admin who hid every truck but the ones they took. A dispatcher is always `MINE`. */
 export type VisibilityScope = 'ALL' | 'MINE';
 
 /**
  * The trucks whose notifications reach a person, on the screen and on the phone (owner, 17.11: «только свои машины,
  * чтобы не запутывать»). A dispatcher follows only their own: the trucks they took and the free trucks of their lines
  * (`isMine`); a cover moves both to the stand-in. Nobody's trucks — no line, or a line without a dispatcher — reach
- * the admins only. An admin and the shared login see every truck; an admin may narrow it to their own.
+ * the admins only. An admin and the shared login see every truck; an admin may narrow it to their own — the trucks
+ * they took, without the free trucks of their lines (owner, 23.11).
  */
 export async function vehiclesVisibleTo(db: PrismaClient, dispatcherId: string | null | undefined, options: { scope?: VisibilityScope; now?: Date } = {}): Promise<(vehicleId: string) => boolean> {
   if (!dispatcherId) return () => true;
@@ -116,7 +117,7 @@ export async function vehiclesVisibleTo(db: PrismaClient, dispatcherId: string |
   const resolver = await coverResolver(db, options.now ?? new Date());
   const myLines = await resolver.linesOf(db, dispatcherId);
   const vehicles = await db.vehicle.findMany({ select: { id: true, assignedDispatcherId: true, customerLineId: true } });
-  const mine = new Set(vehicles.filter((vehicle) => isMine(dispatcherId, resolver.vehicle(vehicle), myLines)).map((vehicle) => vehicle.id));
+  const mine = new Set(vehicles.filter((vehicle) => isMine(dispatcherId, resolver.vehicle(vehicle), myLines, person?.role === 'admin')).map((vehicle) => vehicle.id));
   return (vehicleId) => mine.has(vehicleId);
 }
 

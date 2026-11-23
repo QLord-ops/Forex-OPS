@@ -98,7 +98,7 @@ test('диспетчер видит на карте только свои маш
   expect(asked.every((query) => query === '')).toBe(true)
 })
 
-test('админ видит весь парк и скрывает чужие линии кнопкой «Мои линии»', async ({ page }) => {
+test('админ видит весь парк и скрывает чужие линии кнопкой «Мои машины»', async ({ page }) => {
   const asked: string[] = []
   await fleet(page, 'admin', asked)
   await page.goto('/')
@@ -108,7 +108,7 @@ test('админ видит весь парк и скрывает чужие л�
   await expect(page.locator('.fleet-marker')).toHaveCount(3)
   expect(asked.at(-1)).toBe('')
 
-  await scope.getByRole('button', { name: /Мои линии/ }).click()
+  await scope.getByRole('button', { name: /Мои машины/ }).click()
   await expect(page.locator('.fleet-list .vehicle-card')).toHaveCount(2)
   await expect(marker(page, '7448')).toHaveCount(0)
   await expect(marker(page, '3786')).toHaveCount(0)
@@ -116,7 +116,7 @@ test('админ видит весь парк и скрывает чужие л�
 
   // The admin's choice is kept for the next visit.
   await page.reload()
-  await expect(scope.getByRole('button', { name: /Мои линии/ })).toHaveAttribute('aria-pressed', 'true')
+  await expect(scope.getByRole('button', { name: /Мои машины/ })).toHaveAttribute('aria-pressed', 'true')
   await expect(page.locator('.fleet-list .vehicle-card')).toHaveCount(2)
   await expect(marker(page, '7448')).toHaveCount(0)
 })
