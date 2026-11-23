@@ -126,7 +126,7 @@ export function SettingsPage() {
                   <div className="min-w-0">
                     <p className="settings-row-label">Чьи машины</p>
                     <p className="settings-row-hint">{admin && viewer.id
-                      ? 'Колокольчик и push на этом устройстве следуют кнопке «Мои линии» на Диспозиции.'
+                      ? 'Колокольчик и push на этом устройстве следуют кнопке «Мои машины» на Диспозиции.'
                       : admin ? 'Общий логин видит весь парк.' : 'Вам приходят только ваши машины: взятые вами и свободные машины ваших линий.'}</p>
                   </div>
                   {admin && viewer.id ? <Link to="/" className="settings-chip">{ownLines ? 'Только мои линии' : 'Весь парк'}</Link> : null}

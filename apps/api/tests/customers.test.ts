@@ -53,6 +53,9 @@ describe('customer profile', () => {
     expect(isMine('anna', { assignedDispatcherId: 'ben', customerLineId: 'nord' }, lines)).toBe(false);
     expect(isMine('anna', { assignedDispatcherId: null, customerLineId: 'sued' }, lines)).toBe(false);
     expect(isMine(null, { assignedDispatcherId: null, customerLineId: 'nord' }, lines)).toBe(false);
+    // The admin's own: only what they took.
+    expect(isMine('anna', { assignedDispatcherId: null, customerLineId: 'nord' }, lines, true)).toBe(false);
+    expect(isMine('anna', { assignedDispatcherId: 'anna', customerLineId: 'nord' }, lines, true)).toBe(true);
   });
   it('makes stable keys from names', () => {
     expect(slugOf('Walter (Tesla)')).toBe('WALTER_TESLA');
