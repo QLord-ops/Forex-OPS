@@ -146,6 +146,9 @@
 .truck-card-remove { display: inline-flex; align-items: center; gap: 4px; min-height: 28px; border: 1px solid rgb(var(--ln-fecaca)); border-radius: 8px; background: rgb(var(--bg-ffffff)); padding: 0 8px; color: rgb(var(--tx-b91c1c)); font-size: .75rem; font-weight: 500; }
 .truck-card-remove:hover { background: rgb(var(--bg-fef2f2)); }
 .truck-card-remove:focus-visible { outline: 2px solid rgb(var(--ln-0ea5e9)); outline-offset: 1px; }
+.truck-card-edit { display: inline-flex; align-items: center; gap: 4px; min-height: 28px; border: 1px solid rgb(var(--ln-e2e8f0)); border-radius: 8px; background: rgb(var(--bg-ffffff)); padding: 0 8px; color: rgb(var(--tx-334155)); font-size: .75rem; font-weight: 500; text-decoration: none; }
+.truck-card-edit:hover { border-color: rgb(var(--ln-0f766e)); color: rgb(var(--tx-0f172a)); }
+.truck-card-edit:focus-visible { outline: 2px solid rgb(var(--ln-0ea5e9)); outline-offset: 1px; }
 .truck-card-remove:disabled { opacity: .6; }
 
 .vehicle-card-info { color: rgb(var(--tx-475569)); }

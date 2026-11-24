@@ -111,3 +111,37 @@ test('уведомление в фоне: окно Windows, звук и счёт
   const shown = await page.evaluate(() => (window as unknown as { shownNotifications: Array<{ title: string; body?: string; tag?: string }> }).shownNotifications)
   expect(shown).toEqual([{ title: 'Прибытие по GPS', body: 'Webfleet: LKW 997 прибыла на загрузку, Zwickau', tag: 'n1' }])
 })
+
+test('тур в ожидании: «Изменить» из карточки открывает редактор с прицепом и Tourbemerkung и возвращает назад', async ({ page }) => {
+  const waiting = { ...queued('tour-b', '20570001', 'Bocholt', 'Kassel'), trailerPlate: 'GÖ-FX 812', tourRemarks: 'Rampe 4' }
+  let saved: Record<string, unknown> | null = null
+  await page.route('**/api/**', async (route) => {
+    const path = new URL(route.request().url()).pathname.replace(/^\/api/, '')
+    if (path === '/auth/session') return json(route, { authenticated: true, role: 'dispatcher', csrfToken: 'e2e' })
+    if (path === '/notifications') return json(route, { notifications: [] })
+    if (path === '/dashboard') return json(route, { vehicles: [{ vehicle, tour: current, statusText: 'WAITING', operationVersion: 1,
+      currentAction: null, mapPosition: { coordinate: [12.5, 50.7], source: 'WEBFLEET', stale: false } }] })
+    if (path === '/vehicles/veh-997/tours') return json(route, [current, waiting])
+    if (path === '/vehicles') return json(route, [vehicle])
+    if (path === '/tours/tour-b' && route.request().method() === 'PATCH') { saved = route.request().postDataJSON(); return json(route, waiting) }
+    if (path === '/tours/tour-b') return json(route, waiting)
+    if (path.endsWith('/card')) return json(route, { vehicleId: vehicle.id, vehicleNumber: '997', licensePlate: null, currentTrailerPlate: null, generatedAt: new Date().toISOString(),
+      webfleet: null, current: null, coupling: null, driver: null, events: null, trips: null, maintenance: null })
+    if (path.endsWith('/current-position')) return json(route, { status: 'WAITING', coordinate: [12.5, 50.7] })
+    return json(route, [])
+  })
+  await page.route('https://tile.openstreetmap.org/**', (route) => route.abort())
+  await page.goto('/')
+  await page.evaluate(() => window.localStorage.setItem('ops-truck-card-tab', 'tour'))
+  await page.locator('.vehicle-card').filter({ hasText: 'LKW 997' }).locator('.vehicle-row-main').click()
+  const next = page.getByRole('dialog').getByRole('region', { name: /Следующие туры/ })
+  await next.getByRole('link', { name: 'Изменить тур 20570001' }).click()
+
+  await expect(page).toHaveURL(/\/tours\/tour-b\/edit$/)
+  await expect(page.getByLabel('Прицеп')).toHaveValue('GÖ-FX 812')
+  await page.getByLabel('Tourbemerkung').fill('Rampe 6, vorher anrufen')
+  await page.getByRole('button', { name: /Сохранить/ }).click()
+  await expect.poll(() => saved?.tourRemarks).toBe('Rampe 6, vorher anrufen')
+  expect(saved).toMatchObject({ trailerPlate: 'GÖ-FX 812', orderNumber: '20570001', version: 1 })
+  await expect(page).not.toHaveURL(/\/edit$/)
+})

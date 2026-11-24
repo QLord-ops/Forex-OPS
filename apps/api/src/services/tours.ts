@@ -273,6 +273,13 @@ export class TourService {
     const orderedStops = [...input.stops].sort((a, b) => a.sequence - b.sequence);
     const plan = await prepareTourPlan(this.routingProvider, orderedStops, context.previousTour?.stops[0], context.vehicle.maxSpeedKmh);
     const terminRules = await readTerminRules(this.db);
+    // The tour behind this one drives on from its new last stop: its transfer leg is rebuilt, not lost with the old stops.
+    const following = context.current?.nextTours[0] ?? null;
+    const followingFirst = following?.stops[0] ?? null;
+    const newLast = plan.stops.at(-1);
+    const transfer = following && followingFirst && newLast
+      ? await prepareTransferLeg(this.routingProvider, toCoordinate(newLast), followingFirst, context.vehicle.maxSpeedKmh)
+      : null;
 
     return this.db.$transaction(async (tx) => {
       assertPlanningContextUnchanged(context, await readPlanningContext(tx, input, tourId));
@@ -299,6 +306,7 @@ export class TourService {
         }
       });
       await persistTourPlan(tx, tourId, plan, terminRules);
+      if (following && transfer) await relinkFollowingTour(tx, tourId, { id: following.id, status: following.status, queueIndex: following.queueIndex, previousTourId: following.previousTourId, firstStop: followingFirst }, transfer);
       await writeAuditLog(tx, actor, { action: "TOUR_UPDATED", entityType: "Tour", entityId: tourId,
         vehicleId: input.vehicleId, tourId, metadata: { orderNumber: input.orderNumber } });
 
@@ -885,17 +893,18 @@ async function readPlanningContext(db: Prisma.TransactionClient, input: CreateTo
         include: {
           stops: { orderBy: { sequence: "asc" } },
           events: { orderBy: [{ timestamp: "asc" }, { id: "asc" }] },
-          nextTours: { orderBy: { id: "asc" } }
+          // A cancelled tour behind this one no longer waits for it.
+          nextTours: { where: { status: "QUEUED" }, orderBy: { id: "asc" }, include: { stops: { orderBy: { sequence: "asc" }, take: 1 } } }
         }
       })
     : null;
   if (tourId && !current) throw new TourPlanConflictError("Маршрут больше не существует. Обновите страницу.");
   if (current) {
     assertFutureTourEditable(current);
-    if (current.nextTours.length > 0) {
-      throw new TourPlanConflictError(
-        "Изменять можно только последний маршрут в очереди, чтобы сохранить следующие транзитные участки."
-      );
+    // Any tour of the queue can change (owner, 24.11.2026); the next one's transfer is rebuilt in the same save. Moving a
+    // tour to another truck would leave a gap in this truck's queue, so that waits until the tour behind it is moved.
+    if (current.nextTours.length > 0 && input.vehicleId !== current.vehicleId) {
+      throw new TourPlanConflictError("За этим туром в очереди стоит следующий. Сначала перенесите или удалите следующий тур этой машины.");
     }
   }
 
