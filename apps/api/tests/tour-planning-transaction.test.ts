@@ -2,10 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { TourService, type CreateTourInput } from "../src/services/tours.js";
 
 describe("tour planning transaction boundary", () => {
-  it("preserves downstream transfer legs by rejecting edits to an intermediate tour", async () => {
+  it("refuses to move a tour with another one behind it to a different truck, before any write", async () => {
     const fixture = planningFixture();
-    Object.assign(fixture.state.current, { nextTours: [{ id: "next-tour" }] });
-    await expect(fixture.service.updateFutureTour("editing-tour", input())).rejects.toMatchObject({ statusCode: 409 });
+    Object.assign(fixture.state.current, { nextTours: [{ id: "next-tour", stops: [] }] });
+    await expect(fixture.service.updateFutureTour("editing-tour", { ...input(), vehicleId: "vehicle-2" })).rejects.toMatchObject({ statusCode: 409 });
     expect(fixture.db.$transaction).not.toHaveBeenCalled();
   });
   it("resolves every address and road route before starting a create transaction", async () => {

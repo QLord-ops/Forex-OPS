@@ -3,7 +3,7 @@ import type { FormEvent } from 'react'
 import { AddressInput } from '../components/AddressInput'
 import { suggestionAddress, suggestionProvider } from '../lib/address-book'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 
 import { ErrorState, LoadingState } from '../components/States'
 import { usePolling } from '../hooks/usePolling'
@@ -38,10 +38,15 @@ function SharedTerminHint({ stops, index }: { stops: StopDraft[]; index: number 
 export function EditTourPage() {
   const { id = '' } = useParams()
   const navigate = useNavigate()
+  const location = useLocation()
+  // Back to where the editor was opened from (the truck card), else the tour list.
+  const back = typeof (location.state as { back?: unknown } | null)?.back === 'string' && (location.state as { back: string }).back.startsWith('/') ? (location.state as { back: string }).back : '/tours'
   const vehicles = usePolling(api.vehicles, 0)
   const [tour, setTour] = useState<Tour | null>(null)
   const [vehicleId, setVehicleId] = useState('')
   const [orderNumber, setOrderNumber] = useState('')
+  const [trailerPlate, setTrailerPlate] = useState('')
+  const [tourRemarks, setTourRemarks] = useState('')
   const [stops, setStops] = useState<StopDraft[]>([])
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
@@ -58,6 +63,8 @@ export function EditTourPage() {
         setTour(loaded)
         setVehicleId(loaded.vehicleId)
         setOrderNumber(loaded.orderNumber)
+        setTrailerPlate(loaded.trailerPlate ?? '')
+        setTourRemarks(loaded.tourRemarks ?? '')
         setStops(
           (loaded.stops ?? []).map((stop) => ({
             id: stop.id,
@@ -142,7 +149,9 @@ export function EditTourPage() {
       await api.updateTour(id, {
         vehicleId,
         orderNumber: orderNumber.trim(),
-        // The server keeps fields this form does not show (LDM, references, windows, trailer, remarks) by stop id.
+        trailerPlate: trailerPlate.trim() || null,
+        tourRemarks: tourRemarks.trim() || null,
+        // The server keeps fields this form does not show (LDM, references, windows) by stop id.
         version: tour?.planVersion,
         stops: stops.map((stop, index): CreateTourStopInput => ({
           id: savedStopIds.has(stop.id) ? stop.id : undefined,
@@ -158,7 +167,7 @@ export function EditTourPage() {
           serviceMaxMinutes: stop.serviceMaxMinutes
         }))
       })
-      navigate('/tours')
+      navigate(back)
     } catch (cause) {
       setError(cause as Error)
     } finally {
@@ -174,7 +183,7 @@ export function EditTourPage() {
     <form className="space-y-5 pb-56" onSubmit={handleSubmit}>
       <div className="min-w-0">
         <h2 className="page-title">Изменить маршрут</h2>
-        <p className="page-subtitle">Можно изменять только будущие маршруты в очереди без подтверждённых событий.</p>
+        <p className="page-subtitle">Тур в очереди можно менять, пока по нему нет событий. Следующий тур машины поедет от новой последней точки.</p>
       </div>
 
       <section className="work-surface p-4">
@@ -190,6 +199,14 @@ export function EditTourPage() {
           <label>
             <span className="field-label">Номер заказа</span>
             <input className="field-input" value={orderNumber} onChange={(event) => setOrderNumber(event.target.value)} required />
+          </label>
+          <label>
+            <span className="field-label">Прицеп</span>
+            <input className="field-input" value={trailerPlate} maxLength={100} onChange={(event) => setTrailerPlate(event.target.value)} placeholder="Номер прицепа" />
+          </label>
+          <label className="md:col-span-2">
+            <span className="field-label">Tourbemerkung</span>
+            <textarea className="field-input" rows={3} value={tourRemarks} maxLength={4000} onChange={(event) => setTourRemarks(event.target.value)} />
           </label>
         </div>
       </section>
