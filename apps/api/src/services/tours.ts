@@ -98,11 +98,33 @@ export class TourPlanConflictError extends Error {
   readonly statusCode = 409;
 }
 
+/** Parsed drawn routes kept per leg until the leg row changes. */
+const DRAWN_ROUTE_CACHE_SIZE = 300;
+type DrawnRoute = { updatedAt: number; geometry: ReturnType<typeof parseGeometry>; details: string | null; version: string };
+
 export class TourService {
+  /**
+   * The line of a truck's current leg, read and parsed once per change of the leg. Every screen asks for every truck's
+   * position every 10 s and the background check asks again; reading hundreds of kilobytes each time is what filled the
+   * database's memory (24.11.2026).
+   */
+  private readonly drawnRoutes = new Map<string, DrawnRoute>();
+
   constructor(
     private readonly db: PrismaClient,
     private readonly routingProvider: RoutingProvider
   ) {}
+
+  private async drawnRouteOf(legId: string, updatedAt: Date): Promise<DrawnRoute> {
+    const known = this.drawnRoutes.get(legId);
+    if (known && known.updatedAt === updatedAt.getTime()) return known;
+    const leg = await this.db.leg.findUniqueOrThrow({ where: { id: legId }, select: { routeGeometry: true, routeDetails: true } });
+    const route = { updatedAt: updatedAt.getTime(), geometry: Object.freeze(parseGeometry(leg.routeGeometry)) as ReturnType<typeof parseGeometry>, details: leg.routeDetails,
+      version: geometryFingerprint(legId, leg.routeGeometry, leg.routeDetails) };
+    if (this.drawnRoutes.size >= DRAWN_ROUTE_CACHE_SIZE) this.drawnRoutes.clear();
+    this.drawnRoutes.set(legId, route);
+    return route;
+  }
 
   async createTour(input: CreateTourInput, actor?: AuditActor): Promise<TourAggregate> {
     return this.createTourInternal(input, undefined, actor);
@@ -428,7 +450,7 @@ export class TourService {
       }),
       this.db.leg.findFirst({
         where: { tour: { vehicleId, status: "ACTIVE" }, status: { in: ["ACTIVE", "ARRIVED"] } },
-        include: { toStop: true },
+        select: { ...legsWithoutRoute.select, toStop: true },
         orderBy: { startedAt: "desc" }
       })
     ]);
@@ -443,7 +465,8 @@ export class TourService {
     const progress = activeLeg.toStop.arrivedAt ? 1 : activeLeg.simulatedDurationSeconds <= 0
       ? (activeLeg.startedAt ? 1 : 0)
       : Math.max(0, Math.min(1, clock.driveElapsedSeconds / activeLeg.simulatedDurationSeconds));
-    const geometry = parseGeometry(activeLeg.routeGeometry);
+    const route = await this.drawnRouteOf(activeLeg.id, activeLeg.updatedAt);
+    const geometry = route.geometry;
     const position = calculatePositionOnRoute(geometry, progress);
     const breakdown = breakdownTiming(vehicle, now);
     // With the driver's tachograph the remaining drive is planned on the real hours: shift end, breaks and the daily rest.
@@ -484,7 +507,7 @@ export class TourService {
     let roadSections: RoadSection[] = [];
     let trafficCheckedAt: string | null = null;
     try {
-      const details = JSON.parse(activeLeg.routeDetails ?? "{}") as { travelledGeometry?: Array<Coordinate | [number, number]>; travelledStitches?: unknown; previousTravelledDistanceMeters?: number;
+      const details = JSON.parse(route.details ?? "{}") as { travelledGeometry?: Array<Coordinate | [number, number]>; travelledStitches?: unknown; previousTravelledDistanceMeters?: number;
         trafficSections?: TrafficSection[]; roadSections?: RoadSection[]; checkedAt?: string; providerStatus?: string;
         activeRoute?: { trafficSections?: TrafficSection[]; roadSections?: RoadSection[]; checkedAt?: string } };
       if (Array.isArray(details.travelledGeometry)) {
@@ -517,7 +540,7 @@ export class TourService {
       tourId: activeLeg.tourId,
       legId: activeLeg.id,
       // Depends only on the drawn line: the leg row is touched on every background check.
-      geometryVersion: geometryFingerprint(activeLeg.id, activeLeg.routeGeometry, activeLeg.routeDetails),
+      geometryVersion: route.version,
       startedAt: activeLeg.startedAt?.toISOString() ?? null,
       delayMinutes,
       routeGeometry: [...travelledPrefix, ...geometry].map(toLonLat),
@@ -1158,6 +1181,18 @@ export const tourListInclude = {
   }
 } satisfies Prisma.TourInclude;
 
+/** A leg without its drawn route, for everything that plans, checks and lists but never draws the line. */
+export const legsWithoutRoute = tourListInclude.legs;
+
+/**
+ * The same tours with the route left empty, so they fit every planner. The dashboard and the 15 s background check
+ * read every tour of the fleet; with the full lines that was megabytes per screen every 10 s and the database ran
+ * out of memory (DigitalOcean, 24.11.2026).
+ */
+export function withEmptyRoutes<T extends { legs: readonly object[] }>(tour: T): Omit<T, "legs"> & { legs: Array<T["legs"][number] & { routeGeometry: string; routeDetails: string | null }> } {
+  return { ...tour, legs: tour.legs.map((leg) => ({ ...leg, routeGeometry: "", routeDetails: null })) };
+}
+
 /** Finished tours stay in the list this long; older ones are in the truck's history. */
 export const TOUR_LIST_FINISHED_DAYS = 30;
 
@@ -1172,7 +1207,7 @@ export async function findToursForList(db: Pick<PrismaClient, "tour">, filter: {
     include: tourListInclude,
     orderBy: [{ plannedStartAt: "asc" }, { createdAt: "asc" }]
   });
-  return tours.map((tour) => ({ ...tour, legs: tour.legs.map((leg) => ({ ...leg, routeGeometry: "", routeDetails: null })) })) as TourAggregate[];
+  return tours.map(withEmptyRoutes) as TourAggregate[];
 }
 
 export function withoutDrawnRoute<T extends { legs: Array<{ routeGeometry?: unknown; routeDetails?: unknown }> }>(tour: T) {

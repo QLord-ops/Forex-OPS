@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PrismaClient } from "../src/generated/sqlite-client/index.js";
-import { afterAll, beforeAll, expect, it } from "vitest";
+import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { MockRoutingProvider } from "../src/services/routing.js";
 import { makePersistedDrivePlan, TourService } from "../src/services/tours.js";
 import { createUnknownClockState } from "../src/services/vehicle-clock.js";
@@ -40,6 +40,30 @@ it("keeps the geometry version while only the leg row is touched, and changes it
 
   await db.leg.update({ where: { id: leg.id }, data: { routeGeometry: JSON.stringify([{ latitude: 52.52, longitude: 13.405 }, { latitude: 53, longitude: 11 }, { latitude: 53.55, longitude: 9.99 }]) } });
   expect((await service.getCurrentPosition(vehicle.id)).geometryVersion).not.toBe(first.geometryVersion);
+});
+
+it("reads the drawn line once while the leg stays the same, and again after it changes (24.11)", async () => {
+  const service = new TourService(asAppDatabase(db), new MockRoutingProvider());
+  const vehicle = await db.vehicle.create({ data: { vehicleNumber: "GEO-CACHE" } });
+  await service.createTour({ vehicleId: vehicle.id, orderNumber: "GEO-C", stops: [
+    { sequence: 1, type: "LOAD", address: "Berlin", latitude: 52.52, longitude: 13.405 },
+    { sequence: 2, type: "UNLOAD", address: "Hamburg", latitude: 53.55, longitude: 9.99 }
+  ] });
+  const leg = await db.leg.findFirstOrThrow({ where: { tour: { vehicleId: vehicle.id } } });
+  await db.leg.update({ where: { id: leg.id }, data: { status: "ACTIVE", startedAt: new Date(Date.now() - 10 * 60_000) } });
+  const reads = vi.spyOn(db.leg, "findUniqueOrThrow");
+  const first = await service.getCurrentPosition(vehicle.id);
+  const second = await service.getCurrentPosition(vehicle.id);
+  expect(reads).toHaveBeenCalledTimes(1);
+  expect(second.routeGeometry).toEqual(first.routeGeometry);
+
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  const line = [{ latitude: 52.52, longitude: 13.405 }, { latitude: 53, longitude: 11 }, { latitude: 53.55, longitude: 9.99 }];
+  await db.leg.update({ where: { id: leg.id }, data: { routeGeometry: JSON.stringify(line) } });
+  const third = await service.getCurrentPosition(vehicle.id);
+  expect(reads).toHaveBeenCalledTimes(2);
+  expect(third.routeGeometry).toHaveLength(3);
+  reads.mockRestore();
 });
 
 it("returns congested stretches shifted by the already travelled part", async () => {

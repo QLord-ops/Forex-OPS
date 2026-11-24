@@ -527,7 +527,7 @@ export class WebfleetTelemetryService {
     const observedAt = current.lastContactAt && current.lastContactAt > current.recordedAt && current.lastContactAt <= now ? current.lastContactAt : current.recordedAt;
     const tour = await this.db.tour.findFirst({
       where: { vehicleId, status: 'ACTIVE' },
-      include: { stops: { orderBy: { sequence: 'asc' } }, legs: true },
+      include: { stops: { orderBy: { sequence: 'asc' } }, legs: { select: { toStopId: true, startedAt: true } } },
       orderBy: [{ queueIndex: 'asc' }, { createdAt: 'asc' }]
     });
     const stop = tour?.stops.find((item) => !item.completedAt);

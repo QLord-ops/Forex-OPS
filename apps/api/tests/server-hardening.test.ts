@@ -86,4 +86,12 @@ describe("health", () => {
     expect(response.json()).toMatchObject({ ok: false, database: "unavailable" });
     expect(response.body).not.toContain("db-host");
   });
+
+  it("all connections busy is not a failure: no restart for a slow pool (24.11)", async () => {
+    const app = await buildApp({ auth: { disabled: true }, healthTimeoutMs: 20, databaseCheck: () => new Promise((resolve) => setTimeout(resolve, 500)) });
+    apps.push(app);
+    const response = await app.inject({ url: "/health" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ ok: true, database: "busy" });
+  });
 });
