@@ -1,6 +1,6 @@
 import type { PrismaClient } from '@prisma/client';
 import type { Coordinate } from '../domain.js';
-import { TourService, TourPlanConflictError, snapshotVehicleClock, makePersistedDrivePlan } from './tours.js';
+import { TourService, TourPlanConflictError, legsWithoutRoute, snapshotVehicleClock, makePersistedDrivePlan } from './tours.js';
 import { NotificationService } from './notifications.js';
 import { TrafficRoutingService, type TrafficRefreshSource, type TrafficRouteResult, type RouteAlternativeProposal, type TruckRouteProfile } from './traffic-routing.js';
 import { calculateSimulatedDuration, parseGeometry, splitGeometryAtProgress } from './simulation.js';
@@ -46,11 +46,14 @@ export class TrafficOperationsService {
     private readonly notifications: NotificationService, private readonly routing: TrafficRoutingService,
     private readonly getPosition = (vehicleId: string, now: Date) => tours.getCurrentPosition(vehicleId, now)) {}
 
+  // The leg's line and provider answer come from the parsed cache: this runs for every moving truck every 15 s, and the
+  // row snapshot saved in RouteRevision stays without the line (24.11.2026).
   private async context(vehicleId: string) {
     const vehicle = await this.db.vehicle.findUniqueOrThrow({ where: { id: vehicleId } });
     const leg = await this.db.leg.findFirst({ where: { tour: { vehicleId, status: 'ACTIVE' }, status: { in: ['ACTIVE', 'ARRIVED'] } },
-      include: { toStop: true, tour: true }, orderBy: { startedAt: 'desc' } });
-    return { vehicle, leg, details: readDetails(leg?.routeDetails) };
+      select: { ...legsWithoutRoute.select, toStop: true, tour: true }, orderBy: { startedAt: 'desc' } });
+    const route = leg ? await this.tours.drawnRouteOf(leg.id, leg.updatedAt) : null;
+    return { vehicle, leg, route, details: readDetails(route?.details) };
   }
 
   async status(vehicleId: string, now = new Date()) {
@@ -242,7 +245,7 @@ export class TrafficOperationsService {
     const snapshot = snapshotVehicleClock(vehicle, leg, now);
     // With GPS the driven part is cut where the truck really is; the timer split is only for trucks without Webfleet.
     // Each stitch is remembered, so the map never joins two pieces with a straight line and drops what was not driven.
-    const legGeometry = parseGeometry(leg.routeGeometry);
+    const legGeometry = context.route?.geometry ?? [];
     const before = cleanTravelled(context.details.travelledGeometry ?? [], legGeometry[0] ?? null, context.details.travelledStitches);
     const current = travelled && travelled.length >= before.points.length ? travelled.slice(before.points.length)
       : splitGeometryAtProgress(legGeometry, snapshot.progress).travelledGeometry;

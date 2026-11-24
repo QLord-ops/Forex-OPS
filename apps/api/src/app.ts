@@ -1,3 +1,5 @@
+import { monitorEventLoopDelay } from "node:perf_hooks";
+import { TimeLimitError, withTimeLimit } from "./lib/time-limit.js";
 import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
 import multipart from "@fastify/multipart";
@@ -423,6 +425,8 @@ export interface BuildAppOptions {
   databaseCheck?: () => Promise<unknown>;
   /** How long /health waits for the database before it answers «busy» instead of failing. */
   healthTimeoutMs?: number;
+  /** How long one step of the 15 s background check may run before the check goes on without it. */
+  tickStepTimeoutMs?: number;
   /** How long an Auftrag upload waits for the AI before answering «ещё читаем» (tests make it short). */
   importWaitMs?: number;
 }
@@ -557,6 +561,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
   const maxSseConnectionsPerSession = Math.max(1, Number.parseInt(process.env.SSE_MAX_CONNECTIONS_PER_SESSION ?? '3', 10) || 3);
   let notificationTimer: ReturnType<typeof setInterval> | undefined;
   let refreshingNotifications = false;
+  const tickStepTimeoutMs = options.tickStepTimeoutMs ?? 45_000;
+  const tickTimes: { lastMs: number; lastAt: number; steps: Record<string, number> } = { lastMs: 0, lastAt: 0, steps: {} };
   let lastNotificationRefreshAt = 0;
   const operationsRefreshStateId = 'SYSTEM:OPERATIONS_REFRESH';
   const acquireOperationsRefreshLease = async () => {
@@ -579,27 +585,46 @@ export async function buildApp(options: BuildAppOptions = {}) {
     });
     return locked.count === 1;
   };
+  /**
+   * One step of the background check with its own time limit. A step that never answered kept the busy flag set, and
+   * every later check was silently skipped: no GPS arrivals, no notifications (24.11.2026). A failed step no longer
+   * stops the others either.
+   */
+  const tickStep = async (name: string, work: () => Promise<unknown>) => {
+    const started = Date.now();
+    try {
+      await withTimeLimit(work(), tickStepTimeoutMs);
+    } catch (error) {
+      app.log.warn({ step: name, errorType: error instanceof Error ? error.name : 'unknown', timedOut: error instanceof TimeLimitError }, 'Шаг фоновой проверки не завершился');
+    } finally {
+      tickTimes.steps[name] = Date.now() - started;
+    }
+  };
   const refreshNotifications = async () => {
     if (refreshingNotifications) return;
     if (!await acquireOperationsRefreshLease()) return;
     refreshingNotifications = true;
+    const tickStarted = Date.now();
     try {
-      await webfleetSync.refreshIfDue().catch(() => undefined);
-      await webfleetDetails.refreshIfDue().catch(() => undefined);
-      await addressBook.refreshIfDue(new Date(), webfleetLive.objectsAt).catch((error) => app.log.error(error));
-      await routeDeviation.check().catch((error) => app.log.error(error));
-      await restAtStop.check().catch((error) => app.log.error(error));
-      await notificationService.refresh();
-      await pendingAppointments.scan((input) => notificationService.publish(input)).catch((error) => app.log.error(error));
-      await refreshAllAlerts();
-      await trafficService.tick();
-      await dailyStatus.runIfDue(new Date()).catch((error) => app.log.error(error));
+      await tickStep('webfleetSync', () => webfleetSync.refreshIfDue().catch(() => undefined));
+      await tickStep('webfleetDetails', () => webfleetDetails.refreshIfDue().catch(() => undefined));
+      await tickStep('addressBook', () => addressBook.refreshIfDue(new Date(), webfleetLive.objectsAt));
+      await tickStep('routeDeviation', () => routeDeviation.check());
+      await tickStep('restAtStop', () => restAtStop.check());
+      await tickStep('notifications', () => notificationService.refresh());
+      await tickStep('pendingAppointments', () => pendingAppointments.scan((input) => notificationService.publish(input)));
+      await tickStep('alerts', () => refreshAllAlerts());
+      await tickStep('traffic', () => trafficService.tick());
+      await tickStep('dailyStatus', () => dailyStatus.runIfDue(new Date()));
       // New decisions reach the dispatchers' phones even when the app is closed.
-      await pushService.sweep(() => notificationService.list(), (dispatcherId, ownOnly) => visibleTo(dispatcherId, ownOnly ? 'MINE' : 'ALL')).catch((error) => app.log.warn({ errorType: error instanceof Error ? error.name : 'unknown' }, 'Push не отправлен'));
+      await tickStep('push', () => pushService.sweep(() => notificationService.list(), (dispatcherId, ownOnly) => visibleTo(dispatcherId, ownOnly ? 'MINE' : 'ALL')));
       lastNotificationRefreshAt = Date.now();
       for (const client of subscribers) client.write(`event: operations\ndata: ${JSON.stringify({ at: Date.now() })}\n\n`);
     } catch (error) { app.log.error(error); }
     finally {
+      tickTimes.lastMs = Date.now() - tickStarted;
+      tickTimes.lastAt = Date.now();
+      if (tickTimes.lastMs > 30_000) app.log.warn({ ms: tickTimes.lastMs, steps: tickTimes.steps }, 'Фоновая проверка шла дольше 30 с');
       refreshingNotifications = false;
       if (isServerless) {
         await prisma.integrationSyncState.updateMany({
@@ -625,8 +650,23 @@ export async function buildApp(options: BuildAppOptions = {}) {
       app.log.warn({ errorType: error instanceof Error ? error.name : 'unknown' }, 'Очистка старых GPS-позиций не удалась');
     } finally { telemetryPurging = false; }
   };
+  // Once a minute, what the server needs to say why it slowed down or restarted: memory, event loop delay, background check.
+  let vitalsTimer: ReturnType<typeof setInterval> | undefined;
+  const loopDelay = monitorEventLoopDelay({ resolution: 20 });
+  const logVitals = () => {
+    const memory = process.memoryUsage();
+    const mb = (bytes: number) => Math.round(bytes / 1_048_576);
+    app.log.info({ vitals: { rssMb: mb(memory.rss), heapUsedMb: mb(memory.heapUsed), heapTotalMb: mb(memory.heapTotal),
+      loopDelayP99Ms: Math.round(loopDelay.percentile(99) / 1e6), loopDelayMaxMs: Math.round(loopDelay.max / 1e6),
+      tickMs: tickTimes.lastMs, tickAgeS: tickTimes.lastAt ? Math.round((Date.now() - tickTimes.lastAt) / 1000) : null, tickSteps: tickTimes.steps,
+      sseClients: subscribers.size } }, 'Состояние сервера');
+    loopDelay.reset();
+  };
   app.addHook('onListen', async () => {
     if (isServerless) return;
+    loopDelay.enable();
+    vitalsTimer = setInterval(logVitals, 60_000);
+    vitalsTimer.unref();
     await refreshNotifications();
     notificationTimer = setInterval(() => { void refreshNotifications(); }, 15_000);
     notificationTimer.unref();
@@ -639,6 +679,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
   });
   app.addHook('onClose', async () => {
     if (notificationTimer) clearInterval(notificationTimer);
+    if (vitalsTimer) clearInterval(vitalsTimer);
+    loopDelay.disable();
     if (documentPurgeTimer) clearInterval(documentPurgeTimer);
     if (telemetryPurgeTimer) clearInterval(telemetryPurgeTimer);
     for (const client of subscribers) client.end();
@@ -732,11 +774,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
     try {
       // All connections busy is load, not death: answering late made DigitalOcean restart the API, which dropped
       // the work in flight and made the next minutes worse (24.11.2026). A real database error still answers 503.
-      const busy = Symbol('busy');
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const result = await Promise.race([databaseCheck(), new Promise<typeof busy>((resolve) => { timer = setTimeout(() => resolve(busy), healthTimeoutMs); })])
-        .finally(() => clearTimeout(timer));
-      if (result === busy) {
+      const busy = await withTimeLimit(databaseCheck(), healthTimeoutMs).then(() => false, (error: unknown) => { if (error instanceof TimeLimitError) return true; throw error; });
+      if (busy) {
         app.log.warn('База отвечает медленно: все соединения заняты');
         return { ok: true, service: "@ops/api", database: "busy", timestamp };
       }
@@ -1236,13 +1275,18 @@ export async function buildApp(options: BuildAppOptions = {}) {
     };
   });
 
+  // Running and recent tours without drawn routes; the truck page asks `withRoute` for the planned line of the open
+  // tours, which its map shows while the truck has no leg under way.
   app.get("/vehicles/:id/tours", async (request) => {
     const { id } = z.object({ id: z.string() }).parse(request.params);
-    const tours = await prisma.tour.findMany({
-      where: { vehicleId: id },
-      include: tourInclude,
-      orderBy: [{ plannedStartAt: "asc" }, { createdAt: "asc" }]
-    });
+    const { withRoute } = z.object({ withRoute: z.enum(["0", "1"]).optional() }).parse(request.query);
+    const tours = await findToursForList(prisma, { vehicleId: id });
+    if (withRoute === "1") {
+      const open = tours.filter((tour) => tour.status === "ACTIVE" || tour.status === "QUEUED").map((tour) => tour.id);
+      const lines = new Map((open.length ? await prisma.leg.findMany({ where: { tourId: { in: open } }, select: { id: true, routeGeometry: true } }) : [])
+        .map((leg) => [leg.id, leg.routeGeometry]));
+      for (const tour of tours) for (const leg of tour.legs) leg.routeGeometry = lines.get(leg.id) ?? leg.routeGeometry;
+    }
     return enrichToursWithSchedule(tours);
   });
 
@@ -1551,13 +1595,13 @@ export async function buildApp(options: BuildAppOptions = {}) {
         issues: { where: { resolvedAt: null } },
         tours: {
           where: { status: { in: ["ACTIVE", "QUEUED", "COMPLETED"] } },
-          include: { stops: { orderBy: { sequence: "asc" } }, legs: { orderBy: { createdAt: "asc" } } },
+          include: { stops: { orderBy: { sequence: "asc" } }, legs: legsWithoutRoute },
           orderBy: [{ plannedStartAt: "asc" }, { createdAt: "asc" }]
         }
       }
     });
-    const schedule = await scheduleOf(vehicle);
-    const tours = vehicle.tours.map((tour) => ({ ...tour, stops: withTerminGroups(tour.stops) }));
+    const schedule = await scheduleOf({ ...vehicle, tours: vehicle.tours.map(withEmptyRoutes) });
+    const tours = vehicle.tours.map((tour) => ({ ...withEmptyRoutes(tour), stops: withTerminGroups(tour.stops) }));
     const items = tours.flatMap((tour) => buildTimelineItems(tour));
     return {
       vehicle: toIsoObject(vehicle),

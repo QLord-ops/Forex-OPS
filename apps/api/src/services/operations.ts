@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { PrismaClient } from '@prisma/client';
-import { TourPlanConflictError, TourService, snapshotVehicleClock, rebaseActiveLeg } from './tours.js';
+import { TourPlanConflictError, TourService, legsWithoutRoute, snapshotVehicleClock, rebaseActiveLeg, withEmptyRoutes } from './tours.js';
 import {
   createInitialClockState, getBerlinIsoWeekKey, reserveCycleExtension, releaseCycleExtension,
   forecastDrive, applyStopTime, resetReducedRestCounter, clockWarnings, type ClockState
@@ -16,13 +16,20 @@ export const SYSTEM_WEBFLEET_ACTOR: AuditActor = { role: 'system', sessionId: 'w
 export class OperationsService {
   constructor(private readonly db: PrismaClient, private readonly tours: TourService) {}
 
-  async context(vehicleId: string, now = new Date()) {
+  /** `light`: the polled panel, which never draws a line — the legs come without their routes. */
+  async context(vehicleId: string, now = new Date(), light = false) {
     const vehicle = await this.db.vehicle.findUniqueOrThrow({ where: { id: vehicleId } });
-    const tours = await this.db.tour.findMany({
-      where: { vehicleId, status: { in: ['ACTIVE', 'QUEUED'] } },
-      orderBy: [{ queueIndex: 'asc' }, { createdAt: 'asc' }],
-      include: { stops: { orderBy: { sequence: 'asc' } }, legs: true }
-    });
+    const tours = light
+      ? (await this.db.tour.findMany({
+          where: { vehicleId, status: { in: ['ACTIVE', 'QUEUED'] } },
+          orderBy: [{ queueIndex: 'asc' }, { createdAt: 'asc' }],
+          include: { stops: { orderBy: { sequence: 'asc' } }, legs: legsWithoutRoute }
+        })).map(withEmptyRoutes)
+      : await this.db.tour.findMany({
+          where: { vehicleId, status: { in: ['ACTIVE', 'QUEUED'] } },
+          orderBy: [{ queueIndex: 'asc' }, { createdAt: 'asc' }],
+          include: { stops: { orderBy: { sequence: 'asc' } }, legs: true }
+        });
     const activeTour = tours.find(tour => tour.status === 'ACTIVE');
     const currentStop = activeTour?.stops.find(stop => !stop.completedAt) ?? null;
     const activeLeg = activeTour?.legs.find(leg => (leg.status === 'ACTIVE' || leg.status === 'ARRIVED') && !currentStop?.arrivedAt) ?? null;
@@ -31,19 +38,21 @@ export class OperationsService {
   }
 
   async get(vehicleId: string, now = new Date()) {
-    const context = await this.context(vehicleId, now);
+    const context = await this.context(vehicleId, now, true);
     const { vehicle, currentStop, snapshot } = context;
+    const details = context.activeLeg ? (await this.tours.drawnRouteOf(context.activeLeg.id, context.activeLeg.updatedAt)).details : null;
+    const { routeGeometry: _route, travelledGeometry: _travelled, remainingGeometry: _remaining, ...position } = await this.tours.getCurrentPosition(vehicleId, now);
     return {
       vehicleId, version: vehicle.operationVersion,
       // Unknown hours are already shown through `preliminary`; only the duty overrun is a clock warning here.
       clock: { ...snapshot.clockState, warnings: clockWarnings(snapshot.clockState).filter(code => code !== 'CLOCK_STATE_UNKNOWN') },
       preliminary: snapshot.clockState.kind !== 'KNOWN', manualStoppedAt: vehicle.manualStoppedAt,
-      position: await this.tours.getCurrentPosition(vehicleId, now), currentStop,
+      position, currentStop,
       dwellMinutes: currentStop?.arrivedAt ? Math.max(0, Math.floor((now.getTime() - currentStop.arrivedAt.getTime()) / 60_000)) : null,
       currentArrival: currentStop?.arrivedAt ? await this.arrivalInfo(currentStop.id) : null,
       arrivalRadiusMeters: currentStop ? currentStop.arrivalRadiusMeters ?? DEFAULT_ARRIVAL_RADIUS_METERS : null,
       clockProposals: this.proposals(context, now),
-      traffic: context.activeLeg?.routeDetails ? JSON.parse(context.activeLeg.routeDetails) : null
+      traffic: details ? withoutLines(JSON.parse(details)) : null
     };
   }
 
@@ -321,4 +330,12 @@ export function terminVerdict(stop: { appointmentAt: Date | null; appointmentWin
 
 function berlinTime(value: Date) {
   return new Intl.DateTimeFormat('ru-RU', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit' }).format(value);
+}
+
+const LINE_KEYS = new Set(['geometry', 'travelledGeometry', 'travelledStitches', 'trafficSections', 'roadSections', 'instructions', 'points', 'legs']);
+/** The provider's answer for the panel, polled every 20 s: every line and section list left out, the numbers kept. */
+export function withoutLines(value: unknown, depth = 0): unknown {
+  if (depth > 4 || value === null || typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.map((item) => withoutLines(item, depth + 1));
+  return Object.fromEntries(Object.entries(value).filter(([key]) => !LINE_KEYS.has(key)).map(([key, item]) => [key, withoutLines(item, depth + 1)]));
 }
