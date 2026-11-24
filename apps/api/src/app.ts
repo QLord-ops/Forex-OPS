@@ -48,6 +48,7 @@ import { forecastDrive } from './services/vehicle-clock.js';
 import { ClockEngine, forecastRoute, WebfleetEngine } from './services/termin-planner.js';
 import { forecastClock, parseClockState } from './services/tours.js';
 import { registerDispatcherAuth, requireDispatcherRoles, type DispatcherAuthOptions } from './services/dispatcher-auth.js';
+import { mayChangeVehicle, NOT_YOUR_VEHICLE, ownershipTarget, vehicleOfTarget } from './services/vehicle-ownership.js';
 import { RouteScenarioService, routeScenarioInputSchema } from './services/route-scenario.js';
 import { registerRouteScenarioRoutes } from './routes/route-scenario.js';
 import { AssistantError, DispatcherAssistantService } from './services/dispatcher-assistant.js';
@@ -488,6 +489,17 @@ export async function buildApp(options: BuildAppOptions = {}) {
   let driverGate: NonNullable<DispatcherAuthOptions['driverGate']> = async (_request, reply) => reply.code(404).send({ error: 'Не найдено.' });
   registerDispatcherAuth(app, prisma, { ...options.auth, origins: options.auth?.origins ?? allowedOrigins, driverGate: (request, reply) => driverGate(request, reply) });
   driverGate = registerDriverAuth(app, prisma, { secret: options.auth?.secret, origins: options.driverOrigins ?? driverAppOrigins, now: options.auth?.now });
+  // A dispatcher changes only their own trucks (owner, 24.11.2026); the admin and the shared login change every truck.
+  app.addHook('preHandler', async (request, reply) => {
+    const session = request.dispatcherSession;
+    if (!session?.dispatcherId || session.role === 'admin') return;
+    const target = ownershipTarget(request.method, request.routeOptions.url ?? '', request.params, request.body);
+    if (!target) return;
+    const vehicleId = await vehicleOfTarget(prisma, target);
+    if (!vehicleId || await mayChangeVehicle(prisma, session.dispatcherId, vehicleId)) return;
+    request.log.info({ route: request.routeOptions.url, vehicleId }, 'Отказ: машина коллеги');
+    return reply.code(403).send({ error: NOT_YOUR_VEHICLE });
+  });
   await app.register(rateLimit, {
     global: true,
     max: 300,
