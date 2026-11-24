@@ -6,7 +6,7 @@ import type { RoutingProvider } from './routing.js';
 import { resolveAddressWithFallback } from './address-resolution.js';
 import { calculateSimulatedDuration } from './simulation.js';
 import { shareTerminAtSamePlace } from './termin-groups.js';
-import { TourService, snapshotVehicleClock, rebaseActiveLeg } from './tours.js';
+import { TourService, snapshotVehicleClock, rebaseActiveLeg, withoutDrawnRoute } from './tours.js';
 import { ClockEngine, forecastEta, WebfleetEngine, type DriveEngine, type DriverEtaInput } from './termin-planner.js';
 import { writeAuditLog, type AuditActor } from './audit-log.js';
 
@@ -169,7 +169,7 @@ export class ReplanningService {
       const clock = snapshotVehicleClock(context.vehicle, currentLeg ?? null, now).clockState;
       const arrived = context.tour.stops.find(s => s.arrivedAt && !s.completedAt);
       for (const tour of context.tours.filter(t => plan.affectedTourIds.includes(t.id))) {
-        await tx.routeRevision.create({ data: { tourId: tour.id, version: tour.planVersion, snapshotJson: JSON.stringify({ tour, position: plan.position, clockState: context.vehicle.clockState }) } });
+        await tx.routeRevision.create({ data: { tourId: tour.id, version: tour.planVersion, snapshotJson: JSON.stringify({ tour: withoutDrawnRoute(tour), position: plan.position, clockState: context.vehicle.clockState }) } });
         await tx.leg.deleteMany({ where: { tourId: tour.id, status: { not: 'COMPLETED' }, ...(arrived && currentLeg ? { id: { not: currentLeg.id } } : {}) } });
         await tx.tour.update({ where: { id: tour.id }, data: { planVersion: { increment: 1 } } });
       }
