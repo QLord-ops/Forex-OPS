@@ -7,7 +7,7 @@ import { berlinToday } from './order-dates.js';
 import { stopActivityOf } from './rest-at-stop.js';
 import { DAILY_REST_SECONDS, driverBudgetFromWebfleet, planTermin, TERMIN_BUFFER_MINUTES, type DriverBudget, type PlannerStop } from './termin-planner.js';
 import { buildPlannerStops, type DriveEstimate } from './termin-service.js';
-import { snapshotVehicleClock } from './tours.js';
+import { legsWithoutRoute, snapshotVehicleClock, withEmptyRoutes } from './tours.js';
 import { DEPARTURE_MARGIN_METERS, distanceMeters, SAME_PLACE_METERS, zoneRadiusOf } from './webfleet.js';
 import type { DriverHours, WebfleetDrivingTimes } from './webfleet-live.js';
 import { withZuladungNote } from './zuladung.js';
@@ -397,12 +397,12 @@ export class DailyStatusService {
     const vehicles = await this.db.vehicle.findMany({ where: { line: list.key, ...(list.excludedVehicles.length ? { vehicleNumber: { notIn: list.excludedVehicles } } : {}) }, include: {
       issues: { where: { resolvedAt: null } },
       customerLine: { select: { dispatchers: LINE_DISPATCHERS } },
-      tours: { where: { status: { in: ['ACTIVE', 'QUEUED'] } }, orderBy: [{ queueIndex: 'asc' }, { createdAt: 'asc' }], include: { stops: { orderBy: { sequence: 'asc' } }, legs: true } }
+      tours: { where: { status: { in: ['ACTIVE', 'QUEUED'] } }, orderBy: [{ queueIndex: 'asc' }, { createdAt: 'asc' }], include: { stops: { orderBy: { sequence: 'asc' } }, legs: legsWithoutRoute } }
     } });
     const dayStart = dayStartOf(dayKey);
     const ready = this.deps.webfleetReady(now);
     const drafts: StatusRowDraft[] = [];
-    for (const vehicle of vehicles) drafts.push(await this.rowFor(vehicle, dayKey, dayStart, now, ready));
+    for (const vehicle of vehicles) drafts.push(await this.rowFor({ ...vehicle, tours: vehicle.tours.map(withEmptyRoutes) }, dayKey, dayStart, now, ready));
     const groupOrder = list.groups.map((group) => group.code);
     const order = (draft: StatusRowDraft) => {
       const group = groupOrder.indexOf(draft.statusGroup ?? '');

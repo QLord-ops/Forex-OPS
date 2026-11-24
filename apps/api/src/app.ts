@@ -24,7 +24,7 @@ import { geocodePrecisions, resolveAddressWithFallback } from "./services/addres
 import { OpenPlzChecker, TomTomPlaceSearch } from "./services/address-check.js";
 import { BudgetedAddressResearcher } from "./services/address-research.js";
 import { validateXlsxArchive } from "./services/xlsx-validation.js";
-import { enrichTour, snapshotVehicleClock, type TourAggregate, toDashboardTourSummary, toIsoObject, tourInclude, tourListInclude, findToursForList, withoutDrawnRoute, TourService } from "./services/tours.js";
+import { enrichTour, snapshotVehicleClock, type TourAggregate, toDashboardTourSummary, toIsoObject, tourInclude, tourListInclude, findToursForList, withoutDrawnRoute, legsWithoutRoute, withEmptyRoutes, TourService } from "./services/tours.js";
 import { VehicleService } from "./services/vehicles.js";
 import { calculateDwellState, NotificationService } from "./services/notifications.js";
 import { OperationsService, SYSTEM_WEBFLEET_ACTOR } from "./services/operations.js";
@@ -421,6 +421,8 @@ export interface BuildAppOptions {
   pdfImport?: (buffer: Buffer, filename: string, customer?: ImportCustomerContext | null) => Promise<PdfImportPreview>;
   imageImport?: (buffer: Buffer, filename: string, mimeType: "image/png" | "image/jpeg" | "image/webp", customer?: ImportCustomerContext | null) => Promise<ImageImportPreview>;
   databaseCheck?: () => Promise<unknown>;
+  /** How long /health waits for the database before it answers «busy» instead of failing. */
+  healthTimeoutMs?: number;
   /** How long an Auftrag upload waits for the AI before answering «ещё читаем» (tests make it short). */
   importWaitMs?: number;
 }
@@ -549,6 +551,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   const imageImport = options.imageImport ?? (async (buffer, filename, mimeType, customer) =>
     importImagePreview(buffer, filename, mimeType, { learned: await learnedRules(customer?.selected?.id ?? null), customer: customer ?? null }));
   const databaseCheck = options.databaseCheck ?? (() => prisma.$queryRaw`SELECT 1`);
+  const healthTimeoutMs = options.healthTimeoutMs ?? 2_000;
   const subscribers = new Set<import('node:http').ServerResponse>();
   const subscriberSessions = new Map<string, number>();
   const maxSseConnectionsPerSession = Math.max(1, Number.parseInt(process.env.SSE_MAX_CONNECTIONS_PER_SESSION ?? '3', 10) || 3);
@@ -727,7 +730,16 @@ export async function buildApp(options: BuildAppOptions = {}) {
   app.get("/health", async (_request, reply) => {
     const timestamp = new Date().toISOString();
     try {
-      await databaseCheck();
+      // All connections busy is load, not death: answering late made DigitalOcean restart the API, which dropped
+      // the work in flight and made the next minutes worse (24.11.2026). A real database error still answers 503.
+      const busy = Symbol('busy');
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const result = await Promise.race([databaseCheck(), new Promise<typeof busy>((resolve) => { timer = setTimeout(() => resolve(busy), healthTimeoutMs); })])
+        .finally(() => clearTimeout(timer));
+      if (result === busy) {
+        app.log.warn('База отвечает медленно: все соединения заняты');
+        return { ok: true, service: "@ops/api", database: "busy", timestamp };
+      }
       return { ok: true, service: "@ops/api", database: "ok", timestamp };
     } catch (error) {
       app.log.error({ errorType: error instanceof Error ? error.name : 'unknown' }, "База данных недоступна для /health");
@@ -1625,19 +1637,20 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const lineStaff = await prisma.dispatcherLine.findMany({ select: { dispatcherId: true, lineId: true } });
     const dispatcherNames = new Map((await prisma.dispatcher.findMany({ select: { id: true, displayName: true } })).map((person) => [person.id, person.displayName]));
     const person = (id: string) => ({ id, name: dispatcherNames.get(id) ?? 'Диспетчер удалён' });
-    const vehicles = await prisma.vehicle.findMany({
+    // Without the drawn routes: the page gets the line of the opened truck from its own position call.
+    const vehicles = (await prisma.vehicle.findMany({
       include: {
         assignedDispatcher: { select: { id: true, displayName: true } },
         customerLine: { select: { id: true, code: true, name: true, customer: { select: { id: true, name: true, slug: true, color: true } } } },
         issues: { where: { resolvedAt: null }, orderBy: { createdAt: 'desc' } },
         tours: {
           where: { status: { in: ["ACTIVE", "QUEUED"] } },
-          include: tourInclude,
+          include: tourListInclude,
           orderBy: [{ plannedStartAt: "asc" }, { createdAt: "asc" }]
         }
       },
       orderBy: { vehicleNumber: "asc" }
-    });
+    })).map((vehicle) => ({ ...vehicle, tours: vehicle.tours.map((tour) => withEmptyRoutes(tour) as TourAggregate) }));
 
     const notices = await customerNotices.latestByTour(vehicles.flatMap((vehicle) => vehicle.tours.filter((tour) => tour.status === "ACTIVE").map((tour) => tour.id)));
     // Each truck needs a few small queries; running a handful at once keeps the 10 s poll fast as the fleet grows.
@@ -1809,14 +1822,14 @@ async function refreshAllAlerts() {
       issues: { where: { resolvedAt: null } },
       tours: {
         where: { status: { in: ["ACTIVE", "QUEUED"] } },
-        include: { stops: { orderBy: { sequence: "asc" } }, legs: { orderBy: { createdAt: "asc" } } },
+        include: { stops: { orderBy: { sequence: "asc" } }, legs: legsWithoutRoute },
         orderBy: [{ plannedStartAt: "asc" }, { createdAt: "asc" }]
       }
     }
   });
 
   for (const vehicle of vehicles) {
-    await alertService.refreshVehicleAlerts(vehicle.id, await scheduleOf(vehicle));
+    await alertService.refreshVehicleAlerts(vehicle.id, await scheduleOf({ ...vehicle, tours: vehicle.tours.map(withEmptyRoutes) }));
   }
 }
 
@@ -1827,12 +1840,12 @@ async function refreshAlertsForVehicle(vehicleId: string) {
       issues: { where: { resolvedAt: null } },
       tours: {
         where: { status: { in: ["ACTIVE", "QUEUED"] } },
-        include: { stops: { orderBy: { sequence: "asc" } }, legs: { orderBy: { createdAt: "asc" } } },
+        include: { stops: { orderBy: { sequence: "asc" } }, legs: legsWithoutRoute },
         orderBy: [{ plannedStartAt: "asc" }, { createdAt: "asc" }]
       }
     }
   });
-  await alertService.refreshVehicleAlerts(vehicle.id, await scheduleOf(vehicle));
+  await alertService.refreshVehicleAlerts(vehicle.id, await scheduleOf({ ...vehicle, tours: vehicle.tours.map(withEmptyRoutes) }));
 }
 
 function isPrismaRecordNotFound(error: unknown): boolean {
