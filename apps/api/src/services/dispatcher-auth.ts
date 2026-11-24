@@ -3,7 +3,11 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 
 const COOKIE = 'ops_dispatcher';
-const SESSION_MS = 12 * 60 * 60 * 1000;
+export const SESSION_MS = 12 * 60 * 60 * 1000;
+/** «Запомнить меня» (owner, 24.11.2026): a personal account may stay signed in for 7 days; shared logins never do. */
+export const REMEMBER_MS = 7 * 24 * 60 * 60 * 1000;
+/** A short mark of the account's password hash inside its token: a new password ends the sessions made with the old one. */
+const passwordMark = (hash: string) => createHash('sha256').update(hash).digest('base64url').slice(0, 8);
 export type DispatcherRole = 'admin' | 'dispatcher';
 export interface DispatcherSession {
   token: string;
@@ -15,6 +19,8 @@ export interface DispatcherSession {
   displayName: string | null;
   /** When the guided tour was finished; only known for personal accounts. */
   onboardingCompletedAt?: Date | null;
+  /** The password mark the token was made with; tokens from before 24.11.2026 have none and run out within 12 h. */
+  passwordMark?: string | null;
 }
 
 export type DispatcherAccount = { id: string; login: string; displayName: string; role: string; passwordHash: string; active: boolean; onboardingCompletedAt?: Date | null };
@@ -96,17 +102,22 @@ export function registerDispatcherAuth(app: FastifyInstance, prisma: QuotaStore,
   const session = (request: FastifyRequest): DispatcherSession | null => {
     const token = request.headers.cookie?.split(';').map(part => part.trim()).find(part => part.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1);
     if (!token || token.length > 500) return null;
-    // Personal sessions: expires.role.account.nonce.sig; shared-password sessions: expires.role.nonce.sig.
+    // Personal sessions: expires.role.account.mark.nonce.sig (before 24.11.2026 without the mark);
+    // shared-password sessions: expires.role.nonce.sig.
     const parts = token.split('.');
-    if (parts.length !== 4 && parts.length !== 5) return null;
+    if (parts.length < 4 || parts.length > 6) return null;
     const [expires, role] = parts;
-    const account = parts.length === 5 ? parts[2] : null;
+    const account = parts.length >= 5 ? parts[2] : null;
+    const mark = parts.length === 6 ? parts[3] : null;
     const nonce = parts[parts.length - 2];
     const signature = parts[parts.length - 1];
     const expiresAt = Number(expires);
+    // Only a personal account may hold the longer «Запомнить меня» session.
+    const longest = account ? REMEMBER_MS : SESSION_MS;
     if ((role !== 'admin' && role !== 'dispatcher') || !nonce || !signature || (account !== null && !/^[A-Za-z0-9_-]{1,64}$/.test(account))
-      || !Number.isSafeInteger(expiresAt) || expiresAt <= now() || expiresAt > now() + SESSION_MS || !equal(signature, sign(parts.slice(0, -1).join('.')))) return null;
-    return { token, expiresAt, role, dispatcherId: account, displayName: null, sessionId: createHash('sha256').update(token).digest('hex').slice(0, 32) };
+      || (mark !== null && !/^[A-Za-z0-9_-]{8}$/.test(mark))
+      || !Number.isSafeInteger(expiresAt) || expiresAt <= now() || expiresAt > now() + longest || !equal(signature, sign(parts.slice(0, -1).join('.')))) return null;
+    return { token, expiresAt, role, dispatcherId: account, displayName: null, passwordMark: mark, sessionId: createHash('sha256').update(token).digest('hex').slice(0, 32) };
   };
   const accounts = prisma.dispatcher;
   // A deactivated or re-roled account loses its session within a minute on every instance.
@@ -132,6 +143,7 @@ export function registerDispatcherAuth(app: FastifyInstance, prisma: QuotaStore,
     if (!found.dispatcherId) return found;
     const account = await accountById(found.dispatcherId);
     if (!account || !account.active || account.role !== found.role) return null;
+    if (found.passwordMark && found.passwordMark !== passwordMark(account.passwordHash)) return null;
     return { ...found, displayName: account.displayName, onboardingCompletedAt: account.onboardingCompletedAt ?? null };
   };
   const cookie = (token: string, maxAge: number) => `${COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${process.env.NODE_ENV === 'production' || process.env.VERCEL ? '; Secure' : ''}`;
@@ -186,7 +198,7 @@ export function registerDispatcherAuth(app: FastifyInstance, prisma: QuotaStore,
     const bucket = Math.floor(now() / (15 * 60_000));
     const ip = createHash('sha256').update(request.ip).digest('hex').slice(0, 24);
     // Only wrong passwords count, so colleagues behind one office IP are not locked out by normal logins.
-    const parsed = z.object({ login: z.string().trim().toLowerCase().max(40).optional(), password: z.string().min(1).max(1024) }).strict().safeParse(request.body);
+    const parsed = z.object({ login: z.string().trim().toLowerCase().max(40).optional(), password: z.string().min(1).max(1024), remember: z.boolean().optional() }).strict().safeParse(request.body);
     const login = parsed.success && parsed.data.login ? parsed.data.login : null;
     const failureKeys: Array<readonly [string, number]> = [[`auth:${bucket}:ip:${ip}`, LOGIN_FAILURES_PER_IP], [`auth:${bucket}:global`, LOGIN_FAILURES_TOTAL]];
     // Guessing one colleague's password from many addresses is limited too.
@@ -211,12 +223,13 @@ export function registerDispatcherAuth(app: FastifyInstance, prisma: QuotaStore,
       for (const [id] of failureKeys) await prisma.apiQuota.upsert({ where: { id }, create: { id, used: 1 }, update: { used: { increment: 1 } } });
       return reply.code(401).send({ error: login ? 'Неверный логин или пароль.' : 'Неверный пароль.' });
     }
-    const expiresAt = now() + SESSION_MS;
+    const length = account && parsed.success && parsed.data.remember ? REMEMBER_MS : SESSION_MS;
+    const expiresAt = now() + length;
     const nonce = randomBytes(24).toString('base64url');
-    const payload = account ? `${expiresAt}.${role}.${account.id}.${nonce}` : `${expiresAt}.${role}.${nonce}`;
+    const payload = account ? `${expiresAt}.${role}.${account.id}.${passwordMark(account.passwordHash)}.${nonce}` : `${expiresAt}.${role}.${nonce}`;
     const token = `${payload}.${sign(payload)}`;
     if (account) await accounts?.update({ where: { id: account.id }, data: { lastLoginAt: new Date(now()) } });
-    reply.header('Set-Cookie', cookie(token, SESSION_MS / 1000));
+    reply.header('Set-Cookie', cookie(token, length / 1000));
     return { authenticated: true, role, csrfToken: csrf(token), expiresAt: new Date(expiresAt).toISOString(), dispatcherId: account?.id ?? null, displayName: account?.displayName ?? null, onboardingCompletedAt: account?.onboardingCompletedAt?.toISOString() ?? null };
   });
   app.post('/auth/logout', async (request, reply) => {

@@ -238,6 +238,19 @@
   font-weight: 550;
 }
 
+.auth-remember {
+  display: flex;
+  align-items: flex-start;
+  gap: .6rem;
+  margin: -.5rem 0 1.25rem;
+  color: rgba(255, 255, 255, .82);
+  font-size: .85rem;
+  cursor: pointer;
+}
+.auth-remember input { width: 1.05rem; height: 1.05rem; margin-top: .1rem; accent-color: var(--auth-blue-bright); }
+.auth-remember input:focus-visible { outline: 2px solid var(--auth-blue-bright); outline-offset: 2px; }
+.auth-remember small { display: block; margin-top: .15rem; color: rgba(255, 255, 255, .55); font-size: .75rem; }
+
 .auth-form--error .auth-field__control { animation: auth-field-shake 360ms cubic-bezier(.36, .07, .19, .97) both; }
 
 .auth-submit {

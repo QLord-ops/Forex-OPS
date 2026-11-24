@@ -34,7 +34,7 @@ export class DispatcherAuthError extends Error {
   }
 }
 
-async function call(path: string, body?: Record<string, string>): Promise<DispatcherSession> {
+async function call(path: string, body?: Record<string, string | boolean>): Promise<DispatcherSession> {
   const response = await fetch(`/api/auth/${path}`, {
     method: path === 'session' ? 'GET' : 'POST', credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
@@ -57,6 +57,7 @@ async function call(path: string, body?: Record<string, string>): Promise<Dispat
 }
 export const dispatcherAuth = {
   session: () => call('session'),
-  login: (login: string, password: string) => call('login', login.trim() ? { login: login.trim(), password } : { password }),
+  /** `remember`: a personal login stays signed in for 7 days; the shared password always gets 12 h. */
+  login: (login: string, password: string, remember = false) => call('login', login.trim() ? { login: login.trim(), password, ...(remember ? { remember: true } : {}) } : { password }),
   logout: () => call('logout', {})
 }
