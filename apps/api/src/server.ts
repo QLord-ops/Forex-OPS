@@ -43,3 +43,8 @@ process.on("SIGTERM", () => void shutdown("SIGTERM"));
 process.on("unhandledRejection", (reason) => {
   app.log.error({ err: reason }, "Необработанная ошибка в промисе");
 });
+// The state after an uncaught throw is unknown: say why in the log, then stop cleanly and let the platform start again.
+process.on("uncaughtException", (error) => {
+  app.log.fatal({ err: error }, "Необработанная ошибка, API останавливается");
+  void shutdown("uncaughtException");
+});

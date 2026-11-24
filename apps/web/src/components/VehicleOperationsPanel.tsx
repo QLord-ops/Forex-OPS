@@ -47,7 +47,7 @@ export function localDateTime(value = new Date().toISOString()) {
 }
 
 export function VehicleOperationsPanel({ vehicleId, onChange }: { vehicleId: string; onChange: () => Promise<unknown> }) {
-  const state = usePolling(() => operationsRequest<Operations>(`/vehicles/${vehicleId}/operations`), 5000, Boolean(vehicleId), vehicleId)
+  const state = usePolling(() => operationsRequest<Operations>(`/vehicles/${vehicleId}/operations`), 20_000, Boolean(vehicleId), vehicleId)
   const [editing, setEditing] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
