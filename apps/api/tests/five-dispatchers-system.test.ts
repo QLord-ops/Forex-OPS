@@ -313,11 +313,15 @@ describe('the whole system with five dispatchers at work', () => {
     const race = await Promise.all(team.map((person) => call(person, 'POST', `/vehicles/${ids.spare}/assignment`, { action: 'take', expectedDispatcherId: null })));
     expect(race.map((answer) => answer.status).sort()).toEqual([200, 409, 409, 409, 409]);
 
-    // Anna and Ben press BELADEN on the same stop in the same moment.
+    // Anna and the admin press BELADEN on the same stop in the same moment; Ben may not touch Anna's truck at all (owner, 24.11).
+    const chef = await signIn('chef' as Login);
     const tour = await call(anna, 'POST', '/tours', tourBody(ids.trucks.anna[1], 'C-doppelt', 7));
     expect(tour.status).toBe(201);
     const stopId = tour.body.stops[0].id as string;
-    const twice = await Promise.all([call(anna, 'POST', `/stops/${stopId}/loaded`, {}), call(ben, 'POST', `/stops/${stopId}/loaded`, {})]);
+    const notHis = await call(ben, 'POST', `/stops/${stopId}/loaded`, {});
+    expect(notHis.status).toBe(403);
+    expect(notHis.body).toMatchObject({ error: expect.stringContaining('машина коллеги') });
+    const twice = await Promise.all([call(anna, 'POST', `/stops/${stopId}/loaded`, {}), call(chef, 'POST', `/stops/${stopId}/loaded`, {})]);
     expect(twice.filter((answer) => answer.status === 200)).toHaveLength(1);
     expect(twice.find((answer) => answer.status !== 200)!.status).toBeLessThan(500);
     expect(await db.event.count({ where: { stopId, type: 'LOADED' } })).toBe(1);
@@ -325,7 +329,7 @@ describe('the whole system with five dispatchers at work', () => {
     // Both edit the same queued tour from the same version.
     const future = await call(anna, 'POST', '/tours', tourBody(ids.trucks.anna[1], 'D-zwei', 8));
     expect(future.status).toBe(201);
-    const edits = await Promise.all([anna, ben].map((person, index) => call(person, 'PATCH', `/tours/${future.body.id}`,
+    const edits = await Promise.all([anna, chef].map((person, index) => call(person, 'PATCH', `/tours/${future.body.id}`,
       { ...tourBody(ids.trucks.anna[1], `D-zwei-${index}`, 9), version: future.body.planVersion })));
     expect(edits.map((answer) => answer.status).sort()).toEqual([200, 409]);
   }, 60_000);
@@ -359,7 +363,7 @@ describe('the whole system with five dispatchers at work', () => {
   it('never answered with a server error, never refused for load, and never asked a service outside', () => {
     const expected401 = (row: (typeof log)[number]) => row.status === 401 && row.who === 'elena';
     // Ben tried to close Anna's notification, and the admin asked for a scope that does not exist: both on purpose.
-    const expectedRefusal = (row: (typeof log)[number]) => (row.status === 404 && row.who === 'ben' && row.path === '/notifications/:id/ack') || (row.status === 400 && row.who === 'chef' && row.path === '/notifications');
+    const expectedRefusal = (row: (typeof log)[number]) => (row.status === 404 && row.who === 'ben' && row.path === '/notifications/:id/ack') || (row.status === 403 && row.who === 'ben' && row.path === '/stops/:id/loaded') || (row.status === 400 && row.who === 'chef' && row.path === '/notifications');
     const failures = log.filter((row) => row.status >= 500);
     const refused = log.filter((row) => row.status === 429);
     const odd = log.filter((row) => row.status >= 400 && row.status !== 409 && !expected401(row) && !expectedRefusal(row));
