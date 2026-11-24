@@ -52,8 +52,8 @@ test('«Сообщить заказчику»: маленькое окно с о
   expect(box && box.width <= 360 && box.height < 360).toBe(true)
   await expect(popup.getByLabel('Кому')).toHaveValue('dispo@musterwerk.example')
   await expect(popup.getByLabel('Тема')).toHaveValue('187')
-  // Run near midnight, the 40 min late arrival falls on the next day and the letter says so.
-  await expect(popup.getByLabel('Текст')).toHaveValue(/^Hallo, der Fahrer verspätet sich zum Termin um \d{1,2}(:\d{2})? Uhr bei Musterwerk Jena, er wird voraussichtlich (morgen )?gegen \d{2}:\d{2} Uhr da sein$/)
+  // Run near midnight, the Termin or the late arrival falls on the next day and the letter says so.
+  await expect(popup.getByLabel('Текст')).toHaveValue(/^Hallo, der Fahrer verspätet sich zum Termin (morgen )?um \d{1,2}(:\d{2})? Uhr bei Musterwerk Jena, er wird voraussichtlich (morgen )?gegen \d{2}:\d{2} Uhr da sein$/)
   // The truck is on the road: a letter about waiting at the stop cannot be written about it.
   await expect(popup.getByRole('button', { name: 'Ждёт на точке' })).toBeDisabled()
   await popup.getByRole('button', { name: 'Копировать' }).click()

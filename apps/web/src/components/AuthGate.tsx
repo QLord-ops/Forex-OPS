@@ -4,6 +4,8 @@ import { DispatcherAuthError, dispatcherAuth } from '../lib/auth'
 import './auth-gate.css'
 import { disablePush } from '../lib/push'
 
+const LAST_LOGIN_KEY = 'ops:last-login'
+
 type AuthPhase = 'checking' | 'idle' | 'submitting' | 'success'
 
 function AuthBrand() {
@@ -42,7 +44,9 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const [authenticated, setAuthenticated] = useState(false)
   const [phase, setPhase] = useState<AuthPhase>('checking')
   const [password, setPassword] = useState('')
-  const [login, setLogin] = useState('')
+  // Only the login name is kept on this computer; the password is left to the browser's own password manager.
+  const [login, setLogin] = useState(() => { try { return window.localStorage.getItem(LAST_LOGIN_KEY) ?? '' } catch { return '' } })
+  const [remember, setRemember] = useState(false)
   const [passwordVisible, setPasswordVisible] = useState(false)
   const [error, setError] = useState('')
   const [passwordError, setPasswordError] = useState(false)
@@ -105,8 +109,11 @@ export function AuthGate({ children }: { children: ReactNode }) {
     setPasswordError(false)
     setError('')
     try {
-      const session = await dispatcherAuth.login(login, password)
+      const session = await dispatcherAuth.login(login, password, remember)
       if (!session.authenticated) throw new Error('Unauthenticated response')
+      try {
+        if (login.trim()) window.localStorage.setItem(LAST_LOGIN_KEY, login.trim().toLowerCase())
+      } catch { /* a private window keeps nothing; the form just stays empty next time */ }
       setPassword('')
       if (reauthRef.current) {
         // Back to the same screen at once; open pages reload their data.
@@ -218,6 +225,11 @@ export function AuthGate({ children }: { children: ReactNode }) {
               {error && <span id="dispatcher-password-error" role="alert">{error}</span>}
             </div>
           </div>
+
+          {login.trim() ? <label className="auth-remember">
+            <input type="checkbox" checked={remember} disabled={busy} onChange={event => setRemember(event.target.checked)} />
+            <span>Запомнить меня на 7 дней<small>Не ставьте на общем компьютере</small></span>
+          </label> : null}
 
           <button className="auth-submit" type="submit" disabled={busy || !password}>
             <span className="auth-submit__label">{phase === 'success' ? 'ACCESS GRANTED' : 'SIGN IN'}</span>
