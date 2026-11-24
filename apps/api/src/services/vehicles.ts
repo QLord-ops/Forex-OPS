@@ -1,5 +1,5 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
-import { tourInclude } from "./tours.js";
+import { TOUR_LIST_FINISHED_DAYS, tourListInclude } from "./tours.js";
 
 export type CreateVehicleInput = {
   vehicleNumber: string;
@@ -41,13 +41,20 @@ export class VehicleService {
     return { vehicle, before, after };
   }
 
-  getDetails(id: string) {
+  /**
+   * The truck page header, polled every 30 s: running and recent tours without drawn routes, the latest events.
+   * All tours ever with their routes made each poll heavier as the truck worked (24.11.2026).
+   */
+  getDetails(id: string, now = new Date()) {
     return this.db.vehicle.findUniqueOrThrow({
       where: { id },
       include: {
-        tours: { include: tourInclude, orderBy: [{ plannedStartAt: "asc" }, { createdAt: "asc" }] },
-        events: { orderBy: { timestamp: "desc" } },
-        alerts: { orderBy: { createdAt: "desc" } }
+        tours: {
+          where: { OR: [{ status: { in: ["ACTIVE", "QUEUED"] } }, { updatedAt: { gte: new Date(now.getTime() - TOUR_LIST_FINISHED_DAYS * 86_400_000) } }] },
+          include: tourListInclude, orderBy: [{ plannedStartAt: "asc" }, { createdAt: "asc" }]
+        },
+        events: { orderBy: { timestamp: "desc" }, take: 200 },
+        alerts: { orderBy: { createdAt: "desc" }, take: 200 }
       }
     } satisfies Prisma.VehicleFindUniqueArgs);
   }

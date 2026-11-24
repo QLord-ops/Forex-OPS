@@ -98,8 +98,8 @@ export class TourPlanConflictError extends Error {
   readonly statusCode = 409;
 }
 
-/** Parsed drawn routes kept per leg until the leg row changes. */
-const DRAWN_ROUTE_CACHE_SIZE = 300;
+/** Parsed drawn routes kept per leg until the leg row changes: a line is up to a megabyte parsed, so only the recent ones. */
+const DRAWN_ROUTE_CACHE_SIZE = 48;
 type DrawnRoute = { updatedAt: number; geometry: ReturnType<typeof parseGeometry>; details: string | null; version: string };
 
 export class TourService {
@@ -115,13 +115,19 @@ export class TourService {
     private readonly routingProvider: RoutingProvider
   ) {}
 
-  private async drawnRouteOf(legId: string, updatedAt: Date): Promise<DrawnRoute> {
+  async drawnRouteOf(legId: string, updatedAt: Date): Promise<DrawnRoute> {
     const known = this.drawnRoutes.get(legId);
-    if (known && known.updatedAt === updatedAt.getTime()) return known;
+    if (known && known.updatedAt === updatedAt.getTime()) {
+      this.drawnRoutes.delete(legId);
+      this.drawnRoutes.set(legId, known);
+      return known;
+    }
     const leg = await this.db.leg.findUniqueOrThrow({ where: { id: legId }, select: { routeGeometry: true, routeDetails: true } });
     const route = { updatedAt: updatedAt.getTime(), geometry: Object.freeze(parseGeometry(leg.routeGeometry)) as ReturnType<typeof parseGeometry>, details: leg.routeDetails,
       version: geometryFingerprint(legId, leg.routeGeometry, leg.routeDetails) };
-    if (this.drawnRoutes.size >= DRAWN_ROUTE_CACHE_SIZE) this.drawnRoutes.clear();
+    this.drawnRoutes.delete(legId);
+    // The least recently used line goes first (a Map keeps insertion order).
+    while (this.drawnRoutes.size >= DRAWN_ROUTE_CACHE_SIZE) this.drawnRoutes.delete(this.drawnRoutes.keys().next().value!);
     this.drawnRoutes.set(legId, route);
     return route;
   }

@@ -36,7 +36,7 @@ export function VehicleDetailPage() {
   const [stopDialog, setStopDialog] = useState<Stop | null>(null)
   const [stopTime, setStopTime] = useState(localDateTime())
   const vehicle = usePolling(() => api.vehicle(id), 30_000, Boolean(id), id)
-  const tours = usePolling(() => api.vehicleTours(id), 30_000, Boolean(id), id)
+  const tours = usePolling(() => api.vehicleTours(id, true), 30_000, Boolean(id), id)
   const timeline = usePolling(() => api.vehicleTimeline(id), 30_000, Boolean(id), id)
   const position = useVehiclePosition(id)
   const refreshOperations = () => Promise.all([tours.refetch(), timeline.refetch(), position.refetch()])

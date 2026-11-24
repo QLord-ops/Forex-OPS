@@ -165,3 +165,21 @@ it("sends the driven part without a straight line between stitched pieces and wi
   expect(position.routeGeometry.slice(0, prefixLength).every(([longitude]) => longitude < 9.65)).toBe(true);
   expect(position.roadSegments).toEqual([{ from: prefixLength, to: prefixLength + 2, road: "A4" }]);
 });
+
+it("keeps only the recently used lines in memory (24.11)", async () => {
+  const service = new TourService(asAppDatabase(db), new MockRoutingProvider());
+  const vehicle = await db.vehicle.create({ data: { vehicleNumber: "GEO-LRU" } });
+  const tour = await service.createTour({ vehicleId: vehicle.id, orderNumber: "GEO-L", stops: Array.from({ length: 52 }, (_, index) => (
+    { sequence: index + 1, type: index % 2 ? "UNLOAD" as const : "LOAD" as const, address: `Ort ${index}`, latitude: 50 + index * 0.05, longitude: 8 + index * 0.05 })) });
+  const legs = await db.leg.findMany({ where: { tourId: tour.id }, orderBy: { createdAt: "asc" } });
+  expect(legs.length).toBeGreaterThan(48);
+  const reads = vi.spyOn(db.leg, "findUniqueOrThrow");
+  for (const leg of legs) await service.drawnRouteOf(leg.id, leg.updatedAt);
+  expect(reads).toHaveBeenCalledTimes(legs.length);
+  // The newest line is still in memory, the oldest was let go.
+  await service.drawnRouteOf(legs.at(-1)!.id, legs.at(-1)!.updatedAt);
+  expect(reads).toHaveBeenCalledTimes(legs.length);
+  await service.drawnRouteOf(legs[0]!.id, legs[0]!.updatedAt);
+  expect(reads).toHaveBeenCalledTimes(legs.length + 1);
+  reads.mockRestore();
+});
