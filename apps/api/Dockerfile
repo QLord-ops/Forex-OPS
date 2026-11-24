@@ -20,4 +20,6 @@ COPY apps/api apps/api
 RUN npm run build --workspace @ops/api
 
 EXPOSE 3001
-CMD ["npm", "run", "start", "--workspace", "@ops/api"]
+# Node itself, without npm in between: no extra process, SIGTERM reaches the server, and the heap limit sits below the
+# 1 GB container so Node collects garbage before the kernel kills it (24.11.2026).
+CMD ["sh", "-c", "cd apps/api && exec node --max-old-space-size=640 dist/src/server.js"]

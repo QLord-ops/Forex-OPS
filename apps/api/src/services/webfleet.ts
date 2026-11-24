@@ -459,7 +459,7 @@ export class WebfleetTelemetryService {
   /** GPS shows the truck stood at the stop for 3 min or more and has left it, but no arrival was recorded: record it from that stay. */
   private async retroactiveArrival(vehicleId: string, tourId: string, stop: ZoneStop, previousStop: ZoneStop | null, radiusMeters: number, current: WebfleetPosition, now: Date): Promise<Date | null> {
     if (!this.onAutoArrival) return null;
-    const leg = await this.db.leg.findFirst({ where: { tourId, toStopId: stop.id } });
+    const leg = await this.db.leg.findFirst({ where: { tourId, toStopId: stop.id }, select: { startedAt: true } });
     const usedUntil = await this.otherToursDoneAt(vehicleId, tourId);
     const since = Math.max(current.recordedAt.getTime() - ARRIVAL_HISTORY_SECONDS * 1000, leg?.startedAt?.getTime() ?? 0, (usedUntil?.getTime() ?? -1) + 1);
     const history = await this.db.vehicleTelemetry.findMany({

@@ -6,7 +6,7 @@ import { afterAll, beforeAll, expect, it } from 'vitest';
 import { asAppDatabase, migrateTestDatabase } from './test-database.js';
 import { TourService, makePersistedDrivePlan } from '../src/services/tours.js';
 import { MockRoutingProvider } from '../src/services/routing.js';
-import { OperationsService } from '../src/services/operations.js';
+import { OperationsService, withoutLines } from '../src/services/operations.js';
 import { calculateDwellState, NotificationService } from '../src/services/notifications.js';
 import { createInitialClockState, type ClockState } from '../src/services/vehicle-clock.js';
 import { EtaService } from '../src/services/eta.js';
@@ -239,4 +239,19 @@ it('changes the arrival zone only for stops that are not reached yet', async () 
   await f.service.setArrivalRadius(f.stop.id, 1500, at(10), { role: 'admin', sessionId: 'a' });
   expect((await f.service.get(f.vehicle.id, at(10))).arrivalRadiusMeters).toBe(1500);
   await expect(f.service.setArrivalRadius(f.tour.stops[0].id, 800, at(10))).rejects.toThrow('будущей точки');
+});
+
+it('the polled panel gets the numbers of the route, never its lines (24.11)', async () => {
+  const f = await fixture('OPS-LINES');
+  const line = [[13.405, 52.52], [12, 53], [9.99, 53.55]];
+  await db.leg.update({ where: { id: f.leg.id }, data: { routeDetails: JSON.stringify({ providerStatus: 'live-traffic', checkedAt: at(10).toISOString(),
+    travelledGeometry: line, activeRoute: { roadNumbers: ['A24'], trafficDelaySeconds: 240, hasRoadClosure: false, geometry: line, trafficSections: [{ start: 0, end: 1 }] },
+    proposals: [{ roadNumbers: ['A7'], durationSeconds: 3600, geometry: line }] }) } });
+  const result = await f.service.get(f.vehicle.id, at(30));
+  expect(result.position).not.toHaveProperty('routeGeometry');
+  expect(result.position).not.toHaveProperty('remainingGeometry');
+  expect(result.position.status).toBeTruthy();
+  expect(result.traffic).toEqual({ providerStatus: 'live-traffic', checkedAt: at(10).toISOString(),
+    activeRoute: { roadNumbers: ['A24'], trafficDelaySeconds: 240, hasRoadClosure: false }, proposals: [{ roadNumbers: ['A7'], durationSeconds: 3600 }] });
+  expect(withoutLines(null)).toBeNull();
 });

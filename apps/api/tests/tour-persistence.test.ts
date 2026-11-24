@@ -82,8 +82,20 @@ it("persists new and edited tours, preserves transfer legs, and activates the qu
   expect(edited.orderNumber).toBe("TEST-2-EDITED");
   expect(edited.legs).toHaveLength(2);
   const third = await service.createTour({ ...input, orderNumber: "TEST-3" });
-  await expect(service.updateFutureTour(second.id, input)).rejects.toMatchObject({ statusCode: 409 });
+  // A tour in the middle of the queue changes too (owner, 24.11); the next one keeps exactly one transfer, from the new last stop.
+  const middle = await service.updateFutureTour(second.id, { ...input, orderNumber: "TEST-2-MIDDLE" });
+  expect(middle.orderNumber).toBe("TEST-2-MIDDLE");
   expect(await db.leg.count({ where: { tourId: third.id } })).toBe(2);
+  const middleLast = await db.stop.findFirstOrThrow({ where: { tourId: second.id }, orderBy: { sequence: "desc" } });
+  const thirdFirst = await db.stop.findFirstOrThrow({ where: { tourId: third.id }, orderBy: { sequence: "asc" } });
+  expect(await db.leg.count({ where: { tourId: third.id, fromStopId: middleLast.id, toStopId: thirdFirst.id } })).toBe(1);
+  expect((await db.tour.findUniqueOrThrow({ where: { id: third.id } })).previousTourId).toBe(second.id);
+  // Moving it to another truck would leave a gap in this queue: refused while a tour waits behind it.
+  const other = await db.vehicle.create({ data: { vehicleNumber: "TEST-OTHER" } });
+  await expect(service.updateFutureTour(second.id, { ...input, vehicleId: other.id })).rejects.toMatchObject({ statusCode: 409, message: expect.stringContaining("следующий") });
+  // A cancelled tour behind it does not block the edit.
+  await service.cancelTour(third.id);
+  expect((await service.updateFutureTour(second.id, { ...input, orderNumber: "TEST-2-LAST" })).orderNumber).toBe("TEST-2-LAST");
   await expect(service.recordLoaded(first.stops[0].id, new Date("2026-10-08T08:00:00Z"))).rejects.toThrow("подтвердить прибытие");
   await db.stop.update({ where: { id: first.stops[0].id }, data: { arrivedAt: new Date("2026-10-08T07:00:00Z") } });
   await service.recordLoaded(first.stops[0].id, new Date("2026-10-08T08:00:00Z"));

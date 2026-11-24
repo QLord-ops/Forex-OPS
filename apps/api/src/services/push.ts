@@ -61,7 +61,7 @@ export function pushPayload(item: PushCandidate) {
   };
 }
 
-type Sender = (subscription: { endpoint: string; keys: { p256dh: string; auth: string } }, payload: string, options: { vapidDetails: { subject: string; publicKey: string; privateKey: string }; TTL: number; urgency: 'high' | 'normal' }) => Promise<unknown>;
+type Sender = (subscription: { endpoint: string; keys: { p256dh: string; auth: string } }, payload: string, options: { vapidDetails: { subject: string; publicKey: string; privateKey: string }; TTL: number; urgency: 'high' | 'normal'; timeout?: number }) => Promise<unknown>;
 const WATERMARK = 'SYSTEM:PUSH_SWEEP';
 const MAX_FAILURES = 10;
 
@@ -116,7 +116,7 @@ export class PushService {
       for (const item of fresh.filter((candidate) => visible(candidate.vehicleId) && shouldPush(candidate, working))) {
         try {
           await this.send({ endpoint: subscription.endpoint, keys: { p256dh: subscription.p256dh, auth: subscription.auth } }, JSON.stringify(pushPayload(item)),
-            { vapidDetails: this.keys, TTL: 6 * 3600, urgency: item.urgent ? 'high' : 'normal' });
+            { vapidDetails: this.keys, TTL: 6 * 3600, urgency: item.urgent ? 'high' : 'normal', timeout: 10_000 });
           await this.db.pushSubscription.update({ where: { id: subscription.id }, data: { lastSentAt: now, failures: 0 } });
           sent += 1;
         } catch (error) {

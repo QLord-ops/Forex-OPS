@@ -7,6 +7,7 @@ import { AppointmentPlanner } from '../components/AppointmentPlanner'
 import { DriverShiftCode } from '../components/DriverShiftCode'
 import { localDateTime, VehicleOperationsPanel } from '../components/VehicleOperationsPanel'
 import { RouteEditor } from '../components/RouteEditor'
+import { EditTourLink } from '../components/TruckCard'
 import { ErrorState, LoadingState } from '../components/States'
 import { TourStatusBadge } from '../components/StatusBadge'
 import { TourTimeline } from '../components/Timeline'
@@ -14,7 +15,7 @@ import { usePolling } from '../hooks/usePolling'
 import { useVehiclePosition } from '../hooks/useVehiclePosition'
 import { api } from '../lib/api'
 import { routeProgress } from '../lib/route-progress'
-import { sharedTerminOf } from '../lib/tours'
+import { sharedTerminOf, tourCancellable } from '../lib/tours'
 import {
   positionSourceText,
   formatDateTime,
@@ -35,7 +36,7 @@ export function VehicleDetailPage() {
   const [stopDialog, setStopDialog] = useState<Stop | null>(null)
   const [stopTime, setStopTime] = useState(localDateTime())
   const vehicle = usePolling(() => api.vehicle(id), 30_000, Boolean(id), id)
-  const tours = usePolling(() => api.vehicleTours(id), 30_000, Boolean(id), id)
+  const tours = usePolling(() => api.vehicleTours(id, true), 30_000, Boolean(id), id)
   const timeline = usePolling(() => api.vehicleTimeline(id), 30_000, Boolean(id), id)
   const position = useVehiclePosition(id)
   const refreshOperations = () => Promise.all([tours.refetch(), timeline.refetch(), position.refetch()])
@@ -142,7 +143,8 @@ export function VehicleDetailPage() {
           {activeTour && ['ACTIVE', 'QUEUED'].includes(activeTour.status) ? <AppointmentPlanner key={`appointment-${activeTour.id}`} tour={activeTour} onChange={refreshOperations} /> : null}
           <VehicleOperationsPanel key={id} vehicleId={id} onChange={refreshOperations} />
           <section className="work-surface min-w-0 space-y-3 p-4" aria-labelledby="driver-app-title"><h2 id="driver-app-title" className="font-semibold">Приложение водителя</h2><DriverShiftCode vehicleId={id} vehicleLabel={vehicle.data?.licensePlate || vehicle.data?.vehicleNumber || 'машины'} /></section>
-          {activeTour && ['ACTIVE', 'QUEUED'].includes(activeTour.status) && <RouteEditor key={activeTour.id} tour={activeTour} onChange={refreshOperations} />}
+          {activeTour?.status === 'ACTIVE' && <RouteEditor key={activeTour.id} tour={activeTour} onChange={refreshOperations} />}
+          {activeTour?.status === 'QUEUED' && tourCancellable(activeTour) ? <EditTourLink tourId={activeTour.id} orderNumber={activeTour.orderNumber} wide /> : null}
           {actionError ? <ErrorState error={actionError} /> : null}
           {position.error ? <ErrorState error={position.error} onRetry={position.refetch} /> : null}
           <TourTimeline tours={timeline.data?.tours ?? tours.data ?? []} items={timeline.data?.items} />

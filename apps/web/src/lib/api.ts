@@ -261,7 +261,7 @@ export const api = {
       body: JSON.stringify(payload)
     }),
   vehicle: (id: string) => request<Vehicle>(`/vehicles/${id}`),
-  vehicleTours: (id: string) => request<Tour[]>(`/vehicles/${id}/tours`),
+  vehicleTours: (id: string, withRoute = false) => request<Tour[]>(`/vehicles/${id}/tours${withRoute ? '?withRoute=1' : ''}`),
   vehicleTimeline: (id: string) => request<VehicleTimeline>(`/vehicles/${id}/timeline`),
   assignVehicle: (id: string, input: { action: 'take' | 'release' | 'handover' | 'reassign'; expectedDispatcherId: string | null; toDispatcherId?: string | null }) =>
     request<{ vehicleId: string; assignedTo: { id: string; name: string } | null }>(`/vehicles/${encodeURIComponent(id)}/assignment`, { method: 'POST', body: JSON.stringify(input) }),
