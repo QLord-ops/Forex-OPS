@@ -355,8 +355,10 @@ function TourTab({ vehicleId, row }: { vehicleId: string; row: DashboardVehicle 
                     </span>
                     <ChevronDown className="truck-card-tour-chevron" aria-hidden="true" />
                   </button>
-                  {tourCancellable(tour) ? <EditTourLink tourId={tour.id} orderNumber={tour.orderNumber} /> : null}
-                  {tourCancellable(tour) ? <RemoveButton busy={busyId === tour.id} orderNumber={tour.orderNumber} onClick={() => void remove(tour)} /> : null}
+                  {tourCancellable(tour) ? <div className="truck-card-tour-actions">
+                    <EditTourLink tourId={tour.id} orderNumber={tour.orderNumber} />
+                    <RemoveButton busy={busyId === tour.id} orderNumber={tour.orderNumber} onClick={() => void remove(tour)} />
+                  </div> : <span aria-hidden="true" />}
                   {open ? <div id={detailsId} className="truck-card-tour-details">
                     {tour.trailerPlate || tour.tourRemarks ? <p className="truck-card-muted">{[tour.trailerPlate ? `Прицеп ${tour.trailerPlate}` : null, tour.tourRemarks].filter(Boolean).join(' · ')}</p> : null}
                     <div className="truck-card-tour-links"><DocumentLink tour={tour} /><CopyForDriver tourId={tour.id} /></div>

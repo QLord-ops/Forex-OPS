@@ -135,6 +135,13 @@ test('тур в ожидании: «Изменить» из карточки о�
   await page.evaluate(() => window.localStorage.setItem('ops-truck-card-tab', 'tour'))
   await page.locator('.vehicle-card').filter({ hasText: 'LKW 997' }).locator('.vehicle-row-main').click()
   const next = page.getByRole('dialog').getByRole('region', { name: /Следующие туры/ })
+  // «Изменить» and «Удалить» share one column: «Удалить» once wrapped under the number and covered the trailer line (26.11).
+  await next.locator('.truck-card-tour-toggle').first().click()
+  const remove = await next.getByRole('button', { name: 'Удалить тур 20570001' }).boundingBox()
+  const toggle = await next.locator('.truck-card-tour-toggle').first().boundingBox()
+  expect(remove && toggle).toBeTruthy()
+  expect(remove!.x).toBeGreaterThanOrEqual(toggle!.x + toggle!.width)
+  expect(remove!.width).toBeGreaterThan(60)
   await next.getByRole('link', { name: 'Изменить тур 20570001' }).click()
 
   await expect(page).toHaveURL(/\/tours\/tour-b\/edit$/)
