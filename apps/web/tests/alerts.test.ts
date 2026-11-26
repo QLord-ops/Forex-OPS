@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { alertHeading, cardLink, pickNewAlerts, titleWithCount, withoutVehicle } from '../src/lib/alerts'
+import { alertHeading, cardLink, flashOf, pickNewAlerts, planAlerts, titleWithCount, withoutVehicle } from '../src/lib/alerts'
 import { currentStopOf, followingTours, tourCancellable } from '../src/lib/tours'
 import type { Tour } from '../src/types/domain'
 
@@ -14,6 +14,21 @@ describe('alerts', () => {
     expect(next.fresh.map((item) => item.id)).toEqual(['c'])
     expect(next.summary).toBe(0)
     expect(pickNewAlerts([note('a')], next.seen).fresh).toEqual([])
+  })
+
+  it('rings a new notification even when an older open decision of the same truck leads its card, once per truck', () => {
+    const working = new Date('2026-11-26T11:00:00Z')
+    const hours = { days: [1, 2, 3, 4, 5, 6], start: '06:00', end: '18:00' }
+    const decision = { ...note('dwell'), type: 'LONG_DWELL', priority: 'ACTION' as const, leadId: 'dwell' }
+    const fresh = { ...note('auto'), type: 'AUTO_STOP_EVENT', priority: 'INFO' as const, leadId: 'dwell', createdAt: '2026-11-26T10:59:00Z' }
+    const route = { ...note('route'), type: 'ROUTE_DEVIATION', priority: 'INFO' as const, leadId: 'dwell', createdAt: '2026-11-26T10:58:00Z' }
+    const other = { ...note('other'), vehicleId: 'veh-2', priority: 'INFO' as const }
+    const plan = planAlerts([decision, fresh, route, other], ['dwell'], [], working, hours)
+    expect(plan.ring.map((item) => item.id)).toEqual(['auto', 'other'])
+    expect(plan.seen).toEqual(['dwell', 'auto', 'route', 'other'])
+    expect(flashOf(plan.ring)?.id).toBe('auto')
+    expect(flashOf([decision])).toBeNull()
+    expect(planAlerts([decision, fresh], plan.seen, [], working, hours).ring).toEqual([])
   })
 
   it('shows the count in the tab title and links to the truck card', () => {

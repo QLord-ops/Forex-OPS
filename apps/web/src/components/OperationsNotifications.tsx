@@ -1,4 +1,4 @@
-import { CalendarCheck, CalendarDays, LogOut, MapPinCheck, MessageSquareText, Moon, MoreHorizontal, PackageCheck, Route, Smartphone, TriangleAlert } from 'lucide-react'
+import { CalendarCheck, CalendarDays, LogOut, MapPinCheck, MessageSquareText, Moon, MoreHorizontal, PackageCheck, Route, Smartphone, TriangleAlert, X } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 
@@ -288,9 +288,11 @@ export function OperationsNotifications() {
       onApplied={() => void state.closeTermin(true)} onSaved={() => void state.closeTermin(false)} onSkip={() => void state.closeTermin(false)} />
   </div>
   const current = quiet ? undefined : state.open.find(needsAttention)
+  // New information comes up on the dashboard too: over the map only decisions and risks have a place.
+  const flash = phone ? null : state.flash
   const askPermission = permission === 'default' && banner
-  if (!current && !askPermission) return null
-  return <aside role="dialog" aria-labelledby={current ? `decision-${current.id}` : 'operations-permission-heading'} className="operations-toast">
+  if (!current && !flash && !askPermission) return null
+  return <aside role="dialog" aria-labelledby={current ? `decision-${current.id}` : flash ? `decision-${flash.id}` : 'operations-permission-heading'} className="operations-toast">
     {askPermission ? <div className={current ? 'operations-toast-permission operations-toast-permission-split' : 'operations-toast-permission'}>
       <h2 id="operations-permission-heading" className="font-semibold">Включите уведомления, чтобы не пропустить прибытие</h2>
       <p className="my-2 text-sm text-slate-600">Со звуком и окном Windows поверх других программ, пока вкладка OPS открыта.</p>
@@ -300,6 +302,10 @@ export function OperationsNotifications() {
       </div>
     </div> : null}
     {current ? <DecisionRow item={current} openLink /> : null}
+    {flash && flash.id !== current?.id ? <div className="operations-toast-flash">
+      <DecisionRow item={flash} openLink />
+      <button type="button" className="operations-toast-close" aria-label="Скрыть уведомление" title="Скрыть уведомление" onClick={state.dismissFlash}><X className="h-4 w-4" aria-hidden="true" /></button>
+    </div> : null}
   </aside>
 }
 

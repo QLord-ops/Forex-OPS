@@ -133,6 +133,22 @@ describe('reading the information block at once', () => {
     expect((await service.list(now)).map((item) => item.message)).toEqual(['c']);
   });
 
+  it('with more than 300 open the newest still come, and an old question that waits for its answer stays', async () => {
+    const service = new NotificationService(asAppDatabase(db), new TourService(asAppDatabase(db), new MockRoutingProvider()));
+    await db.notification.deleteMany();
+    const at = (minute: number) => new Date(Date.UTC(2026, 10, 4, 0, 0) + minute * 60_000);
+    await db.notification.create({ data: { dedupKey: 'old-question', vehicleId: 'v9', type: 'STOP_DEPARTED', message: 'old question', payloadJson: '{}', createdAt: at(0) } });
+    await db.notification.createMany({ data: Array.from({ length: 320 }, (_, index) => ({ dedupKey: `jam-${index}`, vehicleId: `v${index % 7}`, type: 'TRAFFIC_DELAY', message: `jam ${index}`, payloadJson: '{}', createdAt: at(index + 1) })) });
+    await db.notification.create({ data: { dedupKey: 'fresh', vehicleId: 'v1', type: 'AUTO_STOP_EVENT', message: 'fresh', payloadJson: '{}', createdAt: at(400) } });
+    const list = await service.list(now);
+    const messages = new Set(list.map((item) => item.message));
+    expect(messages.has('fresh')).toBe(true);
+    expect(messages.has('old question')).toBe(true);
+    expect(messages.has('jam 0')).toBe(false);
+    expect(list.length).toBe(301);
+    await db.notification.deleteMany();
+  });
+
   it('validates the ids of «Прочитать все» before touching data', async () => {
     const app = await buildApp({ auth: { disabled: true } });
     try {
