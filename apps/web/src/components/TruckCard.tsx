@@ -1,6 +1,6 @@
 import { Bell, ChevronDown, ClipboardList, History, Loader2, PackageCheck, Pencil, Route, Trash2, Truck, UserRound, Wrench, X, type LucideIcon } from 'lucide-react'
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
-import { Link, useLocation } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 
 import { usePolling } from '../hooks/usePolling'
 import { AssignmentBar } from './AssignmentBar'
@@ -312,6 +312,7 @@ function TourTab({ vehicleId, row }: { vehicleId: string; row: DashboardVehicle 
   const [busyId, setBusyId] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [openIds, setOpenIds] = useState<string[]>([])
+  const [editingId, setEditingId] = useState<string | null>(null)
   const current = row?.tour ?? null
   const next = followingTours(tours.data ?? [], current?.id)
   const toggle = (id: string) => setOpenIds((ids) => ids.includes(id) ? ids.filter((item) => item !== id) : [...ids, id])
@@ -356,9 +357,16 @@ function TourTab({ vehicleId, row }: { vehicleId: string; row: DashboardVehicle 
                     <ChevronDown className="truck-card-tour-chevron" aria-hidden="true" />
                   </button>
                   {tourCancellable(tour) ? <div className="truck-card-tour-actions">
-                    <EditTourLink tourId={tour.id} orderNumber={tour.orderNumber} />
+                    <button type="button" className="truck-card-edit" aria-label={`Изменить тур ${tour.orderNumber}`} aria-expanded={editingId === tour.id}
+                      onClick={() => setEditingId((id) => id === tour.id ? null : tour.id)}>
+                      <Pencil className="h-4 w-4" aria-hidden="true" /><span>Изменить</span>
+                    </button>
                     <RemoveButton busy={busyId === tour.id} orderNumber={tour.orderNumber} onClick={() => void remove(tour)} />
                   </div> : <span aria-hidden="true" />}
+                  {editingId === tour.id && tourCancellable(tour) ? <div className="truck-card-editor truck-card-tour-editor">
+                    <RouteEditor key={`${tour.id}-${tour.planVersion}`} tour={tour} startOpen onClose={() => setEditingId(null)}
+                      onChange={async () => { await tours.refetch(); window.dispatchEvent(new CustomEvent('ops:data-changed')) }} />
+                  </div> : null}
                   {open ? <div id={detailsId} className="truck-card-tour-details">
                     {tour.trailerPlate || tour.tourRemarks ? <p className="truck-card-muted">{[tour.trailerPlate ? `Прицеп ${tour.trailerPlate}` : null, tour.tourRemarks].filter(Boolean).join(' · ')}</p> : null}
                     <div className="truck-card-tour-links"><DocumentLink tour={tour} /><CopyForDriver tourId={tour.id} /></div>
@@ -447,8 +455,7 @@ function CurrentTour({ tour, row, events, busy, onRemove }: { tour: Tour; row: D
         </li>)}
       </ol>
       {/* Future stops of a started tour can change; done stops and confirmed arrivals stay as recorded. */}
-      {tour.status === 'QUEUED' && tourCancellable(tour) ? <div className="truck-card-editor"><EditTourLink tourId={tour.id} orderNumber={tour.orderNumber} wide /></div> : null}
-      {tour.status === 'ACTIVE' ? <div className="truck-card-editor"><RouteEditor key={`${tour.id}-${tour.planVersion}`} tour={tour} zuladungRequest={zuladungRequest}
+      {tour.status === 'ACTIVE' || (tour.status === 'QUEUED' && tourCancellable(tour)) ? <div className="truck-card-editor"><RouteEditor key={`${tour.id}-${tour.planVersion}`} tour={tour} zuladungRequest={zuladungRequest}
         onChange={async () => { window.dispatchEvent(new CustomEvent('ops:data-changed')) }} /></div> : null}
     </Section> : null}
   </>
@@ -470,15 +477,6 @@ function stopState(stop: Stop, stops: Stop[], events: TourEvent[] = []) {
   if (stop.appointmentWindowStartAt) return `впереди · окно ${formatDateTime(stop.appointmentWindowStartAt)}–${formatDateTime(stop.appointmentWindowEndAt)}${eta}`
   const shared = sharedTerminOf(stops, stop)
   return `${shared ? `впереди · ${shared.label}` : 'впереди · без срока'}${eta}`
-}
-
-/** A tour waiting in the queue opens the full editor: stops, Termin, Auftrag number, trailer, Tourbemerkung (owner, 24.11). */
-export function EditTourLink({ tourId, orderNumber, wide = false }: { tourId: string; orderNumber: string; wide?: boolean }) {
-  const location = useLocation()
-  return <Link to={`/tours/${encodeURIComponent(tourId)}/edit`} state={{ back: `${location.pathname}${location.search}` }}
-    className={wide ? 'secondary-button' : 'truck-card-edit'} aria-label={`Изменить тур ${orderNumber}`}>
-    <Pencil className="h-4 w-4" aria-hidden="true" /><span>{wide ? 'Изменить тур' : 'Изменить'}</span>
-  </Link>
 }
 
 function RemoveButton({ busy, orderNumber, onClick }: { busy: boolean; orderNumber: string; onClick: () => void }) {

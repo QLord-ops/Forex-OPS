@@ -90,7 +90,10 @@ export class ReplanningService {
   async preview(tourId: string, input: ReplanInput, now = new Date()) {
     const context = await this.context(this.db, tourId);
     const { tour, vehicle, tours } = context;
-    if (tour.status !== 'ACTIVE' || tour.planVersion !== input.version) throw new ReplanConflict('Требуется актуальная версия маршрута.');
+    // A tour waiting in the queue is edited the same way, right in the truck card (owner, 26.11), while nothing of it has begun.
+    const queued = tour.status === 'QUEUED';
+    if (!['ACTIVE', 'QUEUED'].includes(tour.status) || tour.planVersion !== input.version) throw new ReplanConflict('Требуется актуальная версия маршрута.');
+    if (queued && (tour.stops.some(s => s.arrivedAt || s.completedAt) || tour.events.length)) throw new ReplanConflict('Тур уже начат: обновите карточку машины.');
     if (!input.futureStops.length || input.futureStops.length > 100) throw new ReplanConflict('Необходимо указать от 1 до 100 будущих точек.');
     const completed = tour.stops.filter(s => s.completedAt);
     const pending = tour.stops.filter(s => !s.completedAt);
@@ -128,10 +131,15 @@ export class ReplanningService {
     // A moving replacement begins at the calculated/confirmed position. The old
     // complete geometry and travelled prefix remain in the immutable revision.
     const oldActive = tour.legs.find(l => ['ACTIVE', 'ARRIVED'].includes(l.status));
-    if (origin && !arrived && (oldActive || completed.length)) await append(tourId, { ...origin, id: oldActive?.fromStopId ?? completed.at(-1)!.id }, stops[0], Boolean(oldActive));
+    const index = tours.findIndex(t => t.id === tourId);
+    // Before a queued tour: the tours the truck drives first. Its first leg comes from the last stop of the tour before it.
+    const upstream = queued ? tours.slice(0, index) : [];
+    const handover = upstream.at(-1)?.stops.at(-1);
+    if (queued) { if (handover) await append(tourId, handover, stops[0], false); }
+    else if (origin && !arrived && (oldActive || completed.length)) await append(tourId, { ...origin, id: oldActive?.fromStopId ?? completed.at(-1)!.id }, stops[0], Boolean(oldActive));
     for (let i = 1; i < stops.length; i++) await append(tourId, stops[i - 1], stops[i], false);
     let last = stops.at(-1)!;
-    const downstream = tours.slice(tours.findIndex(t => t.id === tourId) + 1);
+    const downstream = tours.slice(index + 1);
     for (const queued of downstream) {
       if (queued.status !== 'QUEUED' || queued.stops.some(s => s.completedAt || s.arrivedAt) || queued.events.length) throw new ReplanConflict('Следующий маршрут уже начат.');
       for (const stop of queued.stops) {
@@ -144,16 +152,30 @@ export class ReplanningService {
     if (planFingerprint(await this.context(this.db, tourId)) !== plan.context) throw new ReplanConflict('Маршрут изменился во время расчёта.');
     const preview = await this.db.routePreview.create({ data: { tourId, version: input.version, vehicleVersion: vehicle.operationVersion, inputJson: JSON.stringify(input), planJson: JSON.stringify(plan), expiresAt: new Date(now.getTime() + 10 * 60_000) } });
     const beforeLegs = tours.filter(t => affectedTourIds.includes(t.id)).flatMap(t => t.legs.filter(l => l.status !== 'COMPLETED'));
-    const snapshot = snapshotVehicleClock(vehicle, oldActive ?? null, now);
+    const upstreamActive = upstream.flatMap(t => t.legs).find(l => ['ACTIVE', 'ARRIVED'].includes(l.status));
+    const runningLeg = oldActive ?? upstreamActive ?? null;
+    const snapshot = snapshotVehicleClock(vehicle, runningLeg, now);
     const driver = await this.getDriver(vehicle.id, now).catch(() => null);
     const engine: DriveEngine = driver ? new WebfleetEngine(driver.budget) : new ClockEngine(snapshot.clockState);
     const startsAt = driver?.startsAt ?? null;
-    const etaWindows = forecastQueue(engine, now, legs, [...stops, ...downstream.flatMap(t => t.stops)], arrived ?? (!oldActive && !completed.length ? stops[0] : undefined), startsAt);
-    const beforeSchedule = beforeLegs.filter(l => l.toStopId !== arrived?.id).map(l => ({ toStopId: l.toStopId, duration: Math.max(0, l.simulatedDurationSeconds - (l.id === oldActive?.id ? snapshot.driveElapsedSeconds : 0)) }));
-    const beforeWindows = forecastQueue(engine, now, beforeSchedule, tours.flatMap(t => t.stops), arrived ?? (!oldActive && !completed.length ? pending[0] : undefined), startsAt);
+    const remaining = (list: { id: string; toStopId: string; simulatedDurationSeconds: number }[], skip?: string) => list.filter(l => l.toStopId !== skip)
+      .map(l => ({ toStopId: l.toStopId, duration: Math.max(0, l.simulatedDurationSeconds - (l.id === runningLeg?.id ? snapshot.driveElapsedSeconds : 0)) }));
+    // A queued tour is timed after everything the truck still has to do before it; only its own stops and the ones after it are shown.
+    const upstreamArrived = upstream.flatMap(t => t.stops).find(s => s.arrivedAt && !s.completedAt);
+    const upstreamBegun = Boolean(upstreamActive || upstream.some(t => t.stops.some(s => s.completedAt)));
+    const upstreamLegs = remaining(upstream.flatMap(t => t.legs.filter(l => l.status !== 'COMPLETED')), upstreamArrived?.id);
+    const upstreamStart = upstreamArrived ?? (upstreamBegun ? undefined : upstream[0]?.stops.find(s => !s.completedAt));
+    const shown = (windows: ReturnType<typeof forecastQueue>, ids: Set<string>) => queued ? windows.filter(w => ids.has(w.stopId)) : windows;
+    const etaWindows = shown(forecastQueue(engine, now, [...upstreamLegs, ...legs], [...upstream.flatMap(t => t.stops), ...stops, ...downstream.flatMap(t => t.stops)],
+      queued ? (upstream.length ? upstreamStart : stops[0]) : arrived ?? (!oldActive && !completed.length ? stops[0] : undefined), startsAt),
+      new Set([...stops, ...downstream.flatMap(t => t.stops)].map(s => s.id)));
+    const beforeSchedule = remaining(beforeLegs, arrived?.id);
+    const beforeWindows = shown(forecastQueue(engine, now, [...upstreamLegs, ...beforeSchedule], tours.flatMap(t => t.stops),
+      queued ? (upstream.length ? upstreamStart : pending[0]) : arrived ?? (!oldActive && !completed.length ? pending[0] : undefined), startsAt),
+      new Set(tours.filter(t => affectedTourIds.includes(t.id)).flatMap(t => t.stops.map(s => s.id))));
     return { id: preview.id, version: preview.version, expiresAt: preview.expiresAt.toISOString(), stops, affectedTourIds,
       etaWindows,
-      before: { distanceMeters: Math.max(0, beforeLegs.reduce((n, l) => n + l.distanceMeters, 0) - position.distanceTravelledMeters), durationSeconds: beforeSchedule.reduce((n, l) => n + l.duration, 0), roads: [...new Set(beforeLegs.flatMap(l => storedRoads(l.routeDetails)))], etaWindows: beforeWindows },
+      before: { distanceMeters: Math.max(0, beforeLegs.reduce((n, l) => n + l.distanceMeters, 0) - (queued ? 0 : position.distanceTravelledMeters)), durationSeconds: beforeSchedule.reduce((n, l) => n + l.duration, 0), roads: [...new Set(beforeLegs.flatMap(l => storedRoads(l.routeDetails)))], etaWindows: beforeWindows },
       after: { geometry: legs.flatMap(l => l.route.geometry.map(p => [p.longitude, p.latitude])), distanceMeters: legs.reduce((n, l) => n + l.route.distanceMeters, 0), durationSeconds: legs.reduce((n, l) => n + l.duration, 0), roads: [...new Set(legs.flatMap(l => roads(l.route)))], etaWindows } };
   }
 
@@ -191,7 +213,8 @@ export class ReplanningService {
         await tx.stop.upsert({ where: { id }, create: { id, ...data }, update: data });
       }
       for (const leg of plan.legs) await tx.leg.create({ data: { tourId: leg.tourId, fromStopId: leg.fromStopId, toStopId: leg.toStopId, distanceMeters: Math.round(leg.route.distanceMeters), routeGeometry: JSON.stringify(leg.route.geometry), routingDurationSeconds: Math.round(leg.route.durationSeconds), simulatedDurationSeconds: leg.duration, routeDetails: JSON.stringify({ ...leg.route, ...(leg.active ? { travelledGeometry: plan.position.travelledGeometry, travelledStitches: plan.position.routeBreaks?.filter((index) => index < plan.position.travelledGeometry.length) ?? [], previousTravelledDistanceMeters: plan.position.distanceTravelledMeters } : {}) }), startedAt: leg.active ? now : null, status: leg.active ? 'ACTIVE' : 'WAITING' } });
-      if (!arrived) await rebaseActiveLeg(tx, context.vehicle.id, clock, now);
+      // A queued tour leaves the leg the truck is driving now untouched.
+      if (!arrived && context.tour.status === 'ACTIVE') await rebaseActiveLeg(tx, context.vehicle.id, clock, now);
       else await tx.vehicle.update({ where: { id: context.vehicle.id }, data: { operationVersion: { increment: 1 } } });
       await tx.routePreview.update({ where: { id: preview.id }, data: { appliedAt: now } });
       await tx.operationEvent.create({ data: { vehicleId: context.vehicle.id, tourId, type: 'ROUTE_REPLANNED', payloadJson: JSON.stringify({ previewId: preview.id, affectedTourIds: plan.affectedTourIds, origin: plan.origin }) } });

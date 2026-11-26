@@ -135,6 +135,54 @@ it('«Изменить тур» accepts the stops as the page sends them: an unl
   expect(() => replanStopsSchema.parse([])).toThrow();
 });
 
+async function queue(f: Awaited<ReturnType<typeof fixture>>) {
+  const middle = await db.tour.create({ data: { vehicleId: f.vehicle.id, orderNumber: 'Q1', status: 'QUEUED', previousTourId: f.tour.id, queueIndex: 1 } });
+  const pick = await db.stop.create({ data: { tourId: middle.id, sequence: 1, type: 'LOAD', address: 'Bremen', latitude: 53, longitude: 8 } });
+  const drop = await db.stop.create({ data: { tourId: middle.id, sequence: 2, type: 'UNLOAD', address: 'Hannover', latitude: 52.4, longitude: 9.7 } });
+  const leg = { distanceMeters: 1000, routingDurationSeconds: 600, simulatedDurationSeconds: 600, routeGeometry: '[]' };
+  await db.leg.create({ data: { ...leg, tourId: middle.id, fromStopId: f.unload.id, toStopId: pick.id } });
+  await db.leg.create({ data: { ...leg, tourId: middle.id, fromStopId: pick.id, toStopId: drop.id } });
+  const last = await db.tour.create({ data: { vehicleId: f.vehicle.id, orderNumber: 'Q2', status: 'QUEUED', previousTourId: middle.id, queueIndex: 2 } });
+  const far = await db.stop.create({ data: { tourId: last.id, sequence: 1, type: 'UNLOAD', address: 'Dortmund', latitude: 51.5, longitude: 7.5 } });
+  await db.leg.create({ data: { ...leg, tourId: last.id, fromStopId: drop.id, toStopId: far.id } });
+  return { middle, pick, drop, last, far };
+}
+
+it('a tour waiting in the queue is edited like the running one, in the middle of the queue too (owner, 26.11)', async () => {
+  const f = await fixture();
+  const q = await queue(f);
+  const before = await db.vehicle.findUniqueOrThrow({ where: { id: f.vehicle.id } });
+  const keep = { id: q.pick.id, type: 'LOAD' as const, address: 'Bremen', latitude: 53, longitude: 8 };
+  const preview = await f.service.preview(q.middle.id, { version: 0, futureStops: [keep, replacement] }, now);
+  // Timed after the running tour, shown only for its own stops and the tour behind it.
+  expect(preview.etaWindows.map(w => w.stopId)).toEqual([q.pick.id, preview.stops[1].id, q.far.id]);
+  expect(Date.parse(preview.etaWindows[0].earliest)).toBeGreaterThan(now.getTime() + 3600 * 1000);
+  expect(preview.affectedTourIds).toEqual([q.middle.id, q.last.id]);
+  await f.service.apply(q.middle.id, { previewId: preview.id, version: 0 }, now);
+
+  const stops = await db.stop.findMany({ where: { tourId: q.middle.id }, orderBy: { sequence: 'asc' } });
+  expect(stops.map(s => s.address)).toEqual(['Bremen', 'Kassel']);
+  expect(await db.stop.findUnique({ where: { id: q.drop.id } })).toBeNull();
+  const own = await db.leg.findMany({ where: { tourId: q.middle.id } });
+  expect(own.map(l => [l.fromStopId, l.toStopId])).toEqual([[f.unload.id, q.pick.id], [q.pick.id, stops[1].id]]);
+  const handover = await db.leg.findMany({ where: { tourId: q.last.id } });
+  expect(handover.map(l => [l.fromStopId, l.toStopId])).toEqual([[stops[1].id, q.far.id]]);
+  // The leg the truck drives now and its clock stay as they were.
+  expect(await db.leg.findUniqueOrThrow({ where: { id: f.leg.id } })).toMatchObject({ status: 'ACTIVE', startedAt: now, toStopId: f.unload.id });
+  expect((await db.vehicle.findUniqueOrThrow({ where: { id: f.vehicle.id } })).clockState).toBe(before.clockState);
+  expect(await db.tour.findUniqueOrThrow({ where: { id: q.middle.id } })).toMatchObject({ status: 'QUEUED', planVersion: 1 });
+});
+
+it('a queued tour something already happened at is not edited here', async () => {
+  const f = await fixture();
+  const q = await queue(f);
+  await db.stop.update({ where: { id: q.pick.id }, data: { arrivedAt: now } });
+  await expect(f.service.preview(q.middle.id, { version: 0, futureStops: [replacement] }, now)).rejects.toMatchObject({ statusCode: 409 });
+  await db.stop.update({ where: { id: q.pick.id }, data: { arrivedAt: null } });
+  await db.tour.update({ where: { id: q.middle.id }, data: { status: 'CANCELLED' } });
+  await expect(f.service.preview(q.middle.id, { version: 0, futureStops: [replacement] }, now)).rejects.toMatchObject({ statusCode: 409 });
+});
+
 const H = 3600;
 const budget = (continuousLeftSeconds: number): DriverBudget => ({
   referenceTime: now.toISOString(), workState: 3, activitySince: now.toISOString(),

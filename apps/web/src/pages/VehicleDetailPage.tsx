@@ -7,7 +7,6 @@ import { AppointmentPlanner } from '../components/AppointmentPlanner'
 import { DriverShiftCode } from '../components/DriverShiftCode'
 import { localDateTime, VehicleOperationsPanel } from '../components/VehicleOperationsPanel'
 import { RouteEditor } from '../components/RouteEditor'
-import { EditTourLink } from '../components/TruckCard'
 import { ErrorState, LoadingState } from '../components/States'
 import { TourStatusBadge } from '../components/StatusBadge'
 import { TourTimeline } from '../components/Timeline'
@@ -143,8 +142,7 @@ export function VehicleDetailPage() {
           {activeTour && ['ACTIVE', 'QUEUED'].includes(activeTour.status) ? <AppointmentPlanner key={`appointment-${activeTour.id}`} tour={activeTour} onChange={refreshOperations} /> : null}
           <VehicleOperationsPanel key={id} vehicleId={id} onChange={refreshOperations} />
           <section className="work-surface min-w-0 space-y-3 p-4" aria-labelledby="driver-app-title"><h2 id="driver-app-title" className="font-semibold">Приложение водителя</h2><DriverShiftCode vehicleId={id} vehicleLabel={vehicle.data?.licensePlate || vehicle.data?.vehicleNumber || 'машины'} /></section>
-          {activeTour?.status === 'ACTIVE' && <RouteEditor key={activeTour.id} tour={activeTour} onChange={refreshOperations} />}
-          {activeTour?.status === 'QUEUED' && tourCancellable(activeTour) ? <EditTourLink tourId={activeTour.id} orderNumber={activeTour.orderNumber} wide /> : null}
+          {activeTour && (activeTour.status === 'ACTIVE' || (activeTour.status === 'QUEUED' && tourCancellable(activeTour))) ? <RouteEditor key={activeTour.id} tour={activeTour} onChange={refreshOperations} /> : null}
           {actionError ? <ErrorState error={actionError} /> : null}
           {position.error ? <ErrorState error={position.error} onRetry={position.refetch} /> : null}
           <TourTimeline tours={timeline.data?.tours ?? tours.data ?? []} items={timeline.data?.items} />

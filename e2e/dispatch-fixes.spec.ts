@@ -325,7 +325,7 @@ test('сохранённый Auftrag открывается из карточк�
   const activeLink = card.getByRole('link', { name: 'Auftrag (PDF)' })
   await expect(activeLink).toHaveAttribute('href', '/api/documents/doc-1/file')
   await expect(activeLink).toHaveAttribute('target', '_blank')
-  await card.getByRole('button', { name: /71123800/, expanded: false }).click()
+  await card.getByRole('button', { name: /^71123800/, expanded: false }).click()
   await expect(card.getByRole('link', { name: 'Auftrag (фото)' })).toHaveAttribute('href', '/api/documents/doc-2/file')
 })
 
