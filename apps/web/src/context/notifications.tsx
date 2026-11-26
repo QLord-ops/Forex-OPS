@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { useNavigate } from 'react-router-dom'
 
 import { usePolling } from '../hooks/usePolling'
-import { closableWith, isLead, needsAttention, planAlerts, playAlertSound, readDeferred, readSeen, showSummaryAlert, showSystemAlert, stackOf as stackIn, titleWithCount, writeDeferred, writeSeen, type AlertNotification } from '../lib/alerts'
+import { closableWith, flashOf, isLead, needsAttention, planAlerts, playAlertSound, readDeferred, readSeen, showSummaryAlert, showSystemAlert, stackOf as stackIn, titleWithCount, writeDeferred, writeSeen, type AlertNotification } from '../lib/alerts'
 import { readWorkHours, WORK_HOURS_EVENT, type WorkHours } from '../lib/work-hours'
 import { onServiceWorkerOpen } from '../lib/pwa'
 import { syncPushWorkHours } from '../lib/push'
@@ -13,6 +13,8 @@ import type { PendingAppointment } from '../types/domain'
 import { operationsBase, operationsRequest } from '../components/VehicleOperationsPanel'
 
 const HIDDEN_KEY = 'ops-hidden-notifications'
+/** How long new information stays on the right; a decision stays until it is answered. */
+const FLASH_MS = 30_000
 function readHiddenNotifications(): string[] {
   try {
     const value: unknown = JSON.parse(sessionStorage.getItem(HIDDEN_KEY) ?? '[]')
@@ -43,6 +45,9 @@ interface NotificationsState {
   acceptTermin: (item: AlertNotification) => Promise<void>
   closeTermin: (applied: boolean) => Promise<void>
   pendingOf: (item: AlertNotification) => PendingAppointment | null
+  /** New information that just rang, shown on the right for a short while. */
+  flash: AlertNotification | null
+  dismissFlash: () => void
 }
 
 const Context = createContext<NotificationsState | null>(null)
@@ -92,11 +97,12 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
   // One card, one count and one sound per truck: the truck's other notifications fold under its card.
   const leads = useMemo(() => items.filter(isLead), [items])
   const loaded = notifications.data !== null
+  const [flashId, setFlashId] = useState<string | null>(null)
   useEffect(() => {
     if (!loaded) return
     document.title = titleWithCount(leads.filter(needsAttention).length)
     // Outside the working day only urgent items ring; the rest wait for one morning summary.
-    const plan = planAlerts(leads, readSeen(), readDeferred(), new Date(), readWorkHours())
+    const plan = planAlerts(items, readSeen(), readDeferred(), new Date(), readWorkHours())
     writeSeen(plan.seen)
     writeDeferred(plan.deferred)
     const away = document.visibilityState === 'hidden' || !document.hasFocus()
@@ -108,8 +114,18 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
       playAlertSound(item.type)
       if (away) showSystemAlert(item, (path) => navigate(path))
     }
-  }, [leads, loaded, navigate])
+    const next = flashOf(plan.ring)
+    if (next) setFlashId(next.id)
+  }, [items, leads, loaded, navigate])
   useEffect(() => () => { document.title = titleWithCount(0) }, [])
+  useEffect(() => {
+    if (!flashId) return
+    const timer = window.setTimeout(() => setFlashId(null), FLASH_MS)
+    return () => window.clearTimeout(timer)
+  }, [flashId])
+  // Read or closed elsewhere: the line on the right goes with it.
+  const flash = useMemo(() => (flashId ? items.find((item) => item.id === flashId) ?? null : null), [flashId, items])
+  const dismissFlash = useCallback(() => setFlashId(null), [])
 
   const pending = useMemo(() => (Array.isArray(pendingPoll.data?.items) ? pendingPoll.data.items : []), [pendingPoll.data])
   const open = useMemo(() => leads.filter((item) => !hidden.includes(item.id)), [hidden, leads])
@@ -232,8 +248,8 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
   const pendingOf = useCallback((item: AlertNotification) => pending.find((entry) => entry.id === pendingIdOf(item)) ?? null, [pending])
 
   const value = useMemo<NotificationsState>(() => ({
-    items, open, stackOf, workHours, acknowledgeAll, pending, busyId, errors, termin: termin?.item ?? null, hide, answerDeparture, resolve, reviewTermin, acceptTermin, closeTermin, pendingOf
-  }), [acceptTermin, acknowledgeAll, answerDeparture, busyId, closeTermin, errors, hide, items, open, pending, pendingOf, resolve, reviewTermin, stackOf, termin, workHours])
+    items, open, stackOf, workHours, acknowledgeAll, pending, busyId, errors, termin: termin?.item ?? null, hide, answerDeparture, resolve, reviewTermin, acceptTermin, closeTermin, pendingOf, flash, dismissFlash
+  }), [acceptTermin, acknowledgeAll, answerDeparture, busyId, closeTermin, dismissFlash, errors, flash, hide, items, open, pending, pendingOf, resolve, reviewTermin, stackOf, termin, workHours])
   return <Context.Provider value={value}>{children}</Context.Provider>
 }
 

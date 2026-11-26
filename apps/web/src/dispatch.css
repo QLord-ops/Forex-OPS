@@ -871,3 +871,10 @@ button.decision-card-title:focus-visible { outline: 2px solid var(--focus); outl
 .decision-row-details .decision-card-actions:empty { display: none; }
 .decision-row-error { padding: 0 12px 8px 14px; margin-top: 0; }
 .operations-toast > .decision-row { width: min(440px, calc(100vw - 32px)); }
+/* New information for a short while: the same line with its own close button. */
+.operations-toast-flash { position: relative; }
+.operations-toast > * + .operations-toast-flash { margin-top: 8px; }
+.operations-toast-flash .decision-row-line { padding-right: 44px; }
+.operations-toast-close { position: absolute; top: 9px; right: 8px; display: inline-grid; width: 28px; height: 28px; place-items: center; border-radius: 8px; color: var(--t-muted); }
+.operations-toast-close:hover { background: var(--s-sunken); color: var(--t-primary); }
+.operations-toast-close:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }

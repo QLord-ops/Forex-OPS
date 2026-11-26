@@ -1,6 +1,8 @@
 import type { PrismaClient } from '@prisma/client';
-import { prioritize, stackByTruck } from './notification-priority.js';
+import { ANSWER_REQUIRED_TYPES, prioritize, stackByTruck } from './notification-priority.js';
 import type { TourService } from './tours.js';
+
+const LIST_LIMIT = 300;
 
 export type DwellSeverity = 'NONE' | 'WARNING' | 'CRITICAL';
 
@@ -83,7 +85,12 @@ export class NotificationService {
    * lead per truck. `readerId`: without those this person set aside for themselves.
    */
   async list(now = new Date(), readerId?: string | null) {
-    const items = await this.db.notification.findMany({ where: { acknowledgedAt: null, ...(readerId ? { reads: { none: { dispatcherId: readerId } } } : {}) }, orderBy: { createdAt: 'asc' }, take: 300 });
+    const where = { acknowledgedAt: null, ...(readerId ? { reads: { none: { dispatcherId: readerId } } } : {}) };
+    // The newest ones: with more than LIST_LIMIT open, the oldest 300 hid every new notification (26.11). Questions that
+    // wait for their own answer stay however old they are.
+    const newest = await this.db.notification.findMany({ where, orderBy: { createdAt: 'desc' }, take: LIST_LIMIT });
+    const waiting = newest.length < LIST_LIMIT ? [] : await this.db.notification.findMany({ where: { ...where, type: { in: [...ANSWER_REQUIRED_TYPES] }, id: { notIn: newest.map((item) => item.id) } }, orderBy: { createdAt: 'desc' }, take: LIST_LIMIT });
+    const items = [...waiting, ...newest].sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime());
     const legIds = new Set<string>();
     const stopIds = new Set<string>();
     for (const item of items) {

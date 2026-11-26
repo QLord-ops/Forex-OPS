@@ -119,6 +119,12 @@ export function nightItems(items: AlertNotification[], hours: WorkHours, now = n
   })
 }
 
+/** The first of each truck: one sound and one count per truck, the list already comes most important first. */
+export function onePerTruck(items: AlertNotification[]) {
+  const trucks = new Set<string>()
+  return items.filter((item) => !trucks.has(item.vehicleId) && Boolean(trucks.add(item.vehicleId)))
+}
+
 export interface AlertPlan {
   ring: AlertNotification[]
   /** One summary instead of many sounds: the backlog on the first poll, or what waited through the night. */
@@ -129,14 +135,16 @@ export interface AlertPlan {
 
 /**
  * Which notifications ring now. Outside the working day only urgent ones ring; the rest wait silently
- * and the first poll of the working day gives one summary of them.
+ * and the first poll of the working day gives one summary of them. `items` is every open notification, not only the
+ * card of each truck: a new one under an older open decision of the same truck rings too (owner, 26.11).
  */
 export function planAlerts(items: AlertNotification[], seen: string[] | null, deferred: string[], now: Date, hours: WorkHours): AlertPlan {
   const working = isWorkTime(now, hours)
   const open = new Set(items.map((item) => item.id))
-  const summaryOf = (list: AlertNotification[], night: boolean) => list.length
-    ? { total: list.length, decisions: list.filter((item) => needsAttention(item) && item.priority === 'ACTION').length, night }
-    : null
+  const summaryOf = (all: AlertNotification[], night: boolean) => {
+    const list = all.filter(isLead)
+    return list.length ? { total: list.length, decisions: list.filter((item) => needsAttention(item) && item.priority === 'ACTION').length, night } : null
+  }
   if (seen === null) {
     const ids = items.map((item) => item.id)
     if (working) return { ring: [], summary: summaryOf(items.filter(needsAttention), false), seen: ids, deferred: [] }
@@ -148,11 +156,19 @@ export function planAlerts(items: AlertNotification[], seen: string[] | null, de
   const nextSeen = [...seen, ...items.filter((item) => !known.has(item.id)).map((item) => item.id)]
   if (working) {
     const waited = items.filter((item) => deferred.includes(item.id))
-    return { ring: fresh, summary: summaryOf(waited, true), seen: nextSeen, deferred: [] }
+    return { ring: onePerTruck(fresh), summary: summaryOf(waited, true), seen: nextSeen, deferred: [] }
   }
-  const ring = fresh.filter((item) => item.urgent)
+  const ring = onePerTruck(fresh.filter((item) => item.urgent))
   const quiet = fresh.filter((item) => !item.urgent).map((item) => item.id)
   return { ring, summary: null, seen: nextSeen, deferred: [...deferred.filter((id) => open.has(id)), ...quiet] }
+}
+
+/**
+ * The newest information that just rang comes up on the right for a short while (owner, 26.11): it has no place over the
+ * map and no toast of its own, so before this only the bell knew it.
+ */
+export function flashOf(ring: AlertNotification[]): AlertNotification | null {
+  return ring.filter((item) => !needsAttention(item)).sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0] ?? null
 }
 
 export function titleWithCount(count: number) {
