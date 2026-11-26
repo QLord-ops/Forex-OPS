@@ -110,6 +110,13 @@ test('уведомление в фоне: окно Windows, звук и счёт
   await expect(page).toHaveTitle('(1) OPS FOREX')
   const shown = await page.evaluate(() => (window as unknown as { shownNotifications: Array<{ title: string; body?: string; tag?: string }> }).shownNotifications)
   expect(shown).toEqual([{ title: 'Прибытие по GPS', body: 'Webfleet: LKW 997 прибыла на загрузку, Zwickau', tag: 'n1' }])
+  // The line comes up in the top right corner (owner, 26.11), not at the bottom over the map panel.
+  const toast = page.locator('.operations-toast')
+  await expect(toast).toContainText('прибыла на загрузку')
+  const box = (await toast.boundingBox())!
+  const viewport = page.viewportSize()!
+  expect(box.y).toBeLessThan(40)
+  expect(viewport.width - (box.x + box.width)).toBeLessThan(40)
 })
 
 test('тур в ожидании: «Изменить» из карточки открывает редактор с прицепом и Tourbemerkung и возвращает назад', async ({ page }) => {

@@ -35,7 +35,7 @@
   /* «Требует решения» has its own tab on the phone. */
   .fleet-rail .decision-section { display: none; }
   .fleet-rail, .dashboard-stage { border-width: 0; border-radius: 0; }
-  .operations-toast { bottom: calc(var(--tabbar-h) + var(--safe-bottom) + 8px); }
+  .operations-toast { top: auto; bottom: calc(var(--tabbar-h) + var(--safe-bottom) + 8px); }
 
   /* The truck card: a sheet over the current tab — strip, half, full screen. */
   .truck-card.truck-card-sheet { position: fixed; z-index: 44; top: auto; right: 0; bottom: calc(var(--tabbar-h) + var(--safe-bottom)); left: 0; width: auto; max-height: none; border-width: 1px 0 0; border-radius: 16px 16px 0 0; box-shadow: 0 -8px 24px rgb(var(--shadow-rgb) / 0.18); transition: height .18s ease; }
