@@ -141,6 +141,8 @@
 .truck-card-tour-toggle:focus-visible { outline: 2px solid rgb(var(--ln-0ea5e9)); outline-offset: 2px; }
 .truck-card-tour-chevron { width: 16px; height: 16px; margin-top: 2px; color: rgb(var(--tx-64748b)); transition: transform .15s; }
 .truck-card-tour-open .truck-card-tour-chevron { transform: rotate(180deg); }
+.truck-card-tour-editor { grid-column: 1 / -1; margin-top: 4px; }
+.truck-card-edit[aria-expanded="true"] { border-color: rgb(var(--ln-0f766e)); color: rgb(var(--tx-0f172a)); }
 .truck-card-tour-actions { display: flex; flex-direction: column; align-items: stretch; gap: 4px; }
 .truck-card-tour-details { grid-column: 2 / -1; display: grid; gap: 6px; margin-top: 2px; border-left: 2px solid rgb(var(--ln-0f172a) / 0.08); padding-left: 10px; }
 @media (prefers-reduced-motion: reduce) { .truck-card-tour-chevron { transition: none; } }

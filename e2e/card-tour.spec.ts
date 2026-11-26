@@ -112,9 +112,11 @@ test('уведомление в фоне: окно Windows, звук и счёт
   expect(shown).toEqual([{ title: 'Прибытие по GPS', body: 'Webfleet: LKW 997 прибыла на загрузку, Zwickau', tag: 'n1' }])
 })
 
-test('тур в ожидании: «Изменить» из карточки открывает редактор с прицепом и Tourbemerkung и возвращает назад', async ({ page }) => {
+test('тур в ожидании: «Изменить» открывает тот же редактор прямо в карточке, без перехода на другую страницу (26.11)', async ({ page }) => {
   const waiting = { ...queued('tour-b', '20570001', 'Bocholt', 'Kassel'), trailerPlate: 'GÖ-FX 812', tourRemarks: 'Rampe 4' }
-  let saved: Record<string, unknown> | null = null
+  let sent: { version?: number; futureStops?: Array<Record<string, unknown>> } | null = null
+  let applied: Record<string, unknown> | null = null
+  const summary = { distanceMeters: 250000, durationSeconds: 3 * 3600, roads: ['A7'], etaWindows: [] }
   await page.route('**/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname.replace(/^\/api/, '')
     if (path === '/auth/session') return json(route, { authenticated: true, role: 'dispatcher', csrfToken: 'e2e' })
@@ -123,7 +125,9 @@ test('тур в ожидании: «Изменить» из карточки о�
       currentAction: null, mapPosition: { coordinate: [12.5, 50.7], source: 'WEBFLEET', stale: false } }] })
     if (path === '/vehicles/veh-997/tours') return json(route, [current, waiting])
     if (path === '/vehicles') return json(route, [vehicle])
-    if (path === '/tours/tour-b' && route.request().method() === 'PATCH') { saved = route.request().postDataJSON(); return json(route, waiting) }
+    if (path === '/tours/tour-b/replan/preview') { sent = route.request().postDataJSON(); return json(route, { id: 'prev-1', version: 1,
+      expiresAt: new Date(Date.now() + 600_000).toISOString(), affectedTourIds: ['tour-b'], before: summary, after: summary }) }
+    if (path === '/tours/tour-b/replan/apply') { applied = route.request().postDataJSON(); return json(route, waiting) }
     if (path === '/tours/tour-b') return json(route, waiting)
     if (path.endsWith('/card')) return json(route, { vehicleId: vehicle.id, vehicleNumber: '997', licensePlate: null, currentTrailerPlate: null, generatedAt: new Date().toISOString(),
       webfleet: null, current: null, coupling: null, driver: null, events: null, trips: null, maintenance: null })
@@ -142,13 +146,18 @@ test('тур в ожидании: «Изменить» из карточки о�
   expect(remove && toggle).toBeTruthy()
   expect(remove!.x).toBeGreaterThanOrEqual(toggle!.x + toggle!.width)
   expect(remove!.width).toBeGreaterThan(60)
-  await next.getByRole('link', { name: 'Изменить тур 20570001' }).click()
+  const url = page.url()
+  await next.getByRole('button', { name: 'Изменить тур 20570001' }).click()
 
-  await expect(page).toHaveURL(/\/tours\/tour-b\/edit$/)
-  await expect(page.getByLabel('Прицеп')).toHaveValue('GÖ-FX 812')
-  await page.getByLabel('Tourbemerkung').fill('Rampe 6, vorher anrufen')
-  await page.getByRole('button', { name: /Сохранить/ }).click()
-  await expect.poll(() => saved?.tourRemarks).toBe('Rampe 6, vorher anrufen')
-  expect(saved).toMatchObject({ trailerPlate: 'GÖ-FX 812', orderNumber: '20570001', version: 1 })
-  await expect(page).not.toHaveURL(/\/edit$/)
+  const editor = next.getByRole('region', { name: 'Редактор тура 20570001' })
+  await expect(editor.getByLabel('Адрес').nth(1)).toHaveValue('Werk Kassel')
+  expect(page.url()).toBe(url)
+  await editor.getByLabel('Город').nth(1).fill('Göttingen')
+  await editor.getByRole('button', { name: 'Рассчитать изменения' }).click()
+  await expect.poll(() => sent?.futureStops?.[1]?.city).toBe('Göttingen')
+  expect(sent).toMatchObject({ version: 1, futureStops: [{ id: 'tour-b-1' }, { id: 'tour-b-2' }] })
+  await editor.getByRole('button', { name: 'Применить изменения' }).click()
+  await expect.poll(() => applied).toEqual({ previewId: 'prev-1', version: 1 })
+  await expect(editor).toBeHidden()
+  expect(page.url()).toBe(url)
 })

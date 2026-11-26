@@ -21,7 +21,12 @@ function SharedTerminHint({ stops, index }: { stops: DraftStop[]; index: number 
 
 const draft = (stop: Stop): DraftStop => ({ ...stop, serviceMinMinutes: stop.serviceMinMinutes ?? 60, serviceMaxMinutes: stop.serviceMaxMinutes ?? 120 })
 
-export function RouteEditor({ tour, onChange, zuladungRequest = 0 }: { tour: Tour; onChange: () => Promise<unknown>; zuladungRequest?: number }) {
+/**
+ * «Изменить тур» right where the tour is shown. A tour waiting in the queue opens it the same way (owner, 26.11):
+ * `startOpen` opens it at once, `onClose` tells the card the editor was closed or applied.
+ */
+export function RouteEditor({ tour, onChange, zuladungRequest = 0, startOpen = false, onClose }: { tour: Tour; onChange: () => Promise<unknown>; zuladungRequest?: number; startOpen?: boolean; onClose?: () => void }) {
+  const queued = tour.status === 'QUEUED'
   const [open, setOpen] = useState(false)
   const [stops, setStops] = useState<DraftStop[]>([])
   const [version, setVersion] = useState(0)
@@ -46,6 +51,11 @@ export function RouteEditor({ tour, onChange, zuladungRequest = 0 }: { tour: Tou
     if (zuladungRequest > 0) void start(true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zuladungRequest])
+  useEffect(() => {
+    if (startOpen) void start()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  function close() { setOpen(false); onClose?.() }
   function change(index: number, patch: Partial<DraftStop>) { setPreview(null); setStops(previous => previous.map((stop, i) => i === index ? { ...stop, ...patch } : stop)) }
   function move(index: number, direction: number) { setPreview(null); setStops(previous => { const result = [...previous]; [result[index], result[index + direction]] = [result[index + direction], result[index]]; return result }) }
   async function calculate() {
@@ -58,14 +68,16 @@ export function RouteEditor({ tour, onChange, zuladungRequest = 0 }: { tour: Tou
   async function apply() {
     if (!preview) return
     setBusy(true); setError('')
-    try { await operationsRequest(`/tours/${tour.id}/replan/apply`, 'POST', { previewId: preview.id, version }); setOpen(false); await onChange() }
+    try { await operationsRequest(`/tours/${tour.id}/replan/apply`, 'POST', { previewId: preview.id, version }); close(); await onChange() }
     catch (e) { setError((e as Error).message); setPreview(null) } finally { setBusy(false) }
   }
-  return <section ref={sectionRef} id="route-editor" className="work-surface min-w-0 p-4">
-    <button className="secondary-button" disabled={busy} onClick={() => open ? setOpen(false) : void start()}>{open ? 'Закрыть редактирование' : 'Изменить тур'}</button>
+  return <section ref={sectionRef} id={queued ? undefined : 'route-editor'} className="work-surface min-w-0 p-4" aria-label={queued ? `Редактор тура ${tour.orderNumber}` : undefined}>
+    <button type="button" className="secondary-button" disabled={busy} onClick={() => open ? close() : void start()}>{open ? 'Закрыть редактирование' : 'Изменить тур'}</button>
     {error && <p role="alert" className="mt-2 text-sm text-red-700">{error}</p>}
     {open && <form className="mt-3 space-y-3" onSubmit={event => { event.preventDefault(); void calculate() }}>
-      <p className="text-sm text-slate-600">Можно менять только будущие точки. Подтверждённые прибытия и завершённые точки сохраняются. Изменения вступят в силу после предварительного расчёта и подтверждения.</p>
+      <p className="text-sm text-slate-600">{queued
+        ? 'Тур ждёт в очереди: меняются его точки, сроки и порядок. Время считается после того, что машина сделает до него. Изменения вступят в силу после расчёта и подтверждения.'
+        : 'Можно менять только будущие точки. Подтверждённые прибытия и завершённые точки сохраняются. Изменения вступят в силу после предварительного расчёта и подтверждения.'}</p>
       {stops.map((stop, index) => <fieldset key={stop.id ?? `new-${index}`} className="space-y-2 rounded border p-3" disabled={busy || Boolean(stop.arrivedAt)}>
         <legend className="px-1 text-sm font-semibold">Точка {index + 1}{stop.type === 'LOAD' && /zuladung/i.test(stop.instructions ?? '') ? ' · Zuladung' : ''}{stop.arrivedAt ? ' · прибытие подтверждено (изменение запрещено)' : ''}</legend>
         <label className="block text-sm">Тип<select className="input" value={stop.type} onChange={e => change(index, { type: e.target.value as DraftStop['type'] })}><option value="LOAD">Загрузка</option><option value="UNLOAD">Выгрузка</option></select></label>
@@ -78,7 +90,7 @@ export function RouteEditor({ tour, onChange, zuladungRequest = 0 }: { tour: Tou
         <div className="flex gap-2"><button type="button" className="secondary-button" disabled={index === 0 || Boolean(stops[index - 1]?.arrivedAt)} onClick={() => move(index, -1)} aria-label={`Переместить точку ${index + 1} вверх`}>↑</button><button type="button" className="secondary-button" disabled={index === stops.length - 1 || Boolean(stops[index + 1]?.arrivedAt)} onClick={() => move(index, 1)} aria-label={`Переместить точку ${index + 1} вниз`}>↓</button><button type="button" className="secondary-button" onClick={() => { setStops(previous => previous.filter((_, i) => i !== index)); setPreview(null) }}>Удалить</button></div>
       </fieldset>)}
       <button type="button" className="secondary-button" disabled={busy} onClick={() => { setStops(previous => [...previous, { type: 'UNLOAD', address: '', appointmentAt: null, serviceMinMinutes: 60, serviceMaxMinutes: 120 }]); setPreview(null) }}>Добавить точку</button>
-      <details><summary className="cursor-pointer text-sm">Исправить расчётную исходную позицию</summary><p className="my-2 text-xs">GPS отсутствует. Заполняйте только при известной текущей позиции.</p><div className="grid grid-cols-2 gap-2">{(['latitude', 'longitude'] as const).map(key => <label key={key} className="text-sm">{key === 'latitude' ? 'Широта' : 'Долгота'}<input type="number" className="input" step="any" min={key === 'latitude' ? -90 : -180} max={key === 'latitude' ? 90 : 180} required={Boolean(origin.latitude || origin.longitude)} value={origin[key]} onChange={e => { setOrigin(previous => ({ ...previous, [key]: e.target.value })); setPreview(null) }} /></label>)}</div></details>
+      {!queued && <details><summary className="cursor-pointer text-sm">Исправить расчётную исходную позицию</summary><p className="my-2 text-xs">GPS отсутствует. Заполняйте только при известной текущей позиции.</p><div className="grid grid-cols-2 gap-2">{(['latitude', 'longitude'] as const).map(key => <label key={key} className="text-sm">{key === 'latitude' ? 'Широта' : 'Долгота'}<input type="number" className="input" step="any" min={key === 'latitude' ? -90 : -180} max={key === 'latitude' ? 90 : 180} required={Boolean(origin.latitude || origin.longitude)} value={origin[key]} onChange={e => { setOrigin(previous => ({ ...previous, [key]: e.target.value })); setPreview(null) }} /></label>)}</div></details>}
       <button className="primary-button" disabled={busy || !stops.length}>Рассчитать изменения</button>
       {preview && <div className="space-y-2 rounded bg-slate-50 p-3 text-sm"><p>Расстояние: {metersToKm(preview.before.distanceMeters)} → {metersToKm(preview.after.distanceMeters)}</p><p>Время маршрута: {formatDurationMinutes(preview.before.durationSeconds / 60)} → {formatDurationMinutes(preview.after.durationSeconds / 60)}</p><p>Текущие дороги: {preview.before.roads.join(' → ') || 'Нет данных'}</p><p>Новые дороги: {preview.after.roads.join(' → ') || 'Нет данных'}</p>{preview.after.etaWindows?.map((window, index) => { const old = preview.before.etaWindows?.find(item => item.stopId === window.stopId); const stop = stops.find(item => item.id === window.stopId); return <div className="border-t pt-2" key={window.stopId}><p className="font-medium">{stop?.city || stop?.address || `Следующая точка ${index + 1}`}</p><p>Было: {old ? `${formatDateTime(old.earliest)}–${formatDateTime(old.latest)}` : 'Новая позиция'}</p><p>Новая ETA: {formatDateTime(window.earliest)}–{formatDateTime(window.latest)}</p>{(() => { const day = drivingDayText(window.driveLeftSeconds, window.extendedDay); return day ? <p className={day.extended ? 'font-medium text-amber-800' : 'text-slate-600'}>{day.text}</p> : null })()}</div> })}<p>Затронуто заказов: {preview.affectedTourIds.length}. Расчёт действителен до {formatDateTime(preview.expiresAt)}.</p><button type="button" className="primary-button" disabled={busy || Date.parse(preview.expiresAt) <= Date.now()} onClick={() => void apply()}>Применить изменения</button></div>}
     </form>}
