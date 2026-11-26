@@ -275,7 +275,7 @@ button.decision-card-title:focus-visible { outline: 2px solid var(--focus); outl
 .map-context-distances dd { margin: 0; font-variant-numeric: tabular-nums; }
 .map-context-status { min-height: 1.35em; margin: 0; padding: 0 8px 2px; color: rgb(var(--tx-475569)); font-size: .75rem; }
 .copy-for-driver { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
-.copy-for-driver-button { display: inline-flex; align-items: center; gap: 6px; border-radius: 6px; padding: 2px 4px; margin-left: -4px; color: rgb(var(--tx-0f766e)); font-size: .8125rem; font-weight: 500; }
+.copy-for-driver-button { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; border-radius: 6px; padding: 2px 4px; margin-left: -4px; color: rgb(var(--tx-0f766e)); font-size: .8125rem; font-weight: 500; }
 .copy-for-driver-button:hover { background: rgb(var(--bg-f1f5f9)); }
 .copy-for-driver-button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 .copy-for-driver-button:disabled { color: rgb(var(--tx-64748b)); cursor: progress; }
