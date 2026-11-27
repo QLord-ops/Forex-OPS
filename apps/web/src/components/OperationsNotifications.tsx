@@ -1,11 +1,12 @@
 import { CalendarCheck, CalendarDays, LogOut, MapPinCheck, MessageSquareText, Moon, MoreHorizontal, PackageCheck, Route, Smartphone, TriangleAlert, X } from 'lucide-react'
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type CSSProperties, type ReactNode } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 
 import { autoEventOf, departureOf, useNotifications } from '../context/notifications'
 import { alertPermission, answerRequired, withoutVehicle, bannerDismissed, dismissBanner, needsAttention, nightItems, requestAlertPermission, type AlertNotification, type AlertPermission } from '../lib/alerts'
 import { pendingToDocument } from '../lib/appointments'
 import { formatDurationMinutes, formatTime } from '../lib/format'
+import { toastPlace } from '../lib/toast-place'
 import { terminText } from '../lib/tours'
 import type { Stop } from '../types/domain'
 import { AppointmentReview } from './AppointmentReview'
@@ -292,7 +293,7 @@ export function OperationsNotifications() {
   const flash = phone ? null : state.flash
   const askPermission = permission === 'default' && banner
   if (!current && !flash && !askPermission) return null
-  return <aside role="dialog" aria-labelledby={current ? `decision-${current.id}` : flash ? `decision-${flash.id}` : 'operations-permission-heading'} className="operations-toast">
+  return <ToastFrame labelledBy={current ? `decision-${current.id}` : flash ? `decision-${flash.id}` : 'operations-permission-heading'}>
     {askPermission ? <div className={current ? 'operations-toast-permission operations-toast-permission-split' : 'operations-toast-permission'}>
       <h2 id="operations-permission-heading" className="font-semibold">Включите уведомления, чтобы не пропустить прибытие</h2>
       <p className="my-2 text-sm text-slate-600">Со звуком и окном Windows поверх других программ, пока вкладка OPS открыта.</p>
@@ -306,7 +307,32 @@ export function OperationsNotifications() {
       <DecisionRow item={flash} openLink />
       <button type="button" className="operations-toast-close" aria-label="Скрыть уведомление" title="Скрыть уведомление" onClick={state.dismissFlash}><X className="h-4 w-4" aria-hidden="true" /></button>
     </div> : null}
-  </aside>
+  </ToastFrame>
+}
+
+function ToastFrame({ labelledBy, children }: { labelledBy: string; children: ReactNode }) {
+  const [place, setPlace] = useState<{ top: number; right: number } | null>(null)
+  useEffect(() => {
+    let frame = 0
+    const measure = () => {
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(() => {
+        const bar = document.querySelector('.map-action-dock .map-action-bar')?.getBoundingClientRect() ?? null
+        const panel = document.querySelector('.map-action-dock .map-action-body')?.getBoundingClientRect() ?? null
+        const next = toastPlace(bar, panel, document.documentElement.clientWidth)
+        setPlace((old) => old?.top === next?.top && old?.right === next?.right ? old : next)
+      })
+    }
+    measure()
+    // The buttons come and go with the page and the panel opens and closes under them.
+    const observer = new MutationObserver(measure)
+    observer.observe(document.body, { childList: true, subtree: true })
+    window.addEventListener('resize', measure)
+    window.addEventListener('scroll', measure, true)
+    return () => { cancelAnimationFrame(frame); observer.disconnect(); window.removeEventListener('resize', measure); window.removeEventListener('scroll', measure, true) }
+  }, [])
+  const style = place ? { '--toast-top': `${place.top}px`, '--toast-right': `${place.right}px` } as CSSProperties : undefined
+  return <aside role="dialog" aria-labelledby={labelledBy} className="operations-toast" style={style}>{children}</aside>
 }
 
 /** Webfleet's fresh GPS puts the truck outside the stop's zone although the driver marked it. */

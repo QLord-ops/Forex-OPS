@@ -386,8 +386,8 @@ button.decision-card-title:focus-visible { outline: 2px solid var(--focus); outl
 .dashboard-stage .map-action-bar button:focus-visible { outline: 2px solid var(--focus); }
 
 /* ---- Toast off the dashboard ---- */
-/* Top right, where the eye goes for news (owner, 26.11); on the phone it stays above the tab bar (mobile.css). */
-.operations-toast { position: fixed; z-index: 50; top: 16px; right: 16px; width: min(420px, calc(100% - 32px)); max-height: 80vh; overflow: auto; border-radius: 14px; background: rgb(var(--bg-ffffff)); box-shadow: 0 20px 48px rgb(var(--shadow-rgb) / 0.22); animation: operations-toast-in .18s ease-out; }
+/* Top right, where the eye goes for news (owner, 26.11), but below the map's «Адрес / Маршрут / Auftrag» buttons (--toast-top, set by the toast); on the phone it stays above the tab bar (mobile.css). */
+.operations-toast { position: fixed; z-index: 50; top: var(--toast-top, 16px); right: var(--toast-right, 16px); width: min(420px, calc(100% - 32px)); max-height: 80vh; overflow: auto; border-radius: 14px; background: rgb(var(--bg-ffffff)); box-shadow: 0 20px 48px rgb(var(--shadow-rgb) / 0.22); animation: operations-toast-in .18s ease-out; }
 @keyframes operations-toast-in { from { opacity: 0; transform: translateY(-8px); } }
 @media (prefers-reduced-motion: reduce) { .operations-toast { animation: none; } }
 .operations-toast > .decision-card { border-radius: 14px; }

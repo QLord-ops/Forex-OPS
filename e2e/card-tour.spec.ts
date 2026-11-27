@@ -119,6 +119,41 @@ test('уведомление в фоне: окно Windows, звук и счёт
   expect(viewport.width - (box.x + box.width)).toBeLessThan(40)
 })
 
+test('на главной уведомление приходит под кнопками «Адрес / Маршрут / Auftrag», а не поверх них (26.11)', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.assign(window, { Notification: class { static permission = 'granted'; static requestPermission = async () => 'granted'; close() { /* nothing to close */ } } })
+    localStorage.setItem('ops-work-hours', JSON.stringify({ days: [0, 1, 2, 3, 4, 5, 6], start: '00:00', end: '23:59' }))
+  })
+  let notifications: Array<Record<string, unknown>> = []
+  await page.route('**/api/**', async (route) => {
+    const path = new URL(route.request().url()).pathname.replace(/^\/api/, '')
+    if (path === '/auth/session') return json(route, { authenticated: true, role: 'dispatcher', csrfToken: 'e2e' })
+    if (path === '/notifications') return json(route, { notifications })
+    if (path === '/dashboard') return json(route, { vehicles: [] })
+    return json(route, [])
+  })
+  await page.route('https://tile.openstreetmap.org/**', (route) => route.abort())
+  const firstPoll = page.waitForResponse((response) => response.url().endsWith('/api/notifications'))
+  await page.goto('/')
+  await firstPoll
+  const bar = page.locator('.map-action-bar')
+  await expect(bar).toBeVisible()
+
+  // Over the map only «Для сведения» comes up as a line; decisions live in «Требует решения».
+  notifications = [{ id: 'n1', vehicleId: vehicle.id, stopId: 's1', type: 'AUTO_ARRIVAL', priority: 'INFO', message: 'Webfleet: LKW 997 прибыла на загрузку, Zwickau', createdAt: new Date().toISOString() }]
+  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')))
+  const toast = page.locator('.operations-toast')
+  await expect(toast).toContainText('прибыла на загрузку')
+  const below = async () => { const b = (await bar.boundingBox())!; const t = (await toast.boundingBox())!; return t.y >= b.y + b.height }
+  await expect.poll(below).toBe(true)
+
+  // With the Auftrag panel open the line moves beside it and does not cover the drop zone.
+  await bar.getByRole('button', { name: 'Auftrag' }).click()
+  const panel = page.locator('.map-action-dock .map-action-body')
+  await expect(panel).toBeVisible()
+  await expect.poll(async () => { const p = (await panel.boundingBox())!; const t = (await toast.boundingBox())!; return t.x + t.width <= p.x }).toBe(true)
+})
+
 test('тур в ожидании: «Изменить» открывает тот же редактор прямо в карточке, без перехода на другую страницу (26.11)', async ({ page }) => {
   const waiting = { ...queued('tour-b', '20570001', 'Bocholt', 'Kassel'), trailerPlate: 'GÖ-FX 812', tourRemarks: 'Rampe 4' }
   let sent: { version?: number; futureStops?: Array<Record<string, unknown>> } | null = null
