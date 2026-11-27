@@ -351,7 +351,13 @@ button.fleet-summary-item:focus-visible { outline: 2px solid var(--focus); outli
   .fleet-summary-item span { font-size: .6875rem; }
   /* The longest wait is on the trucks' own cards; five figures fit the width. */
   .fleet-summary > :nth-child(6) { display: none; }
-  .dashboard-stage .map-zoom, .dashboard-stage .map-layers { top: 68px; }
-  .dashboard-stage .map-action-dock { top: 120px; }
-  .dashboard-stage .map-traffic-legend { top: 120px; }
+  /* Three rows on one 8 px grid (owner, 27.11): summary, «Адрес / Маршрут / Auftrag» edge to edge, then the map buttons, 44 px high. */
+  .dashboard-stage .map-zoom, .dashboard-stage .map-layers { top: 128px; }
+  .dashboard-stage .map-zoom button { width: 42px; height: 42px; }
+  .dashboard-stage .map-layers .map-layer-button { min-width: 44px; height: 44px; }
+  .dashboard-stage .map-layers .map-segment button { height: 34px; padding: 0 12px; }
+  .dashboard-stage .map-action-dock { top: 70px; right: 8px; left: 8px; width: auto; }
+  .dashboard-stage .map-action-bar { width: 100%; }
+  .dashboard-stage .map-action-bar button { flex: 1; height: 40px; gap: 6px; font-size: .875rem; }
+  .dashboard-stage .map-traffic-legend { top: 180px; }
 }

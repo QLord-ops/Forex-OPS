@@ -58,6 +58,26 @@ test('телефон: вкладки внизу, машины и карта по
   await expect(page).toHaveURL(/vehicleId=v1/)
 })
 
+test('телефон: верх карты — сводка, кнопки карты и «Адрес / Маршрут / Auftrag» стоят ровно, по одним краям (27.11)', async ({ page }) => {
+  await phone(page)
+  await page.goto('/?view=map')
+  const stage = page.locator('.dashboard-stage')
+  const box = async (selector: string) => (await stage.locator(selector).first().boundingBox())!
+  await expect(stage.locator('.map-zoom')).toBeVisible()
+  await expect(stage.locator('.map-action-bar')).toBeVisible()
+  const [summary, zoom, layers, bar] = [await box('.fleet-summary'), await box('.map-zoom'), await box('.map-layers'), await box('.map-action-bar')]
+  const right = (b: { x: number; width: number }) => Math.round(b.x + b.width)
+  expect([Math.round(zoom.x), Math.round(bar.x)]).toEqual([Math.round(summary.x), Math.round(summary.x)])
+  expect([right(layers), right(bar)]).toEqual([right(summary), right(summary)])
+  expect([Math.round(zoom.y), Math.round(zoom.height)]).toEqual([Math.round(layers.y), Math.round(layers.height)])
+  expect(zoom.height).toBeGreaterThanOrEqual(44)
+  // «Адрес / Маршрут / Auftrag» right under the summary, the map buttons under them.
+  expect(bar.y).toBeGreaterThanOrEqual(summary.y + summary.height + 8)
+  expect(zoom.y).toBeGreaterThanOrEqual(bar.y + bar.height + 8)
+  for (const name of ['Адрес', 'Маршрут', 'Auftrag']) expect((await stage.locator('.map-action-bar').getByRole('button', { name }).boundingBox())!.height).toBeGreaterThanOrEqual(40)
+  expect(await sideways(page)).toBe(0)
+})
+
 test('телефон: карточка машины — лист над списком, ручка разворачивает и сворачивает', async ({ page }) => {
   await phone(page)
   await page.goto('/')
